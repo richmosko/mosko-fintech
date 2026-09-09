@@ -101,7 +101,7 @@ Scope: bring up a fresh self-hosted Supabase stack (Postgres 17) on the new box 
 - `ALTER ROLE **authenticated** SET TimeZone` is a **no-op** — MEASURED: `current_user` becomes `authenticated`, the setting is visibly present in `pg_db_role_setting`, and the session zone does not move.
 - `ALTER ROLE **authenticator** SET TimeZone` is the live vector — MEASURED: it applies at connect (`source = user`) and **persists across the `SET ROLE`**, so every Data API request runs in that zone.
 
-Consequence for anyone hardening this: **pinning or inspecting `authenticated` protects nothing.** The login roles are `authenticator` (Data API / web app) and `pfin_etl` (`workers/etl`, direct psycopg login). And a read-back executed as `postgres` — which is how `pg_prove` and a plain `psql` connect — observes **`postgres`'s** login-time settings, so it will read a clean `UTC | database` while every PostgREST request runs in another zone. **Inspect the catalog, or connect as the login role; do not infer from a `postgres` session.**
+Consequence for anyone hardening this: **pinning or inspecting `authenticated` protects nothing.** The login roles are `authenticator` (Data API / web app), `pfin_etl` (`workers/etl`, direct psycopg login), and `pfin_provider_sync` (`workers/provider-sync`, post-cutover per §6.2 — migration `116`; `authenticator` until then). And a read-back executed as `postgres` — which is how `pg_prove` and a plain `psql` connect — observes **`postgres`'s** login-time settings, so it will read a clean `UTC | database` while every PostgREST request runs in another zone. **Inspect the catalog, or connect as the login role; do not infer from a `postgres` session.**
 
 Three operational consequences, all load-bearing:
 
@@ -330,6 +330,55 @@ select rolcanlogin, rolinherit, rolsuper, rolbypassrls
 
 > **STUB —** Fill in: the apply mechanism against self-hosted Supabase (`supabase db push` / `supabase migration up` vs. a CI/Coolify-driven apply), the idempotency/ordering guarantees, and how to verify each migration landed (e.g., RLS policies present, `fn_mask_acct_number` callable). Keep the migration list current as Phase 6 adds tables.
 
+### 6.2 `pfin_provider_sync` role provisioning — REQUIRED one-time deploy step · 🔒 SECURITY-SENSITIVE
+
+**Applying the migrations is not sufficient to cut provider-sync over.** Migration [`116_pfin_provider_sync_role.sql`](../supabase/migrations/116_pfin_provider_sync_role.sql) creates provider-sync's dedicated login identity `pfin_provider_sync` **NOLOGIN, with NO password** — deliberately inert, mirroring [`055`](../supabase/migrations/055_pfin_etl_role.sql)'s `pfin_etl`. An operator switches it on at deploy time, in the **SAME Phase-7 deploy pass that provisions `pfin_etl`** (BACKLOG §7.6 S5 AC — one operation reaches a consistent role-graph rather than carrying a half-applied convention across releases). *(ADR-019 Condition C2, renamed/promoted by ADR-041; Sec joint-review AMBER on PR #671, condition C3.)*
+
+> **Precedence and procedure.** This step follows the **same two-step credential handoff as §6.1's `pfin_etl` step** — see §6.1 above and `116`'s own DEPLOY-TIME CREDENTIAL HANDOFF block, which is canonical for this role if this section and `116` disagree. **Do not follow `055`'s CONTRACT block for either role** — Sec grades it SUPERSEDED and actively hazardous (its own joint-review, condition C5); it names the single-statement form that both §6.1 and `116` prohibit. Architect corrects `055`'s CONTRACT block before the Phase-7 deploy pass reads it.
+
+**The step.** Run once against the target database, in an interactive `psql` session, as an operator (never from a committed file):
+
+```
+\password pfin_provider_sync          -- prompts; verifier computed CLIENT-SIDE; role still NOLOGIN → inert
+ALTER ROLE pfin_provider_sync LOGIN;  -- carries no secret; safe in shell history and server logs
+```
+
+Same load-bearing order as §6.1: the credential lands while the role is still `NOLOGIN`, and `LOGIN` then flips onto an already-credentialed role, so LOGIN-with-no-password never exists at any instant. The single-statement `ALTER ROLE pfin_provider_sync WITH LOGIN PASSWORD '…'` form is **PROHIBITED**, for the same reason as §6.1 — statement logging writes the credential to the server log in cleartext, and the prohibition does not depend on any per-stack measurement. Generate the password with `openssl rand -hex 32`.
+
+The password value is **provider-sync's own credential** — a different value from `pfin_etl`'s, and, post-cutover, no longer the `authenticator` credential. Same secret **name** (`PFIN_DB_PASSWORD`), different secret **value**, per container; see [`secrets-manifest.yml`](../secrets-manifest.yml). Then set the provider-sync container's env (§5): `PFIN_DB_USER=pfin_provider_sync` (non-secret username, changed from `authenticator`) + `PFIN_DB_PASSWORD=<this role's value>` (`production_only`).
+
+**Verify before restarting the container** (read-only; expect `t` / `f`):
+
+```sql
+select rolcanlogin, rolinherit, rolsuper, rolbypassrls
+  from pg_catalog.pg_roles where rolname = 'pfin_provider_sync';
+-- expect: rolcanlogin = t, rolinherit = f, rolsuper = f, rolbypassrls = f
+```
+
+**⚠ Creating and flipping the role is NOT the same as cutting the container over — the two half-applied states are asymmetric** (Sec joint-review condition C4; `116`'s own header carries the same analysis). Env-switched-but-role-absent fails **loudly**: provider-sync fails at connect (`role "pfin_provider_sync" is not permitted to log in`) — an outage, never an exposure. Role-present-but-env-unswitched is **silent**: provider-sync keeps running as `authenticator`, the rotation coupling stays live, and every catalog read looks finished — `rolcanlogin = t` proves only that this deploy step ran, and proves nothing about which credential the container is actually using. The dangerous half is the silent one, and the query above cannot see it: it reads the role's catalog state, not the container's effective identity.
+
+**Post-cutover check — read the CONTAINER's effective identity, not the role catalog:**
+
+1. **Effective `PFIN_DB_USER`.** From the provider-sync Coolify service's actual injected env (not this repo's `.env.example`), confirm `PFIN_DB_USER=pfin_provider_sync`.
+2. **`pg_stat_activity` read of the connected identity** (Sec joint-review C4 option C — composes with, does not substitute for, check 1):
+   ```sql
+   select distinct usename from pg_stat_activity where application_name = 'provider-sync';
+   ```
+   This reads the container's *effective* identity from the server side rather than trusting its env file. **Precondition, not yet true: `workers/provider-sync/src`'s `TenantBoundClient` connection does not currently set `application_name`** — this query returns zero rows until that lands. Do not run this check, see an empty result, and read it as "cutover incomplete" — confirm `application_name` is being set before relying on this check at all. Booked at [`BACKLOG.md`](../BACKLOG.md) §7.36 item 2.
+
+**Rotation** — `\password pfin_provider_sync` (same prompt-and-hash path; `LOGIN` is already set, so no second statement) **+ restart the provider-sync container ONLY**. No coordinated PostgREST / `pfin_etl` redeploy.
+
+**Revocation / kill-switch** — `ALTER ROLE pfin_provider_sync NOLOGIN` stops provider-sync **and nothing else**.
+
+**Two failure modes — only one of them is safe** (same shape as §6.1):
+
+| what went wrong | result |
+|---|---|
+| **Step 2 skipped** (`\password` ran, `LOGIN` never set) | Role stays `NOLOGIN` → provider-sync fails at connect with `role "pfin_provider_sync" is not permitted to log in`. Loud, immediate, **safe** — an outage, never an exposure. |
+| **Step 2 run without step 1** (`LOGIN` set, password never set) | ⚠ **The one dangerous ordering.** Succeeds silently and leaves exactly the LOGIN-with-no-password state `116` is shaped to prevent. |
+
+`116`'s `WARNING` branch for a pre-existing LOGIN-with-no-password role catches this mis-ordered deploy on the next migration re-apply, same as `055`'s does for `pfin_etl` — do not remove that guard thinking it only covers the ETL case.
+
 ---
 
 ## 7. Workers
@@ -399,7 +448,7 @@ Scope: prove the from-scratch stand-up actually works before declaring V1 deploy
 
 - **TZ-1 — database TimeZone pin read-back (§4.1; ship-block; DevOps-owned deploy assertion):** assert `select setting, source from pg_settings where name='TimeZone'` returns exactly **`UTC` / `database`** against the production database, and against the connection *each* container actually uses (web-app and `workers/etl` — a per-container `PGTZ` would override the pin for that container alone, and only that container's reads would be wrong).
   - **`source` is the assertion, not `setting`.** `UTC | configuration file` means the pin never applied and the value is right *by accident* — that is the exact unmeasured premise §4.1 exists to remove, and it reads identical to success if you only check the value.
-  - **Run it as each LOGIN role (`authenticator`, `pfin_etl`) — never as `postgres` — and add the catalog sweep.** MEASURED (§4.1): per-role settings apply at login and `SET ROLE` does not re-apply them, so `ALTER ROLE authenticator SET TimeZone` moves every Data API request while a `postgres` session still reads `UTC | database`. A read-back that connects as `postgres` **structurally cannot see the one role-level vector that exists.** Pinning or inspecting `authenticated` protects nothing — it is not the login role.
+  - **Run it as each LOGIN role (`authenticator`, `pfin_etl`, `pfin_provider_sync`) — never as `postgres` — and add the catalog sweep.** MEASURED (§4.1): per-role settings apply at login and `SET ROLE` does not re-apply them, so `ALTER ROLE authenticator SET TimeZone` moves every Data API request while a `postgres` session still reads `UTC | database`. A read-back that connects as `postgres` **structurally cannot see the one role-level vector that exists.** Pinning or inspecting `authenticated` protects nothing — it is not the login role. `pfin_provider_sync` is a login role from its §6.2 cutover onward; before cutover it connects as `authenticator` and is already covered by that entry.
   - **Why this is deploy-time and cannot be delegated to CI:** QA's [`supabase/tests/01_session_timezone.sql`](../supabase/tests/01_session_timezone.sql) asserts this property of the **ephemeral CI container**, and says so in its own header — it cannot observe the deployment. Two claims, two instruments; a green CI is never evidence about production here.
   - Gate this **before** §9 teardown. A failure is a silent up-to-one-day error in the §2.1.1 NAV headline and open-account count, with nothing erroring — not a degraded surface.
   - **⏸ TZ-1b — wire the R3 drift sweep before sign-off (ratified 2026-08-06; NOT YET ACTIVE).** TZ-1 is a **one-shot** assertion: it proves the pin is correct *at deploy*, and says nothing about the next six weeks. The vector is **drift-shaped** — the real instance arrived on a stack nobody was deploying — so a deployment that passes TZ-1 and never wires the recurring sweep is verified once and unmonitored thereafter. **Wire the §7 Scheduled Task (R3) as part of this gate**, and confirm one run has reported to Discord (§8) before §9 teardown. Full rationale, options considered, and the two-privilege-level split: **§7, "TimeZone drift sweep (R3)"**. **⚠ It is detection with bounded latency, not prevention** — do not let its presence read as "the pin cannot drift".
