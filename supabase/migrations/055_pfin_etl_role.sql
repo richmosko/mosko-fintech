@@ -56,6 +56,24 @@
 --   on its own schedule, with a restart of only the ETL container. C1 itself is
 --   NOT weakened or rescinded for the consumers it still covers.
 --
+--   ⚠ THE "ADR-023 C1" LABEL IS MIS-ATTRIBUTED — corrected in place 2026-09-08
+--   (Sec joint-review of PR #671, condition C1). ADR-023's own enumerated C1 is
+--   a DIFFERENT condition — an exposure-readiness artifact (per-table RLS +
+--   policy proof) reviewed before exposure. The rotation coupling is not it.
+--   The label is WRONG-POINTER, not invented, and is deliberately NOT deleted:
+--   a condition label is a reference into a canonical enumeration, and severing
+--   it leaves a reader holding a rule with no way to look the instance up. Its
+--   inferred home is ADR-019's Sec condition C1 — evidence is
+--   `workers/provider-sync/.env.example` ("Sec conditions C1/C3", then
+--   "CONDITION C1 (rotation coupling — Sec-load-bearing)"). But ADR-019
+--   enumerates only C2 of the C1–C4 set its Status line ratifies, and WHETHER
+--   THE C1 / C3 / C4 TEXT IS RECOVERABLE IS AN OPEN F/CTO RULING as of
+--   2026-09-08. Until it is ruled, the label stands as written here and at its
+--   other uses in this file. The full carrier list and the per-artifact
+--   correction vehicles are recorded in migration `116`'s header. This file's
+--   `comment on role` carries the same label and is a DATABASE object, so it is
+--   correctable ONLY by a comment-only migration `117` — booked, not authored.
+--
 -- ----------------------------------------------------------------------------
 -- POSTURE RATIONALE — NO FUNCTION IS AUTHORED HERE, so the SECURITY DEFINER
 --   allowlist question does not arise at all: allowlist STAYS 4 (ADR-011
@@ -358,11 +376,31 @@
 --     identity. Attributes AS CREATED BY THIS MIGRATION: **NOLOGIN**, NOINHERIT,
 --     NO PASSWORD — the role ships INERT. Explicitly NOT: SUPERUSER, CREATEDB,
 --     CREATEROLE, REPLICATION, BYPASSRLS. Owns no object. Holds NO direct table or
---     schema privilege in pfin. It becomes usable ONLY at deploy time, via a single
---     `ALTER ROLE pfin_etl WITH LOGIN PASSWORD '<secret>'` that flips LOGIN and sets
---     the password atomically (see the handoff block above). So `rolcanlogin` is
---     FALSE at migration time and TRUE only in a provisioned environment — tests
---     that assert migration-time state must expect FALSE.
+--     schema privilege in pfin. It becomes usable ONLY at deploy time, via the
+--     TWO-STATEMENT handoff the DEPLOY-TIME CREDENTIAL HANDOFF block above
+--     prescribes: `\password pfin_etl` FIRST (prompts, computes the SCRAM
+--     verifier client-side, sets ONLY the password while the role is still
+--     NOLOGIN and therefore inert), THEN `ALTER ROLE pfin_etl LOGIN` (carries
+--     no secret). There is no atomic single-statement path, by design. So
+--     `rolcanlogin` is FALSE at migration time and TRUE only in a provisioned
+--     environment — tests that assert migration-time state must expect FALSE.
+--     ⚠ CORRECTED IN PLACE 2026-09-08 (Sec joint-review of PR #671, condition
+--     C5). THE SENTENCE THIS REPLACES said the role becomes usable "via a
+--     single `ALTER ROLE pfin_etl WITH LOGIN PASSWORD` that flips LOGIN and
+--     sets the password atomically (see the handoff block above)" — pointing
+--     the reader at the very block that PROHIBITS that form. It is pre-B10
+--     residue the B10 pass did not sweep: the single-statement form writes the
+--     credential to the server log in cleartext wherever statement logging is
+--     on, and typing it also lands it in ~/.psql_history. The prohibition is
+--     measurement-independent — do not resolve it by checking whether logging
+--     is enabled. It was worse than stale because `secrets-manifest.yml` routes
+--     an operator to docs/deployment-runbook.md §6.1 with "migration 055 is
+--     canonical if they disagree", so this block was the tie-breaker an
+--     operator would reach for in the same deploy pass. ⚠ NOTHING AN OPERATOR
+--     IS TOLD TO DO CHANGED: the handoff block's two statements and their
+--     order are untouched, and this file's `comment on role` already states the
+--     prohibition correctly and needs no migration `117` for THIS defect. What
+--     changed is a DESCRIPTION that contradicted them.
 --   Memberships (the role's ONLY source of reach, and only after an explicit
 --     SET ROLE, because NOINHERIT):
 --     · service_role   — privileged writes (e.g. the 054 INSERT grant on

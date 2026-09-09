@@ -20,6 +20,9 @@
 
 ## Postgres / RLS facts worth not re-deriving
 
+- [The "ADR-023 C1" label is MIS-ATTRIBUTED, not unsupported](reference_adr023_c1_label_is_misattributed.md) — carriers by grep, no count; ADR-019 home pending F/CTO.
+- [A worker LOGIN role's minimum grant set is EMPTY](reference_worker_login_role_minimum_grant_is_the_empty_set.md) — ⚠ granting it EXECUTE is a WIDENING.
+- [Local cluster has duplicate-grantor drift on `pfin_etl`](reference_local_cluster_duplicate_grantor_drift.md) — 3 RED in `054` is the BASELINE (2913 ok / 3 not ok).
 - [D3 entries record ORIGINAL provenance](reference_decision3_entries_record_original_provenance.md) — re-targets live in AMENDMENTS; the entry is never edited.
 - [`WITH CHECK` is a POLICY, not a CHECK constraint](reference_with_check_is_a_policy_not_a_check_constraint.md) — subqueries, survives replica; "every fence is a trigger" is dated.
 - [A BEFORE ROW trigger can't see later rows in the statement](reference_before_row_trigger_cannot_see_later_rows.md) — SET-property fences need a deferred CONSTRAINT TRIGGER.
