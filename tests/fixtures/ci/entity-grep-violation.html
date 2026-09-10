@@ -1,0 +1,19 @@
+<!--
+  DELIBERATELY VIOLATION-SHAPED — entity-grep golden-test fixture.
+
+  Plants BOTH catch-criterion patterns the fence-entity-grep.sh fence exists to
+  catch: an HTML-entity-obscured section sign and an HTML-entity-obscured
+  number sign, each inside ordinary prose exactly the way a real doc-author
+  edit could introduce one. `&nbsp;` is ALSO planted here, deliberately, as a
+  negative control — the fence must NOT flag it (out of scope per F/CTO ruling).
+
+  CI inversion check: the fence-entity-grep.sh script MUST report violation
+  against this fixture, naming both planted occurrences. If the fence reports
+  clean, CI fails closed — the fence is broken.
+
+  This file is never served or linked from any real doc; it exists solely for
+  the fence script to scan.
+-->
+<p>See &sect;10 for the catalogued-instance ledger discipline.</p>
+<p>This amendment is Lock 13 mod &#35;9, ratified 2026-09-09.</p>
+<p>Figures like 8 ARM&nbsp;vCores / 16&nbsp;GB must not break across a line-wrap.</p>

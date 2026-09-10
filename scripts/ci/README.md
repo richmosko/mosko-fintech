@@ -30,6 +30,15 @@ three classes of security-load-bearing regressions:
   hardcoded path — covers `workers/provider-sync/docker-compose.yaml` (SELF-212,
   original) and `workers/pdf-render/docker-compose.yaml` (SELF-348 A4 item 4c,
   intra-instance coverage expansion — a wiring change, not a new fence).
+- **entity-grep** — HTML-entity-obscured `§`/`#` fence over `docs/PRD/index.html`,
+  `docs/SECURITY/index.html`, `docs/ARCH/index.html` (F/CTO-authorized
+  2026-09-09). Catches `&sect;`/`&#35;` used in place of a literal `§`/`#` —
+  both render identically in HTML but the entity form is invisible to a
+  byte-literal `grep '§10'` / `grep 'mod #'`, which this project runs as a
+  standing discipline. NOT a §10-catalogued instance (a doc-hygiene fence, not
+  a security-boundary one); see
+  [entity-grep — HTML-entity-obscured §/# fence](#entity-grep--html-entity-obscured--fence)
+  below.
 
 The fences are invoked from `.github/workflows/security-scan.yml`. Each fence ships
 with a paired golden-test fixture under `tests/fixtures/ci/` and a CI inversion-mode
@@ -79,6 +88,7 @@ scripts/ci/
 ├── check-tz-sweep-identical.py           # TimeZone role-sweep query drift fence (runbook §4.1 ↔ (T3); R3 Part A)
 ├── check-report-css-identical.sh         # report.css build-vs-committed-artifact drift fence (SELF-358 / P6)
 ├── fence-gitleaksignore-inversion.sh     # .gitleaksignore fingerprint-scoping golden inversion fixture (SELF-358 / P6)
+├── fence-entity-grep.sh                  # entity-grep fence (&sect;/&#35; over the three HTML doc artifacts)
 ├── rt26-allowlist.txt                    # RT-26 allowlist registry (3 ADR-016 D1 file paths)
 └── README.md                             # (this file)
 ```
@@ -329,6 +339,84 @@ gitleaks 8.24.3, or put it on `PATH`):
 bash scripts/ci/fence-gitleaksignore-inversion.sh
 # or, to pin the base explicitly (mirrors the PR job):
 bash scripts/ci/fence-gitleaksignore-inversion.sh --base <base-sha>
+```
+
+## entity-grep — HTML-entity-obscured §/# fence
+
+**Lock:** F/CTO authorization (2026-09-09; fence-boundary additions escalate to
+F/CTO per agent-def Deciding — "one-way door, slow down" does not apply here,
+this is a new fence, not a weakening of an existing one). Measured by
+Architect, spot-verified by team-lead, re-measured by DevOps before landing.
+
+**Problem:** `docs/PRD/index.html`, `docs/SECURITY/index.html`, and
+`docs/ARCH/index.html` are HTML. A literal `§` or `#` can legally be written as
+the HTML entity `&sect;` or `&#35;` and renders identically in a browser — but
+this project runs standing byte-literal greps over the doc *source*
+(`grep '§10'` for the §10-catalogued-instance ledger discipline; `grep 'mod #'`
+for Lock-amendment sweeps). An entity-obscured occurrence is invisible to
+both. Measured pre-fix (raw vs. entity-normalized grep, over `main` at
+`0c681f0d`):
+
+| file | `&sect;` | `&#35;` | `§10` raw → normalized | `mod #` raw → normalized |
+|---|---|---|---|---|
+| `docs/PRD/index.html` | 0 | 0 | 3 → 3 | 0 → 0 |
+| `docs/SECURITY/index.html` | 2 | 0 | 45 → 46 | 74 → 74 |
+| `docs/ARCH/index.html` | 2 | 6 | 43 → 44 | 53 → 59 |
+
+(These counts are over the FULL raw `§10`/`mod #` occurrence set in each file
+— not merely a ledger-row count — so they run higher than a hand count of
+ledger rows would; they are not comparable to §10's catalogued-instance count,
+which is read live from `DECISIONS.md` per standing discipline, never pinned
+here.) All 10 `&sect;`/`&#35;` occurrences sat in prose/body text — none in an
+`href=`/`id=`/`class=` attribute; confirmed by a full sweep before the
+normalization edit (an attribute hit would have been a link-integrity
+question, not a text substitution, and would have stopped this work for a
+report rather than a fix).
+
+**One-time normalization:** every `&sect;` → literal `§`, every `&#35;` →
+literal `#`, across the three files above (`docs/PRD/index.html` had zero
+occurrences of either — untouched). Rendered output is unchanged (the entity
+and literal forms render identically in HTML); no anchor (`id`/`href`)
+resolves differently, since none of the occurrences were ever in an anchor
+attribute.
+
+**Catch criterion:** the literal strings `&sect;` and `&#35;` MUST NOT appear
+anywhere in the target file(s) — zero-hit, fail-closed, per file. Fails closed
+on its own dependency (missing/unreadable target file is exit 2, same severity
+class as a caught violation — never reported clean) and uses only
+`grep`/`bash` builtins, so it carries no external-parser dependency to fail
+open on.
+
+**Explicitly OUT of scope — `&nbsp;`:** deliberately NOT fenced or stripped.
+It is load-bearing typography (keeps figures like *"8 ARM vCores / 16 GB"*
+from breaking across a line-wrap) and has no §-anchor/lock-mod meaning; the
+whole point of this narrow fence is that `§`/`#` have zero typographic
+purpose, so widening the pattern set to `&nbsp;` would defeat that framing.
+The golden fixture (below) plants `&nbsp;` as a negative control and the CI
+job asserts it is never named in the violation list.
+
+**Golden fixture:** `tests/fixtures/ci/entity-grep-violation.html` plants one
+`&sect;` and one `&#35;` occurrence in ordinary prose, plus an `&nbsp;`
+negative control. The `fence-entity-grep` job in
+`.github/workflows/security-scan.yml` asserts (Sec F-2 discipline applied
+here): exit 1 exactly (not merely non-zero — a missing-target error is also
+non-zero and would prove nothing); the violation list names BOTH the `&sect;`
+and `&#35;` hits by file:line; and the violation list never names the `&nbsp;`
+line. A separate probe asserts exit 2 (never a silent pass) when pointed at a
+nonexistent target.
+
+**NOT added to `.github/required-contexts.tsv`** — promoting a job into
+branch-protection-required status is a separate F/CTO decision (there are
+already two other jobs awaiting that call); tracked as a follow-up, not done
+here.
+
+Local invocation:
+
+```bash
+bash scripts/ci/fence-entity-grep.sh docs/PRD/index.html docs/SECURITY/index.html docs/ARCH/index.html
+# inversion:
+bash scripts/ci/fence-entity-grep.sh tests/fixtures/ci/entity-grep-violation.html
+# Expect non-zero exit, naming both &sect; and &#35; (never &nbsp;).
 ```
 
 ## Convention — fence design discipline
