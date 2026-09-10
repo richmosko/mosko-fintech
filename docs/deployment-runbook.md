@@ -442,6 +442,16 @@ docker volume ls --filter name=<app-uuid>   # MUST print nothing before redeploy
 
 Confirm the volume is actually gone before redeploying — `down` without `-v` leaves `<app-uuid>_db-data` and `<app-uuid>_db-config` in place and silently reproduces the exact same symptom on the next attempt.
 
+**⚠ `rest` (PostgREST) sitting unhealthy after `db`, `auth`, `api-gw`, and `supavisor` are all healthy is expected at this point in the sequence, not evidence of a defect.** Measured live: `rest`'s health probe (`GET /ready`) errors repeatedly —
+
+```
+{"code":"3F000","message":"schema \"pfin\" does not exist"}
+```
+
+— because `PGRST_DB_SCHEMAS=pfin` is correct, but the `pfin` schema does not exist yet: it is created by `supabase/migrations/**`, which run at §6, not here. PostgREST retries its schema-cache load with its own backoff and goes healthy **on its own**, with no restart needed, the moment §6's `supabase db push` lands. **What would make this a real failure instead of the expected wait:** `rest` still unhealthy with this same error *after* §6's migrations have applied cleanly (check `supabase_migrations.schema_migrations` for the expected row count first), or a different error code entirely (anything other than `3F000`/"schema does not exist" on a schema-not-found race).
+
+**This is the third instance of the same pattern in this section, worth naming once rather than re-discovering per check: §4's verifications assume a post-§6 world, and some of them run before §6 in the natural stand-up order.** §4.1's TimeZone read-back, §5's Sec-gate STUB appearing to block §4's own execution, and this `rest`-unhealthy case are the same shape — a check that is correct, and will read as failing, until a later section's work lands. Reordering §4/§5/§6 is not the fix (§5's secrets-before-deploy gate and §6's role-provisioning ordering are both deliberate, not accidental) — the fix is marking each affected check explicitly, which this section now does at each instance rather than leaving a stranger to rediscover the pattern three separate times.
+
 **Secrets this step produces.** Names only — never values, here or anywhere in this repo; most (not all — each row below states whether it is a manifest entry) are drawn from `secrets-manifest.yml`'s `production_only` set. **§5's secrets-provisioning procedure is still a STUB and its Sec joint-review flag is NOT discharged by this section** — this only names where these five land; rotation/injection-order procedure is §5's job.
 
 | Secret | Produced how | Where it goes |
