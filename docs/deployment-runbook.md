@@ -304,6 +304,10 @@ Scope: bring up a fresh self-hosted Supabase stack (Postgres 17) on the new box 
 
 **Do not fetch the reference compose once and commit it verbatim into this repo.** Its service set and image tags move — the gateway service alone has been renamed and re-implemented since earlier tree references were written (see the `kong` row below). Pull it fresh at execution time, apply the trim below, and record the exact tags actually deployed in `docs/records/v1final/standup-log.md` (the as-executed log, not this file, per its own "records measurements, not intentions" rule).
 
+**The trimmed compose lives at [`infra/supabase/docker-compose.yml`](../infra/supabase/docker-compose.yml)**, alongside its vendored Envoy config and DB init scripts (see that directory's `README.md` for provenance and the four changes made from the corresponding upstream service blocks). Sibling to the `workers/*/docker-compose.yaml` pattern §3 already uses, not nested under `supabase/` (CLI-config/migration territory) or `docs/` (reference docs, not deploy artifacts).
+
+**⚠ The Coolify resource for this compose MUST be created with `base_directory: /infra/supabase` and `docker_compose_location: /docker-compose.yml`** — not `base_directory: /` with `docker_compose_location: /infra/supabase/docker-compose.yml`, which looks equivalent and is not. Source-verified in Coolify's own deploy code (`ApplicationDeploymentJob.php:791-793`): the deploy job's working directory (against which every relative bind mount in the compose resolves) is the checkout root adjusted by `base_directory`, not the compose file's own location. Get this wrong and the failure is **silent** — Docker auto-creates a missing bind-mount source as an empty directory rather than erroring, so the stack reports healthy while `db` has no init scripts at all and the gateway has an empty config directory. See `infra/supabase/README.md` for the full mechanism and the verification step below.
+
 **Service scope for V1 — decided service by service, evidence-based.** Cross-checked against `supabase/config.toml`'s `enabled` sections and the current reference compose (read live 2026-09-09); the note after the table says why `config.toml`'s flags don't settle this by themselves.
 
 | Service | In/Out | Evidence |
@@ -334,9 +338,9 @@ psql "$PROD_DB_URL" -Atc "show server_version;"
 
 Do not accept a Coolify/`docker compose` "healthy" status as this proof — a health check proves a process is listening, not which major version it's running. A wrong image tag reports exactly as healthy as a right one; this is exactly the silent failure mode Coolify's one-click template (pinned to 15.x) would have produced.
 
-**5a. Disable production signup; found the tenant by invitation.** Set `GOTRUE_DISABLE_SIGNUP=true` in the Coolify Compose resource's environment for the `auth` service — interpolated into that service's env block in the compose file, the same mechanism the stack's `JWT_SECRET`/`ANON_KEY`/`SERVICE_ROLE_KEY` already use. This is a **container env var on the self-hosted `auth`/GoTrue container**, distinct from and unrelated to `config.toml`'s `[auth] enable_signup` / `[auth.email] enable_signup` (both `true`, local-CLI-only, `config.toml:181,228`) — setting one does not touch the other.
+**5a. Disable production signup; found the tenant by invitation.** `GOTRUE_DISABLE_SIGNUP` is **hardcoded `"true"`** in the `auth` service block of [`infra/supabase/docker-compose.yml`](../infra/supabase/docker-compose.yml) — **not** a Coolify-settable env var. This is a corrected instruction, not the original one: this section previously told the operator to set a Coolify variable named `GOTRUE_DISABLE_SIGNUP`, but the compose interpolated `${DISABLE_SIGNUP}` — followed literally, that naming mismatch resolves to an empty value and **signup stays enabled**, the exact inverse of F/CTO's Q5 ruling. Caught by the verification probe below, not by re-reading the instruction — which is the case for running it at all rather than trusting the config. Q5 makes signup-disabled a **standing gate** (it stays off through the full V1.final soak until the Plaid Link-token operator allowlist ships — [`BACKLOG.md` §7.36 item 1](../BACKLOG.md)), so it is hardcoded rather than left tunable: lifting it later means editing the compose file (and shipping a PR), which is the correct friction for a one-way-door control, not a dashboard toggle. This is a **container env var on the self-hosted `auth`/GoTrue container**, distinct from and unrelated to `config.toml`'s `[auth] enable_signup` / `[auth.email] enable_signup` (both `true`, local-CLI-only, `config.toml:181,228`) — setting one does not touch the other.
 
-**Verify by probing the endpoint, never by reading a config back:**
+**Verify by probing the endpoint, never by reading a config back — this is what would have caught the naming-mismatch defect above, and is why this step is a live probe rather than a compose-file read:**
 
 ```sh
 curl -s -o /dev/null -w '%{http_code}\n' \
@@ -389,6 +393,22 @@ curl -s -o /dev/null -w '%{http_code}\n' "$PUBLIC_SUPABASE_URL/rest/v1/"
 | All services report `healthy` in Coolify/`docker compose ps`, but `server_version` is anything other than `17.x` | **Looks fine but is wrong, and easy to miss** — a container health check proves a process answered, not which image tag it's running. This is exactly the failure mode Coolify's one-click template would have produced silently (see the bring-up-method table above); confirming version by direct query, not by dashboard color, is the point of this row. |
 | The gateway probe returns `2xx` with a data response, no `apikey` supplied | **Wrong, and worse than a clean failure** — the Data API is not enforcing its own key check; every `pfin` table's RLS is the *second* layer of a two-layer fence (`config.toml`'s own header comment: anon holds zero grants outer, RLS inner). A gateway that skips key-checking removes the layer meant to stop unauthenticated traffic from ever reaching PostgREST at all. Stop and re-check the gateway config before proceeding. |
 | `studio` / `meta` show up in `docker compose ps` when the trim decision above dropped them | **Wrong, and worth checking explicitly rather than inferring** — a stale prior deploy attempt, or a compose file that wasn't actually re-pulled with the trim applied, can leave them running even though *this* execution's compose file omits them. Confirm their absence directly; don't infer it from "I used the trimmed file this time." |
+
+**(1b) Bind-mount sanity — every kept service healthy is NOT proof its config/init-script mounts resolved to the right files.** `infra/supabase/docker-compose.yml`'s bind mounts are written compose-file-relative (`./volumes/...`), which is only correct if this Coolify resource's `base_directory` was set to `/infra/supabase` (see that directory's `README.md`). Get `base_directory` wrong and Docker does not fail loudly — it auto-creates each missing bind-mount source as an empty directory, so `api-gw` and `db` both come up "healthy" while actually unconfigured.
+
+```sh
+# Confirm the gateway loaded a real config, not an empty directory.
+docker logs supabase-envoy 2>&1 | tail -30
+# EXPECTED: Envoy's own startup log (listener/cluster config lines). A
+# near-empty log or an immediate crash-loop means /etc/envoy mounted empty.
+
+# Confirm each DB init script actually ran on first boot (only meaningful
+# on a FRESH db-data volume — a script only runs once, at first init).
+docker logs supabase-db 2>&1 | grep -iE "roles\.sql|jwt\.sql|webhooks\.sql|realtime\.sql|_supabase\.sql|logs\.sql|pooler\.sql"
+# EXPECTED: all seven filenames appear (Postgres logs each init-scripts/
+# migrations file it executes). A short or empty result means the init
+# directory mounted empty — the base_directory misconfiguration above.
+```
 
 **Secrets this step produces.** Names only — never values, here or anywhere in this repo; most (not all — each row below states whether it is a manifest entry) are drawn from `secrets-manifest.yml`'s `production_only` set. **§5's secrets-provisioning procedure is still a STUB and its Sec joint-review flag is NOT discharged by this section** — this only names where these five land; rotation/injection-order procedure is §5's job.
 
@@ -830,7 +850,7 @@ Net effect: **deleting a user who has grouped legs FAILS** (the `journal` cascad
 | 7 | BLS key: code requires `BLS_API_KEY` vs. ARCH §5 "free/open" — reconcile | Architect / Sec | §5 |
 | 8 | Cutover timing + teardown go/no-go (**one-way door**) | F/CTO | §9 |
 | 9 | ✅ Cross-ref greenfield-deployment ADR-021 (resolved) | DevOps | Overview |
-| 11 | DB TimeZone pin — runbook §4.1 + §10 TZ-1 landed; **the pin itself needs an Architect-authored migration** (`ALTER DATABASE … SET timezone='UTC'`). Until it lands, production's UTC is an image default, not a declaration | Architect (authors) / DevOps (verifies) | §4.1 / §10 |
+| 11 | ✅ DB TimeZone pin — **resolved**: this row was stale, claiming the pin migration "needs to be authored." `061_pin_database_timezone_utc.sql` already exists on `main` (verified at `8434d721`) — production's UTC is a declared pin, not an image default. §4.1's own deploy-time read-back still applies fresh **after §6's migrations run**, not at §4 stand-up time (§6 is a stub; running the read-back before migrations apply will show "No row" and should not be read as the pin missing) | Architect (authored) / DevOps (verifies at §6) | §4.1 / §10 |
 | 10 | ✅ `ALTER ROLE … PASSWORD` plaintext handling — **resolved**: measured `log_statement = ddl` (exposure real, not theoretical); single-statement form prohibited, replaced by the `\password` + `ALTER ROLE … LOGIN` two-step (§6.1). Sec-ruled | DevOps + Sec | §6.1 |
 
 > **STUB —** This runbook is a skeleton. Each `> **STUB —**` marker above is a fill-in point as Phase 6 reveals the operational detail. Do not treat any section as complete until its STUB marker is removed and (for §5 + fence-touching content) Sec joint-review has signed off.
