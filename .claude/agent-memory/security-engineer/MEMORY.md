@@ -14,7 +14,7 @@
 - [Block when the vehicle cost inverts at merge](feedback_block_when_the_vehicle_cost_inverts.md) — return-shape rulings are free pre-merge.
 - [A stated invariant stronger than the contract](feedback_stated_invariant_stronger_than_the_contract.md) — retracting a claim, quote the WHOLE sentence: the tail may be a live obligation.
 - [My requirement can be voided by an artifact I did not read](feedback_my_requirement_can_be_voided_by_an_artifact_i_did_not_read.md) — a wrong REQUIREMENT gets built; run my proposal through every constraint I quote.
-- [Read the whole cell before diagnosing doc drift](feedback_read_the_whole_cell_before_diagnosing_doc_drift.md) — supersession ≠ drift; ask what my correction would UN-cover, and which built control cites the sentence as its reason.
+- [Read the whole cell before diagnosing doc drift](feedback_read_the_whole_cell_before_diagnosing_doc_drift.md) — supersession ≠ drift; ask what my correction would UN-cover, and which built control cites the sentence as its reason. ⚠ A handed-over replacement figure can be the WRONG AXIS, and the stale count is often the LESSER defect beside a false claim in the same sentence.
 - [Corrupt-the-control canary: how it fails to bite](feedback_corrupt_the_control_canary_boundary_tie.md) — corrupt the relation whose regression the fence NAMES; use a BOUNDARY PAIR.
 - [A RED whose message names the wrong defect](feedback_a_red_whose_message_names_the_wrong_defect.md) — the message dictates the repair, and the tempting repair disables the watcher.
 - [Clearance conditions must absorb my own recommendations](feedback_clearance_conditions_must_absorb_my_own_recommendations.md) — "comment-only" goes stale the moment I ask for a code fix.
@@ -70,6 +70,7 @@
 - [A DEFINER grant hands back the channel](feedback_a_definer_grant_hands_back_the_channel.md) — reachability · shape-vs-truth · repairability, in that order.
 - [Guarded region is the control, not the constant](feedback_guarded_region_is_the_control_not_the_constant.md) — a "mirrors <sibling>" claim is about what the block ENCLOSES.
 - [Exception logging leaks the credential in the URL](feedback_exception_logging_leaks_the_credential_in_the_url.md) — `logger.exception` on a `requests` failure writes the webhook URL; check where logs GO.
+- [Interactive tinker echoes the transcript](feedback_interactive_tinker_echoes_transcript.md) — `docker exec -i ... tinker` (no `--execute`) replays input+return values to stdout; fence bans tinker-without-`--execute`; RT-32.
 - [dblink in a test is a privilege boundary](feedback_dblink_in_a_test_is_a_privilege_boundary.md) — `dblink_connect_u` and role elevation are veto-shaped.
 - [A gate measured against `main` expires when `main` moves](feedback_a_gate_measured_against_main_expires_when_main_moves.md) — name the sha; use `git merge-tree`, not a two-way diff.
 - [A narrowing constraint breaks every fixture that seeds the barred value](feedback_a_narrowing_constraint_breaks_every_fixture_that_seeds_the_barred_value.md) — keep the leg, corrupt the control.
@@ -94,3 +95,5 @@
 - [Some F/CTO rulings live ONLY in Linear](project_off_tree_fcto_rulings_live_in_linear.md) — check the issue before calling an obligation undischarged.
 - [The "ADR-023 C1" rotation-coupling label is wrong-ADR](project_c1_rotation_coupling_label_is_misattributed.md) — inferred ADR-019 C1, F/CTO-unruled; 11+ carrier sites; re-attribute, never delete.
 - [Never tighten the CI-fenced-RT grep](project_ci_fenced_set_grep_must_not_be_tightened.md) — when fenced and §10 membership coincide, say so AND say they must not be reconciled.
+- [A new §4.5 RT id is an F/CTO ratify act](project_rt_id_assignment_is_fcto_ratify_act.md) — Sec/DevOps don't mint RT-NN; document the fence unlabeled until F/CTO Decision-4 ratify (studio-admin-console precedent).
+- [A trimmed service leaves live routes in the gateway](feedback_trimmed_service_leaves_live_routes_in_the_gateway.md) — read the PER-ROUTE overrides; `basic_auth: disabled: true` voids the global chain.

@@ -1,0 +1,16 @@
+---
+name: rt-id-assignment-is-fcto-ratify-act
+description: Minting a new §4.5 RT-catalog id (and thereby a CI-fenced-set member) is an F/CTO Decision-4 ratify act, NOT a Sec-authored or deploy-time one — document the fence unlabeled until then
+metadata:
+  type: project
+---
+
+A new CI fence does NOT get to claim an `RT-NN` §4.5 catalog id by Sec or DevOps decision. Assigning a §4.5 RT id is an **F/CTO Decision-4 ratify act**. Until F/CTO ratifies: document the control in `docs/SECURITY/index.html`, claim **no RT id**, and the CI fence job **carries no `RT-NN` label** (an `RT-NN` in a workflow mints a CI-fenced-set member by side effect — also not Sec's/DevOps's to mint).
+
+**Why:** the `#studio-admin-console` entry (F/CTO ruling 2026-09-10) states verbatim: *"whether the datastore fence earns a §4.5 catalog entry is an F/CTO Decision-4 ratify, not a deploy-time or Sec-authored act, and the fence job carries no `RT-NN` label until then."* Every existing RT id (RT-29/30/31) was minted against a ratified ADR as its vehicle. Applied 2026-09-11: the provisioning-tinker-leak fix was accepted as "RT-32" in conversation, but authored WITHOUT the id (entry `#provisioning-token-mint-leak`, §4.2) because no ADR/F-CTO ratify backed it yet — following the one-day-old precedent rather than making a new call.
+
+**How to apply:** when a new fence arises from an incident/PR rather than a ratified ADR, recommend the id but do not author it into the catalog. Use Option A: document the control + incident posture note unlabeled, mirror the studio entry's exact LEDGER+no-id shape, and surface the id assignment to F/CTO as their act with no deadline (the fence protects the tree meanwhile). If you earlier told DevOps to "label it RT-NN," correct it — the label waits; logic + golden positive-control fixture are unaffected. Related: [[interactive-tinker-echoes-transcript]], [[project_ci_fenced_set_grep_must_not_be_tightened]], [[feedback_fence_sentinel_asserts_subject_not_layer]].
+
+**RATIFY HAPPENED (F/CTO, 2026-09-10, creation order):** datastore fence (`fence-datastore-private-bind.sh`) = **RT-32**; interactive-tinker fence (`fence-tinker-no-echo.sh`) = **RT-33**. Both RT-catalog + CI-fenced-set only; NEITHER §10-catalogued (§10 stays 3 = RT-22/26/27). DevOps labels the workflow jobs; Sec authors the §4.5 catalog rows (count 31→33, 30→32 active). Verify built state live before trusting this.
+
+⚠ **The §4.5 RT-catalog's governing decision is [[reference_decision3_family_11_labels]]'s sibling — ADR-008 Decision 3, NOT ADR-011 D4.** ADR-011 D4 is the §10 defense-in-depth catalogued-instance ledger only. The studio-entry phrase "F/CTO Decision-4 ratify" and a team-lead brief both LOOSELY called D4 "the RT-catalog composition" — it is not. When routing an RT-catalog mint to Architect for a durable DECISIONS.md vehicle, name **ADR-008 D3** (its section-hint says "Locked at ADR-008 Decision 3"; body says "Per ADR-008 Decision 3, the catalog is V1-canonical"). Routing it as an ADR-011 D4 amendment would touch the §10 ledger's home = the exact §10/CI-fenced reconciliation the hard invariant forbids. Category/severity reuse (existing `test-environment-posture` + existing severity enum) → no ADR-008 closed-enum expansion; a NEW category or severity value WOULD require an ADR-008 amendment.
