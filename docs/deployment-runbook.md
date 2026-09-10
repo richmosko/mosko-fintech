@@ -159,13 +159,14 @@ ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no deploy@<box-
 
 ```sh
 # (3) Firewall — confirm only the intended ports are reachable from outside.
-nmap -Pn -p 22,80,443,8000,8081 <box-ip>   # run from OUTSIDE the box's network
+nmap -Pn -p 22,80,443,5432,6543,8000,8081 <box-ip>   # run from OUTSIDE the box's network
 ```
 
 | Result | Reading |
 |---|---|
-| `22, 80, 443` open; `8000` **filtered**; `8081` **filtered/closed** | **Correct.** |
+| `22, 80, 443` open; `5432`, `6543`, `8000` **filtered**; `8081` **filtered/closed** | **Correct.** |
 | `8000` shows **open** | **Wrong.** The firewall did not apply, or a rule was added by hand. The dashboard is meant to be unreachable from the internet entirely — reach it over the SSH tunnel above. Fix before installing Coolify, not after. |
+| `5432` or `6543` shows **open** | **Wrong, and load-bearing for the same reason as `8081` below** — nothing should ever publish the Supabase pooler's ports to the host. At *this* point in the sequence (before §3/§4) neither port has anything to answer on yet, so `filtered` here only proves the firewall rule exists, not that the datastore is actually unpublished later — that load-bearing check is §10's, after §4 deploys the stack and Docker has programmed its own NAT rules. This is a one-time provisioning-stage baseline with **no recurring watcher**: re-verify at §10, don't assume this result still holds by then. |
 | `8081` shows **open** | **Wrong, and load-bearing** — this is the exact regression §7 CA-4 / §10 CA-2 exist to catch downstream at the application layer; catching it here, before any service is even deployed, is cheaper. Re-check the cloud firewall rules; nothing at this stage should be publishing that port. |
 | Every port shows `filtered` including `22` | **Wrong-looking-but-fine, conditionally** — if this scan is run from a network Hetzner's Cloud Firewall doesn't allowlist yet (e.g. before the operator's own IP is added to the firewall's SSH rule), a fully-filtered result is expected and does **not** mean the box is unreachable to the operator; re-run from the network holding the firewall-allowlisted IP before concluding anything is actually broken. |
 
@@ -441,6 +442,16 @@ docker volume ls --filter name=<app-uuid>   # MUST print nothing before redeploy
 ```
 
 Confirm the volume is actually gone before redeploying — `down` without `-v` leaves `<app-uuid>_db-data` and `<app-uuid>_db-config` in place and silently reproduces the exact same symptom on the next attempt.
+
+**⚠ `rest` (PostgREST) sitting unhealthy after `db`, `auth`, `api-gw`, and `supavisor` are all healthy is expected at this point in the sequence, not evidence of a defect.** Measured live: `rest`'s health probe (`GET /ready`) errors repeatedly —
+
+```
+{"code":"3F000","message":"schema \"pfin\" does not exist"}
+```
+
+— because `PGRST_DB_SCHEMAS=pfin` is correct, but the `pfin` schema does not exist yet: it is created by `supabase/migrations/**`, which run at §6, not here. PostgREST retries its schema-cache load with its own backoff and goes healthy **on its own**, with no restart needed, the moment §6's `supabase db push` lands. **What would make this a real failure instead of the expected wait:** `rest` still unhealthy with this same error *after* §6's migrations have applied cleanly (check `supabase_migrations.schema_migrations` for the expected row count first), or a different error code entirely (anything other than `3F000`/"schema does not exist" on a schema-not-found race).
+
+**This is the third instance of the same pattern in this section, worth naming once rather than re-discovering per check: §4's verifications assume a post-§6 world, and some of them run before §6 in the natural stand-up order.** §4.1's TimeZone read-back, §5's Sec-gate STUB appearing to block §4's own execution, and this `rest`-unhealthy case are the same shape — a check that is correct, and will read as failing, until a later section's work lands. Reordering §4/§5/§6 is not the fix (§5's secrets-before-deploy gate and §6's role-provisioning ordering are both deliberate, not accidental) — the fix is marking each affected check explicitly, which this section now does at each instance rather than leaving a stranger to rediscover the pattern three separate times.
 
 **Secrets this step produces.** Names only — never values, here or anywhere in this repo; most (not all — each row below states whether it is a manifest entry) are drawn from `secrets-manifest.yml`'s `production_only` set. **§5's secrets-provisioning procedure is still a STUB and its Sec joint-review flag is NOT discharged by this section** — this only names where these five land; rotation/injection-order procedure is §5's job.
 
@@ -834,6 +845,11 @@ Scope: prove the from-scratch stand-up actually works before declaring V1 deploy
   - **POSITIVE control (must SUCCEED):** from a sibling container *inside* the same Coolify project, `http://provider-sync:8081` health path returns 2xx — proves internal reach works (so the negative result above is "correctly private," not "app simply down").
   - **CA-4 same-project check:** the positive control passing IS the same-project-internal-DNS assertion — if `http://provider-sync:8081` does not resolve from the api/ container, api/ and provider-sync are not co-located in one project (fix before proceeding; do NOT "fix" by assigning a public Domain).
   - Wire this as a go/no-go gate item alongside the §9 teardown gate. QA owns the cross-tenant/RLS assertions; DevOps owns this infra-reachability assertion.
+
+- **CA-7 — Supabase datastore external-reachability NEGATIVE smoke (§4 (1d); ship-block; DevOps-owned deploy assertion).** Same shape as CA-2 above, different subject: post-deploy, empirically assert `api-gw` and `supavisor` are **NOT** reachable from outside the private Docker network, now that both are `expose:`-only (§4 (1d) — the fix for the live 2026-09-10 incident where `supavisor` came up bound to `0.0.0.0:5432`/`0.0.0.0:6543`, caught only by probing, not by any error). This is §1's `nmap` baseline's load-bearing counterpart — §1 checks before anything exists to answer; this checks after the stack is actually up and Docker has programmed its own NAT rules, which is the only point where the assertion means anything.
+  - **NEGATIVE assertion (must FAIL to connect):** from a host *outside* the Coolify project network, `nmap -Pn -p 5432,6543,8000 <box-ip>` — all three must read `filtered`/closed, exactly as §1's baseline did, now re-confirmed with the datastore actually running. Also confirm no Coolify Domain is assigned to either service.
+  - **POSITIVE control (must SUCCEED) — this doubles as the CA-4-style same-Coolify-project prerequisite for §6, verify it BEFORE §6 runs, not after:** from a sibling container in the **same Coolify project** (the `app`/`workers/*` resources created at §6), `http://api-gw:8000` and the pooler's service name on `5432`/`6543` must resolve and respond. **If they don't resolve, `app` and the Supabase resource are not co-located in one Coolify project** — the CA-4 failure shape (§7's own precedent for `provider-sync` ↔ `app`) — **fix the project placement, do not "fix" it by assigning either Supabase service a public Domain.** `connect_to_docker_network` is not automatic and not project-scoped (§4 (1d)); confirm it is enabled on both sides as part of this check, not assumed from the services merely existing in the same project.
+  - Wire alongside CA-2 as a go/no-go gate item before §9 teardown.
 
 - **TZ-1 — database TimeZone pin read-back (§4.1; ship-block; DevOps-owned deploy assertion):** assert `select setting, source from pg_settings where name='TimeZone'` returns exactly **`UTC` / `database`** against the production database, and against the connection *each* container actually uses (web-app and `workers/etl` — a per-container `PGTZ` would override the pin for that container alone, and only that container's reads would be wrong).
   - **`source` is the assertion, not `setting`.** `UTC | configuration file` means the pin never applied and the value is right *by accident* — that is the exact unmeasured premise §4.1 exists to remove, and it reads identical to success if you only check the value.

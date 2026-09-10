@@ -1,0 +1,16 @@
+# fence-datastore-private-bind: target
+# GOLDEN FIXTURE — evasion class: ${VAR} interpolation in the bind token
+# (exit 1, vector 1).
+#
+# A compose ${VAR} can resolve to anything at deploy time -- the fence cannot
+# evaluate it, so any interpolation anywhere in the token is refused rather
+# than assumed safe. Exercised by the fence-datastore-bind CI job, asserting
+# exit 1 AND the vector-1 token.
+
+services:
+  studio:
+    container_name: supabase-studio
+    image: supabase/studio:2026.09.07-sha-7996410
+    restart: unless-stopped
+    ports:
+      - "${STUDIO_BIND}:3000:3000"

@@ -1,0 +1,15 @@
+# fence-datastore-private-bind: target
+# GOLDEN FIXTURE — VECTOR 3 (network_mode: host → fence FAILS, exit 1).
+#
+# `network_mode: host` drops the service onto the host's own network
+# namespace, binding its ports directly on every host interface — bypasses
+# the project Docker network and the expose:/ports: distinction entirely.
+# Exercised by the fence-datastore-bind CI job, asserting exit 1 AND the
+# vector-3 token.
+
+services:
+  supavisor:
+    container_name: supabase-pooler
+    image: supabase/supavisor:2.9.12
+    restart: unless-stopped
+    network_mode: host
