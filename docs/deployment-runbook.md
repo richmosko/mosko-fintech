@@ -418,6 +418,19 @@ docker compose --project-name <app-uuid> logs db 2>&1 | grep -iE "roles\.sql|jwt
 # directory mounted empty — the base_directory misconfiguration above.
 ```
 
+**⚠ A `db` container reporting `healthy` after an init-script mount failure is the normal presentation of that failure, not evidence against it — its health check only proves Postgres is accepting connections, not that any init script ran.** Postgres runs everything under `/docker-entrypoint-initdb.d/` exactly once, against an **empty** data directory, at first boot. If that first boot happened with (1c)'s bogus empty-directory mounts in place — even briefly, even from a deploy attempt that then failed for an unrelated reason like `api-gw`'s mount error — the data directory is no longer empty, `roles.sql`/`jwt.sql`/the rest can never run against it, and re-running (1c)'s materialize script and redeploying does **not** fix this: Postgres will happily boot healthy against the already-initialized (and now permanently broken) directory forever. The tell: `pg_authid` shows `authenticator`/`pgbouncer`/`supabase_auth_admin` with a **NULL** password (only the image's own baked-in schema scripts ran — those create the `anon`/`authenticated`/`service_role` roles too, so their presence is not evidence `roles.sql` ran) and `show app.settings.jwt_secret` errors `unrecognized configuration parameter`. Symptomatically this shows up one step downstream: `auth`, `rest`, `api-gw`, and `supavisor` all sit in `Created` and never start, because none of them can authenticate to a `db` that itself reports healthy.
+
+**The remedy is destroying the volume and letting Postgres re-init, never a redeploy alone:**
+
+```sh
+# Confirms nothing is preserved by skipping this — no data exists to protect
+# before §6's migrations run, so this is cheap now and expensive to diagnose later.
+docker compose --project-name <app-uuid> down -v
+docker volume ls --filter name=<app-uuid>   # MUST print nothing before redeploying
+```
+
+Confirm the volume is actually gone before redeploying — `down` without `-v` leaves `<app-uuid>_db-data` and `<app-uuid>_db-config` in place and silently reproduces the exact same symptom on the next attempt.
+
 **Secrets this step produces.** Names only — never values, here or anywhere in this repo; most (not all — each row below states whether it is a manifest entry) are drawn from `secrets-manifest.yml`'s `production_only` set. **§5's secrets-provisioning procedure is still a STUB and its Sec joint-review flag is NOT discharged by this section** — this only names where these five land; rotation/injection-order procedure is §5's job.
 
 | Secret | Produced how | Where it goes |
