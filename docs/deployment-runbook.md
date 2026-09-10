@@ -304,6 +304,8 @@ Scope: bring up a fresh self-hosted Supabase stack (Postgres 17) on the new box 
 
 **Do not fetch the reference compose once and commit it verbatim into this repo.** Its service set and image tags move — the gateway service alone has been renamed and re-implemented since earlier tree references were written (see the `kong` row below). Pull it fresh at execution time, apply the trim below, and record the exact tags actually deployed in `docs/records/v1final/standup-log.md` (the as-executed log, not this file, per its own "records measurements, not intentions" rule).
 
+**The trimmed compose lives at [`infra/supabase/docker-compose.yml`](../infra/supabase/docker-compose.yml)**, alongside its vendored Envoy config and DB init scripts (see that directory's `README.md` for provenance and the two changes made from the corresponding upstream service blocks). Sibling to the `workers/*/docker-compose.yaml` pattern §3 already uses, not nested under `supabase/` (CLI-config/migration territory) or `docs/` (reference docs, not deploy artifacts).
+
 **Service scope for V1 — decided service by service, evidence-based.** Cross-checked against `supabase/config.toml`'s `enabled` sections and the current reference compose (read live 2026-09-09); the note after the table says why `config.toml`'s flags don't settle this by themselves.
 
 | Service | In/Out | Evidence |
@@ -334,9 +336,9 @@ psql "$PROD_DB_URL" -Atc "show server_version;"
 
 Do not accept a Coolify/`docker compose` "healthy" status as this proof — a health check proves a process is listening, not which major version it's running. A wrong image tag reports exactly as healthy as a right one; this is exactly the silent failure mode Coolify's one-click template (pinned to 15.x) would have produced.
 
-**5a. Disable production signup; found the tenant by invitation.** Set `GOTRUE_DISABLE_SIGNUP=true` in the Coolify Compose resource's environment for the `auth` service — interpolated into that service's env block in the compose file, the same mechanism the stack's `JWT_SECRET`/`ANON_KEY`/`SERVICE_ROLE_KEY` already use. This is a **container env var on the self-hosted `auth`/GoTrue container**, distinct from and unrelated to `config.toml`'s `[auth] enable_signup` / `[auth.email] enable_signup` (both `true`, local-CLI-only, `config.toml:181,228`) — setting one does not touch the other.
+**5a. Disable production signup; found the tenant by invitation.** `GOTRUE_DISABLE_SIGNUP` is **hardcoded `"true"`** in the `auth` service block of [`infra/supabase/docker-compose.yml`](../infra/supabase/docker-compose.yml) — **not** a Coolify-settable env var. This is a corrected instruction, not the original one: this section previously told the operator to set a Coolify variable named `GOTRUE_DISABLE_SIGNUP`, but the compose interpolated `${DISABLE_SIGNUP}` — followed literally, that naming mismatch resolves to an empty value and **signup stays enabled**, the exact inverse of F/CTO's Q5 ruling. Caught by the verification probe below, not by re-reading the instruction — which is the case for running it at all rather than trusting the config. Q5 makes signup-disabled a **standing gate** (it stays off through the full V1.final soak until the Plaid Link-token operator allowlist ships — [`BACKLOG.md` §7.36 item 1](../BACKLOG.md)), so it is hardcoded rather than left tunable: lifting it later means editing the compose file (and shipping a PR), which is the correct friction for a one-way-door control, not a dashboard toggle. This is a **container env var on the self-hosted `auth`/GoTrue container**, distinct from and unrelated to `config.toml`'s `[auth] enable_signup` / `[auth.email] enable_signup` (both `true`, local-CLI-only, `config.toml:181,228`) — setting one does not touch the other.
 
-**Verify by probing the endpoint, never by reading a config back:**
+**Verify by probing the endpoint, never by reading a config back — this is what would have caught the naming-mismatch defect above, and is why this step is a live probe rather than a compose-file read:**
 
 ```sh
 curl -s -o /dev/null -w '%{http_code}\n' \
@@ -830,7 +832,7 @@ Net effect: **deleting a user who has grouped legs FAILS** (the `journal` cascad
 | 7 | BLS key: code requires `BLS_API_KEY` vs. ARCH §5 "free/open" — reconcile | Architect / Sec | §5 |
 | 8 | Cutover timing + teardown go/no-go (**one-way door**) | F/CTO | §9 |
 | 9 | ✅ Cross-ref greenfield-deployment ADR-021 (resolved) | DevOps | Overview |
-| 11 | DB TimeZone pin — runbook §4.1 + §10 TZ-1 landed; **the pin itself needs an Architect-authored migration** (`ALTER DATABASE … SET timezone='UTC'`). Until it lands, production's UTC is an image default, not a declaration | Architect (authors) / DevOps (verifies) | §4.1 / §10 |
+| 11 | ✅ DB TimeZone pin — **resolved**: this row was stale, claiming the pin migration "needs to be authored." `061_pin_database_timezone_utc.sql` already exists on `main` (verified at `8434d721`) — production's UTC is a declared pin, not an image default. §4.1's own deploy-time read-back still applies fresh **after §6's migrations run**, not at §4 stand-up time (§6 is a stub; running the read-back before migrations apply will show "No row" and should not be read as the pin missing) | Architect (authored) / DevOps (verifies at §6) | §4.1 / §10 |
 | 10 | ✅ `ALTER ROLE … PASSWORD` plaintext handling — **resolved**: measured `log_statement = ddl` (exposure real, not theoretical); single-statement form prohibited, replaced by the `\password` + `ALTER ROLE … LOGIN` two-step (§6.1). Sec-ruled | DevOps + Sec | §6.1 |
 
 > **STUB —** This runbook is a skeleton. Each `> **STUB —**` marker above is a fill-in point as Phase 6 reveals the operational detail. Do not treat any section as complete until its STUB marker is removed and (for §5 + fence-touching content) Sec joint-review has signed off.

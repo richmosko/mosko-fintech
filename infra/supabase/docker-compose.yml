@@ -1,0 +1,271 @@
+# Trimmed self-hosted Supabase stack for V1 stand-up (docs/deployment-runbook.md §4).
+#
+# Derived from Supabase's own reference self-hosting compose, NOT committed verbatim
+# per §4's own guidance (the reference's service set and image tags move). Source and
+# read time recorded here so a future re-pull can diff against a known point:
+#
+#   Source:  https://raw.githubusercontent.com/supabase/supabase/master/docker/docker-compose.yml
+#   Read:    2026-09-10 07:22 UTC
+#   Pinned to upstream commit: 8c7a4d9dbbaf8b552893822e89d7bf06f33f9220
+#            ("chore(self-hosted): update 2026-09-09 - 0.8.1 (#50172)")
+#
+# Trim (§4 service-scope table): IN = db, auth, rest, api-gw (gateway), supavisor.
+# OUT = studio, meta, storage, imgproxy, realtime, analytics, vector, functions.
+#
+# Four changes from the corresponding upstream service blocks, all load-bearing:
+#
+#   1. api-gw's `depends_on: studio: condition: service_healthy` REMOVED.
+#      studio is OUT of this trim; left in place, `docker compose up` hard-errors
+#      on the undefined service reference and the gateway never starts.
+#
+#   2. auth's GOTRUE_DISABLE_SIGNUP is HARDCODED "true", not read from a
+#      ${DISABLE_SIGNUP} interpolation. §4 step 5a (F/CTO Q5 ruling) makes
+#      signup-disabled a STANDING GATE, not an operator-settable value: it stays
+#      off through the full V1.final soak until the Plaid Link-token operator
+#      allowlist ships (BACKLOG.md §7.36 item 1). The env-var form was a live
+#      defect — the runbook instructed setting a Coolify var named
+#      GOTRUE_DISABLE_SIGNUP, but the compose interpolates ${DISABLE_SIGNUP};
+#      followed literally, the mismatch resolves empty and signup stays ENABLED,
+#      the exact inverse of the ruling. Hardcoding closes it by construction:
+#      lifting the gate later requires an edit to this file (and a PR), which is
+#      the correct friction for a one-way-door security control, not a Coolify
+#      env-var toggle anyone with dashboard access could flip.
+#
+#   3. Every relative bind-mount source is written REPO-ROOT-RELATIVE
+#      (./infra/supabase/volumes/...), not compose-file-relative (./volumes/...)
+#      as upstream writes them. This is deploying via Coolify's `dockercompose`
+#      build pack with `docker_compose_location` pointing at this file inside a
+#      git checkout — NOT running `docker compose up` by hand from this
+#      directory, which is what upstream's own paths assume. Multiple Coolify
+#      GitHub issues (#1996, #2444, #3294, #3375, #4468, #6056, #8107 — spanning
+#      a wide version range, none confirmed fixed as of this writing) report
+#      that Coolify resolves a Docker Compose build pack's relative volume
+#      sources against the application's checkout ROOT, not the compose file's
+#      own directory, when the compose file lives in a subdirectory. Written
+#      compose-file-relative, every bind mount below would resolve to a
+#      nonexistent path at the repo root, and Docker auto-creates a bind mount's
+#      missing source as an EMPTY DIRECTORY rather than erroring — Envoy would
+#      boot with no config, and the DB init scripts would silently not run,
+#      both "comes up healthy, serves the wrong config" failures rather than a
+#      loud one. THIS ASSUMPTION IS NOT VERIFIED AGAINST THIS BOX'S Coolify
+#      4.3.18 SPECIFICALLY — it is the best call from the external evidence
+#      available, not a live-tested fact. Verify empirically at first deploy:
+#      check `docker logs supabase-envoy` for a real config load (not just
+#      "container running"), and check `docker logs supabase-db` during first
+#      boot for each init-script filename actually executing, before trusting
+#      this stack with anything.
+#
+#   4. `db`'s data directory is a NAMED VOLUME (`db-data`), not upstream's
+#      relative bind mount (./volumes/db/data). Multiple Coolify sources
+#      converge on this independently of point 3's path-resolution question:
+#      a bind mount under the application's git checkout is not guaranteed to
+#      survive a redeploy (the checkout can be cleared/re-cloned), whereas a
+#      named volume is managed by Docker/Coolify directly and does. Upstream's
+#      own compose is written for a manually-run, never-re-cloned checkout,
+#      where this distinction doesn't matter — it does here. This is the one
+#      change of the four that is correct regardless of how point 3 resolves.
+
+name: supabase
+
+services:
+
+  # Envoy is the default API gateway (upstream renamed this from `kong`;
+  # network aliases below keep both hostnames resolvable, though nothing in
+  # this tree references either name directly — confirmed via a repo grep).
+  api-gw:
+    container_name: supabase-envoy
+    image: envoyproxy/envoy:v1.39.1
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - envoy
+          - kong
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/8000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    ports:
+      - ${API_GW_HTTP_PORT:-${KONG_HTTP_PORT:-8000}}:8000/tcp
+    volumes:
+      - ./infra/supabase/volumes/api/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./infra/supabase/volumes/api/envoy/cds.yaml:/etc/envoy/cds.yaml:ro
+      - ./infra/supabase/volumes/api/envoy/lds.template.yaml:/etc/envoy/lds.template.yaml:ro
+      - ./infra/supabase/volumes/api/envoy/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+    environment:
+      ANON_KEY: ${ANON_KEY}
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+      ANON_KEY_ASYMMETRIC: ${ANON_KEY_ASYMMETRIC:-}
+      SERVICE_ROLE_KEY_ASYMMETRIC: ${SERVICE_ROLE_KEY_ASYMMETRIC:-}
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+    entrypoint: ["/bin/sh", "/docker-entrypoint.sh"]
+
+  auth:
+    container_name: supabase-auth
+    image: supabase/gotrue:v2.196.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      timeout: 5s
+      interval: 5s
+      retries: 3
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      GOTRUE_SITE_URL: ${SITE_URL}
+      GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS}
+      # HARDCODED — see header note. Not a ${DISABLE_SIGNUP} interpolation on
+      # purpose: this is a standing gate (F/CTO Q5), not an operator tunable.
+      GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: ${JWT_EXPIRY}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_ISSUER: ${API_EXTERNAL_URL}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: ${ENABLE_EMAIL_SIGNUP}
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: ${ENABLE_ANONYMOUS_USERS}
+      GOTRUE_MAILER_AUTOCONFIRM: ${ENABLE_EMAIL_AUTOCONFIRM}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT}
+      GOTRUE_SMTP_USER: ${SMTP_USER}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME}
+      GOTRUE_MAILER_URLPATHS_INVITE: ${MAILER_URLPATHS_INVITE}
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: ${MAILER_URLPATHS_CONFIRMATION}
+      GOTRUE_MAILER_URLPATHS_RECOVERY: ${MAILER_URLPATHS_RECOVERY}
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: ${MAILER_URLPATHS_EMAIL_CHANGE}
+      GOTRUE_EXTERNAL_PHONE_ENABLED: ${ENABLE_PHONE_SIGNUP}
+      GOTRUE_SMS_AUTOCONFIRM: ${ENABLE_PHONE_AUTOCONFIRM}
+
+  rest:
+    container_name: supabase-rest
+    image: postgrest/postgrest:v14.17
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "postgrest", "--ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      PGRST_DB_SCHEMAS: ${PGRST_DB_SCHEMAS}
+      PGRST_DB_MAX_ROWS: ${PGRST_DB_MAX_ROWS:-1000}
+      PGRST_DB_EXTRA_SEARCH_PATH: ${PGRST_DB_EXTRA_SEARCH_PATH:-public}
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_ADMIN_SERVER_PORT: 3001
+      PGRST_ADMIN_SERVER_HOST: localhost
+      PGRST_JWT_SECRET: ${JWT_JWKS:-${JWT_SECRET}}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET}
+      PGRST_APP_SETTINGS_JWT_EXP: ${JWT_EXPIRY}
+    command: ["postgrest"]
+
+  # Comment out everything below if you are using an external Postgres database
+  # (not applicable here — this IS the database).
+  db:
+    container_name: supabase-db
+    image: supabase/postgres:17.6.1.136
+    restart: unless-stopped
+    volumes:
+      - ./infra/supabase/volumes/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
+      - ./infra/supabase/volumes/db/webhooks.sql:/docker-entrypoint-initdb.d/init-scripts/98-webhooks.sql:Z
+      - ./infra/supabase/volumes/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:Z
+      - ./infra/supabase/volumes/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:Z
+      # NAMED VOLUME, not a bind mount — see header note point 4. Upstream uses
+      # ./volumes/db/data here; that is unsafe under Coolify's redeploy model.
+      - db-data:/var/lib/postgresql/data:Z
+      - ./infra/supabase/volumes/db/_supabase.sql:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql:Z
+      - ./infra/supabase/volumes/db/logs.sql:/docker-entrypoint-initdb.d/migrations/99-logs.sql:Z
+      - ./infra/supabase/volumes/db/pooler.sql:/docker-entrypoint-initdb.d/migrations/99-pooler.sql:Z
+      - db-config:/etc/postgresql-custom
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      PGPORT: ${POSTGRES_PORT}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      POSTGRES_DB: ${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXP: ${JWT_EXPIRY}
+    command:
+      [
+        "postgres",
+        "-c",
+        "config_file=/etc/postgresql/postgresql.conf",
+        "-c",
+        "log_min_messages=fatal" # prevents Realtime polling queries from appearing in logs (harmless: no realtime container in this trim)
+      ]
+
+  # Update the DATABASE_URL if you are using an external Postgres database
+  # (not applicable here).
+  supavisor:
+    container_name: supabase-pooler
+    image: supabase/supavisor:2.9.12
+    restart: unless-stopped
+    ports:
+      - ${POSTGRES_PORT}:5432
+      - ${POOLER_PROXY_PORT_TRANSACTION}:6543
+    volumes:
+      - ./infra/supabase/volumes/pooler/pooler.exs:/etc/pooler/pooler.exs:ro,z
+    healthcheck:
+      test: ["CMD", "curl", "-sSfL", "--head", "-o", "/dev/null", "http://127.0.0.1:4000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: ecto://supabase_admin:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/_supabase
+      CLUSTER_POSTGRES: "true"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      VAULT_ENC_KEY: ${VAULT_ENC_KEY}
+      API_JWT_SECRET: ${JWT_SECRET}
+      METRICS_JWT_SECRET: ${JWT_SECRET}
+      REGION: local
+      ERL_AFLAGS: -proto_dist inet_tcp
+      POOLER_TENANT_ID: ${POOLER_TENANT_ID}
+      POOLER_DEFAULT_POOL_SIZE: ${POOLER_DEFAULT_POOL_SIZE}
+      POOLER_MAX_CLIENT_CONN: ${POOLER_MAX_CLIENT_CONN}
+      POOLER_POOL_MODE: transaction
+      DB_POOL_SIZE: ${POOLER_DB_POOL_SIZE}
+    command:
+      [
+        "/bin/sh",
+        "-c",
+        "/app/bin/migrate && /app/bin/supavisor eval \"$$(cat /etc/pooler/pooler.exs)\" && /app/bin/server"
+      ]
+
+volumes:
+  db-config:
+  db-data:
+  # NOTE: upstream's `deno-cache` volume dropped — it was `functions`-only,
+  # and `functions` is OUT of this trim.
