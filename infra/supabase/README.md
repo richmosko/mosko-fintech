@@ -27,7 +27,7 @@ Every file under `volumes/` here was vendored from that same commit (`docker/vol
 
 **OUT:** `studio`, `meta`, `storage`, `imgproxy`, `realtime`, `analytics`, `vector`, `functions`. None of the kept services retain a `depends_on`, healthcheck, volume, or env var pointing at a dropped one — checked explicitly, not inferred.
 
-## Four changes from the corresponding upstream service blocks
+## Five changes from the corresponding upstream service blocks
 
 1. **`api-gw`'s `depends_on: studio` removed.** Upstream's gateway waits on `studio` being healthy before starting. `studio` is OUT of this trim; left in place, `docker compose up` hard-errors on the undefined service reference and the gateway never starts.
 
@@ -38,6 +38,14 @@ Every file under `volumes/` here was vendored from that same commit (`docker/vol
    **Verify at first deploy anyway** — a healthy status cannot distinguish this from success. Check the gateway container's own log for a real config load (not just "container running"), and check the `db` container's boot log for each init-script filename actually executing. See §4's verification step.
 
 4. **`db`'s data directory is a named volume (`db-data`), not upstream's relative bind mount (`./volumes/db/data`).** Independent of point 3's path-resolution question: a bind mount under the application's git checkout is not guaranteed to survive a redeploy (the checkout can be cleared/re-cloned — corroborated by multiple Coolify sources: "if you use a bind mount with a path that gets cleared during deploy instead of a named volume, you'll lose data"), whereas a named volume is managed by Docker/Coolify directly and does survive. Upstream's own compose is written for a manually-run, never-re-cloned checkout, where this distinction doesn't matter — it does here. This change is correct regardless of how point 3 resolves.
+
+5. **`supavisor`'s pooler config mount is `:ro`, not the two-flag `:ro,z` an SELinux-aware host would use.** Dropped, not carried over: this box runs Ubuntu with no SELinux, so `:z` is a no-op there regardless — but Coolify's own compose-string parser (`bootstrap/helpers/parsers.php`) mis-parses the two-flag combination, bleeding `:ro,z` into the `mount_path` it records rather than stopping at the first `:`. Coolify's single-flag forms (`:ro` alone, `:Z` alone — used on all seven `db` mounts) parse cleanly. Discovered on the first live deploy attempt; see the empty-directory issue immediately below for the deploy that surfaced it.
+
+## Known gap: first deploy pre-creates every file-shaped bind mount as an empty directory
+
+**Every mount in point 3 above is written compose-file-relative, and that's correct — but "correct" doesn't mean Coolify resolves it to a real file on the first deploy.** Source-verified in `bootstrap/helpers/parsers.php`'s `applicationParser()`: parsing a relative bind mount for the first time (no prior `local_file_volumes` row to read the shape from) defaults `is_directory=true` and pre-creates that path on the host as an empty directory. Nothing in `ApplicationDeploymentJob`'s deploy flow for this application's settings (`is_preserve_repository_enabled=false`, the default for this build pack) corrects that guess before `docker compose up` runs — the method that would (`LocalFileVolume::saveStorageOnServer()`) is only ever called when that setting is on. Unlike point 3's silent failure, this one is loud: `docker compose up` errors with `not a directory: Are you trying to mount a directory onto a file?` for every one of the 12 file-shaped mounts here (4 under `volumes/api/envoy/`, 7 under `volumes/db/`, 1 under `volumes/pooler/`).
+
+**Fix:** `scripts/coolify-materialize-supabase-mounts.sh --apply` (repo root; dry-run without `--apply`). It replaces each bogus host directory with the real file read from this `volumes/` tree — never the reverse, this tree stays the only source of truth — and syncs Coolify's `local_file_volumes.content` + `.is_directory` bookkeeping through its own Eloquent model rather than a raw SQL write (the `content` column is `encrypted`-cast; a plaintext write corrupts it). Full narrative and the redeploy step: `docs/deployment-runbook.md` §4, subsection (1c).
 
 ## Vendored support files — deliberately unmodified, all seven/four
 
