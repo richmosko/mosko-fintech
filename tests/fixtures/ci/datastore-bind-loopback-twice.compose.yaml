@@ -1,0 +1,23 @@
+# fence-datastore-private-bind: target
+# GOLDEN FIXTURE — evasion class: the allowlisted line appears twice
+# (exit 1, vector 1).
+#
+# The allowance is for ONE service; the fence cannot tell which `ports:`
+# block a service actually needs it, so a second occurrence anywhere in the
+# file is a violation rather than assumed to be "more of the same, fine."
+# Exercised by the fence-datastore-bind CI job, asserting exit 1 AND the
+# vector-1 token.
+
+services:
+  studio:
+    container_name: supabase-studio
+    image: supabase/studio:2026.09.07-sha-7996410
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+  studio-decoy:
+    container_name: supabase-studio-decoy
+    image: supabase/studio:2026.09.07-sha-7996410
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
