@@ -86,6 +86,7 @@
 - [CPI positivity CHECK must be additive](project_cpi_positivity_check_must_be_additive.md) — `NaN > 0` is TRUE in Postgres.
 - [`z.coerce.number()` on FK-shaped ID fields is permissive](project_zod_coerce_number_on_fk_id_fields.md) — accepts `true` / `[5]` / `"0x10"` / `"5e2"`; standing item, never a per-branch condition.
 - [Lock 14 `.strict()` is decorative; the hand-built parse input is the fence](project_lock14_strict_is_decorative_hand_built_input_is_the_fence.md) — property HOLDS, the header's CLAIM is wrong; read the ACTION first.
+- [Runbook §5's Sec gate does NOT block §4](project_runbook_s4_s5_gate_boundary.md) — mint (§4) vs app-facing Coolify injection (§5); `PUBLIC_` names are gated too.
 - [ONE write through `impersonate()` is ratified (SELF-351)](project_impersonate_block_write_ratified_at_self351.md) — that one call only; re-measure grant + tenant-parameter before extending.
 - [`account_trans` write surfaces auto-route to Sec](project_account_trans_write_surface_auto_routes_to_sec.md) — ADR-064 D5; D2-mandatory, never opt-in.
 - [aal2 `passkey` arm has no behavioural observer](project_aal2_passkey_arm_has_no_behavioural_observer.md) — standing QA item, never a per-member merge condition.
