@@ -28,7 +28,7 @@
 |---|---|---|---|
 | 1 | Hosting target decided | F/CTO | ✅ Ruled 2026-09-08 — Hetzner CAX21 |
 | 2 | `pfin_provider_sync` login-role migration (S5) | Architect | ✅ Migration `116` on `main` (PR #671) |
-| 3 | Provision VPS + install Coolify | DevOps + F/CTO | 🟡 **VPS PROVISIONED 2026-09-09** — Coolify not yet installed |
+| 3 | Provision VPS + install Coolify | DevOps + F/CTO | ✅ **DONE 2026-09-09** — VPS provisioned, §1 hardening applied, Coolify `4.3.18` healthy |
 | 4 | DNS / domain decision + records | F/CTO + DevOps | 🟡 Domain RULED (`pfindash.com` reuse) — records not yet cut over |
 | 5 | Stand up self-hosted Supabase; apply migrations | DevOps | ⛔ Blocked on 3 |
 | 5a | Production signup OFF (`GOTRUE_DISABLE_SIGNUP=true`) | DevOps | ⛔ Blocked on 5 · ruled Q5 |
@@ -112,6 +112,54 @@ ssh -L 8000:localhost:8000 root@188.245.166.206
 
 **Still outstanding on this box:** §1's hardening beyond key-only auth — password authentication off, root SSH login restricted, non-root operator user. Coolify itself (§3) is not installed.
 
+### 3c. §1 hardening applied — 2026-09-09
+
+Applied over SSH as `root`, verified by probing rather than by reading the config back.
+
+**sshd** — written as a drop-in at `/etc/ssh/sshd_config.d/99-pfin-hardening.conf` so a package upgrade of the main file cannot silently revert it. `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PubkeyAuthentication yes`, and **`PermitRootLogin prohibit-password` — deliberately not `no`**, because Coolify connects to this box as `root` over key-based SSH and a flat `no` breaks its server connection.
+
+| Probe | Result |
+|---|---|
+| password auth, pubkey disabled | `Permission denied (publickey)` — refused |
+| key auth as `root` | works |
+| key auth as `deploy` | works |
+
+**Operator user `deploy`** created with sudo and both public keys copied in.
+
+⚠ **One thing I got wrong, fixed the same minute.** I created `deploy` with `--disabled-password` to avoid an interactive prompt, which left it unable to authenticate to `sudo` at all — `sudo: a password is required` for an account that has no password. Granted `NOPASSWD` at `/etc/sudoers.d/90-deploy` instead. **The reasoning, stated so it can be challenged:** the same keys already grant *direct* `root` login (required by Coolify, above), so `NOPASSWD` sudo for `deploy` grants no capability those keys do not already have. It removes a prompt that cannot be satisfied. If `PermitRootLogin` is ever tightened, revisit this — the argument depends on it.
+
+### 3d. Coolify installed — 2026-09-09
+
+**Version `4.3.18`, pinned.** Read from `cdn.coollabs.io/coolify/versions.json` (`coolify.v4`) immediately before installing, per runbook §3 — the runbook deliberately does not hardcode a version, since a stale pin in a doc is worse than no pin.
+
+```
+curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash -s 4.3.18
+```
+
+All six containers healthy: `coolify`, `coolify-db`, `coolify-redis`, `coolify-proxy`, `coolify-realtime`, `coolify-sentinel`. `curl http://localhost:8000` **from the box** returns `302 → /login`.
+
+**Port 8000 re-probed from outside after installation: still filtered.** Installing a service that listens on a port is exactly when a firewall regression would appear, so the check was repeated rather than assumed to still hold from provisioning time.
+
+**Access is tunnel-only.** The installer prints `http://188.245.166.206:8000`; that URL will not resolve and that is correct.
+
+```sh
+ssh -L 8000:localhost:8000 root@188.245.166.206
+# then browse http://localhost:8000
+```
+
+⚠ **Not yet done, and it is F/CTO's:** the first-run admin account has not been created. Until it is, the instance is unclaimed.
+
+⚠ **`/data/coolify/source/.env` on the box holds Coolify's own secrets** and the installer recommends backing it up off-server. It belongs in a password manager, **never in this repo**.
+
+### 3e. Key custody — a single point of failure, named
+
+Both keys on this box exist only on one laptop. Recorded because the recovery path is not obvious:
+
+- **Hetzner injects SSH keys only at server creation.** Adding a key in the Hetzner console does **nothing** to an existing box — it stores it for future ones. This is the same fact that forced a destroy-and-recreate at §3b.
+- **To add a machine:** append its public key to `~/.ssh/authorized_keys` on the box from a machine that already has access (`ssh-copy-id`). Both `root` and `deploy` carry copies, so both need updating.
+- **If no machine has access:** Hetzner's browser console (VNC) bypasses SSH entirely — reset the root password there, log in, add the key. Rescue mode is the heavier fallback. **So the real dependency is the Hetzner account, not any laptop** — which relocates the risk to wherever that account's 2FA lives.
+- **The two keys are not equally safe to copy.** The personal key is passphrase-protected, so the file alone is useless and it is reasonable to store in a password manager. **The automation key has no passphrase — anyone holding that file has root.** It should not be copied between machines; generate a separate key per machine instead.
+
 ### 3b. The first box was destroyed and rebuilt — the failure is the point
 
 The first server (`165377261`) came up **correct in every respect**: right spec, right image, sshd listening, firewall exactly as specified. It was also **unreachable by automation**, because the only key on it was `id_ed25519`, which is passphrase-protected. A script has no terminal to type a passphrase into.
@@ -142,4 +190,5 @@ Two things came out of it. `scripts/provision-vps.sh` now takes a **list** of ke
 | 2026-09-09 | 3 | Follow runbook §1/§3 | Both sections were STUBs; no procedure existed to follow. | ✅ Authored, PR #684 |
 | 2026-09-09 | 3 | Provision once, cleanly | First box carried only a passphrase-protected key — correct in every other respect and unreachable by automation. Destroyed and recreated with both keys. | ✅ Script now validates key usability and refuses to provision without an automation-usable key |
 | 2026-09-09 | 3 | Script runs clean | Five bugs, each found only by running against the live API: shell brace expansion mangled the SSH-key JSON; an unassigned primary IP is created against a `location`, not a `datacenter`; `public_net` takes `ipv4:<id>` while `enable_ipv4` is a bool; key lookup must be by **fingerprint** (Hetzner 409s on duplicate material whatever you name it); and the server delete returns **before** the primary IP detaches, so creating into that window 422s with nothing about timing. | ✅ All five fixed; the race now waits and refuses rather than creating into it |
+| 2026-09-09 | 3 | `adduser deploy` per runbook §1 step 3 | Created with `--disabled-password` to avoid an interactive prompt, which left the account unable to authenticate to `sudo` at all. | ✅ `NOPASSWD` granted; reasoning recorded at §3c — the same keys already grant direct root |
 | 2026-09-09 | 3 | Verify ports from outside | First probe reported **every** port filtered, including 22, seconds after SSH had succeeded on 22. The instrument was broken, not the box. | n/a — re-probed by TCP behaviour |
