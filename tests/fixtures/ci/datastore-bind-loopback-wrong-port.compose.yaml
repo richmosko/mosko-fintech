@@ -1,0 +1,15 @@
+# fence-datastore-private-bind: target
+# GOLDEN FIXTURE — evasion class: correct address, wrong port (exit 1, vector 1).
+#
+# The allowlist is ONE exact token (127.0.0.1:3000:3000), not "any loopback
+# bind" -- this plants the loopback address on a DIFFERENT port (db's 5432)
+# to prove the fence doesn't pattern-match on 127.0.0.1 alone. Exercised by
+# the fence-datastore-bind CI job, asserting exit 1 AND the vector-1 token.
+
+services:
+  db:
+    container_name: supabase-db
+    image: supabase/postgres:17.6.1.136
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"

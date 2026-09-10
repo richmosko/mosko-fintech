@@ -1,0 +1,19 @@
+# fence-datastore-private-bind: target
+# GOLDEN FIXTURE — VECTOR 2 (reverse-proxy Domain / public-FQDN request →
+# fence FAILS, exit 1).
+#
+# A datastore service must never request a public Domain/Host()/SERVICE_FQDN —
+# there is no legitimate reason for Postgres's own gateway to be
+# Traefik-routed to the public internet. Exercised by the fence-datastore-bind
+# CI job, asserting exit 1 AND the vector-2 token.
+
+services:
+  api-gw:
+    container_name: supabase-envoy
+    image: envoyproxy/envoy:v1.39.1
+    restart: unless-stopped
+    expose:
+      - "8000"
+    labels:
+      - traefik.enable=true
+      - "traefik.http.routers.api-gw.rule=Host(`data.example.com`)"

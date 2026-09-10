@@ -1,0 +1,17 @@
+# GOLDEN FIXTURE — STRUCTURAL (sentinel absent → fence FAILS CLOSED, exit 2).
+#
+# Otherwise identical to datastore-bind-private.compose.yaml (a clean,
+# internal-only shape) but deliberately missing the
+# `# fence-datastore-private-bind: target` sentinel line. Proves the fence
+# refuses to emit a clean pass over a file it cannot confirm is the intended
+# datastore manifest — a renamed/unmarked compose must not silently pass by
+# virtue of having no violations in it. Exercised by the fence-datastore-bind
+# CI job, asserting exit 2 specifically (not just non-zero).
+
+services:
+  api-gw:
+    container_name: supabase-envoy
+    image: envoyproxy/envoy:v1.39.1
+    restart: unless-stopped
+    expose:
+      - "8000"
