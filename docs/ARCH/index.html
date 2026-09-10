@@ -80,8 +80,12 @@
     <strong>Framework locked.</strong> The V1 web app is built on <strong>SvelteKit (Svelte 5)</strong>
     per <a href="../../DECISIONS.md#adr-015">ADR-015</a> — closing the Phase&nbsp;2 ↔ Phase&nbsp;3 coupling
     point per <a href="../../DECISIONS.md#adr-012">ADR-012</a> and anchoring the V1-web-app container in
-    the <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision&nbsp;17 hybrid 3-container topology. See
-    <a href="#sec-4">§4</a> for the row decomposition (V1 web-app / ingestion+cron / PDF render worker) and
+    the <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision&nbsp;17 hybrid worker topology &mdash;
+    <strong>3 containers at that lock, 4 since <a href="../../DECISIONS.md#adr-019">ADR-019</a>'s topology
+    amendment (2026-07-17) added the <code>provider-sync</code> worker</strong>. See
+    <a href="#sec-4">§4</a> for the row decomposition (V1 web-app / ingestion+cron / PDF render worker;
+    &#9888; <a href="#sec-4">§4</a> carries <strong>no <code>provider-sync</code> row</strong> &mdash; a gap
+    flagged, not closed, in the PR that landed this correction) and
     <a href="#sec-4-1">§4.1</a> for the server-source allowlist anchoring the
     <a href="../SECURITY/#rt-26">RT-26</a> CI grep fence. No Tailwind; styling consumes
     <a href="../../DECISIONS.md#adr-014">ADR-014</a>'s two-tier tokens natively via Svelte component-scoped
@@ -918,7 +922,7 @@ flowchart TB
   <ul>
     <li><strong>Single-user / single-tenant economics favor user-history primary.</strong> The user's own assignment history is the highest-signal training data at single-user scale; cross-tenant generalization (the ML-classifier strength at multi-tenant scale) is not available at V1 single-user shape without crossing the <a href="../../DECISIONS.md#adr-011">ADR-011 Decision 5 / Lock 1</a> tenant isolation boundary.</li>
     <li><strong>Cold-start is closed cheaply.</strong> Option (i) seed mapping bootstraps from F/CTO's existing taxonomy at first-login — closes the empty-history gap without committing to a curated-table maintenance workflow at V1 (the mapping table extends incrementally per user assignment).</li>
-    <li><strong>No ML infrastructure ratchet at V1.</strong> Pure SQL implementation respects the <a href="../../DECISIONS.md#adr-011">ADR-011 Decision 17 / Lock 13</a> hybrid 3-container topology without adding an ML runtime axis; <code>feedback_incumbent_exceeds_v1_review</code> guardrail explicitly disallows incumbent-exceeds-V1 infrastructure additions absent F/CTO ratify.</li>
+    <li><strong>No ML infrastructure ratchet at V1.</strong> Pure SQL implementation respects the <a href="../../DECISIONS.md#adr-011">ADR-011 Decision 17 / Lock 13</a> hybrid 3-container topology without adding an ML runtime axis (&#9888; <strong>the count is dated, and the reasoning is not:</strong> the topology is <strong>4</strong> containers since <a href="../../DECISIONS.md#adr-019">ADR-019</a>'s amendment. This §8 entry records what was reasoned at the lock and is annotated rather than renumbered, the same treatment the Lock 13 entry above receives &mdash; adding a container does not add an ML runtime axis, so the argument is unaffected); <code>feedback_incumbent_exceeds_v1_review</code> guardrail explicitly disallows incumbent-exceeds-V1 infrastructure additions absent F/CTO ratify.</li>
     <li><strong>V2+ trajectory preserved.</strong> Option (ii) trained classifier remains a forward-compat path when multi-tenant data shape changes the cost/benefit; the V1 hybrid (iii)+(i) shape does not foreclose V2+ ML adoption — at V2+ the per-tenant mapping table + user-history become labelled training data for a future classifier.</li>
   </ul>
 
