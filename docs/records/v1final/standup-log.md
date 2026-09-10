@@ -30,8 +30,8 @@
 | 2 | `pfin_provider_sync` login-role migration (S5) | Architect | ✅ Migration `116` on `main` (PR #671) |
 | 3 | Provision VPS + install Coolify | DevOps + F/CTO | ✅ **DONE 2026-09-09** — VPS provisioned, §1 hardening applied, Coolify `4.3.18` healthy |
 | 4 | DNS / domain decision + records | F/CTO + DevOps | 🟡 Domain RULED (`pfindash.com` reuse) — records not yet cut over |
-| 5 | Stand up self-hosted Supabase; apply migrations | DevOps | ⛔ Blocked on 3 |
-| 5a | Production signup OFF (`GOTRUE_DISABLE_SIGNUP=true`) | DevOps | ⛔ Blocked on 5 · ruled Q5 |
+| 5 | Stand up self-hosted Supabase; apply migrations | DevOps | 🟡 **Stack LIVE 2026-09-10** — 5 services healthy, verified. Migrations NOT applied (that is step 6 / runbook §6) |
+| 5a | Production signup OFF (`GOTRUE_DISABLE_SIGNUP=true`) | DevOps | ✅ **DONE 2026-09-10** — hardcoded in the compose, verified on the running `auth` container |
 | 6 | Deploy the four services from one `main` sha | DevOps | ⛔ Blocked on 5 |
 | 7 | ~~Register 9 existing Plaid Items~~ | — | ❌ Struck 2026-09-08 — Items orphaned, tokens lost |
 | 7′ | Historical categorized-transaction backfill walk | Backend + F/CTO | ⛔ SELF-388 / SELF-389 not started |
@@ -198,6 +198,89 @@ Two things came out of it. `scripts/provision-vps.sh` now takes a **list** of ke
 
 ---
 
+## Step 5 — Stand up self-hosted Supabase
+
+**LIVE 2026-09-10.** Five services healthy on the production box, verified end to end. Repo half is `infra/supabase/` (PR #703); the live half took **three deploy attempts**, each blocked by a distinct defect, all three now fixed in the tree.
+
+**What is running.** Coolify application `pfin-supabase-stack`, uuid `eepvlmaq4uortakmido7jgvn`, build pack `dockercompose`, `base_directory: /infra/supabase`, branch `main`. Trimmed to five services — `db`, `auth`, `rest`, `api-gw`, `supavisor`. `studio`, `meta`, `storage`, `imgproxy`, `realtime`, `analytics`, `vector`, `functions` are OUT (see the reopening below).
+
+**Verified after the final deploy** (`agxzitre3a8zvrcustzih6qb`, status `finished`, `main` at `af2c1696`):
+
+| Check | Measured |
+|---|---|
+| Containers | `db` · `auth` · `rest` · `api-gw` · `supavisor` — all healthy |
+| Postgres | `17.6` |
+| Init scripts | all 7 vendored files executed on first init, zero errors |
+| Service roles | `authenticator` · `pgbouncer` · `supabase_auth_admin` · `supabase_functions_admin` — all passwords SET |
+| JWT | `app.settings.jwt_secret` PRESENT |
+| Envoy | `lds: add/update listener 'supabase'` + `all dependencies initialized. starting workers` |
+| Signup | `GOTRUE_DISABLE_SIGNUP=true` on the running container (Q5) |
+| Internal reachability | `db` → `http://api-gw:8000/auth/v1/health` = `401` |
+| Host ports | none published by our services. Host `:8000` belongs to Coolify itself |
+| External | `5432` · `6543` · `8000` all **filtered**; auto-assigned `sslip.io` fqdn returns `404` |
+
+**Secrets.** 8 minted on the box at `/root/.pfin/supabase.env`, mode `600`: `ANON_KEY`, `SERVICE_ROLE_KEY`, `JWT_SECRET`, `POSTGRES_PASSWORD`, `SECRET_KEY_BASE`, `VAULT_ENC_KEY`, `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD`. 38 environment variables set on the Coolify resource, stored encrypted at rest.
+
+### §5a — Env vars read back as empty, and were
+
+Setting the 38 variables with per-key `POST /applications/{uuid}/envs` appeared to succeed. A direct DB read then showed **no value on any key**. The cause: Coolify had already created all 44 keys when it first parsed the compose, so every create collided with an existing key and no-opped — and the responses were discarded rather than checked. `PATCH .../envs/bulk` fixed it in one call.
+
+Two measurement traps here, both nearly misread:
+- `length(content)` on Coolify's stored rows returns **ciphertext** length (Laravel `encrypted` cast, `eyJpdiI6...` envelope), ~1.8× the plaintext. A row that looks oversized is normal.
+- The production and preview rows are separate copies. 44 keys × 2 explains an 88-vs-44 count that first read as duplication.
+
+### §5b — First deploy: every file bind pre-created as an empty directory
+
+`docker compose up` failed with `not a directory: Are you trying to mount a directory onto a file?` on `docker-entrypoint.sh`.
+
+Coolify's compose parser rewrites every **relative** bind mount to an absolute host path under `/data/coolify/applications/<uuid>/` — **discarding `base_directory`** — and does not copy the git clone there. On first parse it creates a `local_file_volumes` row per mount defaulting `is_directory=true`, because it has no prior row to read the shape from, then pre-creates each as an empty host directory. All 12 file-shaped mounts hit this identically. `saveStorageOnServer()`, the method that would write real content, only runs when `is_preserve_repository_enabled` is on — it is off by default for this build pack.
+
+Fixed by `scripts/coolify-materialize-supabase-mounts.sh`, which materializes the real files from `infra/supabase/volumes/**` and syncs Coolify's bookkeeping **through its own Eloquent model** — never raw SQL, because `content` is an `encrypted`-cast column and a plaintext write corrupts it. Runbook §4 (1c).
+
+A second, quieter bug surfaced in the same parse: the two-flag volume mode `:ro,z` bled into the recorded `mount_path` (`/etc/pooler/pooler.exs:ro,z`). Single-flag forms parse cleanly. Fixed at source by dropping the redundant `:z` — this box runs Ubuntu with no SELinux.
+
+### §5c — The `db-data` volume was poisoned, and reported healthy
+
+The failed first deploy got far enough to **start Postgres**, which initialized against the empty-directory mounts. Postgres runs `/docker-entrypoint-initdb.d` exactly once, on first init of an empty data directory — so the mount fix could not reach it, and a redeploy would not have helped.
+
+The container reported **`healthy`** throughout. What it actually looked like:
+
+```
+psql: .../98-webhooks.sql: error: could not read from input file: Is a directory
+pg_authid:  authenticator|NULL   pgbouncer|NULL   supabase_auth_admin|NULL
+show app.settings.jwt_secret  ->  ERROR: unrecognized configuration parameter
+```
+
+Only the image's own baked-in scripts had run, which is why `anon`/`authenticated`/`service_role` existed — **their presence is not evidence `roles.sql` ran.** Remedy is `down -v` and re-init, never a bare redeploy. The materialize script now refuses to say "redeploy" while a `db-data` volume exists. Runbook §4 (1c).
+
+### §5d — Second deploy: `api-gw` collided with Coolify's own dashboard
+
+`Bind for 0.0.0.0:8000 failed: port is already allocated`. Upstream's compose publishes `api-gw` on host `8000`; so does Coolify. The gateway never started.
+
+Probing then found the quieter half: `supavisor` had come up bound to `0.0.0.0:5432` and `0.0.0.0:6543` — a multi-tenant Postgres's wire protocol and pooler proxy on the public interface, unreachable only because the cloud firewall happened to filter those ports.
+
+**Sec ruled (2026-09-10): VETO — all three published mappings removed, `expose:`-only, not a `127.0.0.1` bind.** The cloud firewall stays primary but is not acceptable alone; the second layer is de-publishing, not `ufw` (Docker's `DOCKER` nat chain DNATs published ports from `0.0.0.0/0`, so a `ufw` rule sits in a chain those packets never traverse — a control that reads as protection and provides none). A CI fence is required, on the CI-fenced side only, with its own script and sentinel rather than RT-27's. Runbook §4 (1d), PR #707.
+
+⚠ **Do not "fix" a future collision by repointing `${POSTGRES_PORT}`** — that variable feeds five internal DSNs. Delete mapping lines; leave the variable alone.
+
+### §5e — `auto_deploy=true` is inert without a webhook
+
+The resource reads `auto_deploy=true`, so merging to `main` was expected to deploy. It queued nothing and started nothing. No GitHub webhook is configured (ARCH §6 item (f), deliberately deferred), so nothing tells Coolify a push happened. **The setting reads as a live trigger to anyone who does not know the webhook is missing.** Deploys must be triggered explicitly. Runbook §4.
+
+### §5f — `rest` is unhealthy until §6, and that is correct
+
+PostgREST reports `Up (unhealthy)` with `schema "pfin" does not exist`. `PGRST_DB_SCHEMAS=pfin` is right; the `pfin` schema is created by migrations, which run at **step 6**. It retries with backoff and clears itself once they land. A real failure would be a different error code, or still-unhealthy *after* §6.
+
+This is the third instance of one pattern: **runbook §4's verifications assume a post-§6 world.** The other two are §4.1's TimeZone read-back (asserts migration `061`) and §5's Sec gate appearing to block §4 (Sec ruled it does not — the boundary is minting vs. app-facing injection).
+
+### §5g — Reopened: `studio` back IN
+
+Runbook line 322 carried `studio` as **OUT by default, "unless F/CTO names a concrete reason to keep it."** F/CTO named it 2026-09-10: the Supabase dashboard should be reachable the same way Coolify's is — **by SSH tunnel**, not a public Domain. `meta` comes with it by line 321's rule; Studio has no other data source. Sec has the exposure ruling; the mechanics are not obvious, because `expose:`-only leaves `ssh -L` no stable `localhost` target and container IPs move across redeploys.
+
+**Migrations have NOT been applied to production.** Nothing has run `supabase db push` against `188.245.166.206`.
+
+---
+
 ## Departures from plan
 
 *Every place reality and the plan disagreed. Empty until the first one — and an empty section here is a claim, so do not leave a real departure out of it.*
@@ -211,3 +294,11 @@ Two things came out of it. `scripts/provision-vps.sh` now takes a **list** of ke
 | 2026-09-09 | 3 | `adduser deploy` per runbook §1 step 3 | Created with `--disabled-password` to avoid an interactive prompt, which left the account unable to authenticate to `sudo` at all. | ✅ `NOPASSWD` granted; reasoning recorded at §3c — the same keys already grant direct root |
 | 2026-09-09 | 3 | The primary IP preserves the box's addresses across a rebuild | It preserved **IPv4 only**. Hetzner creates the IPv6 primary IP with `auto_delete=true`, so the rebuild silently changed the `/64`. Caught only because F/CTO pasted the box's login banner and it disagreed with this record. | ✅ IPv6 flipped to persistent; the script now enforces it every run |
 | 2026-09-09 | 3 | Verify ports from outside | First probe reported **every** port filtered, including 22, seconds after SSH had succeeded on 22. The instrument was broken, not the box. | n/a — re-probed by TCP behaviour |
+| 2026-09-10 | 5 | 38 env vars set via per-key POST | Coolify had already created all 44 keys when it parsed the compose, so every create collided and no-opped; responses were discarded rather than checked. Values read back empty. | n/a — `PATCH .../envs/bulk` used instead |
+| 2026-09-10 | 5 | Relative bind mounts resolve against `base_directory` | Coolify's parser discards `base_directory`, does not copy the clone to the host path, and pre-creates all 12 file-shaped mounts as empty directories (`is_directory=true` by default on first parse). Deploy failed loudly. | ✅ §4 (1c) + `scripts/coolify-materialize-supabase-mounts.sh` |
+| 2026-09-10 | 5 | Two-flag volume mode `:ro,z` parses | Coolify bled the flags into `mount_path` itself. Single-flag forms parse cleanly. | ✅ `:z` dropped at source (no SELinux on this box) |
+| 2026-09-10 | 5 | Fixing the mounts is enough | The failed deploy had already started Postgres against the empty mounts, consuming its one-shot init. Container reported **healthy** with NULL service-role passwords and no `jwt_secret`. Volume had to be destroyed. | ✅ §4 (1c); script now refuses to suggest a bare redeploy while `db-data` exists |
+| 2026-09-10 | 5 | Upstream's `ports:` mappings are safe to carry over | `api-gw` collided with Coolify's own dashboard on host `8000`; `supavisor` published a multi-tenant Postgres on `0.0.0.0:5432`/`6543`, filtered only by the cloud firewall. | ✅ Sec VETO — all three removed, `expose:`-only. §4 (1d), PR #707 |
+| 2026-09-10 | 5 | `auto_deploy=true` deploys on merge | Queued nothing. Inert without a GitHub webhook, which is deliberately not configured. Reads as a live trigger to anyone who does not know. | ✅ §4 — explicit manual trigger documented |
+| 2026-09-10 | 5 | All services healthy after a good deploy | `rest` is `unhealthy` because schema `pfin` does not exist until step 6's migrations. Correct behaviour, not a fault. Third instance of §4's checks assuming a post-§6 world. | 🟡 Flagged; structural fix outstanding |
+| 2026-09-10 | 5 | Container names come from the compose | Coolify overrides every `container_name`. Verification commands addressing `supabase-db` / `supabase-envoy` would have read as mount failures. | ✅ §4 (1b) uses `docker compose --project-name <uuid> logs <service>`, PR #704 |
