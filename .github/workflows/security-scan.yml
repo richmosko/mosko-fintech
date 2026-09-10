@@ -957,6 +957,77 @@ jobs:
           fi
           echo "OK: fence caught the pdf-render published-ports exposure vector via its vector-1 token (exit $rc)."
 
+  fence-entity-grep:
+    name: entity-grep — HTML-entity-obscured §/# in doc artifacts
+    runs-on: ubuntu-latest
+    # F/CTO-authorized fence (2026-09-09): docs/PRD, docs/SECURITY, docs/ARCH
+    # are HTML — a literal § or # can legally be written as &sect; / &#35; and
+    # render identically, but that silently defeats the project's own standing
+    # `grep '§10'` / `grep 'mod #'` sweeps over the doc source. See
+    # scripts/ci/fence-entity-grep.sh header for the full catch criterion and
+    # the deliberate &nbsp; out-of-scope carve-out (load-bearing typography;
+    # do NOT extend this fence to it).
+    #
+    # One-time normalization of pre-existing &sect;/&#35; occurrences landed in
+    # the same PR that adds this fence; from here on any reintroduction trips
+    # this job. Run-always (no paths filter), matching every other §10-adjacent
+    # fence in this workflow.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Production-mode (real doc artifacts; expect clean, exit 0)
+        run: bash scripts/ci/fence-entity-grep.sh docs/PRD/index.html docs/SECURITY/index.html docs/ARCH/index.html
+
+      - name: Inversion-mode (golden fixture; expect violation, exit 1, both tokens named)
+        # Sec F-2 lesson (applied here per this workflow's own convention): a
+        # bare non-zero exit does not prove the RIGHT thing was caught — assert
+        # the specific &sect; and &#35; hits the fixture plants, not just rc!=0.
+        # Also asserts the &nbsp; negative control (planted in the same fixture)
+        # is NEVER named in the violation list — proves the fence's scope stays
+        # confined to &sect;/&#35; and does not drift onto &nbsp;.
+        run: |
+          set +e
+          OUT="$(bash scripts/ci/fence-entity-grep.sh tests/fixtures/ci/entity-grep-violation.html 2>&1)"
+          rc=$?
+          set -e
+          echo "$OUT"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: entity-grep fence expected exit 1 (violation caught) against the golden fixture but got $rc."
+            case "$rc" in
+              0) echo "       0 = fence reported the violation fixture CLEAN. The fence is broken." ;;
+              2) echo "       2 = fence aborted on an argument/target error and never scanned." ;;
+              *) echo "       Unexpected exit code — the fence did something unmodelled." ;;
+            esac
+            echo "       Failing closed."
+            exit 1
+          fi
+          VIOLATION_LINES="$(echo "$OUT" | grep '^  tests/fixtures/ci/entity-grep-violation.html:')"
+          if ! echo "$VIOLATION_LINES" | grep -q ':&sect;$'; then
+            echo "FATAL: fence exited 1 but its violation list does not name the planted &sect; occurrence — the non-zero exit does not prove that token was caught; failing closed."
+            exit 1
+          fi
+          if ! echo "$VIOLATION_LINES" | grep -q ':&#35;$'; then
+            echo "FATAL: fence exited 1 but its violation list does not name the planted &#35; occurrence — the non-zero exit does not prove that token was caught; failing closed."
+            exit 1
+          fi
+          if echo "$VIOLATION_LINES" | grep -q 'nbsp'; then
+            echo "FATAL: fence's violation list names the &nbsp; negative control — scope drift onto out-of-scope typography; failing closed."
+            exit 1
+          fi
+          echo "OK: entity-grep fence caught both planted tokens (&sect; and &#35;) and left the &nbsp; negative control unflagged (exit $rc)."
+
+      - name: Fail-closed probe — missing target (expect exit 2, never a silent pass)
+        run: |
+          set +e
+          bash scripts/ci/fence-entity-grep.sh docs/does-not-exist.html
+          rc=$?
+          set -e
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: expected exit 2 (fail-closed on missing target) but got $rc. An unscannable target must never read as clean."
+            exit 1
+          fi
+          echo "OK: fence failed closed on a missing target (exit 2, as asserted)."
+
   dedup-hash-identical:
     name: dedup-hash — import_hash canonical↔copy drift fence
     runs-on: ubuntu-latest
