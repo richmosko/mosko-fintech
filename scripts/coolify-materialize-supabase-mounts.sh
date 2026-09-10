@@ -97,6 +97,7 @@ if [ "$APPLY" != true ]; then
   echo "    2. On the box: rmdir each stale bogus mount directory (fails if non-empty), cp the real file into place, chmod 644 (755 for docker-entrypoint.sh)"
   echo "    3. Sync local_file_volumes.content + is_directory=false for all 12 rows via php artisan tinker inside the coolify container (Eloquent, not raw SQL — content is encrypted-cast)"
   echo "    4. Clean up the staged /tmp copy"
+  echo "    5. Check whether <uuid>_db-data already exists; if so, warn loudly that this script cannot fix an already-initialized volume and print the destroy-and-reinit command instead of a bare redeploy instruction"
   exit 0
 fi
 
@@ -167,4 +168,24 @@ rm -f "$PHP_SCRIPT"
 echo "==> Cleaning up staged copy on the box"
 ssh -i "$SSH_KEY" "$SSH_HOST" "rm -rf /tmp/pfin-supabase-mounts"
 
-echo "==> Done. Redeploy the pfin-supabase-stack application for the fix to take effect if a deploy hasn't run since."
+echo "==> Checking whether db-data already exists (a prior deploy may have initialized Postgres against the bogus empty-directory mounts this script just replaced)"
+EXISTING_DB_VOLUME="$(ssh -i "$SSH_KEY" "$SSH_HOST" "docker volume ls -q --filter name=${APP_UUID}_db-data")"
+if [ -n "$EXISTING_DB_VOLUME" ]; then
+  cat <<WARNING
+==> ⚠ ${APP_UUID}_db-data already exists. THIS SCRIPT DOES NOT FIX THAT VOLUME.
+    Postgres runs everything under /docker-entrypoint-initdb.d/ exactly once,
+    against an EMPTY data directory, at first boot. If db ever started with
+    the bogus empty-directory mounts this script just replaced, that first
+    boot already happened and consumed its one chance to run
+    roles.sql/jwt.sql/the rest -- redeploying now, with the mounts fixed,
+    will NOT make them run. A 'healthy' db container is not evidence this
+    volume is fine; it only means Postgres is accepting connections.
+    See docs/deployment-runbook.md §4 (1c) for how to confirm whether this
+    volume is actually poisoned. If it is, destroy it before redeploying:
+      docker compose --project-name $APP_UUID down -v
+      docker volume ls --filter name=$APP_UUID   # must print nothing
+    Only then redeploy.
+WARNING
+else
+  echo "==> Done. No db-data volume present -- safe to redeploy the pfin-supabase-stack application now."
+fi
