@@ -58,6 +58,34 @@ VOLUMES_DIR="$REPO_ROOT/infra/supabase/volumes"
 APP_UUID="${COOLIFY_APP_UUID:-eepvlmaq4uortakmido7jgvn}"
 SSH_HOST="${COOLIFY_SSH_HOST:-root@188.245.166.206}"
 SSH_KEY="${COOLIFY_SSH_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
+
+# Sec-flagged latent footgun (pre-prod review of #726, 2026-09-11), fixed
+# proactively even though it's marked non-blocking: this is the exact
+# mechanism of the 2026-09-11 incident, one level down. provision-supabase-
+# stack.sh's caller now always passes both COOLIFY_APP_UUID and
+# COOLIFY_SSH_HOST together, so it can't recur through THAT path -- but
+# this script's own defaults still independently pair a scratch-safe
+# APP_UUID default with a hardcoded PROD SSH_HOST default. Any other/future
+# caller (or a by-hand invocation) that overrides one without the other
+# reproduces the incident exactly: a non-prod app UUID materialized onto
+# PROD's filesystem. Refuse that combination outright; the only two
+# accepted shapes are "neither overridden" (the documented standalone-
+# against-prod default) and "both overridden together".
+if [[ -n "${COOLIFY_APP_UUID:-}" && -z "${COOLIFY_SSH_HOST:-}" ]]; then
+  echo "FATAL: COOLIFY_APP_UUID is overridden but COOLIFY_SSH_HOST is not -- this is" >&2
+  echo "the exact shape of the 2026-09-11 incident (a non-prod app UUID materialized" >&2
+  echo "onto prod's filesystem via this script's own hardcoded SSH_HOST default)." >&2
+  echo "Set COOLIFY_SSH_HOST explicitly alongside COOLIFY_APP_UUID, or override" >&2
+  echo "neither to target prod with both documented defaults." >&2
+  exit 2
+fi
+if [[ -z "${COOLIFY_APP_UUID:-}" && -n "${COOLIFY_SSH_HOST:-}" ]]; then
+  echo "FATAL: COOLIFY_SSH_HOST is overridden but COOLIFY_APP_UUID is not -- refusing" >&2
+  echo "to materialize a PROD app's manifest onto a non-prod box (the same incident" >&2
+  echo "class, inverted). Set COOLIFY_APP_UUID explicitly alongside COOLIFY_SSH_HOST." >&2
+  exit 2
+fi
+
 APPLY=false
 
 for arg in "$@"; do

@@ -713,6 +713,18 @@ elif [[ $APPLY -eq 0 ]]; then
     info "admin=$ADMIN_STATE token=$TOKEN_STATE -- would create the admin from .env/prompted credentials and mint a token ON THE BOX, printing nothing secret"
   fi
 else
+  # Measured 2026-09-11 against a genuinely fresh scratch box (F/CTO
+  # directive -- burn defects down there, not against prod, because prod
+  # already has this directory from the hand-run era and so never exercised
+  # this line): `/root/.pfin` is never created anywhere in this script
+  # before this point. Every write below assumes it exists -- prod silently
+  # got away with that because it already did; a fresh box does not.
+  # `mkdir -p` is idempotent and safe to run every time, matching this
+  # script's own convention elsewhere (re-running a satisfied step is a
+  # no-op, not an error). 700, not 755 -- this directory holds secrets
+  # (coolify.env, the seed env-file below).
+  sshx "mkdir -p /root/.pfin && chmod 700 /root/.pfin"
+
   # Env-file, never `docker exec -e` (argv-visible via ps on the box) and
   # never a tinker --execute argument (argv-visible on THIS machine too).
   SEED_ENV_FILE="/root/.pfin/_root_seed.env.$$"
@@ -755,11 +767,61 @@ else
   #      (`<digits>|<20+ alnum chars>`) anywhere at all. The password check
   #      is unchanged and still literal, since the password DOES still
   #      cross locally (via the env-file below) even though never printed.
+  #
+  # FOLLOW-UP, same day: re-running the fix above closed the VISIBLE leak
+  # (team-lead's own grep of the full combined stdout+stderr found zero
+  # token-shaped strings) but the structural check above still fired --
+  # against $BOOTSTRAP_LOG itself, this step's OWN capture file, not the
+  # visible stream. Most likely cause, reasoned from the PHP: `--execute`
+  # with SEVERAL top-level statements appears to echo more than just the
+  # trailing bare expression's value -- the ADMIN_STATE/TOKEN_STATE checks
+  # never leaked because they are a SINGLE `echo`-terminated statement, but
+  # the token/reset scripts had several, including an ASSIGNMENT to an
+  # OBJECT ($token = $user->createToken(...) -- a NewAccessToken instance
+  # whose properties include plainTextToken). If tinker auto-echoes an
+  # intermediate statement's return value the way a REPL echoes each line,
+  # printing that object would dump plainTextToken as a side effect -- into
+  # $BOOTSTRAP_LOG, which the leak-check then correctly caught before
+  # display. Fixed structurally, not by re-trusting a trailing `null;`
+  # (which only ever guarded the LAST bare statement): both scripts are now
+  # wrapped in a single IIFE -- `(function () { ...; return null; })();` --
+  # so there is exactly ONE top-level statement, and its value is an
+  # explicit `null`, regardless of how many intermediate assignments happen
+  # inside it or whether --execute echoes every top-level statement or only
+  # the last. The leak-check did its job correctly here -- this is a fix to
+  # what it was checking, not to the check itself.
   BOOTSTRAP_LOG="$(mktemp)"
+  chmod 600 "$BOOTSTRAP_LOG"
+  # Set inside the captured block below (a `{ }` group, not a subshell, so
+  # the assignment is visible here). Starts 1 (nothing to verify yet if
+  # ADMIN_STATE was already EXISTS); flips to 0 only on a measured seeder
+  # failure. Gates the token-mint step below so it never runs against a
+  # user that was never created -- see the incident note there for why
+  # that mattered (a null-pointer PHP fatal that hid the real failure).
+  ADMIN_OK=1
   {
     if [[ "$ADMIN_STATE" != "EXISTS" ]]; then
-      sshx "docker exec --env-file $SEED_ENV_FILE coolify php artisan db:seed --class=RootUserSeeder --force"
-      echo "ADMIN_CREATED"
+      sshx "docker exec --env-file $SEED_ENV_FILE coolify php artisan db:seed --class=RootUserSeeder --force" || true
+      # VERIFY, don't assume. Measured 2026-09-11 against a genuinely fresh
+      # scratch box: RootUserSeeder's own input validation (email format,
+      # password complexity -- upper+lower required at minimum) rejected
+      # the supplied credentials, printed an ERROR block, and created
+      # NOTHING -- but `artisan db:seed` still exited 0 in that path, so
+      # `|| true` above is deliberate (a genuine seeder crash should not be
+      # swallowed either -- this is why the verify below is unconditional,
+      # not just an else-branch). Re-query rather than trust the seeder's
+      # own exit status, which this measurement showed is not reliable
+      # evidence. Note this check must NOT call `die` here -- this whole
+      # block's stdout+stderr are redirected into $BOOTSTRAP_LOG, so a die()
+      # message here would be swallowed exactly like the failure it is
+      # trying to report clearly. Set a flag instead; die() runs AFTER the
+      # block closes, where the operator's terminal can actually see it.
+      if [[ "$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\User::where('id',0)->exists() ? 'EXISTS' : 'ABSENT';\"" 2>/dev/null | tail -1)" == "EXISTS" ]]; then
+        echo "ADMIN_CREATED"
+      else
+        ADMIN_OK=0
+        echo "ADMIN_CREATE_FAILED"
+      fi
     fi
 
     if [[ $RESET_ADMIN_PASSWORD -eq 1 && "$ADMIN_STATE" == "EXISTS" ]]; then
@@ -770,16 +832,18 @@ else
       # either.
       sshx_in <<REMOTE
 docker exec --env-file $SEED_ENV_FILE coolify php artisan tinker --execute='
-\$pw = getenv("ROOT_USER_PASSWORD");
-\\App\\Models\\User::where("id", 0)->update(["password" => \\Illuminate\\Support\\Facades\\Hash::make(\$pw)]);
-unset(\$pw);
-echo "RESET_OK";
-null;
+(function () {
+  \$pw = getenv("ROOT_USER_PASSWORD");
+  \\App\\Models\\User::where("id", 0)->update(["password" => \\Illuminate\\Support\\Facades\\Hash::make(\$pw)]);
+  unset(\$pw);
+  echo "RESET_OK";
+  return null;
+})();
 '
 REMOTE
     fi
 
-    if [[ "$TOKEN_STATE" != "EXISTS" ]]; then
+    if [[ "$TOKEN_STATE" != "EXISTS" && $ADMIN_OK -eq 1 ]]; then
       # Fully self-contained remote script -- no local variable is
       # interpolated into it, so the heredoc delimiter is QUOTED
       # (<<'REMOTE') to send it verbatim; every $-expansion below happens
@@ -788,15 +852,29 @@ REMOTE
       # container's own /tmp (www-data-writable) to the host's
       # root-owned /root/.pfin/coolify.env via `docker cp` -- never
       # printed by any command in this chain.
+      #
+      # `if (!$user)` guard: measured 2026-09-11 -- without it, a failed
+      # create above (caught now by ADMIN_OK, so this branch shouldn't even
+      # run) produced "Call to a member function createToken() on null", a
+      # confusing SECOND failure that hid the real first one. Kept as a
+      # defensive second layer even now that ADMIN_OK gates the call
+      # site -- a clear FATAL beats a cryptic null-pointer trace if
+      # something else ever reaches this with no admin user.
       sshx_in <<'REMOTE'
 set -euo pipefail
 docker exec coolify php artisan tinker --execute='
-$user = \App\Models\User::find(0);
-$team = \App\Models\Team::find(0);
-session(["currentTeam" => $team]);
-$token = $user->createToken("provisioning-automation", ["root"]);
-file_put_contents("/tmp/.pfin_token", $token->plainTextToken);
-null;
+(function () {
+  $user = \App\Models\User::find(0);
+  if (!$user) {
+    fwrite(STDERR, "FATAL: admin user id=0 not found -- token mint cannot proceed.\n");
+    exit(1);
+  }
+  $team = \App\Models\Team::find(0);
+  session(["currentTeam" => $team]);
+  $token = $user->createToken("provisioning-automation", ["root"]);
+  file_put_contents("/tmp/.pfin_token", $token->plainTextToken);
+  return null;
+})();
 '
 docker cp coolify:/tmp/.pfin_token /root/.pfin/_coolify_token.tmp
 docker exec coolify rm -f /tmp/.pfin_token
@@ -810,6 +888,10 @@ REMOTE
   } > "$BOOTSTRAP_LOG" 2>&1
 
   sshx "shred -u $SEED_ENV_FILE 2>/dev/null || rm -f $SEED_ENV_FILE"
+
+  if [[ $ADMIN_OK -eq 0 ]]; then
+    die "RootUserSeeder ran but no id=0 user exists afterward -- it silently failed. Check COOLIFY_ADMIN_EMAIL/NAME/PASSWORD against Coolify's own validation (valid email format; password needs at least one uppercase AND one lowercase letter, and must not be a known-compromised password) and re-run -- the seeder is idempotent, nothing was left half-done by this attempt. Full seeder output preserved (mode 600) at: $BOOTSTRAP_LOG"
+  fi
 
   # The assertion team-lead asked for, run every --apply, not once by hand,
   # against the SAME combined stdout+stderr stream the operator's own
@@ -826,17 +908,47 @@ REMOTE
   [[ -n "${COOLIFY_ADMIN_PASSWORD:-}" ]] && grep -qF -- "$COOLIFY_ADMIN_PASSWORD" "$BOOTSTRAP_LOG" && LEAK=1
   grep -qE '[0-9]+\|[A-Za-z0-9]{20,}' "$BOOTSTRAP_LOG" && LEAK=1
   if [[ $LEAK -eq 1 ]]; then
-    rm -f "$BOOTSTRAP_LOG"
-    die "a secret value (or a token-shaped string) appeared in the admin-bootstrap step's own captured output -- refusing to print the log. This is the echo trap the 2026-09-11 incident fix exists to prevent; something regressed. Do not re-run until fixed. If this is a false positive on an unrelated token-shaped string, tighten the pattern below rather than removing the check."
+    # PRESERVE the log on this path -- do NOT rm it. Measured 2026-09-11:
+    # the previous version deleted it here, which is what turned the second
+    # (structural, non-visible) leak into an undiagnosable dead end -- the
+    # evidence was gone by the time anyone could read it. mode 600 already
+    # (set at mktemp, above), so leaving it on disk a while longer is the
+    # same exposure class as any other root-only file this script writes;
+    # NOT the same as printing it. The operator must read it deliberately
+    # (it may hold a real secret) and shred it themselves once done -- this
+    # script does not do that automatically, because "automatically clean
+    # up the evidence" is exactly the bug being fixed here.
+    die "a secret value (or a token-shaped string) appeared in the admin-bootstrap step's own captured output. PRESERVED for diagnosis (mode 600; may contain a real secret -- handle with care) at: $BOOTSTRAP_LOG -- read it, find the exact matching line, fix the leak at its source, then 'shred -u $BOOTSTRAP_LOG' yourself once done. Do not re-run until fixed. Treat any token/password this run touched as exposed until you've confirmed otherwise -- revoke and re-mint (the orphan-clear logic above handles the re-mint)."
   fi
 
-  grep -vE '^(ADMIN_CREATED|RESET_OK|TOKEN_WRITTEN)$' "$BOOTSTRAP_LOG" | sed 's/^/      /'
+  grep -vE '^(ADMIN_CREATED|ADMIN_CREATE_FAILED|RESET_OK|TOKEN_WRITTEN)$' "$BOOTSTRAP_LOG" | sed 's/^/      /'
   grep -q ADMIN_CREATED "$BOOTSTRAP_LOG" && ok "admin user created (email/name from .env or prompt; password human-chosen, never printed)"
   grep -q RESET_OK "$BOOTSTRAP_LOG" && ok "admin password reset (value never printed by this script or tinker)"
   grep -q TOKEN_WRITTEN "$BOOTSTRAP_LOG" && ok "automation token minted on the box (value never left it, never printed, never even returned to this script)"
   ok "leak check: zero hits for the password (literal) and zero token-shaped strings in this step's own captured output"
   rm -f "$BOOTSTRAP_LOG"
   unset COOLIFY_ADMIN_PASSWORD
+fi
+
+step "Coolify API enabled -- scripts/provision-supabase-stack.sh needs this"
+# Measured 2026-09-11 against a genuinely fresh scratch box: the freshly-
+# minted token authenticated (Sanctum accepted it) but every API call
+# still 403'd with {"success":true,"message":"API is disabled."} --
+# source-verified in app/Http/Middleware/ApiAllowed.php: Coolify disables
+# its own REST API by default (`InstanceSettings.is_api_enabled`, per
+# Coolify's own migration `2024_09_26_083441_disable_api_by_default.php`).
+# The prod box never hit this because it was enabled by hand in the
+# browser during the 2026-09 hand-run era, long before either provisioning
+# script existed -- exactly the class of thing a fresh box exposes and an
+# already-provisioned one hides. Idempotent: checked before touched.
+API_ENABLED="$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\InstanceSettings::get()->is_api_enabled ? 'YES' : 'NO';\"" 2>/dev/null | tail -1)"
+if [[ "$API_ENABLED" == "YES" ]]; then
+  ok "Coolify API already enabled"
+elif [[ $APPLY -eq 0 ]]; then
+  info "Coolify API is disabled (Coolify's own default) -- would enable it"
+else
+  sshx "docker exec coolify php artisan tinker --execute=\"\\\\App\\\\Models\\\\InstanceSettings::get()->update(['is_api_enabled' => true]);\"" >/dev/null
+  ok "Coolify API enabled (was off by Coolify's own default; provision-supabase-stack.sh needs it)"
 fi
 
 step "Phase 2 verification"
@@ -865,7 +977,10 @@ cat <<NEXT
       you change them -- pfindash.com may still resolve to the incumbent
       box, so this is a live-traffic change, not a greenfield write.
 
-      Next script: scripts/provision-supabase-stack.sh --apply
+      Next script: BOX_IP=$BOX_IP scripts/provision-supabase-stack.sh --apply
+        BOX_IP is required there, not defaulted (2026-09-11 incident: a
+        missing override used to fall through to prod silently) -- always
+        pass it explicitly, copy-paste the line above, don't retype it.
         Reads the token this run wrote to /root/.pfin/coolify.env ON THE BOX
         -- nothing to copy here.
 NEXT
