@@ -35,8 +35,21 @@ SERVER_NAME="${SERVER_NAME:-pfin-prod-1}"
 SERVER_TYPE="cax21"          # RULED 2026-09-08 (F/CTO): 4 ARM vCPU / 8 GB / 80 GB
 LOCATION="${LOCATION:-fsn1}" # runbook §1: Falkenstein, fall back to hel1 on capacity
 IMAGE="ubuntu-24.04"         # runbook §1: Coolify supports Debian-based; arm64
-SSH_KEY_NAME="${SSH_KEY_NAME:-mosko-fintech-operator}"
-SSH_PUBKEY_PATH="${SSH_PUBKEY_PATH:-$HOME/.ssh/id_ed25519.pub}"
+# SSH keys to install on the box. Space-separated list of PUBLIC key paths.
+#
+# ⚠ AT LEAST ONE MUST BE PASSPHRASE-FREE, and the script enforces it at run
+# time. This is not a style preference — it is the failure this list exists to
+# prevent. The first provisioned box (2026-09-09) carried only a
+# passphrase-protected key: the box was correct, sshd was up, the firewall was
+# right, and automation still could not log in, because a passphrase needs a
+# terminal that a script does not have. The box had to be destroyed and
+# rebuilt. A key you cannot use is indistinguishable from a key that is not
+# there, and you find out AFTER provisioning.
+SSH_PUBKEYS="${SSH_PUBKEYS:-$HOME/.ssh/id_ed25519.pub $HOME/.ssh/id_ed25519_claude_mosko-fintech.pub}"
+SSH_KEY_PREFIX="${SSH_KEY_PREFIX:-mosko-fintech}"
+# Escape hatch: allow an all-passphrase key set. Only for a box a human will
+# ever touch by hand. Nothing scripted will be able to reach it.
+ALLOW_NO_AUTOMATION_KEY="${ALLOW_NO_AUTOMATION_KEY:-0}"
 FIREWALL_NAME="${FIREWALL_NAME:-pfin-prod-fw}"
 # A Primary IP is created SEPARATELY from the server and outlives it
 # (auto_delete=false). That is the whole point: DNS for pfindash.com points at
@@ -62,8 +75,15 @@ PRIMARY_IP_NAME="${PRIMARY_IP_NAME:-pfin-prod-ipv4}"
 
 API="https://api.hetzner.cloud/v1"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APPLY=0
-[[ "${1:-}" == "--apply" ]] && APPLY=1
+APPLY=0; REBUILD=0
+for arg in "$@"; do
+  case "$arg" in
+    --apply)   APPLY=1 ;;
+    --rebuild) REBUILD=1 ;;
+    *) echo "unknown flag: $arg" >&2
+       echo "usage: $0 [--apply] [--rebuild]" >&2; exit 2 ;;
+  esac
+done
 
 die()  { printf '\n\033[31mFAIL\033[0m  %s\n' "$*" >&2; exit 1; }
 ok()   { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
@@ -128,7 +148,12 @@ d=json.load(sys.stdin)
 assert d['type']=='$SERVER_TYPE', \
   'existing server is %s, this script describes $SERVER_TYPE. Refusing to touch it — resolve by hand.' % d['type']
 "
-  ok "existing server matches this file; nothing to create"
+  if [[ $REBUILD -eq 0 ]]; then
+    ok "existing server matches this file; nothing to create"
+    info "to change its SSH key set you must --rebuild (keys are fixed at creation)"
+  else
+    info "--rebuild given: this server will be DESTROYED and recreated"
+  fi
 fi
 
 EXISTING_PIP="$(api GET "/primary_ips?name=$PRIMARY_IP_NAME" | jqp "
@@ -141,15 +166,49 @@ else
   info "primary IP '$PRIMARY_IP_NAME' does not exist yet — will be created"
 fi
 
-[[ -f "$SSH_PUBKEY_PATH" ]] || die "no public key at $SSH_PUBKEY_PATH (set SSH_PUBKEY_PATH=)"
-PUBKEY="$(tr -d '\r\n' < "$SSH_PUBKEY_PATH")"
-FPR="$(ssh-keygen -lf "$SSH_PUBKEY_PATH" | awk '{print $2}')"
-ok "operator key $SSH_PUBKEY_PATH — $FPR"
+# ---- Key validation. Run BEFORE anything is created, never after. --------
+step "SSH keys — validating usability, not just presence"
+
+KEY_PATHS=(); KEY_USABLE=0
+for pub in $SSH_PUBKEYS; do
+  [[ -f "$pub" ]] || die "no public key at $pub"
+  priv="${pub%.pub}"
+  fpr="$(ssh-keygen -lf "$pub" | awk '{print $2}')"
+  if [[ ! -f "$priv" ]]; then
+    verdict="public only — no private half here"
+  elif ssh-keygen -y -P "" -f "$priv" >/dev/null 2>&1; then
+    verdict="usable by automation (no passphrase)"; KEY_USABLE=$((KEY_USABLE+1))
+  else
+    verdict="PASSPHRASE-PROTECTED — humans only, no script can use it"
+  fi
+  printf '      %-52s %s\n' "$(basename "$pub")" "$verdict"
+  info "  $fpr"
+  KEY_PATHS+=("$pub")
+done
+
+if [[ $KEY_USABLE -eq 0 ]]; then
+  if [[ "$ALLOW_NO_AUTOMATION_KEY" == "1" ]]; then
+    info "WARNING: no automation-usable key, proceeding because ALLOW_NO_AUTOMATION_KEY=1."
+    info "         Nothing scripted will be able to reach this box."
+  else
+    die "none of these keys is usable without a passphrase.
+
+  A script has no terminal to type a passphrase into, so this box would come
+  up correct and still be unreachable by automation — exactly the failure that
+  destroyed and rebuilt the first box on 2026-09-09.
+
+  Fix by ONE of:
+    * add a passphrase-free key to SSH_PUBKEYS=
+    * ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519_automation
+    * set ALLOW_NO_AUTOMATION_KEY=1 if this box is genuinely hand-operated only"
+  fi
+fi
+ok "$KEY_USABLE of ${#KEY_PATHS[@]} key(s) usable by automation"
 
 step "Plan"
 cat <<PLAN
       server    $SERVER_NAME  ($SERVER_TYPE, $IMAGE, $LOCATION)
-      ssh key   $SSH_KEY_NAME  <- $SSH_PUBKEY_PATH
+      ssh keys  ${#KEY_PATHS[@]} key(s), $KEY_USABLE usable by automation
       firewall  $FIREWALL_NAME  in: 22, 80, 443 only
                                 :8000 NOT opened — dashboard via SSH tunnel
                                 :8081 NOT opened (runbook §1 / §7 CA-4)
@@ -163,16 +222,41 @@ fi
 
 step "Applying"
 
-SSH_KEY_ID="$(api GET "/ssh_keys?name=$SSH_KEY_NAME" | jqp "
-d=json.load(sys.stdin)['ssh_keys']; print(d[0]['id'] if d else '')")"
-if [[ -z "$SSH_KEY_ID" ]]; then
-  SSH_KEY_ID="$(api POST /ssh_keys "$(python3 -c "
-import json,sys; print(json.dumps({'name':'$SSH_KEY_NAME','public_key':sys.argv[1]}))" "$PUBKEY")" \
-    | jqp "print(json.load(sys.stdin)['ssh_key']['id'])")"
-  ok "ssh key uploaded — id $SSH_KEY_ID"
-else
-  ok "ssh key already present — id $SSH_KEY_ID"
-fi
+SSH_KEY_IDS=()
+for pub in "${KEY_PATHS[@]}"; do
+  kname="$SSH_KEY_PREFIX-$(basename "${pub%.pub}")"
+  # Look up by FINGERPRINT, not name. Hetzner rejects duplicate key MATERIAL
+  # with a 409 regardless of what you call it, so a name-keyed lookup misses a
+  # key already uploaded under a different name and then fails on the insert.
+  # The key's identity is its material; the name is a label on top of it.
+  # Measured 2026-09-09 when the naming scheme changed from a single
+  # "-operator" key to per-file names.
+  md5fpr="$(ssh-keygen -lf "$pub" -E md5 | awk '{print $2}' | sed 's/^MD5://')"
+  kid="$(api GET /ssh_keys | MD5FPR="$md5fpr" jqp "
+import os
+d=json.load(sys.stdin)['ssh_keys']
+m=[k['id'] for k in d if k['fingerprint']==os.environ['MD5FPR']]
+print(m[0] if m else '')")"
+  if [[ -z "$kid" ]]; then
+    pubval="$(tr -d '\r\n' < "$pub")"
+    # Build this payload with a HEREDOC, not an inline python dict.
+    # A `{'a':1,'b':2}` literal written inline is brace-expanded by the shell
+    # into two words BEFORE python ever sees it, producing `json.dumps('a':1)`
+    # and a SyntaxError. Measured 2026-09-09 on the first --apply run.
+    payload="$(KNAME="$kname" PUBVAL="$pubval" python3 <<'PYJSON'
+import json, os
+print(json.dumps({"name": os.environ["KNAME"],
+                  "public_key": os.environ["PUBVAL"]}))
+PYJSON
+)"
+    kid="$(api POST /ssh_keys "$payload" | jqp "print(json.load(sys.stdin)['ssh_key']['id'])")"
+    ok "uploaded $kname — id $kid"
+  else
+    ok "already present $kname — id $kid"
+  fi
+  SSH_KEY_IDS+=("$kid")
+done
+SSH_KEYS_JSON="$(IFS=,; echo "${SSH_KEY_IDS[*]}")"
 
 FW_ID="$(api GET "/firewalls?name=$FIREWALL_NAME" | jqp "
 d=json.load(sys.stdin)['firewalls']; print(d[0]['id'] if d else '')")"
@@ -193,19 +277,13 @@ fi
 PIP_ID="$(api GET "/primary_ips?name=$PRIMARY_IP_NAME" | jqp "
 d=json.load(sys.stdin)['primary_ips']; print(d[0]['id'] if d else '')")"
 if [[ -z "$PIP_ID" ]]; then
-  # Resolve the datacenter from the location — the suffix is NOT uniform
-  # (fsn1-dc14, hel1-dc2, nbg1-dc3), so it must be looked up, never built
-  # by string concatenation. A wrong datacenter here creates the IP somewhere
-  # the server cannot use it.
-  DC_NAME="$(api GET /datacenters | jqp "
-d=json.load(sys.stdin)['datacenters']
-m=[x['name'] for x in d if x['location']['name']=='$LOCATION']
-assert m, 'no datacenter found for location $LOCATION'
-print(m[0])
-")"
-  info "datacenter for $LOCATION resolved as $DC_NAME"
+  # An UNASSIGNED primary IP is created against a `location`, not a
+  # `datacenter` — the API requires "either assignee_id or location" and
+  # rejects a datacenter-only body with 422. Measured 2026-09-09; an earlier
+  # draft here resolved a datacenter name, which was solving a problem that
+  # does not exist at creation time.
   PIP_JSON="$(api POST /primary_ips "$(cat <<JSON
-{"name":"$PRIMARY_IP_NAME","type":"ipv4","datacenter":"$DC_NAME",
+{"name":"$PRIMARY_IP_NAME","type":"ipv4","location":"$LOCATION",
  "assignee_type":"server","auto_delete":false,
  "labels":{"project":"mosko-fintech","env":"production"}}
 JSON
@@ -218,11 +296,37 @@ else
   ok "primary IP already present — $PIP_ADDR (id $PIP_ID)"
 fi
 
+if [[ -n "$EXISTING_SERVER" && $REBUILD -eq 1 ]]; then
+  # Hetzner's own /actions/rebuild re-images the disk but does NOT re-apply
+  # ssh_keys — the keys are fixed at creation. Changing the key set therefore
+  # means destroy-and-recreate, not rebuild. The PRIMARY IP is what makes that
+  # cheap: auto_delete=false, so the address (and any DNS pointing at it)
+  # survives the delete and re-attaches to the new box.
+  SRV_ID="$(echo "$EXISTING_SERVER" | jqp "print(json.load(sys.stdin)['id'])")"
+  info "REBUILD: deleting server $SERVER_NAME (id $SRV_ID) — the primary IP is retained"
+  api DELETE "/servers/$SRV_ID" >/dev/null
+  # Wait for the SERVER to disappear AND the PRIMARY IP to become unassigned.
+  # Waiting on the server alone is not enough: the delete returns before the IP
+  # detaches, and creating the new server while the IP still shows an assignee
+  # fails with a 422 that says nothing about a race. Measured 2026-09-09 — the
+  # create failed in-script and succeeded by hand seconds later, which is the
+  # signature of a timing bug rather than a bad payload.
+  for _ in $(seq 1 45); do
+    still="$(api GET "/servers?name=$SERVER_NAME" | jqp "print(len(json.load(sys.stdin)['servers']))")"
+    assignee="$(api GET "/primary_ips/$PIP_ID" | jqp "print(json.load(sys.stdin)['primary_ip']['assignee_id'] or '')")"
+    [[ "$still" == "0" && -z "$assignee" ]] && break
+    sleep 4
+  done
+  [[ -z "$assignee" ]] || die "primary IP $PIP_ID still assigned to $assignee after 180s — refusing to create into a race"
+  ok "old server deleted; primary IP detached and free"
+  EXISTING_SERVER=""
+fi
+
 if [[ -z "$EXISTING_SERVER" ]]; then
   RESULT="$(api POST /servers "$(cat <<JSON
 {"name":"$SERVER_NAME","server_type":"$SERVER_TYPE","image":"$IMAGE",
- "location":"$LOCATION","ssh_keys":[$SSH_KEY_ID],"firewalls":[{"firewall":$FW_ID}],
- "public_net":{"enable_ipv4":$PIP_ID,"enable_ipv6":true},
+ "location":"$LOCATION","ssh_keys":[$SSH_KEYS_JSON],"firewalls":[{"firewall":$FW_ID}],
+ "public_net":{"ipv4":$PIP_ID,"enable_ipv4":true,"enable_ipv6":true},
  "labels":{"project":"mosko-fintech","env":"production"}}
 JSON
 )")"
