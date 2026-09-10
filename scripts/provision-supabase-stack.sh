@@ -50,15 +50,39 @@
 #   a poisoned `db-data` volume rather than silently reproducing 2026-09-10.
 #
 # SCOPE — READ BEFORE ASSUMING THIS REPLACES §5
-#   This mints/sets exactly the Supabase-stack secrets named in
-#   secrets-manifest.yml's production_only set (POSTGRES_PASSWORD,
-#   JWT_SECRET, SECRET_KEY_BASE, VAULT_ENC_KEY, SERVICE_ROLE_KEY, ANON_KEY,
-#   DASHBOARD_PASSWORD, PG_META_CRYPTO_KEY) plus the two non-secret Studio
-#   vars (STUDIO_DEFAULT_ORGANIZATION, STUDIO_DEFAULT_PROJECT) — the set this
-#   session's Studio/meta work actually needs. It is NOT §5's general
-#   secrets-provisioning procedure (still a STUB, still Sec-gated) and does
-#   not touch SMTP_*, the four app-service secrets, or anything outside this
-#   one Coolify resource.
+#   This mints/sets the 8 Supabase-stack secrets named in secrets-manifest.yml's
+#   production_only set (POSTGRES_PASSWORD, JWT_SECRET, SECRET_KEY_BASE,
+#   VAULT_ENC_KEY, SERVICE_ROLE_KEY, ANON_KEY, DASHBOARD_PASSWORD,
+#   PG_META_CRYPTO_KEY), plus ~20 non-secret compose-required config vars
+#   (Studio defaults, POSTGRES_HOST/PORT/DB, POOLER_*, PGRST_DB_*, JWT_EXPIRY,
+#   MAILER_URLPATHS_*, ENABLE_*/DISABLE_* auth flags — see NONSECRET_DEFAULTS
+#   below for the full set and where each value comes from). It is NOT §5's
+#   general secrets-provisioning procedure (still a STUB, still Sec-gated)
+#   and does not touch the four app-service secrets or anything outside
+#   this one Coolify resource.
+#
+#   ⚠ SMTP_* — set with Supabase's own reference NON-FUNCTIONAL placeholder
+#   values (SMTP_HOST=supabase-mail etc.), NOT real credentials, and NOT a
+#   silent decision that placeholder email is fine for prod. Measured
+#   2026-09-11: `auth` (GoTrue) FATALs on startup if SMTP_PORT isn't a
+#   parseable integer -- unlike the URL vars below, SMTP config blocks the
+#   stack from coming up at all, not just from sending real mail, so this
+#   script cannot leave it genuinely unset the way its scope note used to
+#   claim. mint-if-absent means these placeholders are NEVER written over
+#   a box that already has real values set (prod already does, from the
+#   hand-run era, untouched by this change) -- but on any box where they
+#   ARE absent, "auth starts" and "auth sends real confirmation email"
+#   are now two different, unverified claims. Real SMTP provisioning is an
+#   open F/CTO/ARCH decision, not resolved here.
+#
+#   ⚠ SITE_URL / API_EXTERNAL_URL / SUPABASE_PUBLIC_URL — deliberately
+#   NOT set by this script at all (not even a placeholder). These are
+#   box/domain-specific and affect OAuth-callback and email-confirmation
+#   link correctness; picking a scheme is an ARCH/F/CTO call, not
+#   DevOps's to default silently. Whether `auth` actually needs them to
+#   START (vs. just to generate correct-looking URLs) was NOT settled as
+#   of this comment -- check the deployment-runbook.md / standup-log
+#   entry this incident produced for whatever was actually measured.
 #
 # WHAT THIS SCRIPT HAS NOT BEEN EXERCISED AGAINST
 #   The project/environment/application CREATE path (all three already exist
@@ -68,18 +92,25 @@
 #   right because the rest of the script is.
 #
 # USAGE
-#   scripts/provision-supabase-stack.sh              # preflight: read-only
-#   scripts/provision-supabase-stack.sh --apply       # create/mint/deploy
+#   BOX_IP is REQUIRED, not defaulted (2026-09-11 incident: a missing
+#   override used to fall through silently to prod's IP -- see the check
+#   right after this script's die()/ok()/info()/step() definitions).
+#   BOX_IP=<box-ip> scripts/provision-supabase-stack.sh          # preflight: read-only
+#   BOX_IP=<box-ip> scripts/provision-supabase-stack.sh --apply  # create/mint/deploy
 #
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BOX_IP="${BOX_IP:-188.245.166.206}"
+BOX_IP="${BOX_IP:-}"
 AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
 PROJECT_NAME="${PROJECT_NAME:-pfin-supabase}"
 ENVIRONMENT_NAME="${ENVIRONMENT_NAME:-production}"
 APP_NAME="${APP_NAME:-pfin-supabase-stack}"
-GIT_REPOSITORY="${GIT_REPOSITORY:-richmosko/mosko-fintech}"
+# Measured 2026-09-11 against a genuinely fresh scratch box: Coolify's
+# /applications/public validator rejects the GitHub short form
+# ("owner/repo") outright -- "must start with https://, http://, git://, or
+# git@." -- a full URL is required, not a slug.
+GIT_REPOSITORY="${GIT_REPOSITORY:-https://github.com/richmosko/mosko-fintech}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
 BASE_DIRECTORY="/infra/supabase"
 DOCKER_COMPOSE_LOCATION="/docker-compose.yml"
@@ -96,6 +127,22 @@ die()  { printf '\n\033[31mFAIL\033[0m  %s\n' "$*" >&2; exit 1; }
 ok()   { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
 info() { printf '      %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+# INCIDENT, 2026-09-11: BOX_IP used to default to prod's IP
+# (188.245.166.206) when unset. Running this script against a scratch box
+# with BOX_IP correctly overridden still left ONE downstream call (to
+# coolify-materialize-supabase-mounts.sh) on ITS OWN separate hardcoded
+# prod default, because that call didn't explicitly pass BOX_IP through --
+# it fell through silently and wrote files to prod. That specific call is
+# fixed below (passes COOLIFY_SSH_HOST explicitly now), but the GENERAL
+# fix is here: BOX_IP is no longer defaulted at all, anywhere in this
+# script. A missing override now fails loud, immediately, before anything
+# runs -- not a silent fall-through to prod from whichever line happens to
+# have (or lack) its own default. Every downstream call in this script
+# already routes through this one variable via the sshx()/sshx_in()
+# helpers below; requiring it here is what makes "no BOX_IP set"
+# impossible to reach any of them by accident.
+[[ -n "$BOX_IP" ]] || die "BOX_IP is required, not defaulted (deliberately, after 2026-09-11's incident) -- set it explicitly, e.g. BOX_IP=188.245.166.206 for prod or BOX_IP=<scratch-ip> for a scratch box. No default means no silent fall-through to prod."
 
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=6 -i "$AUTOMATION_KEY")
 sshx() { ssh "${SSH_OPTS[@]}" "root@$BOX_IP" "$@"; }
@@ -146,6 +193,23 @@ print(json.dumps(m[0]) if m else '')")"
   fi
 fi
 
+# Measured 2026-09-11 against a genuinely fresh scratch box: Coolify's
+# create_application (public branch) NORMALIZES git_repository on save --
+# it parses the submitted URL and stores just the URL path's owner/repo
+# segments (app/Http/Controllers/Api/ApplicationsController.php:
+# `$application->git_repository = ...->getSegment(1).'/'.->getSegment(2)`),
+# regardless of the full-URL form the create validator requires on input.
+# GET on an existing application therefore returns the SHORT form even
+# though this script must POST the full https:// form to pass validation
+# (see the create block below). Comparing $GIT_REPOSITORY (full URL)
+# against that short-form response made every re-run report a false
+# MISMATCH and refuse to proceed on an application that was actually
+# correctly configured. Compare against a normalized (stripped-prefix)
+# copy instead -- the POST body below still uses the full URL, unchanged.
+GIT_REPOSITORY_STORED="${GIT_REPOSITORY#https://github.com/}"
+GIT_REPOSITORY_STORED="${GIT_REPOSITORY_STORED#http://github.com/}"
+GIT_REPOSITORY_STORED="${GIT_REPOSITORY_STORED%.git}"
+
 APP_JSON="$(api GET /applications | jqp "
 d=json.load(sys.stdin)
 m=[a for a in d if a['name']=='$APP_NAME']
@@ -155,7 +219,7 @@ if [[ -n "$APP_JSON" ]]; then
   echo "$APP_JSON" | jqp "
 d=json.load(sys.stdin)
 mismatches=[]
-want={'build_pack':'dockercompose','base_directory':'$BASE_DIRECTORY','docker_compose_location':'$DOCKER_COMPOSE_LOCATION','git_repository':'$GIT_REPOSITORY','git_branch':'$GIT_BRANCH'}
+want={'build_pack':'dockercompose','base_directory':'$BASE_DIRECTORY','docker_compose_location':'$DOCKER_COMPOSE_LOCATION','git_repository':'$GIT_REPOSITORY_STORED','git_branch':'$GIT_BRANCH'}
 for k,v in want.items():
     if d.get(k)!=v: mismatches.append('%s: file wants %r, resource has %r'%(k,v,d.get(k)))
 if mismatches:
@@ -200,32 +264,63 @@ if [[ -z "${PROJECT_UUID:-}" ]]; then
   ok "project created — $PROJECT_UUID"
 fi
 if [[ -z "${ENV_UUID:-}" ]]; then
-  ENV_UUID="$(api POST "/projects/$PROJECT_UUID/environments" "{\"name\":\"$ENVIRONMENT_NAME\"}" | jqp "print(json.load(sys.stdin)['uuid'])")"
-  ok "environment created — $ENV_UUID"
+  # Re-check for an existing environment before creating one. Measured
+  # 2026-09-11 against a genuinely fresh scratch box: Coolify auto-creates
+  # a default "production" environment the moment a project is created --
+  # a blind POST here 409'd against that auto-created row. The preflight
+  # lookup above only runs when the project ALREADY EXISTED at preflight
+  # time; a first-ever run against a brand-new project never populates
+  # ENV_UUID before reaching this line, so "empty here" does not mean
+  # "needs creating" -- look it up for real, the same way preflight does,
+  # rather than assuming.
+  ENV_JSON="$(api GET "/projects/$PROJECT_UUID/environments" | jqp "
+d=json.load(sys.stdin)
+m=[e for e in d if e['name']=='$ENVIRONMENT_NAME']
+print(json.dumps(m[0]) if m else '')")"
+  if [[ -n "$ENV_JSON" ]]; then
+    ENV_UUID="$(echo "$ENV_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
+    ok "environment '$ENVIRONMENT_NAME' already existed (Coolify auto-creates one per new project) — $ENV_UUID"
+  else
+    ENV_UUID="$(api POST "/projects/$PROJECT_UUID/environments" "{\"name\":\"$ENVIRONMENT_NAME\"}" | jqp "print(json.load(sys.stdin)['uuid'])")"
+    ok "environment created — $ENV_UUID"
+  fi
 fi
 if [[ -z "${APP_UUID:-}" ]]; then
-  # UNEXERCISED against a live instance -- see the header. server_uuid /
-  # destination_uuid / github_app_uuid resolved by name/singleton lookup, not
+  # Measured 2026-09-11 against a genuinely fresh scratch box (this create
+  # path was UNEXERCISED against a live instance before then -- see the
+  # header): the original version of this step POSTed to
+  # /applications/private-github-app using the box's default "Public
+  # GitHub" github_apps row (id=0, no private_key -- that row exists
+  # precisely so PUBLIC repos don't need one). Coolify's own controller
+  # (app/Http/Controllers/Api/ApplicationsController.php) rejected that
+  # combination with a 500: "Attempt to read property \"private_key\" on
+  # null" -- the private-github-app endpoint expects a REAL GitHub App
+  # integration (OAuth credentials + a private key), which a public repo
+  # deliberately has none of. Source-verified in routes/api.php: Coolify
+  # ships a SEPARATE endpoint for exactly this case --
+  # POST /applications/public (create_public_application), which needs no
+  # github_app_uuid at all. This repo (mosko-fintech) is public, so that is
+  # the correct endpoint, not a workaround.
+  #
+  # server_uuid / destination_uuid resolved by name/singleton lookup, not
   # hardcoded, so a rebuild on a differently-shaped instance still works.
   SERVER_UUID="$(api GET /servers | jqp "
 d=json.load(sys.stdin)
 m=[s for s in d if s['name']=='localhost']
 print(m[0]['uuid'] if m else '')")"
   [[ -n "$SERVER_UUID" ]] || die "no server named 'localhost' -- expected Coolify's own auto-registered entry for this box"
-  GITHUB_APP_UUID="$(sshx "docker exec coolify-db psql -U coolify -d coolify -Atc \"select uuid from github_apps order by id limit 1;\"")"
-  [[ -n "$GITHUB_APP_UUID" ]] || die "no github_apps row found -- expected the default 'Public GitHub' source"
   CREATE_BODY="$(python3 -c "
 import json
 print(json.dumps({
   'project_uuid': '$PROJECT_UUID', 'environment_uuid': '$ENV_UUID',
-  'server_uuid': '$SERVER_UUID', 'github_app_uuid': '$GITHUB_APP_UUID',
+  'server_uuid': '$SERVER_UUID',
   'git_repository': '$GIT_REPOSITORY', 'git_branch': '$GIT_BRANCH',
   'build_pack': 'dockercompose', 'name': '$APP_NAME',
   'base_directory': '$BASE_DIRECTORY',
   'docker_compose_location': '$DOCKER_COMPOSE_LOCATION',
   'instant_deploy': False,
 }))")"
-  APP_UUID="$(api POST /applications/private-github-app "$CREATE_BODY" | jqp "print(json.load(sys.stdin)['uuid'])")"
+  APP_UUID="$(api POST /applications/public "$CREATE_BODY" | jqp "print(json.load(sys.stdin)['uuid'])")"
   ok "application created — $APP_UUID (compose parse queued, not deployed yet)"
 fi
 
@@ -246,30 +341,63 @@ fi
 ok "$MOUNT_ROWS local_file_volumes row(s) present -- safe to materialize now, before any deploy"
 
 step "Materializing the real compose files (never a bogus empty directory this time)"
-COOLIFY_APP_UUID="$APP_UUID" "$REPO_ROOT/scripts/coolify-materialize-supabase-mounts.sh" --apply
+# INCIDENT, 2026-09-11: this call passed COOLIFY_APP_UUID but not
+# COOLIFY_SSH_HOST -- coolify-materialize-supabase-mounts.sh's own default
+# for that var is root@188.245.166.206 (PROD's IP, hardcoded there as the
+# ordinary case since that script is normally run standalone against
+# prod). Run against a scratch box with only COOLIFY_APP_UUID overridden,
+# this correctly materialized the SCRATCH app's manifest -- onto PROD's
+# filesystem, under a path scoped to the scratch app's UUID
+# (/data/coolify/applications/<scratch-uuid>/volumes/**). No real Coolify
+# resource on prod references that UUID, so nothing there should have
+# consumed the files, but they were still an unintended write to prod's
+# disk from this script, and must not recur. Fixed by threading BOX_IP
+# through explicitly rather than relying on the sibling script's own
+# default matching by coincidence.
+COOLIFY_APP_UUID="$APP_UUID" COOLIFY_SSH_HOST="root@$BOX_IP" "$REPO_ROOT/scripts/coolify-materialize-supabase-mounts.sh" --apply
 
 step "Secrets: mint-if-absent, set env vars, assert non-empty -- all on the box, no value ever leaves it"
-# One remote script, python3 on the box (not this process): reads the token,
-# lists current envs (names + flags only -- the v1 API's GET .../envs
-# response carries no value field at all, confirmed by reading it), mints
-# openssl-quality randomness for any of the 8 manifest secrets genuinely
-# absent, PATCHes .../envs/bulk, then asserts non-empty the ONLY reliable
-# way: decrypts each required key server-side via the app's own Eloquent
-# cast (tinker --execute -- see below; never piped/interactive)
-# and reports true/false -- never ciphertext
-# length (meaningless: an empty string still encrypts to a non-trivial
-# blob) and never the plaintext itself.
+# Measured 2026-09-11 against a genuinely fresh scratch box: the OLD
+# "absent" check asked the API which KEYS have a row at all
+# (GET .../envs), then skipped minting any key that already had one. But
+# Coolify's own compose parser PRE-CREATES an EMPTY EnvironmentVariable
+# row for every var the compose file references as an interpolation
+# placeholder (e.g. api-gw's `SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}`) the
+# moment the application is created -- BEFORE this script ever runs. The
+# row existing was mistaken for the SECRET existing, so every mint was
+# skipped and every required key was left genuinely empty -- caught only
+# by the assert-non-empty step at the bottom, which is exactly why that
+# step exists, but the mint DECISION itself needs to ask the SAME
+# question (real decrypted non-emptiness, not row presence) to be
+# correct. Fixed: determine what needs minting via Eloquent decryption
+# FIRST (same non-echoing tinker --execute mechanism the assert step
+# already used), THEN mint only those, THEN re-assert.
+NEED_MINT="$(sshx_in <<REMOTE
+docker exec coolify php artisan tinker --execute="
+\\\$app = \\App\\Models\\Application::where('uuid','$APP_UUID')->firstOrFail();
+\\\$check = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
+foreach (\\\$check as \\\$key) {
+  \\\$env = \\\$app->environment_variables()->where('key', \\\$key)->first();
+  \\\$nonEmpty = \\\$env && strlen((string) \\\$env->value) > 0;
+  if (!\\\$nonEmpty) { echo \\\$key . PHP_EOL; }
+}
+"
+REMOTE
+)"
+
 sshx_in <<REMOTE
 set -e
 umask 077
 mkdir -p /root/.pfin
 TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
 APP_UUID="$APP_UUID"
+NEED_MINT="$NEED_MINT"
 
-python3 - "\$TOKEN" "\$APP_UUID" <<'PYEOF'
+python3 - "\$TOKEN" "\$APP_UUID" "\$NEED_MINT" <<'PYEOF'
 import json, subprocess, sys, secrets as pysecrets
 
-token, app_uuid = sys.argv[1], sys.argv[2]
+token, app_uuid, need_mint_raw = sys.argv[1], sys.argv[2], sys.argv[3]
+need_mint = set(need_mint_raw.split())
 
 def api(method, path, body=None):
     cmd = ["curl", "-fsS", "-X", method, "-H", f"Authorization: Bearer {token}"]
@@ -279,20 +407,93 @@ def api(method, path, body=None):
     out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
     return json.loads(out) if out.strip() else None
 
-existing = {e["key"] for e in api("GET", f"/applications/{app_uuid}/envs")}
-
-MINT_SECRETS = ["POSTGRES_PASSWORD", "JWT_SECRET", "SECRET_KEY_BASE",
-                "VAULT_ENC_KEY", "SERVICE_ROLE_KEY", "ANON_KEY",
-                "DASHBOARD_PASSWORD", "PG_META_CRYPTO_KEY"]
+# Measured 2026-09-11: MOST secrets have no length requirement (any random
+# value is fine, 64 hex chars is generous), but VAULT_ENC_KEY does --
+# Supavisor's Cloak/AES-256-GCM config needs EXACTLY 32 characters used
+# directly as raw key bytes (Supabase's own reference doc: "Must be
+# exactly 32 characters; generate with: openssl rand -hex 16" -- 16 BYTES
+# hex-encoded is 32 CHARACTERS). The original 64-char value (token_hex(32),
+# 32 bytes hex-encoded) crashed supavisor on startup:
+# "Unknown cipher or invalid key size". Per-key byte count, not one
+# constant for all of MINT_SECRETS.
+MINT_SECRETS = {"POSTGRES_PASSWORD": 32, "JWT_SECRET": 32, "SECRET_KEY_BASE": 32,
+                "VAULT_ENC_KEY": 16, "SERVICE_ROLE_KEY": 32, "ANON_KEY": 32,
+                "DASHBOARD_PASSWORD": 32, "PG_META_CRYPTO_KEY": 32}
+# Measured 2026-09-11 against a genuinely fresh scratch box: this script's
+# own header claims its scope is "exactly the Supabase-stack secrets ...
+# plus the two non-secret Studio vars" -- that was never actually
+# sufficient. The compose file references ~30 non-secret config vars
+# total; on prod every one of them was already set from the 2026-09
+# hand-run era, so this gap was invisible until a genuinely fresh
+# deploy hit it: 'db' itself failed to start
+# ('FATAL: invalid value for parameter "port": ""') because
+# POSTGRES_PORT was never set anywhere. Values below are Supabase's own
+# documented defaults (github.com/supabase/supabase docker/.env.example,
+# read live 2026-09-11), not guessed.
+#
+# SITE_URL / API_EXTERNAL_URL / SUPABASE_PUBLIC_URL: measured 2026-09-11
+# that 'auth' FATALs on startup ("parse \"\": empty url") without at
+# least one of these being a parseable URL -- unlike a wrong VALUE (a
+# genuine ARCH/F/CTO call, still open), a MISSING one blocks the stack
+# from starting at all, the same class as POSTGRES_PORT and SMTP_PORT
+# above. Set to Supabase's OWN reference docker/.env.example literal
+# defaults (http://localhost:8000 / :8000/auth/v1 / :3000) -- not an
+# invented value, upstream's own documented dev/fresh-install default.
+# mint-if-absent means this never overwrites prod's real values (already
+# set from the hand-run era). The REAL public-facing URL scheme (once
+# pfindash.com DNS/domain routing is decided) is still an open ARCH call.
 NONSECRET_DEFAULTS = {"STUDIO_DEFAULT_ORGANIZATION": "mosko-fintech",
-                       "STUDIO_DEFAULT_PROJECT": "pfin-supabase"}
+                       "STUDIO_DEFAULT_PROJECT": "pfin-supabase",
+                       "DASHBOARD_USERNAME": "supabase",
+                       "DISABLE_SIGNUP": "false",
+                       "ENABLE_ANONYMOUS_USERS": "false",
+                       "ENABLE_EMAIL_AUTOCONFIRM": "false",
+                       "ENABLE_EMAIL_SIGNUP": "true",
+                       "ENABLE_PHONE_AUTOCONFIRM": "true",
+                       "ENABLE_PHONE_SIGNUP": "true",
+                       "JWT_EXPIRY": "3600",
+                       "MAILER_URLPATHS_CONFIRMATION": "/auth/v1/verify",
+                       "MAILER_URLPATHS_EMAIL_CHANGE": "/auth/v1/verify",
+                       "MAILER_URLPATHS_INVITE": "/auth/v1/verify",
+                       "MAILER_URLPATHS_RECOVERY": "/auth/v1/verify",
+                       "PGRST_DB_EXTRA_SEARCH_PATH": "public",
+                       "PGRST_DB_MAX_ROWS": "1000",
+                       "PGRST_DB_SCHEMAS": "public,graphql_public",
+                       "POOLER_DB_POOL_SIZE": "5",
+                       "POOLER_DEFAULT_POOL_SIZE": "20",
+                       "POOLER_MAX_CLIENT_CONN": "100",
+                       # Stable across rebuilds (not box-IP-derived) --
+                       # this is a Supavisor tenant identifier, not a
+                       # secret or a URL.
+                       "POOLER_TENANT_ID": "pfin-supabase",
+                       "POSTGRES_DB": "postgres",
+                       "POSTGRES_HOST": "db",
+                       "POSTGRES_PORT": "5432",
+                       # NON-FUNCTIONAL PLACEHOLDERS (Supabase's own
+                       # reference docker/.env.example values, read live
+                       # 2026-09-11) -- mint-if-absent means these NEVER
+                       # overwrite a box that already has real SMTP set
+                       # (prod already does, from the hand-run era). Where
+                       # they ARE absent, they exist ONLY so 'auth' can
+                       # start at all (GoTrue FATALs on an unparseable
+                       # SMTP_PORT) -- real outbound email needs a real
+                       # provider decided separately, not assumed here.
+                       "SMTP_HOST": "supabase-mail",
+                       "SMTP_PORT": "2500",
+                       "SMTP_USER": "fake_mail_user",
+                       "SMTP_PASS": "fake_mail_password",
+                       "SMTP_SENDER_NAME": "fake_sender",
+                       "SMTP_ADMIN_EMAIL": "admin@example.com",
+                       "SUPABASE_PUBLIC_URL": "http://localhost:8000",
+                       "API_EXTERNAL_URL": "http://localhost:8000/auth/v1",
+                       "SITE_URL": "http://localhost:3000"}
 
 to_set = {}
-for key in MINT_SECRETS:
-    if key not in existing:
-        to_set[key] = pysecrets.token_hex(32)
+for key, nbytes in MINT_SECRETS.items():
+    if key in need_mint:
+        to_set[key] = pysecrets.token_hex(nbytes)
 for key, default in NONSECRET_DEFAULTS.items():
-    if key not in existing:
+    if key in need_mint:
         to_set[key] = default
 
 if to_set:
@@ -305,14 +506,15 @@ if to_set:
                 f.write(f"{k}={to_set[k]}\n")
     print(f"MINTED: {sorted(to_set.keys())}")
 else:
-    print("MINTED: none -- all required keys already present")
+    print("MINTED: none -- all required keys already non-empty")
 PYEOF
 chmod 600 /root/.pfin/supabase.env 2>/dev/null || true
 
-# Assert non-empty via Eloquent decryption, never ciphertext length.
+# Re-assert non-empty via Eloquent decryption, never ciphertext length --
+# proof the mint above actually worked, not just that it ran.
 docker exec coolify php artisan tinker --execute="
 \\\$app = \\App\\Models\\Application::where('uuid','$APP_UUID')->firstOrFail();
-\\\$required = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT'];
+\\\$required = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
 foreach (\\\$required as \\\$key) {
   \\\$env = \\\$app->environment_variables()->where('key', \\\$key)->first();
   \\\$nonEmpty = \\\$env && strlen((string) \\\$env->value) > 0;
@@ -345,17 +547,40 @@ for _ in $(seq 1 90); do
 done
 if [[ "$STATUS" != "finished" ]]; then
   info "deployment log (last 60 lines):"
+  # Measured 2026-09-11 against a genuinely fresh scratch box: `logs` in the
+  # deployment API response is a JSON-encoded STRING (Coolify stores/returns
+  # it that way), not an array -- `d.get('logs')` handed a raw string to the
+  # `for l in ...` loop, which iterated CHARACTER BY CHARACTER (Python's
+  # normal behavior for iterating a string), so `l.get('output','')` failed
+  # with "'str' object has no attribute 'get'" on the first character. This
+  # bug fired on every failed deployment, masking whatever the REAL failure
+  # was behind a Python traceback about string iteration. Parse it as the
+  # nested JSON it actually is before treating it as a list of log entries.
   api GET "/deployments/$DEPLOY_UUID" | jqp "
 d=json.load(sys.stdin)
-print('\n'.join(l.get('output','') for l in (d.get('logs') or [])[-60:]))" || true
+raw=d.get('logs') or '[]'
+entries=json.loads(raw) if isinstance(raw,str) else (raw or [])
+print('\n'.join(e.get('output','') for e in entries[-60:]))" || true
   die "deployment $DEPLOY_UUID status=$STATUS -- see log above"
 fi
 ok "deployment finished"
 
 step "Verification battery"
-CONTAINERS="$(sshx "docker ps --filter 'label=com.docker.compose.project=$APP_UUID' --filter 'health=healthy' --format '{{.Names}}'" | wc -l | tr -d ' ')"
+# Measured 2026-09-11: right after "deployment finished", supavisor (last
+# to pass its own health check's start_period) can still read as
+# "starting" for several more seconds even though the deploy itself
+# succeeded -- a single immediate check here reported 5/7 or 6/7 on a
+# stack that was fully healthy 10-15s later. Poll rather than assume the
+# deploy's own "finished" status means every container's healthcheck has
+# also converged yet.
+CONTAINERS=0
+for _ in $(seq 1 15); do
+  CONTAINERS="$(sshx "docker ps --filter 'label=com.docker.compose.project=$APP_UUID' --filter 'health=healthy' --format '{{.Names}}'" | wc -l | tr -d ' ')"
+  [[ "$CONTAINERS" == "7" ]] && break
+  sleep 3
+done
 info "$CONTAINERS/7 containers healthy (db auth rest api-gw supavisor studio meta)"
-[[ "$CONTAINERS" == "7" ]] || die "expected 7 healthy containers, got $CONTAINERS"
+[[ "$CONTAINERS" == "7" ]] || die "expected 7 healthy containers, got $CONTAINERS after 45s of polling"
 ok "all 7 containers healthy"
 
 PGVER="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc 'show server_version;'" 2>/dev/null | cut -d. -f1)"
@@ -365,10 +590,26 @@ ok "Postgres major version 17"
 # State-based init check, not filename grep -- the filename check (§4 (1b))
 # only works on a FRESH db-data volume; this works regardless.
 INIT_STATE="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc \"select rolname||':'||(rolpassword is not null) from pg_authid where rolname in ('authenticator','pgbouncer','supabase_auth_admin','supabase_functions_admin') order by rolname;\"")"
-echo "$INIT_STATE" | while IFS=: read -r role has_pw; do
+# Two bugs, both measured 2026-09-11 against the real scratch box, fixed
+# together:
+#   1. `(rolpassword is not null)` concatenated into text with `||` prints
+#      the WORD "true"/"false", not "t"/"f" (that shorthand is what a bare
+#      boolean COLUMN renders as -- this is a boolean EXPRESSION). The
+#      check compared against "t", which a correctly-initialized role
+#      never matches -- died on the FIRST role checked (authenticator)
+#      EVERY time, even confirmed non-poisoned, correctly-initialized
+#      volumes (direct query on the box: all four roles genuinely true).
+#   2. `echo "$INIT_STATE" | while read ...; done` runs the loop body in a
+#      SUBSHELL (bash's pipe-to-while behavior) -- die()'s `exit 1` inside
+#      it only exits that subshell, not this script; it happened to still
+#      abort correctly here only because the pipeline's own non-zero exit
+#      then tripped this script's own `set -eo pipefail` from outside the
+#      loop, which is fragile to rely on, not the actual intended
+#      mechanism. Process substitution avoids the subshell entirely.
+while IFS=: read -r role has_pw; do
   info "  $role password set: $has_pw"
-  [[ "$has_pw" == "t" ]] || die "role $role has no password set -- init scripts did not run (or db-data was already initialized before this deploy)"
-done
+  [[ "$has_pw" == "true" ]] || die "role $role has no password set -- init scripts did not run (or db-data was already initialized before this deploy)"
+done < <(printf '%s\n' "$INIT_STATE")
 JWT_SETTING="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc \"show app.settings.jwt_secret;\"" 2>&1 || true)"
 [[ "$JWT_SETTING" != *"unrecognized configuration parameter"* ]] || die "app.settings.jwt_secret unset -- init scripts did not run"
 ok "all four role passwords set + app.settings.jwt_secret present"
