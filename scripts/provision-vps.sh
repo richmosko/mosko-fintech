@@ -1,32 +1,50 @@
 #!/usr/bin/env bash
 #
-# provision-vps.sh — provision the V1 production VPS on Hetzner Cloud,
-# DevOps-owned, executing `docs/deployment-runbook.md` §1 through the API
-# instead of the web console (F/CTO chose scripted provisioning 2026-09-09).
+# provision-vps.sh — provision the V1 production VPS on Hetzner Cloud AND
+# take it from a bare box to an SSH-reachable, hardened, Coolify-installed,
+# admin-bootstrapped state with an automation API token minted ON THE BOX.
+# DevOps-owned. Phase 1 executes `docs/deployment-runbook.md` §1 through the
+# Hetzner API instead of the web console (F/CTO chose scripted provisioning
+# 2026-09-09); Phase 2 executes §1's hardening + §3's Coolify install and
+# admin bootstrap over SSH (F/CTO directive 2026-09-10: the stand-up must be
+# a scripted re-run a stranger can execute, zero browser steps).
 #
 # WHY THIS EXISTS
-#   §1 is written to be executed by a human in the Hetzner console. Doing it
-#   by hand once produces a box nobody can reproduce: the region, image,
-#   firewall rules and key fingerprint live only in whatever the operator
-#   clicked. This script makes the box a function of the file, so a rebuild
-#   after a loss is a re-run rather than an archaeology exercise.
+#   §1/§3 were written to be executed by a human in a console or browser.
+#   Doing it by hand once produces a box nobody can reproduce: the region,
+#   image, firewall rules, hardening, Coolify version and admin credential
+#   all live only in whatever the operator clicked or typed. This script
+#   makes the box a function of the file, so a rebuild after a loss is a
+#   re-run rather than an archaeology exercise. Phase 2 specifically closes a
+#   gap found reconstructing the ACTUAL 2026-09 stand-up: every step but one
+#   was already scripted or SSH-driven; the one browser step (Coolify's
+#   first-run registration form) turned out to be unnecessary, not load-
+#   bearing -- see the "Admin bootstrap" step below for the source-verified
+#   non-interactive path that replaces it.
 #
 # WHAT IT REFUSES TO DO
-#   It never prints the API token, never writes it anywhere, and never
-#   creates anything unless invoked with --apply. The default is a preflight
-#   that only reads.
+#   It never prints an API token or password (Hetzner's or Coolify's), never
+#   writes one anywhere off the box, and never creates or mutates anything
+#   unless invoked with --apply. The default is a preflight that only reads
+#   -- Phase 1's Hetzner-side creation is skipped entirely without --apply,
+#   and Phase 2 (SSH) still RUNS in preflight mode when the box already
+#   exists, reporting what it would do rather than doing it, which is what
+#   makes "prove this script is a no-op against the box we already have"
+#   possible without a flag that mutates production.
 #
 # IDEMPOTENCE
-#   Every create is preceded by a lookup on the resource's NAME. Re-running
-#   after a partial failure adopts what already exists rather than making a
-#   second copy. The one thing it will NOT do is mutate a resource that
-#   exists but disagrees with this file — it stops and shows the difference,
-#   because silently reconciling a live production box is how you delete
-#   something you meant to keep.
+#   Every create is preceded by a lookup — by resource NAME on the Hetzner
+#   side, by remote STATE (file content, package existence, DB row presence)
+#   on the SSH side. Re-running after a partial failure adopts what already
+#   exists rather than making a second copy or re-applying something already
+#   correct. The one thing it will NOT do is mutate a resource that exists
+#   but disagrees with this file — it stops and shows the difference, because
+#   silently reconciling a live production box is how you delete something
+#   you meant to keep.
 #
 # USAGE
 #   scripts/provision-vps.sh              # preflight: read-only, prints the plan
-#   scripts/provision-vps.sh --apply      # create what the preflight described
+#   scripts/provision-vps.sh --apply      # create/harden/install what the preflight described
 #
 set -euo pipefail
 
@@ -184,6 +202,12 @@ for pub in $SSH_PUBKEYS; do
   printf '      %-52s %s\n' "$(basename "$pub")" "$verdict"
   info "  $fpr"
   KEY_PATHS+=("$pub")
+  # First usable-by-automation PRIVATE key becomes the one the SSH phase below
+  # uses to reach the box. Only set once (first match wins), matching the
+  # order SSH_PUBKEYS is given in.
+  if [[ -z "${AUTOMATION_KEY:-}" && "$verdict" == usable* ]]; then
+    AUTOMATION_KEY="$priv"
+  fi
 done
 
 if [[ $KEY_USABLE -eq 0 ]]; then
@@ -215,11 +239,15 @@ cat <<PLAN
       primary   $PRIMARY_IP_NAME  (ipv4, auto_delete=false — survives a rebuild)
 PLAN
 
-if [[ $APPLY -eq 0 ]]; then
+if [[ $APPLY -eq 0 && -z "$EXISTING_SERVER" ]]; then
   printf '\n\033[33mPREFLIGHT ONLY.\033[0m Nothing was created. Re-run with --apply to execute.\n'
   exit 0
 fi
+if [[ $APPLY -eq 0 ]]; then
+  info "PREFLIGHT: server '$SERVER_NAME' already exists -- skipping Hetzner-side creation, continuing into Phase 2's read-only checks over SSH (this is what makes 'dry-run against the current box' possible)."
+fi
 
+if [[ $APPLY -eq 1 ]]; then
 step "Applying"
 
 SSH_KEY_IDS=()
@@ -341,7 +369,14 @@ print('      ipv6 %s' % (s['public_net']['ipv6'] or {}).get('ip'))
 else
   ok "server already existed — not recreated"
 fi
+fi  # end: if [[ $APPLY -eq 1 ]] (Hetzner-side "Applying" section)
 
+BOX_IP="$(api GET "/servers?name=$SERVER_NAME" | jqp "
+d=json.load(sys.stdin)['servers']
+print((d[0]['public_net']['ipv4'] or {}).get('ip') or '' if d else '')")"
+[[ -n "$BOX_IP" ]] || die "could not resolve $SERVER_NAME's IPv4 address after create/lookup"
+
+if [[ $APPLY -eq 1 ]]; then
 # The IPv6 primary IP is created FOR you by Hetzner at server-creation time,
 # with auto_delete=TRUE — so unlike the IPv4 one it dies with the server and a
 # rebuild hands out a different /64. Measured 2026-09-09: the rebuild at §3b
@@ -363,34 +398,238 @@ p=json.load(sys.stdin)['primary_ip']; print('%s %s' % (p['auto_delete'], p['ip']
     ok "IPv6 primary IP already persistent — ${v6state#* }"
   fi
 fi
+fi  # end: if [[ $APPLY -eq 1 ]] (IPv6 persistence)
 
-step "Next — runbook §1 verification block"
-cat <<'NEXT'
-      Run these from your machine, NOT from the box:
+# PIP_ADDR is used by Phase 2's "Next" block even in preflight mode (the
+# primary IP already exists whenever the server does); resolve it here if the
+# Applying section above didn't run.
+PIP_ADDR="${PIP_ADDR:-$(api GET "/primary_ips?name=$PRIMARY_IP_NAME" | jqp "
+d=json.load(sys.stdin)['primary_ips']; print(d[0]['ip'] if d else '')")}"
 
-        ssh root@<ip> 'nproc; free -h; df -h /; uname -m; lsb_release -ds'
-          EXPECT: 4 | ~8Gi | ~80G | aarch64 | Ubuntu 24.04.x LTS
-          x86_64 here means the wrong line was ordered — every image in this
-          repo is arm64 and will fail to build. Stop and rebuild.
+##############################################################################
+# PHASE 2 — post-provision SSH: hardening, Coolify install, admin bootstrap.
+#
+# F/CTO directive (2026-09-10): the stand-up must be a scripted re-run, not a
+# hand-run sequence. Reconstructed after the fact: past this point, every
+# single step of the original stand-up was executed by an agent over SSH or
+# the API. The ONE human step recorded — opening a tunnel and filling
+# Coolify's first-run browser form — was manufactured by the runbook
+# transcribing the installer's "browse to http://ip:8000" line without asking
+# whether a browser was required. It is not: `php artisan db:seed
+# --class=RootUserSeeder` is Coolify's own official non-interactive bootstrap
+# path (verified by reading it, not assumed — see the admin-bootstrap step
+# below), and a Sanctum token is mintable the same way. Zero browser steps.
+#
+# Everything below is READ-ONLY without --apply, same as Phase 1. Every
+# mutating step checks remote state FIRST and reports "already satisfies" on
+# a re-run rather than re-applying — this is what makes the script safe to
+# run again against an already-hardened, already-installed box, which is
+# exactly what proves it before it is ever pointed at a fresh one.
+##############################################################################
 
-        nmap -Pn -p 22,80,443,8000,8081 <ip>
+[[ -n "${AUTOMATION_KEY:-}" ]] || die "no automation-usable private key resolved — Phase 1 should have caught this"
+SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=6 -i "$AUTOMATION_KEY")
+sshx() { ssh "${SSH_OPTS[@]}" "root@$BOX_IP" "$@"; }
+sshx_in() { ssh "${SSH_OPTS[@]}" "root@$BOX_IP" bash -s; }  # feed a script on stdin
+
+step "Phase 2 — waiting for SSH at $BOX_IP (automation key)"
+SSH_UP=0
+for _ in $(seq 1 30); do
+  if sshx true >/dev/null 2>&1; then SSH_UP=1; break; fi
+  sleep 4
+done
+if [[ $SSH_UP -eq 0 ]]; then
+  if [[ $APPLY -eq 0 ]]; then
+    info "box not reachable yet (expected on a brand-new server during preflight — cloud-init is still running, or this box doesn't exist yet). Skipping Phase 2 checks."
+    printf '\n\033[33mPREFLIGHT ONLY.\033[0m Nothing was created. Re-run with --apply to execute.\n'
+    exit 0
+  else
+    die "box at $BOX_IP not reachable over SSH with the automation key after 120s"
+  fi
+fi
+ok "SSH reachable"
+
+step "Box spec (runbook §1) — read-only, every run"
+SPEC="$(sshx 'nproc; free -m | awk "/^Mem:/{print \$2}"; df -BG --output=size / | tail -1 | tr -d "G "; uname -m')"
+read -r CORES MEMMB DISKGB ARCH <<<"$(echo "$SPEC" | tr '\n' ' ')"
+info "cores=$CORES mem=${MEMMB}MB disk=${DISKGB}G arch=$ARCH"
+[[ "$CORES" == "4" ]] || die "expected 4 cores, box reports $CORES"
+[[ "$MEMMB" -ge 7000 && "$MEMMB" -le 8500 ]] || die "expected ~8GB RAM, box reports ${MEMMB}MB"
+[[ "$DISKGB" -ge 70 && "$DISKGB" -le 85 ]] || die "expected ~80GB disk, box reports ${DISKGB}G"
+[[ "$ARCH" == "aarch64" ]] || die "expected aarch64, box reports $ARCH -- every image in this repo is arm64 and will fail to build on this box"
+ok "spec matches the ruled $SERVER_TYPE shape"
+
+step "sshd hardening drop-in (runbook §1 step 2)"
+DESIRED_SSHD='# mosko-fintech V1 -- runbook §1 step 2.
+# PermitRootLogin is prohibit-password, NOT no: Coolify connects to this box
+# as root over key-based SSH. A flat "no" breaks Coolify'"'"'s server connection.
+PasswordAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin prohibit-password
+KbdInteractiveAuthentication no
+# AllowTcpForwarding must stay yes (the default) -- the Coolify dashboard and
+# Supabase Studio tunnels (ssh -L) both depend on it. Stated explicitly so a
+# future hardening pass cannot flip the default without this line objecting.
+AllowTcpForwarding yes'
+CURRENT_SSHD="$(sshx 'cat /etc/ssh/sshd_config.d/99-pfin-hardening.conf 2>/dev/null' || true)"
+if [[ "$CURRENT_SSHD" == "$DESIRED_SSHD" ]]; then
+  ok "sshd drop-in already matches"
+elif [[ $APPLY -eq 0 ]]; then
+  info "sshd drop-in missing or differs -- would write /etc/ssh/sshd_config.d/99-pfin-hardening.conf and reload sshd"
+else
+  printf '%s\n' "$DESIRED_SSHD" | ssh "${SSH_OPTS[@]}" "root@$BOX_IP" \
+    'cat > /etc/ssh/sshd_config.d/99-pfin-hardening.conf && sshd -t && systemctl reload sshd'
+  ok "sshd drop-in written and reloaded"
+fi
+
+step "Operator user 'deploy' + NOPASSWD sudo (runbook §1 step 3)"
+# NOPASSWD reasoning, carried from docs/records/v1final/standup-log.md §3c:
+# the SAME keys already grant DIRECT root login (required above, for
+# Coolify's own server connection) -- NOPASSWD sudo for deploy therefore
+# grants no capability those keys do not already have; it only removes a
+# password prompt that --disabled-password left unsatisfiable. This argument
+# DEPENDS on PermitRootLogin staying prohibit-password, not no -- asserted by
+# the sshd step above running first.
+DEPLOY_STATE="$(sshx 'id deploy >/dev/null 2>&1 && echo EXISTS || echo ABSENT'; sshx 'test -f /etc/sudoers.d/90-deploy && cat /etc/sudoers.d/90-deploy || true')"
+DEPLOY_EXISTS="$(echo "$DEPLOY_STATE" | head -1)"
+SUDOERS_LINE="$(echo "$DEPLOY_STATE" | tail -n +2)"
+if [[ "$DEPLOY_EXISTS" == "EXISTS" && "$SUDOERS_LINE" == "deploy ALL=(ALL) NOPASSWD:ALL" ]]; then
+  ok "deploy user + NOPASSWD sudo already present"
+elif [[ $APPLY -eq 0 ]]; then
+  info "deploy user/sudoers missing or differ -- would create/fix"
+else
+  sshx_in <<REMOTE
+set -e
+id deploy >/dev/null 2>&1 || adduser --disabled-password --gecos "" deploy
+usermod -aG sudo deploy
+echo 'deploy ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-deploy
+chmod 440 /etc/sudoers.d/90-deploy
+visudo -c -f /etc/sudoers.d/90-deploy
+mkdir -p /home/deploy/.ssh && chmod 700 /home/deploy/.ssh
+cp /root/.ssh/authorized_keys /home/deploy/.ssh/authorized_keys
+chmod 600 /home/deploy/.ssh/authorized_keys
+chown -R deploy:deploy /home/deploy/.ssh
+REMOTE
+  ok "deploy user + NOPASSWD sudo applied"
+fi
+
+step "Security updates (runbook §1 step 4)"
+UPGRADABLE="$(sshx 'apt list --upgradable 2>/dev/null | grep -c "^[a-z]"' || echo 0)"
+if [[ "$UPGRADABLE" == "0" ]]; then
+  ok "no upgradable packages"
+elif [[ $APPLY -eq 0 ]]; then
+  info "$UPGRADABLE package(s) upgradable -- would run apt-get update && apt-get -y upgrade"
+else
+  sshx 'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq upgrade' >/dev/null
+  REMAINING="$(sshx 'apt list --upgradable 2>/dev/null | grep -c "^[a-z]"' || echo '?')"
+  ok "security updates applied -- $REMAINING package(s) still upgradable (non-security or needs a reboot)"
+fi
+
+step "Coolify install (runbook §3), version pinned at run time"
+PINNED_VERSION="$(curl -fsS https://cdn.coollabs.io/coolify/versions.json | jqp "print(json.load(sys.stdin)['coolify']['v4']['version'])")"
+[[ -n "$PINNED_VERSION" ]] || die "could not read coolify.v4 from cdn.coollabs.io/coolify/versions.json"
+info "current pinned version per Coollabs: $PINNED_VERSION"
+INSTALLED_VERSION="$(sshx 'grep -m1 "^COOLIFY_VERSION=" /data/coolify/source/.env 2>/dev/null | cut -d= -f2' || true)"
+if [[ "$INSTALLED_VERSION" == "$PINNED_VERSION" ]]; then
+  ok "Coolify $PINNED_VERSION already installed"
+elif [[ -n "$INSTALLED_VERSION" ]]; then
+  info "Coolify $INSTALLED_VERSION is installed; $PINNED_VERSION is now pinned. This script does NOT auto-upgrade a live instance -- that is a deliberate, separate decision. Upgrade by hand via the Coolify dashboard/CLI when ready."
+elif [[ $APPLY -eq 0 ]]; then
+  info "Coolify not installed -- would run the installer pinned to $PINNED_VERSION"
+else
+  sshx "curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash -s $PINNED_VERSION"
+  ok "Coolify $PINNED_VERSION installed"
+fi
+
+step "Admin bootstrap -- zero browser steps (runbook §3)"
+# Source-verified, not assumed, in /var/www/html on the box (Coolify 4.3.18):
+#   database/seeders/RootUserSeeder.php -- Coolify's OWN official non-
+#   interactive first-user path. Reads ROOT_USER_EMAIL / ROOT_USER_PASSWORD /
+#   ROOT_USERNAME from env, no-ops if a user with id=0 already exists
+#   (idempotent by construction), creates that user, attaches it to Team 0 as
+#   owner, and disables further registration. This is NOT a reimplementation
+#   of app/Actions/Fortify/CreateNewUser.php's first-user branch -- it IS
+#   Coolify's own alternate entrypoint for exactly this (headless-install)
+#   case, so it stays correct across upstream changes to the interactive path.
+#   Password must satisfy Password::min(8)->mixedCase()->letters()->numbers()
+#   ->symbols()->uncompromised() -- generated on the box, long enough that a
+#   HaveIBeenPwned k-anonymity miss is not a realistic concern.
+#
+#   Token minting is separate (the seeder mints no token): app/Models/User.php
+#   ::createToken() reads session('currentTeam')->id for the token's team_id
+#   -- tinker has no HTTP session, so the script sets it explicitly first,
+#   mirroring what CreateNewUser::create() does at the end of registration.
+#   Ability: 'root' -- app/Http/Middleware/ApiAbility.php special-cases
+#   tokenCan('root') to bypass every other ability check ('read'/'write'/
+#   'deploy', the only three strings used anywhere in routes/api.php) --
+#   correct for this token since it belongs to the root user itself.
+ADMIN_STATE="$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\User::where('id',0)->exists() ? 'EXISTS' : 'ABSENT';\"" 2>/dev/null | tail -1)"
+TOKEN_STATE="$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','provisioning-automation')->exists() ? 'EXISTS' : 'ABSENT';\"" 2>/dev/null | tail -1)"
+if [[ "$ADMIN_STATE" == "EXISTS" && "$TOKEN_STATE" == "EXISTS" ]]; then
+  ok "admin user + automation token already provisioned -- not touched (values were never re-readable by this script by design)"
+elif [[ $APPLY -eq 0 ]]; then
+  info "admin=$ADMIN_STATE token=$TOKEN_STATE -- would generate a password + token ON THE BOX and write /root/.pfin/coolify.env (600), printing nothing secret"
+else
+  sshx_in <<'REMOTE'
+set -e
+umask 077
+mkdir -p /root/.pfin
+if ! docker exec coolify php artisan tinker --execute="echo \App\Models\User::where('id',0)->exists() ? 'EXISTS' : 'ABSENT';" 2>/dev/null | tail -1 | grep -q EXISTS; then
+  ROOT_PW="$(openssl rand -base64 33 | tr -d '\n')"
+  docker exec -e ROOT_USER_EMAIL="devops@mosko-fintech.internal" \
+              -e ROOT_USERNAME="DevOps Automation" \
+              -e ROOT_USER_PASSWORD="$ROOT_PW" \
+              coolify php artisan db:seed --class=RootUserSeeder --force
+  unset ROOT_PW
+fi
+if ! docker exec coolify php artisan tinker --execute="echo \App\Models\User::find(0)?->tokens()->where('name','provisioning-automation')->exists() ? 'EXISTS' : 'ABSENT';" 2>/dev/null | tail -1 | grep -q EXISTS; then
+  TOKEN_SCRIPT='$user = \App\Models\User::find(0);
+$team = \App\Models\Team::find(0);
+session(["currentTeam" => $team]);
+$token = $user->createToken("provisioning-automation", ["root"]);
+file_put_contents("/root/.pfin/_coolify_token.tmp", $token->plainTextToken);
+echo "MINTED";'
+  echo "$TOKEN_SCRIPT" | docker exec -i coolify php artisan tinker
+  TOKEN_VALUE="$(docker exec coolify cat /root/.pfin/_coolify_token.tmp 2>/dev/null || true)"
+  docker exec coolify rm -f /root/.pfin/_coolify_token.tmp
+  if [[ -n "$TOKEN_VALUE" ]]; then
+    { echo "COOLIFY_API_TOKEN=$TOKEN_VALUE"; } >> /root/.pfin/coolify.env
+    chmod 600 /root/.pfin/coolify.env
+  fi
+fi
+echo DONE
+REMOTE
+  ok "admin user + automation token provisioned on the box (values never left it, never printed)"
+  info "retrieve the dashboard password only if needed: it was NOT recorded anywhere -- reset it via 'docker exec coolify php artisan tinker' if lost, same as any other Coolify admin account"
+fi
+
+step "Phase 2 verification"
+HEALTHY="$(sshx "docker ps --filter 'name=coolify' --filter 'health=healthy' --format '{{.Names}}'" | wc -l | tr -d ' ')"
+info "$HEALTHY of 6 coolify-* containers healthy"
+[[ "$HEALTHY" == "6" ]] || die "expected 6 healthy coolify-* containers, got $HEALTHY -- check 'docker ps -a' on the box"
+ok "all 6 Coolify containers healthy"
+DASH_CODE="$(sshx "curl -s -o /dev/null -w '%{http_code}' http://localhost:8000")"
+[[ "$DASH_CODE" == "302" ]] || die "expected 302 from the dashboard on localhost:8000, got $DASH_CODE"
+ok "dashboard responds 302 -> /login (from the box)"
+
+step "Next"
+cat <<NEXT
+      Port check from OUTSIDE the box, not from it:
+        nmap -Pn -p 22,80,443,8000,8081 $BOX_IP
           EXPECT: 22/80/443 open · 8000 AND 8081 filtered
-          8081 open is the CA-4 regression; fix before installing anything.
-          8000 open means the firewall did not apply -- the dashboard is
-          meant to be unreachable from the internet entirely.
 
-      Coolify dashboard (§3) — over the tunnel, never a public port:
+      Dashboard, only if you want to look at it -- nothing in script 2 needs
+      the browser:
+        ssh -L 3000:localhost:3000 -L 8000:localhost:8000 root@$BOX_IP
+        # then browse http://localhost:8000 (Coolify) / :3000 (Studio, once §4)
 
-        ssh -L 8000:localhost:8000 root@<ip>
-        # leave that open, then browse http://localhost:8000
+      DNS (runbook §2): point pfindash.com's A record at $PIP_ADDR (the
+      PRIMARY IP), not at whatever address a future rebuild hands out --
+      that is what the primary IP is for. Check the CURRENT records before
+      you change them -- pfindash.com may still resolve to the incumbent
+      box, so this is a live-traffic change, not a greenfield write.
 
-      Then complete §1's hardening (password auth off, non-root operator user)
-      and record the box's IP, key fingerprint and Coolify version in
-      docs/records/v1final/standup-log.md before moving to §3.
-
-      DNS (runbook §2): point pfindash.com's A record at the PRIMARY IP above,
-      not at whatever address a future rebuild hands out. That is what the
-      primary IP is for. Check the CURRENT records before you change them --
-      pfindash.com may still resolve to the incumbent box, so this is a
-      live-traffic change, not a greenfield write.
+      Next script: scripts/provision-supabase-stack.sh --apply
+        Reads the token this run wrote to /root/.pfin/coolify.env ON THE BOX
+        -- nothing to copy here.
 NEXT
