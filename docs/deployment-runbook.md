@@ -293,7 +293,111 @@ Scope: bring up a fresh self-hosted Supabase stack (Postgres 17) on the new box 
 - **Postgres 17** is the forward target (`supabase/config.toml` `major_version = 17`), by choice.
 - **Carried follow-up (open):** PG-17 confirm-vs-prod — the `config.toml` comment notes `major_version = 17` is a best-guess match to the incumbent and should be confirmed before Phase 6 base-table RLS work where version-skew bites harder. In the greenfield posture this is **forward-by-choice**, so the "match prod" framing is reference-only; still confirm 17 is the version actually deployed.
 
-> **STUB —** Fill in: self-hosted Supabase bring-up procedure (Coolify one-click vs. compose), which Supabase services are in scope for V1 (db / auth / storage / realtime / studio — cross-check against `supabase/config.toml` enabled sections), the from-scratch DB init, and how `config.toml` settings map onto the self-hosted stack. **Note:** `supabase/config.toml` is owned elsewhere — this runbook *consumes* it, does not edit it.
+**Bring-up method — a Coolify "Docker Compose" resource sourced from Supabase's own reference self-hosting compose, not Coolify's one-click Supabase service.** The losing side is named below, not glossed over.
+
+| Approach | What it is | Verdict |
+|---|---|---|
+| Coolify's one-click **Supabase** service — a template Coolify itself curates and maintains | Ships Coolify's own bundled compose | **NOT CHOSEN.** Read live from Coolify's own docs (`coolify.io/docs/services/supabase`, 2026-09-09): the bundled compose pins **`supabase/postgres:15.6.1.146`** — Postgres **15**, not the **17** this project already decided on ([ADR-021](../DECISIONS.md#adr-021); `supabase/config.toml` `major_version = 17`). Using it would mean hand-editing Coolify's own managed template's compose to swap the database image — and Coolify's own docs already resort to exactly that kind of hand-edit for a lesser fix (a documented database-port-exposure workaround). The template does not spare us editing a compose file; it only relocates the edit into a Coolify-managed resource a future Coolify update could silently revert, instead of a file this repo commits and reviews. |
+| A Coolify **Docker Compose** custom resource — the same resource type §3's table already uses for `etl` / `pdf-render` / `provider-sync` — pointed at a compose file adapted from Supabase's reference self-hosting compose (`github.com/supabase/supabase` → `docker/docker-compose.yml`) | We supply the compose content | **CHOSEN.** Read live 2026-09-09: the current reference compose already pins `supabase/postgres:17.6.1.136` — PG 17, on target, no override needed. It also gives a committed, reviewable artifact for the `studio`/`meta` trim below — the same lintability argument §3 already makes for `provider-sync`/`pdf-render`'s Compose-over-bare-Dockerfile choice: a UI-only trim is a setting nothing can check; a committed compose file is. |
+
+**Losing side of the chosen option, stated plainly:** Coolify's one-click services get Coolify's own maintained upgrade path and a curated per-service UI panel; a hand-sourced Compose resource gets neither — DevOps, not Coolify, is responsible for periodically re-pulling the upstream reference compose and re-applying the trim below, rather than clicking an "update" button. Accepted because the PG17 mismatch above is not a stale-snapshot fluke of Coolify's template — it is that template's own committed artifact, and leaning on it for a version-sensitive component like the database is exactly the kind of moving-target dependency this runbook's own Coolify-version-pin discipline (§3) argues against.
+
+**Do not fetch the reference compose once and commit it verbatim into this repo.** Its service set and image tags move — the gateway service alone has been renamed and re-implemented since earlier tree references were written (see the `kong` row below). Pull it fresh at execution time, apply the trim below, and record the exact tags actually deployed in `docs/records/v1final/standup-log.md` (the as-executed log, not this file, per its own "records measurements, not intentions" rule).
+
+**Service scope for V1 — decided service by service, evidence-based.** Cross-checked against `supabase/config.toml`'s `enabled` sections and the current reference compose (read live 2026-09-09); the note after the table says why `config.toml`'s flags don't settle this by themselves.
+
+| Service | In/Out | Evidence |
+|---|---|---|
+| `db` (Postgres) | **IN** | The datastore. The chosen bring-up method's reference compose pins `supabase/postgres:17.6.1.136` — PG 17, matching `config.toml`'s `major_version = 17` with no override needed. |
+| `auth` (GoTrue) | **IN** | `api/src/hooks.server.ts`'s `createServerClient()` call is the app's entire session mechanism (`event.locals.supabase`) — no code path works without it. |
+| `rest` (PostgREST) | **IN** | The Data API `createServerClient()` talks to for every `pfin`-schema query, per [`supabase/CLAUDE.md`](../supabase/CLAUDE.md)'s RLS-default-trust posture (supabase-js + PostgREST, native RLS). |
+| `storage` | **OUT** | Re-grepped 2026-09-09: `grep -rniE "supabase.*storage\|\.storage\.from\(\|createBucket\|getBucket" api/src` and the same over `workers/pdf-render/src` → **zero hits**. Plaid access tokens live in `vault.secrets` (a Postgres extension inside `db`) — a different thing from the Storage service; don't conflate them. **New finding, not previously recorded anywhere in this tree** — revisit if a future PRD story adds file uploads. |
+| `realtime` | **OUT** | Re-grepped 2026-09-09, independently reproducing `production-standup.md` §5's finding: `grep -rniE "realtime\|\.channel\(\|supabase\.channel\|postgres_changes\|removeChannel" api/src` → zero genuine hits (only an unrelated `vi.useRealTimers()` fake-timer call). Also confirmed **zero** `createBrowserClient` call sites in `api/src` — no browser-side Supabase client exists to subscribe through even in principle. |
+| API gateway (`kong`, historically) | **IN — name drift flagged** | The ingress everything else sits behind; required regardless of name. **Finding:** this tree's prior references (`production-standup.md` §3, runbook §2) call this service `kong`. The **current** reference compose (read live 2026-09-09) no longer ships Kong at all — the gateway is now `api-gw`, built on **Envoy** (`envoyproxy/envoy:v1.39.1`). Supabase has migrated its self-hosted gateway upstream of this tree's prior research. Confirm which gateway actually ships in whatever reference-compose snapshot is pulled at execution time — Kong's plugin config and Envoy's filter config are not interchangeable, so a stale "kong" mental model is a real footgun here, not a naming nicety. |
+| `meta` (postgres-meta) | **OUT by default** | Sole known consumer in the reference compose is `studio`'s schema browser — nothing else depends on it. Drop **together with** `studio`, never independently: if `studio` is kept, `meta` must be kept too, since Studio has no other data source. This tightens the compose-trimming finding (`production-standup.md` §5), which flagged dropping `studio` as "unverified whether it breaks anything else" without checking `meta`'s dependents — checked here: nothing else needs `meta`. |
+| `studio` | **OUT by default, named exception carried over** | Per the compose-trimming finding and runbook §2's own framing: drop unless F/CTO names a concrete reason to keep it (e.g. browser-based ad-hoc DB inspection without an SSH tunnel). If kept, it needs its own Coolify Domain and the `meta` row above flips to IN with it — a §2/§3-shaped follow-on, not resolved here. |
+| `imgproxy` | **OUT** | Sole consumer is Storage's image-transformation feature. `storage` is OUT (above), and `config.toml`'s `[storage.image_transformation]` block is commented out regardless — no consumer at either layer. |
+| `supavisor` (pooler) | **IN, with a carve-out** | Fronts `rest`/`auth`'s own database connections by default in the reference compose. `config.toml`'s `[db.pooler] enabled = false` is **local-CLI-only** and isn't evidence either way — the local `supabase start` stack (`production-standup.md` §5's 11-container `docker stats` table) doesn't run a pooler container at all, on or off. **DevOps call, named so it can be revisited:** the two direct-Postgres workers (`workers/etl`'s `pfin_etl` connection, `workers/provider-sync`'s `pfin_provider_sync` connection — both via `TenantBoundConnection`/`TenantBoundClient`, Lock 13 mod #3) connect **straight to `db`**, bypassing `supavisor` — each is a long-lived singleton connection that gains nothing from transaction-mode pooling, and routing through `supavisor` adds an unverified prepared-statement-compatibility unknown for no offsetting benefit at V1's single-tenant scale. Open to Architect/Sec revisit; not F/CTO-locked. |
+| `analytics` | **OUT** | Re-confirmed 2026-09-09, reproducing the prior finding independently: absent from the current reference compose entirely — a `supabase start` CLI-only convenience add, never part of the production reference stack. |
+| `vector` | **OUT** | Same as `analytics` — confirmed absent from the current reference compose. |
+
+**Not in scope of the above list, noted for completeness:** the reference compose also defines a `functions` service (Edge Runtime). No Edge Function is authored anywhere in this tree (`config.toml`'s `[edge_runtime]` block is a local-CLI default with nothing behind it) — **OUT**, same reasoning as the others, just not itemized since it wasn't asked for.
+
+**On `config.toml` generally.** Every `enabled = true` in `supabase/config.toml` (`api`, `db`, `realtime`, `studio`, `storage`, `auth`, `analytics`, `inbucket`, `edge_runtime`) describes what the **local CLI-managed dev stack** turns on for developer convenience — it is not a production service manifest, and per this runbook's own convention this section does not edit that file. Where the table above disagrees with a `config.toml` `enabled = true` (`realtime`, `storage`, `studio`, `analytics`), that is `config.toml` correctly serving local dev, not evidence either service belongs in production. `inbucket` is the clearest case: it's explicitly local-only email-catching (`config.toml`'s own comment: "not actually sent") — production email is wired separately at the `auth` container's own SMTP env per `config.toml`'s commented `[auth.email.smtp]` block, unrelated to this service-scope decision.
+
+**Postgres major version — 17, and how to know it landed.** The chosen bring-up method sources a reference compose that already pins `supabase/postgres:17.6.1.136` as of the 2026-09-09 read, matching `config.toml`'s `major_version = 17` ([ADR-021](../DECISIONS.md#adr-021), forward-target-by-choice, not by prod-match — the cax21/pfindash.com incumbent measured PG 15.8 and is reference-only). This is what discharges this section's "PG-17 confirm-vs-prod" carried follow-up above — **operationally**, by the check below, not by this sentence alone:
+
+```sh
+psql "$PROD_DB_URL" -Atc "show server_version;"
+# EXPECTED: 17.x
+```
+
+Do not accept a Coolify/`docker compose` "healthy" status as this proof — a health check proves a process is listening, not which major version it's running. A wrong image tag reports exactly as healthy as a right one; this is exactly the silent failure mode Coolify's one-click template (pinned to 15.x) would have produced.
+
+**5a. Disable production signup; found the tenant by invitation.** Set `GOTRUE_DISABLE_SIGNUP=true` in the Coolify Compose resource's environment for the `auth` service — interpolated into that service's env block in the compose file, the same mechanism the stack's `JWT_SECRET`/`ANON_KEY`/`SERVICE_ROLE_KEY` already use. This is a **container env var on the self-hosted `auth`/GoTrue container**, distinct from and unrelated to `config.toml`'s `[auth] enable_signup` / `[auth.email] enable_signup` (both `true`, local-CLI-only, `config.toml:181,228`) — setting one does not touch the other.
+
+**Verify by probing the endpoint, never by reading a config back:**
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -X POST "$PUBLIC_SUPABASE_URL/auth/v1/signup" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H 'Content-Type: application/json' \
+  -d '{"email":"probe-'"$(date +%s)"'@example.invalid","password":"probe-password-1234"}'
+# EXPECTED: signup refused (GoTrue's signup-disabled error), never a 2xx with a created session.
+```
+
+Record pass/fail in `docs/records/v1final/standup-log.md` — this runbook is the reusable procedure; that log is the as-executed chronicle, per its own convention.
+
+**Founding tenant, by invitation, never by signup.** Run the Auth Admin API's invite path with the production `SUPABASE_SERVICE_ROLE_KEY` — service-role-gated, confirmed runnable standalone with no Studio dependency (relevant since `studio` is OUT by default above — dropping it does not remove this capability, only its point-and-click form):
+
+```js
+// one-off, run BY F/CTO from a machine holding the production service_role key —
+// never by an agent, never committed
+const { createClient } = require('@supabase/supabase-js')
+const supabase = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+await supabase.auth.admin.inviteUserByEmail('<founding-tenant-email>')
+```
+
+(Equivalent REST form if a script runtime isn't handy: `POST {PUBLIC_SUPABASE_URL}/auth/v1/invite` with the service_role key as both the `apikey` and bearer `Authorization` header.)
+
+**This stays off past stand-up completion — a standing gate, not a step that discharges.** `GOTRUE_DISABLE_SIGNUP` stays `true` through the full V1.final soak until the operator allowlist on the Plaid Link-token route ships — [`BACKLOG.md` §7.36 item 1](../BACKLOG.md) — per F/CTO's ruling (`docs/records/v1final/production-standup.md` §5, OPEN-3 gate #16). Do not flip it back on as a byproduct of any later stand-up step reading as "done."
+
+**Applying migrations to the fresh instance.** This names the mechanism only — per-migration specifics (ordering rationale, the `pfin_etl` / `pfin_provider_sync` two-step credential handoffs) are §6 / §6.1 / §6.2 below; this section does not restate them. The fresh `db` container begins empty; there is no separate "init" step beyond bringing it up and then applying the full chain here — every schema and table is created from scratch by the migrations themselves.
+
+Self-hosted Supabase has no "linked Supabase Cloud project" to `supabase link` against — that command binds to Supabase's hosted platform API, not applicable here. Apply with:
+
+```sh
+supabase db push --db-url "$PROD_DB_URL"
+```
+
+This pushes every migration in `supabase/migrations/` (currently through `117` — read the directory live; this runbook does not pin the count) in numeric order and records each in `supabase_migrations.schema_migrations` — the same tracking table OPEN-3 gate #10 already reads for `061`'s provenance. Safe to re-run: the CLI compares against that table and skips what's already applied, so a retry after a partial failure does not re-apply anything.
+
+**⚠ `055` and `117` write a cluster-wide `comment on role` — what that means for a production apply, specifically.** `pg_shdescription` (the catalog `comment on role` writes to) is **shared across every database in the Postgres cluster**, not scoped to one. [`BACKLOG.md` §7.36 item 9](../BACKLOG.md) records this being tripped for real: applying `117` against a scratch database inside the **shared local dev cluster** left its comment visible from every other database sharing that cluster. **Production does not have that shape, and that is exactly why applying there is safe as designed:** this stack's `db` container is a single-purpose Postgres instance serving only this app — there is no second database in the cluster for the comment to leak into. The hazard is about *reusing this migration file against a shared/scratch cluster*, not about running it once, as intended, against production's own dedicated cluster. The corollary is a constraint worth keeping, not just a fact to note: **if production's Postgres cluster is ever asked to host a second database** (e.g. co-locating a future second app to save resources), the `pfin_etl` / `pfin_provider_sync` role comments become shared state across both — a reason to keep this cluster single-database, named here for whoever next reconsiders Coolify topology. If `117`'s comment text is ever revised again post-deploy, the repair path is the one §7.36 item 9 already names: re-apply `055` then `117` — overwrite is benign, since the new text is the intended end state.
+
+**Verification block — stack-level, run after apply, before §5's secrets lock.** The TimeZone check is §4.1's, by reference — not restated here.
+
+```sh
+# (1) Every in-scope service healthy AND on the right artifact — not the same check.
+docker compose -f <the compose file used> ps
+psql "$PROD_DB_URL" -Atc "show server_version;"
+curl -s -o /dev/null -w '%{http_code}\n' "$PUBLIC_SUPABASE_URL/rest/v1/"
+```
+
+| Result | Reading |
+|---|---|
+| All services `running`/`healthy`; `server_version` = `17.x`; the gateway probe returns a `4xx` refusal | **Correct.** The refusal is the *fail-closed* result of hitting the Data API with no `apikey` header — read it as "the gateway is up and enforcing," not as a failure. The exact code (`401` under Kong's key-auth plugin; possibly different under the Envoy-based `api-gw` — see the gateway row above) is not pinned here; confirm what this gateway actually returns and treat any refusal as correct, a `2xx` as not. |
+| All services report `healthy` in Coolify/`docker compose ps`, but `server_version` is anything other than `17.x` | **Looks fine but is wrong, and easy to miss** — a container health check proves a process answered, not which image tag it's running. This is exactly the failure mode Coolify's one-click template would have produced silently (see the bring-up-method table above); confirming version by direct query, not by dashboard color, is the point of this row. |
+| The gateway probe returns `2xx` with a data response, no `apikey` supplied | **Wrong, and worse than a clean failure** — the Data API is not enforcing its own key check; every `pfin` table's RLS is the *second* layer of a two-layer fence (`config.toml`'s own header comment: anon holds zero grants outer, RLS inner). A gateway that skips key-checking removes the layer meant to stop unauthenticated traffic from ever reaching PostgREST at all. Stop and re-check the gateway config before proceeding. |
+| `studio` / `meta` show up in `docker compose ps` when the trim decision above dropped them | **Wrong, and worth checking explicitly rather than inferring** — a stale prior deploy attempt, or a compose file that wasn't actually re-pulled with the trim applied, can leave them running even though *this* execution's compose file omits them. Confirm their absence directly; don't infer it from "I used the trimmed file this time." |
+
+**Secrets this step produces.** Names only, per `secrets-manifest.yml`'s `production_only` set — never values, here or anywhere in this repo. **§5's secrets-provisioning procedure is still a STUB and its Sec joint-review flag is NOT discharged by this section** — this only names where these four land; rotation/injection-order procedure is §5's job.
+
+| Secret | Produced how | Where it goes |
+|---|---|---|
+| `SUPABASE_ANON_KEY` | Minted at Supabase stand-up (signed with the stack's own JWT secret, `role: anon`) — not operator-chosen | The Supabase compose's own env (so `rest`/the gateway/`auth` recognize it) **and** the `app` service's Coolify env. **⚠ Naming mismatch, found while writing this, not previously flagged anywhere:** `secrets-manifest.yml` and root [`.env.example`](../.env.example) name this `SUPABASE_ANON_KEY`, but the code that actually reads it (`api/src/hooks.server.ts:43`) reads `env.PUBLIC_SUPABASE_ANON_KEY` — declared instead, and explicitly marked non-secret, in [`api/.env.example`](../api/.env.example). Whatever value Coolify injects for the app's anon key must reach the container under the name `PUBLIC_SUPABASE_ANON_KEY` or the app fails closed at boot (`hooks.server.ts`'s own missing-env guard) — reconciling the two names is outside this section's boundary (`.env.example`/`secrets-manifest.yml` are not this PR's to edit); flagged for whoever locks §5. `PUBLIC_SUPABASE_URL` has no such mismatch — both consumers (`hooks.server.ts`, `supabase-admin.ts`) read the same name. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Same minting step, `role: service_role` | Same two-place pattern as above; consumed under this exact name by `api/src/lib/server/supabase-admin.ts` (verified — no mismatch here). RT-26's §4.1 allowlist confines its **consumption** inside the `app` container to that one file; unaffected by where the value is injected. |
+| `PFIN_DB_USER` | Non-secret username, fixed per container (`pfin_etl` / `pfin_provider_sync`) | Coolify env on `workers/etl` / `workers/provider-sync` respectively. |
+| `PFIN_DB_PASSWORD` | Generated at the §6.1/§6.2 two-step credential handoff (`openssl rand -hex 32`) — **after** migrations apply, per the ordering dependency §6.1 already states | Coolify env on `workers/etl` / `workers/provider-sync` — **different value per container**, same secret name, per `secrets-manifest.yml`'s own note. |
 
 ### 4.1 Database TimeZone — pinned to UTC · NOT a stub · financial-correctness dependency
 
