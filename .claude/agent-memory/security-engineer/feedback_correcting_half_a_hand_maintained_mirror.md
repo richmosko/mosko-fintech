@@ -31,5 +31,13 @@ prose. The paragraph cites the identical `SIMPLEFIN_TOKEN` recurrence as its cau
 - When a stale row is partly RIGHT, the fix is a split, not a deletion. Runbook §4's anon-key
   row correctly required the Supabase stack's own compose `ANON_KEY` while wrongly sending the
   same name to the app service; deleting it would have removed a real requirement.
+- ⚠ **A per-surface census over FILES misses scope CLAIMS made INSIDE files that are themselves
+  correct.** On PR #697 (2026-09-09, Plaid confinement) team-lead measured all four
+  `.env.example` surfaces and ruled `workers/provider-sync/` "correct, untouched" — its
+  DECLARATIONS were correct, but its inline comment
+  `PLAID_CLIENT_ID=  # secret (production_only) — shared with api/ + workers/etl/` named a
+  container the fix had just disqualified. Same class as the `secrets-manifest.yml` scope
+  comment. **After a confinement removal, grep the credential NAME across the whole tree, not
+  the enumerating files** — the residue lives in the comments of the file that is right.
 - Name the miss in the same message as the new findings. Related:
   [[feedback_public_prefix_is_a_declaration_not_an_emission]].
