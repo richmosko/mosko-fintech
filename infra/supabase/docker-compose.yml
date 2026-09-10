@@ -86,6 +86,11 @@
 #      services over the shared Coolify project network by service name
 #      once `connect_to_docker_network` is enabled at §6.
 
+# fence-datastore-private-bind: target
+# Do not remove the line above (must stand alone, no trailing text): it is
+# what lets scripts/ci/fence-datastore-private-bind.sh confirm it is scanning
+# the intended datastore manifest rather than silently passing over a
+# renamed/unmarked file.
 name: supabase
 
 services:
