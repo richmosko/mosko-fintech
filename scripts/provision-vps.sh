@@ -630,12 +630,19 @@ step "Admin bootstrap -- zero browser steps (runbook §3)"
 #   correct for this token since it belongs to the root user itself.
 #
 #   ⚠ THE PASSWORD BOUNDARY -- read before touching this block. It travels
-#   .env -> a local shell variable -> SSH stdin -> tinker's OWN stdin on the
-#   box -> Hash::make() -> the users row. At no point is it: a command-line
-#   argument (ps-visible, on this machine or the box), the return value of a
-#   bare tinker expression (tinker/psysh echoes those -- every statement that
-#   touches it ends in `; null;` or is buried inside a closure), or exposed
-#   by `set -x` (asserted off, explicitly, right here).
+#   .env -> a local shell variable -> SSH stdin (writing an env-file to the
+#   HOST, not the container, never a container-writable-by-www-data path) ->
+#   `docker exec --env-file` -> getenv() inside PHP -> Hash::make() -> the
+#   users row, for BOTH the create path (RootUserSeeder, a real artisan
+#   command) and the reset path (`tinker --execute`, since 2026-09-11 -- see
+#   the incident note below for why not piped/interactive tinker). At no
+#   point is it: a command-line argument (ps-visible, on this machine or the
+#   box -- the --execute code text itself carries no secret, only a
+#   `getenv()` call), the return value of a bare expression (`--execute`
+#   mode does not echo transcripts or return values the way piped/
+#   interactive tinker does -- that distinction IS this file's most recent
+#   incident), or exposed by `set -x` (asserted off, explicitly, right
+#   here).
 [[ $- != *x* ]] || die "set -x is on entering the admin-bootstrap step -- refusing to proceed with a password in scope while tracing is active."
 
 # `|| true`: under pipefail, a no-match grep (the normal "not set in .env"
@@ -651,16 +658,19 @@ COOLIFY_ADMIN_PASSWORD="$(read_env_var COOLIFY_ADMIN_PASSWORD)"
 ADMIN_STATE="$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\User::where('id',0)->exists() ? 'EXISTS' : 'ABSENT';\"" 2>/dev/null | tail -1)"
 TOKEN_STATE="$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','provisioning-automation')->exists() ? 'EXISTS' : 'ABSENT';\"" 2>/dev/null | tail -1)"
 
-# Orphan-token detection. Measured 2026-09-11: the token-capture bug fixed
-# below (container-unwritable path) left a 'provisioning-automation' DB row
-# behind with a plaintext nobody holds -- id=2, PLAINTEXT LOST. A naive
-# TOKEN_STATE==EXISTS-means-skip check makes that permanent: the row exists
-# forever, the script always skips minting, and nothing can ever use it. The
-# row (DB) and /root/.pfin/coolify.env (host file) are two halves of one
-# fact -- the row says a token SHOULD exist, the file says whether this box
-# actually HOLDS one. When they disagree, the row is an orphan from a failed
-# capture, not a completed provision: clear it and re-mint, the same way any
-# other step here treats a state mismatch as "redo," not "skip."
+# Orphan-token detection. General-purpose robustness, not a one-time
+# cleanup -- a failed or interrupted mint (measured twice already, 2026-09-11:
+# once from a container-permission bug, once from a mechanism that leaked
+# the value instead of writing it -- see the incident note further below)
+# can leave a 'provisioning-automation' DB row behind whose plaintext nobody
+# holds. A naive TOKEN_STATE==EXISTS-means-skip check makes that permanent:
+# the row exists forever, the script always skips minting, and nothing can
+# ever use it. The row (DB) and /root/.pfin/coolify.env (host file) are two
+# halves of one fact -- the row says a token SHOULD exist, the file says
+# whether this box actually HOLDS one. When they disagree, the row is an
+# orphan from a failed capture, not a completed provision: clear it and
+# re-mint, the same way any other step here treats a state mismatch as
+# "redo," not "skip."
 if [[ "$TOKEN_STATE" == "EXISTS" ]]; then
   HOST_TOKEN_USABLE="$(sshx "test -s /root/.pfin/coolify.env && grep -q '^COOLIFY_API_TOKEN=.' /root/.pfin/coolify.env && echo USABLE || echo ORPHAN" 2>/dev/null | tail -1)"
   if [[ "$HOST_TOKEN_USABLE" == "ORPHAN" ]]; then
@@ -712,11 +722,39 @@ else
     printf 'ROOT_USER_PASSWORD=%s\n' "$COOLIFY_ADMIN_PASSWORD"
   } | sshx "umask 077; cat > $SEED_ENV_FILE"
 
-  # Everything below is captured (stdout+stderr) rather than printed as it
-  # runs, so it can be checked for a leak BEFORE the operator ever sees it --
-  # not a substitute for the design above (never an argument, never a bare
-  # tinker expression), a proof that it held. The two secrets are still in
-  # scope at the grep below; both are unset immediately after.
+  # SECURITY INCIDENT, 2026-09-11 -- read before touching this block again.
+  # The previous version of this step piped a script into INTERACTIVE tinker
+  # (`echo "$SCRIPT" | ... php artisan tinker`, no --execute) for both the
+  # password reset and the token mint. Measured on the real --apply run:
+  # interactive/piped tinker echoes each input line back (`> ...`) AND the
+  # return value of evaluated expressions (`= ...`) to its own stdout -- a
+  # REPL transcript, not a clean script run. The token's plaintext appeared
+  # directly in that transcript and reached the operator's terminal and the
+  # run log BEFORE the local scrub/leak-check ever ran -- those checked
+  # $BOOTSTRAP_LOG, a stream the leak had already bypassed. Team-lead caught
+  # it live, revoked the token (DB row deleted) and removed the host file;
+  # the exposed value is dead. This is the exact "instrument watches the
+  # wrong stream" failure -- fixed at the mechanism, not by patching the
+  # scrub:
+  #   1. Tinker now runs ONLY via `--execute=<code>` (non-interactive,
+  #      documented Laravel Tinker mode -- no REPL echo of input or return
+  #      values; this file already relied on that exact property for the
+  #      ADMIN_STATE/TOKEN_STATE reads above, which never leaked anything).
+  #   2. The token's plaintext now NEVER returns to this script's own
+  #      variables or stdout at all -- not even to write it locally, unlike
+  #      before. It is minted, copied host-side via `docker cp` (never
+  #      `docker exec`, so www-data's inability to write /root never enters
+  #      the picture), and written into coolify.env, ALL inside one remote
+  #      script over one SSH call. Container -> SSH-side/host -> host file,
+  #      never crossing back to this process.
+  #   3. Because the token literal is no longer ever in this script's own
+  #      memory, the old "grep the log for the known value" leak-check is
+  #      no longer possible FOR THE TOKEN (nothing to compare against) --
+  #      replaced by a structural check: the combined captured output must
+  #      contain nothing shaped like a Sanctum plaintext token
+  #      (`<digits>|<20+ alnum chars>`) anywhere at all. The password check
+  #      is unchanged and still literal, since the password DOES still
+  #      cross locally (via the env-file below) even though never printed.
   BOOTSTRAP_LOG="$(mktemp)"
   {
     if [[ "$ADMIN_STATE" != "EXISTS" ]]; then
@@ -725,90 +763,80 @@ else
     fi
 
     if [[ $RESET_ADMIN_PASSWORD -eq 1 && "$ADMIN_STATE" == "EXISTS" ]]; then
-      # RootUserSeeder only creates; a reset re-hashes via tinker instead.
-      # The password crosses via tinker's OWN stdin (this heredoc's content,
-      # sent over the already-encrypted SSH channel) -- never a shell
-      # expression tinker would echo, and the whole script ends on a bare
-      # `null;` so psysh's normal last-expression REPL echo never prints the
-      # hash either.
-      RESET_SCRIPT="\$pw = getenv('ROOT_USER_PASSWORD');
-\\App\\Models\\User::where('id', 0)->update(['password' => \\Illuminate\\Support\\Facades\\Hash::make(\$pw)]);
+      # --execute, not piped interactive stdin -- see the incident note
+      # above. The password crosses via the env-file (unchanged, already
+      # correct), read inside PHP with getenv(); the --execute argument
+      # itself is static code, no secret in it, so it is not ps-visible
+      # either.
+      sshx_in <<REMOTE
+docker exec --env-file $SEED_ENV_FILE coolify php artisan tinker --execute='
+\$pw = getenv("ROOT_USER_PASSWORD");
+\\App\\Models\\User::where("id", 0)->update(["password" => \\Illuminate\\Support\\Facades\\Hash::make(\$pw)]);
 unset(\$pw);
-echo 'RESET_OK';
-null;"
-      echo "$RESET_SCRIPT" | sshx "docker exec --env-file $SEED_ENV_FILE -i coolify php artisan tinker"
+echo "RESET_OK";
+null;
+'
+REMOTE
     fi
 
     if [[ "$TOKEN_STATE" != "EXISTS" ]]; then
-      # Measured 2026-09-11 on the real box: the previous version of this
-      # step wrote the token to a file INSIDE the container
-      # (file_put_contents("/root/.pfin/...")) then read it back with a
-      # second `docker exec ... cat`. Coolify's container runs as www-data
-      # (uid 9999), not root -- /root/anything is unwritable from inside it,
-      # on every box, not just this one. The write failed, the read of a
-      # file that was never created returned empty, and the token had
-      # already been minted server-side with no way left to retrieve its
-      # plaintext (Sanctum only returns plaintext once, at creation).
-      #
-      # Fixed by never routing the secret through a container-written file
-      # at all: createToken() returns the plaintext as an expression value,
-      # so capture it from tinker's OWN stdout via an explicit `echo`, the
-      # same channel the leak-check already reads. It rides inside
-      # $BOOTSTRAP_LOG only as long as it takes the code just below this
-      # block to pull it out and scrub the carrier line -- see there for why
-      # that order matters.
-      TOKEN_SCRIPT='$user = \App\Models\User::find(0);
+      # Fully self-contained remote script -- no local variable is
+      # interpolated into it, so the heredoc delimiter is QUOTED
+      # (<<'REMOTE') to send it verbatim; every $-expansion below happens
+      # on the BOX, never here. The plaintext exists only inside this one
+      # ssh session's remote shell/PHP process, on its way from the
+      # container's own /tmp (www-data-writable) to the host's
+      # root-owned /root/.pfin/coolify.env via `docker cp` -- never
+      # printed by any command in this chain.
+      sshx_in <<'REMOTE'
+set -euo pipefail
+docker exec coolify php artisan tinker --execute='
+$user = \App\Models\User::find(0);
 $team = \App\Models\Team::find(0);
 session(["currentTeam" => $team]);
 $token = $user->createToken("provisioning-automation", ["root"]);
-echo "PFIN_TOKEN=" . $token->plainTextToken;
-echo "MINTED";
-null;'
-      echo "$TOKEN_SCRIPT" | sshx "docker exec -i coolify php artisan tinker"
+file_put_contents("/tmp/.pfin_token", $token->plainTextToken);
+null;
+'
+docker cp coolify:/tmp/.pfin_token /root/.pfin/_coolify_token.tmp
+docker exec coolify rm -f /tmp/.pfin_token
+umask 077
+printf 'COOLIFY_API_TOKEN=%s\n' "$(cat /root/.pfin/_coolify_token.tmp)" >> /root/.pfin/coolify.env
+chmod 600 /root/.pfin/coolify.env
+shred -u /root/.pfin/_coolify_token.tmp 2>/dev/null || rm -f /root/.pfin/_coolify_token.tmp
+echo TOKEN_WRITTEN
+REMOTE
     fi
   } > "$BOOTSTRAP_LOG" 2>&1
 
   sshx "shred -u $SEED_ENV_FILE 2>/dev/null || rm -f $SEED_ENV_FILE"
 
-  # Pull the token out of the captured log and SCRUB its carrier line before
-  # anything else reads $BOOTSTRAP_LOG -- in particular before the leak-check
-  # right below, which greps this same file for the token value. Order
-  # matters: if the carrier line were still present, that grep would find
-  # its own source and die() on every single run, not just a real leak.
-  TOKEN_VALUE=""
-  if grep -q '^PFIN_TOKEN=' "$BOOTSTRAP_LOG"; then
-    TOKEN_VALUE="$(grep -m1 '^PFIN_TOKEN=' "$BOOTSTRAP_LOG" | cut -d= -f2-)"
-    grep -v '^PFIN_TOKEN=' "$BOOTSTRAP_LOG" > "$BOOTSTRAP_LOG.scrubbed"
-    mv "$BOOTSTRAP_LOG.scrubbed" "$BOOTSTRAP_LOG"
-  fi
-  if [[ -n "$TOKEN_VALUE" ]]; then
-    # This write was never the broken half -- it goes over SSH straight to
-    # the HOST filesystem (root-owned, outside the container entirely), not
-    # through `docker exec`. Unchanged from before this fix.
-    printf 'COOLIFY_API_TOKEN=%s\n' "$TOKEN_VALUE" | sshx "umask 077; cat >> /root/.pfin/coolify.env; chmod 600 /root/.pfin/coolify.env"
-    echo "TOKEN_WRITTEN" >> "$BOOTSTRAP_LOG"
-  fi
-
-  # The assertion team-lead asked for, run every --apply, not once by hand:
-  # grep the captured log for both secrets while they're still in scope. Zero
-  # hits is the test -- and now a REAL test: the token's own carrier line was
-  # scrubbed above, so this can only fire on an actual leak, not its own
-  # source line.
+  # The assertion team-lead asked for, run every --apply, not once by hand,
+  # against the SAME combined stdout+stderr stream the operator's own
+  # terminal would show (this step's output is captured, not printed live,
+  # specifically so this check runs before the operator ever sees it) --
+  # zero hits is the test, checked two ways:
+  #   - literal match for the password (still held locally, by design, via
+  #     $COOLIFY_ADMIN_PASSWORD -- unchanged from before this incident)
+  #   - PATTERN match for anything token-shaped, since the token itself is
+  #     deliberately never held locally anymore to literal-match against
+  #     (see the incident note above) -- catches an accidental echo from
+  #     either tinker call even without knowing the exact value in advance.
   LEAK=0
   [[ -n "${COOLIFY_ADMIN_PASSWORD:-}" ]] && grep -qF -- "$COOLIFY_ADMIN_PASSWORD" "$BOOTSTRAP_LOG" && LEAK=1
-  [[ -n "${TOKEN_VALUE:-}" ]] && grep -qF -- "$TOKEN_VALUE" "$BOOTSTRAP_LOG" && LEAK=1
+  grep -qE '[0-9]+\|[A-Za-z0-9]{20,}' "$BOOTSTRAP_LOG" && LEAK=1
   if [[ $LEAK -eq 1 ]]; then
     rm -f "$BOOTSTRAP_LOG"
-    die "a secret value appeared in the admin-bootstrap step's own captured output -- refusing to print the log. This is the echo trap the design above exists to prevent; something regressed. Do not re-run until fixed."
+    die "a secret value (or a token-shaped string) appeared in the admin-bootstrap step's own captured output -- refusing to print the log. This is the echo trap the 2026-09-11 incident fix exists to prevent; something regressed. Do not re-run until fixed. If this is a false positive on an unrelated token-shaped string, tighten the pattern below rather than removing the check."
   fi
 
-  grep -vE '^(ADMIN_CREATED|RESET_OK|MINTED|TOKEN_WRITTEN)$' "$BOOTSTRAP_LOG" | sed 's/^/      /'
+  grep -vE '^(ADMIN_CREATED|RESET_OK|TOKEN_WRITTEN)$' "$BOOTSTRAP_LOG" | sed 's/^/      /'
   grep -q ADMIN_CREATED "$BOOTSTRAP_LOG" && ok "admin user created (email/name from .env or prompt; password human-chosen, never printed)"
   grep -q RESET_OK "$BOOTSTRAP_LOG" && ok "admin password reset (value never printed by this script or tinker)"
-  grep -q TOKEN_WRITTEN "$BOOTSTRAP_LOG" && ok "automation token minted on the box (value never left it, never printed)"
-  ok "leak check: zero hits for either secret in this step's own captured output"
+  grep -q TOKEN_WRITTEN "$BOOTSTRAP_LOG" && ok "automation token minted on the box (value never left it, never printed, never even returned to this script)"
+  ok "leak check: zero hits for the password (literal) and zero token-shaped strings in this step's own captured output"
   rm -f "$BOOTSTRAP_LOG"
-  unset COOLIFY_ADMIN_PASSWORD TOKEN_VALUE
+  unset COOLIFY_ADMIN_PASSWORD
 fi
 
 step "Phase 2 verification"
