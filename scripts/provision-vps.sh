@@ -93,13 +93,14 @@ PRIMARY_IP_NAME="${PRIMARY_IP_NAME:-pfin-prod-ipv4}"
 
 API="https://api.hetzner.cloud/v1"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APPLY=0; REBUILD=0
+APPLY=0; REBUILD=0; RESET_ADMIN_PASSWORD=0
 for arg in "$@"; do
   case "$arg" in
-    --apply)   APPLY=1 ;;
-    --rebuild) REBUILD=1 ;;
+    --apply)                APPLY=1 ;;
+    --rebuild)               REBUILD=1 ;;
+    --reset-admin-password)  RESET_ADMIN_PASSWORD=1 ;;
     *) echo "unknown flag: $arg" >&2
-       echo "usage: $0 [--apply] [--rebuild]" >&2; exit 2 ;;
+       echo "usage: $0 [--apply] [--rebuild] [--reset-admin-password]" >&2; exit 2 ;;
   esac
 done
 
@@ -109,10 +110,28 @@ info() { printf '      %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 # ---- Token: read from .env, never echoed, never exported to children ------
-[[ -f "$REPO_ROOT/.env" ]] || die "no .env at $REPO_ROOT — HETZNER_API_KEY is read from there"
-TOKEN="$(grep -m1 '^HETZNER_API_KEY=' "$REPO_ROOT/.env" | cut -d= -f2- | tr -d '"'"'"' \r\n')"
-[[ -n "$TOKEN" ]] || die "HETZNER_API_KEY missing or empty in .env"
-[[ ${#TOKEN} -eq 64 ]] || die "HETZNER_API_KEY is ${#TOKEN} chars; Hetzner tokens are 64 — wrong value or a stray quote"
+# Named HETZNER_API_TOKEN, not _KEY -- renamed 2026-09-10 to match Hetzner's own
+# name for it (an API Token, sent as a bearer), this repo's own _TOKEN/_KEY split
+# (_TOKEN for bearer tokens like SIMPLEFIN_TOKEN, _KEY for actual keys), and its
+# sibling COOLIFY_API_TOKEN. Deliberately NOT read as a fallback from the old
+# HETZNER_API_KEY name -- a silent alias is how two names stay alive forever;
+# the die message below names both spellings so the rename is diagnosed in one
+# read instead of a bare "missing".
+[[ -f "$REPO_ROOT/.env" ]] || die "no .env at $REPO_ROOT — HETZNER_API_TOKEN is read from there"
+# `|| true` on the grep: under `set -o pipefail`, a no-match grep inside a
+# command-substitution PIPELINE is a "failing command" and set -e aborts the
+# whole script right here, silently (no die(), no message) -- before the
+# -z check below ever runs. Caught by actually testing the missing-var path,
+# not by inspection: the original single-name version of this line had the
+# same latent bug, just never exercised because .env always had the var set.
+TOKEN="$(grep -m1 '^HETZNER_API_TOKEN=' "$REPO_ROOT/.env" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' \r\n' || true)"
+if [[ -z "$TOKEN" ]]; then
+  if grep -q '^HETZNER_API_KEY=' "$REPO_ROOT/.env" 2>/dev/null; then
+    die "HETZNER_API_TOKEN missing from .env, but HETZNER_API_KEY is present -- that name was renamed 2026-09-10 (Hetzner calls it an API Token; this repo's _TOKEN/_KEY convention agrees). Rename the line in .env, don't add a second one."
+  fi
+  die "HETZNER_API_TOKEN missing or empty in .env. See docs/deployment-runbook.md §0 for where to create one."
+fi
+[[ ${#TOKEN} -eq 64 ]] || die "HETZNER_API_TOKEN is ${#TOKEN} chars; Hetzner tokens are 64 — wrong value or a stray quote"
 
 api() { # api <METHOD> <PATH> [json-body]
   local method="$1" path="$2" body="${3:-}"
@@ -127,7 +146,7 @@ jqp() { python3 -c "import json,sys;$1" ; }
 
 step "Preflight — reading current state (no writes)"
 
-api GET /servers >/dev/null || die "token rejected by Hetzner (401/403). Check HETZNER_API_KEY has Read & Write."
+api GET /servers >/dev/null || die "token rejected by Hetzner (401/403). Check HETZNER_API_TOKEN has Read & Write."
 ok "token authenticates"
 
 # Spec check: assert the ruled spec against what Hetzner actually sells today.
@@ -551,9 +570,22 @@ step "Admin bootstrap -- zero browser steps (runbook §3)"
 #   of app/Actions/Fortify/CreateNewUser.php's first-user branch -- it IS
 #   Coolify's own alternate entrypoint for exactly this (headless-install)
 #   case, so it stays correct across upstream changes to the interactive path.
-#   Password must satisfy Password::min(8)->mixedCase()->letters()->numbers()
-#   ->symbols()->uncompromised() -- generated on the box, long enough that a
-#   HaveIBeenPwned k-anonymity miss is not a realistic concern.
+#
+#   F/CTO override 2026-09-10: the password must be HUMAN-CHOSEN, not
+#   generated -- a random 32-char password is secure and unusable. Read from
+#   .env (COOLIFY_ADMIN_EMAIL / COOLIFY_ADMIN_NAME / COOLIFY_ADMIN_PASSWORD),
+#   or prompted if stdin is a TTY and a value is missing; dies naming the
+#   exact variable if neither. No generated fallback for the password, ever.
+#
+#   email_verified_at -- checked whether it matters, not assumed either way:
+#   App\Models\User does NOT implement Illuminate\Contracts\Auth\MustVerifyEmail
+#   (confirmed: `class User extends Authenticatable implements SendsEmail`,
+#   no MustVerifyEmail). routes/web.php DOES apply a ['auth','verified']
+#   middleware group, but Laravel's EnsureEmailIsVerified middleware only
+#   blocks when `$user instanceof MustVerifyEmail` -- false here, so the
+#   check is a structural no-op for this model regardless of
+#   email_verified_at. RootUserSeeder's omission of markEmailAsVerified() is
+#   therefore not a bug to work around.
 #
 #   Token minting is separate (the seeder mints no token): app/Models/User.php
 #   ::createToken() reads session('currentTeam')->id for the token's team_id
@@ -563,44 +595,132 @@ step "Admin bootstrap -- zero browser steps (runbook §3)"
 #   tokenCan('root') to bypass every other ability check ('read'/'write'/
 #   'deploy', the only three strings used anywhere in routes/api.php) --
 #   correct for this token since it belongs to the root user itself.
+#
+#   ⚠ THE PASSWORD BOUNDARY -- read before touching this block. It travels
+#   .env -> a local shell variable -> SSH stdin -> tinker's OWN stdin on the
+#   box -> Hash::make() -> the users row. At no point is it: a command-line
+#   argument (ps-visible, on this machine or the box), the return value of a
+#   bare tinker expression (tinker/psysh echoes those -- every statement that
+#   touches it ends in `; null;` or is buried inside a closure), or exposed
+#   by `set -x` (asserted off, explicitly, right here).
+[[ $- != *x* ]] || die "set -x is on entering the admin-bootstrap step -- refusing to proceed with a password in scope while tracing is active."
+
+# `|| true`: under pipefail, a no-match grep (the normal "not set in .env"
+# case) would otherwise make this function's exit status non-zero, and
+# `VAR=$(read_env_var ...)` with set -e would abort the whole script right
+# there -- silently, no die(), exactly the bug the HETZNER_API_TOKEN read
+# above hit and got fixed for. Same shape, fixed the same way.
+read_env_var() { grep -m1 "^$1=" "$REPO_ROOT/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r\n' || true; }
+COOLIFY_ADMIN_EMAIL="$(read_env_var COOLIFY_ADMIN_EMAIL)"
+COOLIFY_ADMIN_NAME="$(read_env_var COOLIFY_ADMIN_NAME)"
+COOLIFY_ADMIN_PASSWORD="$(read_env_var COOLIFY_ADMIN_PASSWORD)"
+
 ADMIN_STATE="$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\User::where('id',0)->exists() ? 'EXISTS' : 'ABSENT';\"" 2>/dev/null | tail -1)"
 TOKEN_STATE="$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','provisioning-automation')->exists() ? 'EXISTS' : 'ABSENT';\"" 2>/dev/null | tail -1)"
-if [[ "$ADMIN_STATE" == "EXISTS" && "$TOKEN_STATE" == "EXISTS" ]]; then
-  ok "admin user + automation token already provisioned -- not touched (values were never re-readable by this script by design)"
-elif [[ $APPLY -eq 0 ]]; then
-  info "admin=$ADMIN_STATE token=$TOKEN_STATE -- would generate a password + token ON THE BOX and write /root/.pfin/coolify.env (600), printing nothing secret"
-else
-  sshx_in <<'REMOTE'
-set -e
-umask 077
-mkdir -p /root/.pfin
-if ! docker exec coolify php artisan tinker --execute="echo \App\Models\User::where('id',0)->exists() ? 'EXISTS' : 'ABSENT';" 2>/dev/null | tail -1 | grep -q EXISTS; then
-  ROOT_PW="$(openssl rand -base64 33 | tr -d '\n')"
-  docker exec -e ROOT_USER_EMAIL="devops@mosko-fintech.internal" \
-              -e ROOT_USERNAME="DevOps Automation" \
-              -e ROOT_USER_PASSWORD="$ROOT_PW" \
-              coolify php artisan db:seed --class=RootUserSeeder --force
-  unset ROOT_PW
+
+NEED_CREDENTIALS=0
+[[ "$ADMIN_STATE" != "EXISTS" ]] && NEED_CREDENTIALS=1
+[[ $RESET_ADMIN_PASSWORD -eq 1 ]] && NEED_CREDENTIALS=1
+
+if [[ $NEED_CREDENTIALS -eq 1 && $APPLY -eq 1 ]]; then
+  if [[ -t 0 ]]; then
+    [[ -n "$COOLIFY_ADMIN_EMAIL" ]] || read -rp "Coolify admin email: " COOLIFY_ADMIN_EMAIL
+    [[ -n "$COOLIFY_ADMIN_NAME" ]] || read -rp "Coolify admin name: " COOLIFY_ADMIN_NAME
+    if [[ -z "$COOLIFY_ADMIN_PASSWORD" ]]; then
+      read -rsp "Coolify admin password: " COOLIFY_ADMIN_PASSWORD; echo
+      read -rsp "Confirm: " _PW_CONFIRM; echo
+      [[ "$COOLIFY_ADMIN_PASSWORD" == "$_PW_CONFIRM" ]] || die "passwords did not match"
+      unset _PW_CONFIRM
+    fi
+  fi
+  [[ -n "$COOLIFY_ADMIN_EMAIL" ]] || die "COOLIFY_ADMIN_EMAIL missing from .env and no TTY to prompt (add it to .env, non-secret)"
+  [[ -n "$COOLIFY_ADMIN_NAME" ]] || die "COOLIFY_ADMIN_NAME missing from .env and no TTY to prompt (add it to .env, non-secret)"
+  [[ -n "$COOLIFY_ADMIN_PASSWORD" ]] || die "COOLIFY_ADMIN_PASSWORD missing from .env and no TTY to prompt (add it to .env, gitignored, or delete the line after first run)"
 fi
-if ! docker exec coolify php artisan tinker --execute="echo \App\Models\User::find(0)?->tokens()->where('name','provisioning-automation')->exists() ? 'EXISTS' : 'ABSENT';" 2>/dev/null | tail -1 | grep -q EXISTS; then
-  TOKEN_SCRIPT='$user = \App\Models\User::find(0);
+
+if [[ "$ADMIN_STATE" == "EXISTS" && "$TOKEN_STATE" == "EXISTS" && $RESET_ADMIN_PASSWORD -eq 0 ]]; then
+  ok "admin user + automation token already provisioned -- not touched (pass --reset-admin-password to change the password)"
+elif [[ $APPLY -eq 0 ]]; then
+  if [[ $RESET_ADMIN_PASSWORD -eq 1 ]]; then
+    info "--reset-admin-password given -- would re-hash the admin password from .env/prompt on the box"
+  else
+    info "admin=$ADMIN_STATE token=$TOKEN_STATE -- would create the admin from .env/prompted credentials and mint a token ON THE BOX, printing nothing secret"
+  fi
+else
+  # Env-file, never `docker exec -e` (argv-visible via ps on the box) and
+  # never a tinker --execute argument (argv-visible on THIS machine too).
+  SEED_ENV_FILE="/root/.pfin/_root_seed.env.$$"
+  {
+    printf 'ROOT_USER_EMAIL=%s\n' "$COOLIFY_ADMIN_EMAIL"
+    printf 'ROOT_USERNAME=%s\n' "$COOLIFY_ADMIN_NAME"
+    printf 'ROOT_USER_PASSWORD=%s\n' "$COOLIFY_ADMIN_PASSWORD"
+  } | sshx "umask 077; cat > $SEED_ENV_FILE"
+
+  # Everything below is captured (stdout+stderr) rather than printed as it
+  # runs, so it can be checked for a leak BEFORE the operator ever sees it --
+  # not a substitute for the design above (never an argument, never a bare
+  # tinker expression), a proof that it held. The two secrets are still in
+  # scope at the grep below; both are unset immediately after.
+  BOOTSTRAP_LOG="$(mktemp)"
+  {
+    if [[ "$ADMIN_STATE" != "EXISTS" ]]; then
+      sshx "docker exec --env-file $SEED_ENV_FILE coolify php artisan db:seed --class=RootUserSeeder --force"
+      echo "ADMIN_CREATED"
+    fi
+
+    if [[ $RESET_ADMIN_PASSWORD -eq 1 && "$ADMIN_STATE" == "EXISTS" ]]; then
+      # RootUserSeeder only creates; a reset re-hashes via tinker instead.
+      # The password crosses via tinker's OWN stdin (this heredoc's content,
+      # sent over the already-encrypted SSH channel) -- never a shell
+      # expression tinker would echo, and the whole script ends on a bare
+      # `null;` so psysh's normal last-expression REPL echo never prints the
+      # hash either.
+      RESET_SCRIPT="\$pw = getenv('ROOT_USER_PASSWORD');
+\\App\\Models\\User::where('id', 0)->update(['password' => \\Illuminate\\Support\\Facades\\Hash::make(\$pw)]);
+unset(\$pw);
+echo 'RESET_OK';
+null;"
+      echo "$RESET_SCRIPT" | sshx "docker exec --env-file $SEED_ENV_FILE -i coolify php artisan tinker"
+    fi
+
+    if [[ "$TOKEN_STATE" != "EXISTS" ]]; then
+      TOKEN_SCRIPT='$user = \App\Models\User::find(0);
 $team = \App\Models\Team::find(0);
 session(["currentTeam" => $team]);
 $token = $user->createToken("provisioning-automation", ["root"]);
 file_put_contents("/root/.pfin/_coolify_token.tmp", $token->plainTextToken);
-echo "MINTED";'
-  echo "$TOKEN_SCRIPT" | docker exec -i coolify php artisan tinker
-  TOKEN_VALUE="$(docker exec coolify cat /root/.pfin/_coolify_token.tmp 2>/dev/null || true)"
-  docker exec coolify rm -f /root/.pfin/_coolify_token.tmp
-  if [[ -n "$TOKEN_VALUE" ]]; then
-    { echo "COOLIFY_API_TOKEN=$TOKEN_VALUE"; } >> /root/.pfin/coolify.env
-    chmod 600 /root/.pfin/coolify.env
+echo "MINTED";
+null;'
+      echo "$TOKEN_SCRIPT" | sshx "docker exec -i coolify php artisan tinker"
+      TOKEN_VALUE="$(sshx "docker exec coolify cat /root/.pfin/_coolify_token.tmp 2>/dev/null" || true)"
+      sshx "docker exec coolify rm -f /root/.pfin/_coolify_token.tmp"
+      if [[ -n "$TOKEN_VALUE" ]]; then
+        printf 'COOLIFY_API_TOKEN=%s\n' "$TOKEN_VALUE" | sshx "umask 077; cat >> /root/.pfin/coolify.env; chmod 600 /root/.pfin/coolify.env"
+        echo "TOKEN_WRITTEN"
+      fi
+    fi
+  } > "$BOOTSTRAP_LOG" 2>&1
+
+  sshx "shred -u $SEED_ENV_FILE 2>/dev/null || rm -f $SEED_ENV_FILE"
+
+  # The assertion team-lead asked for, run every --apply, not once by hand:
+  # grep the captured log for both secrets while they're still in scope. Zero
+  # hits is the test.
+  LEAK=0
+  [[ -n "${COOLIFY_ADMIN_PASSWORD:-}" ]] && grep -qF -- "$COOLIFY_ADMIN_PASSWORD" "$BOOTSTRAP_LOG" && LEAK=1
+  [[ -n "${TOKEN_VALUE:-}" ]] && grep -qF -- "$TOKEN_VALUE" "$BOOTSTRAP_LOG" && LEAK=1
+  if [[ $LEAK -eq 1 ]]; then
+    rm -f "$BOOTSTRAP_LOG"
+    die "a secret value appeared in the admin-bootstrap step's own captured output -- refusing to print the log. This is the echo trap the design above exists to prevent; something regressed. Do not re-run until fixed."
   fi
-fi
-echo DONE
-REMOTE
-  ok "admin user + automation token provisioned on the box (values never left it, never printed)"
-  info "retrieve the dashboard password only if needed: it was NOT recorded anywhere -- reset it via 'docker exec coolify php artisan tinker' if lost, same as any other Coolify admin account"
+
+  grep -vE '^(ADMIN_CREATED|RESET_OK|MINTED|TOKEN_WRITTEN)$' "$BOOTSTRAP_LOG" | sed 's/^/      /'
+  grep -q ADMIN_CREATED "$BOOTSTRAP_LOG" && ok "admin user created (email/name from .env or prompt; password human-chosen, never printed)"
+  grep -q RESET_OK "$BOOTSTRAP_LOG" && ok "admin password reset (value never printed by this script or tinker)"
+  grep -q TOKEN_WRITTEN "$BOOTSTRAP_LOG" && ok "automation token minted on the box (value never left it, never printed)"
+  ok "leak check: zero hits for either secret in this step's own captured output"
+  rm -f "$BOOTSTRAP_LOG"
+  unset COOLIFY_ADMIN_PASSWORD TOKEN_VALUE
 fi
 
 step "Phase 2 verification"
