@@ -32,11 +32,14 @@
 # │ reason to answer requests from the public internet), every service must    │
 # │ stay INTERNAL-ONLY:                                                         │
 # │   - it may `expose:` its port (sibling-container reach on the project net); │
-# │   - it must NOT `ports:`-publish to the host (public reach) — a loopback    │
-# │     `127.0.0.1:<port>:<port>` bind is STILL a violation: this fence checks  │
-# │     committed config shape only, and Sec's ruling treats even the bounded   │
-# │     loopback fallback as a decision to make explicitly with Sec at that     │
-# │     time, not a standing allowance baked into the fence;                    │
+# │   - it must NOT `ports:`-publish to the host, with ONE enumerated exception:│
+# │     the exact literal mapping `- "127.0.0.1:3000:3000"` (Supabase Studio's  │
+# │     SSH-tunnel loopback bind, Sec-elected 2026-09-10). Enumerated, not      │
+# │     patterned: this fence is line-based and cannot bind a `ports:` block to │
+# │     the service it belongs to, so a loopback-PREFIX rule would silently     │
+# │     permit `127.0.0.1:5432:5432` on `db`. Changing the enumeration is a Sec │
+# │     joint-review, not an edit — see scripts/ci/fence-datastore-private-bind │
+# │     .sh's Vector-1 predicate below for exactly what else that buys;         │
 # │   - it must NOT carry a reverse-proxy Domain / Traefik `Host()` label / a   │
 # │     Coolify `SERVICE_FQDN_*` / `SERVICE_URL_*` magic requesting a public    │
 # │     FQDN;                                                                   │
@@ -50,6 +53,27 @@
 # │ this one).                                                                  │
 # └─────────────────────────────────────────────────────────────────────────────┘
 #
+# VECTOR-1 PREDICATE (exact-string enumeration, not a prefix match):
+#   1. Locate every `ports:` key at a service-nesting indent.
+#   2. For each, collect its value lines — every subsequent line more-indented
+#      than the `ports:` key, stopping at the first line at or below that indent.
+#   3. A `ports:` key that collects ZERO value lines -> exit 2 (structural,
+#      fail closed). A block the walker could not read must never produce a pass.
+#   4. Each collected line must be a scalar list item whose token — after
+#      stripping the leading `- ` and any surrounding single/double quotes — is
+#      BYTE-EXACTLY `127.0.0.1:3000:3000`. Anything else is a violation (exit 1):
+#      a bare `3000:3000`; `0.0.0.0:3000:3000`; `[::1]:3000:3000`;
+#      `127.0.0.1:5432:5432`; any `${VAR}` anywhere in the token; a port range;
+#      a `/udp`/`/tcp` suffix.
+#   5. Any collected line that OPENS A MAPPING (contains `target:`, `published:`,
+#      `host_ip:`, `mode:`, or ends in `:`) is a violation — compose long syntax
+#      can express a public bind, and the fence refuses forms it cannot evaluate
+#      as one literal token rather than trying to parse them.
+#   6. At most ONE permitted publish line per FILE. A second occurrence of the
+#      allowlisted string is a violation — the allowance is for one service, and
+#      the fence cannot tell which service a `ports:` block belongs to.
+# Vectors 2 and 3 are unchanged by this amendment.
+#
 # TARGET-LOCATION FAIL-CLOSED: the target file MUST carry the sentinel line
 #   `# fence-datastore-private-bind: target`
 # proving it is an intended datastore manifest. A file missing the sentinel →
@@ -60,10 +84,16 @@
 #   bash fence-datastore-private-bind.sh <compose-file-path>
 #
 # Exit codes:
-#   0  — clean: internal-only (expose:-only, no host-publish, no public FQDN).
+#   0  — clean: internal-only (expose:-only; no host-publish beyond at most one
+#        exact `127.0.0.1:3000:3000` Studio loopback line; no public FQDN).
 #   1  — one or more committed public-exposure vectors found (fail-closed).
-#   2  — argument / structural error: missing/empty/non-compose file, or the
-#        target sentinel is absent (datastore manifest cannot be confirmed).
+#   2  — argument / structural error: missing/empty/non-compose file, the
+#        target sentinel is absent, or a `ports:` key's value block could not
+#        be read (datastore manifest cannot be confirmed — fail closed).
+#
+# ALLOWLISTED_LOOPBACK_TOKEN is the ONE literal Vector 1 exempts. Changing it
+# is a Sec joint-review, not a config edit — see the Vector-1 predicate above.
+ALLOWLISTED_LOOPBACK_TOKEN='127.0.0.1:3000:3000'
 
 set -euo pipefail
 
@@ -103,20 +133,117 @@ fi
 VIOLATIONS=0
 
 # --- Vector 1: published host-port mapping (`ports:`) ------------------------
-# `expose:` (internal) is ALLOWED; `ports:` (host-publish, including a bounded
-# 127.0.0.1 loopback form) is FORBIDDEN. Match the compose `ports:` key at a
-# service-nesting indent. Anchored to the key so a value line like
-# `- "5432:5432"` under `expose:` is NOT matched, and the word `ports` inside
-# a comment/other-key is not matched.
-PORTS_HITS=$(grep -En '^[[:space:]]+ports:[[:space:]]*(#.*)?$' "$TARGET" 2>/dev/null || true)
-if [ -n "$PORTS_HITS" ]; then
-  echo "VIOLATION (vector 1: published host-port mapping — use expose:, not ports:):" >&2
-  while IFS= read -r h; do
-    [ -z "$h" ] && continue
-    echo "  $TARGET:$h" >&2
-    VIOLATIONS=$((VIOLATIONS+1))
-  done <<< "$PORTS_HITS"
+# `expose:` (internal) is ALLOWED. `ports:` is FORBIDDEN except for the one
+# enumerated exact-string exception (see the Vector-1 predicate in the header).
+# A line-based grep cannot bind a `ports:` block to the service it belongs to,
+# so this is deliberately NOT a regex-in-a-loop: it walks each `ports:` block's
+# value lines with awk, which can track "am I still inside this block" by
+# indentation the way a single grep pattern cannot.
+AWK_SCRIPT="$(mktemp)"
+trap 'rm -f "$AWK_SCRIPT"' EXIT
+cat > "$AWK_SCRIPT" <<'AWK_EOF'
+function flush_block(    ) {
+  if (block_lines == 0) {
+    print "STRUCTURAL:" block_start
+    structural = 1
+  }
+  in_block = 0
+}
+{
+  line = $0
+  n = match(line, /[^ ]/)
+  if (n == 0) {
+    indent = -1
+    trimmed = ""
+  } else {
+    indent = n - 1
+    trimmed = substr(line, n)
+  }
+
+  if (in_block) {
+    if (indent == -1) { next }
+    if (indent > block_indent) {
+      block_lines++
+      if (trimmed ~ /(^|[^A-Za-z0-9_])target:/ || \
+          trimmed ~ /(^|[^A-Za-z0-9_])published:/ || \
+          trimmed ~ /(^|[^A-Za-z0-9_])host_ip:/ || \
+          trimmed ~ /(^|[^A-Za-z0-9_])mode:/ || \
+          trimmed ~ /:[ \t]*$/) {
+        print "LONGSYNTAX:" NR ":" line
+        violations++
+        next
+      }
+      tok = trimmed
+      sub(/^-[ \t]*/, "", tok)
+      gsub(/^["']/, "", tok)
+      gsub(/["']$/, "", tok)
+      if (tok == allow) {
+        allowed++
+        print "ALLOWED:" NR ":" line
+      } else {
+        print "VIOLATION:" NR ":" line
+        violations++
+      }
+      next
+    } else {
+      flush_block()
+    }
+  }
+
+  if (!in_block && indent > 0 && trimmed ~ /^ports:[ \t]*(#.*)?$/) {
+    in_block = 1
+    block_indent = indent
+    block_lines = 0
+    block_start = NR
+    next
+  }
+}
+END {
+  if (in_block) { flush_block() }
+  if (allowed > 1) {
+    print "TOOMANY:" allowed
+    violations++
+  }
+  print "SUMMARY:" violations ":" allowed ":" structural
+}
+AWK_EOF
+
+AWK_OUT="$(awk -v allow="$ALLOWLISTED_LOOPBACK_TOKEN" -f "$AWK_SCRIPT" "$TARGET")"
+rm -f "$AWK_SCRIPT"
+trap - EXIT
+
+# A `ports:` key with zero value lines is a structural failure, not a Vector-1
+# violation — fail closed immediately, matching the sentinel/services: checks
+# above (a block the walker could not read must never produce a pass).
+STRUCTURAL_HIT="$(echo "$AWK_OUT" | grep '^STRUCTURAL:' || true)"
+if [ -n "$STRUCTURAL_HIT" ]; then
+  while IFS= read -r s; do
+    [ -z "$s" ] && continue
+    lineno="${s#STRUCTURAL:}"
+    echo "FATAL: 'ports:' key at $TARGET:$lineno collected zero value lines — cannot confirm what it publishes; failing closed." >&2
+  done <<< "$STRUCTURAL_HIT"
+  exit 2
 fi
+
+echo "$AWK_OUT" | { grep '^LONGSYNTAX:' || true; } | while IFS= read -r h; do
+  [ -z "$h" ] && continue
+  echo "VIOLATION (vector 1: 'ports:' long-syntax mapping — refused, cannot evaluate as one literal token):" >&2
+  echo "  $TARGET:${h#LONGSYNTAX:}" >&2
+done
+echo "$AWK_OUT" | { grep '^VIOLATION:' || true; } | while IFS= read -r h; do
+  [ -z "$h" ] && continue
+  echo "VIOLATION (vector 1: published host-port mapping not the allowlisted Studio loopback — use expose:, not ports:):" >&2
+  echo "  $TARGET:${h#VIOLATION:}" >&2
+done
+TOOMANY_HIT="$(echo "$AWK_OUT" | grep '^TOOMANY:' || true)"
+if [ -n "$TOOMANY_HIT" ]; then
+  echo "VIOLATION (vector 1: the allowlisted Studio loopback line appears more than once — the allowance is for ONE service):" >&2
+  echo "  $TARGET: ${TOOMANY_HIT#TOOMANY:} occurrences of $ALLOWLISTED_LOOPBACK_TOKEN" >&2
+fi
+
+VECTOR1_SUMMARY="$(echo "$AWK_OUT" | grep '^SUMMARY:')"
+VECTOR1_VIOLATIONS="$(echo "$VECTOR1_SUMMARY" | cut -d: -f2)"
+VIOLATIONS=$((VIOLATIONS + VECTOR1_VIOLATIONS))
 
 # --- Vector 2: reverse-proxy Domain / public-FQDN request --------------------
 # Any of: Traefik Host() rule, traefik.enable=true, Coolify SERVICE_FQDN_* /
@@ -164,11 +291,12 @@ fi
 if [ "$VIOLATIONS" -gt 0 ]; then
   echo "" >&2
   echo "FAILED: $VIOLATIONS committed public-exposure vector(s) in $TARGET." >&2
-  echo "This datastore/infra service must stay INTERNAL-ONLY (expose:-only, no" >&2
-  echo "host-publish — not even a loopback bind, no public Domain). See" >&2
+  echo "This datastore/infra service must stay INTERNAL-ONLY (expose:-only; the" >&2
+  echo "ONLY permitted host-publish is the exact, single Studio loopback line" >&2
+  echo "'- \"$ALLOWLISTED_LOOPBACK_TOKEN\"'; no public Domain). See" >&2
   echo "scripts/ci/fence-datastore-private-bind.sh header." >&2
   exit 1
 fi
 
-echo "OK: $TARGET — datastore service(s) internal-only (expose:-only, no host-publish, no public Domain)."
+echo "OK: $TARGET — datastore service(s) internal-only (expose:-only, no public Domain; at most one exact Studio loopback publish)."
 exit 0
