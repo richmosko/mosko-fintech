@@ -27,16 +27,27 @@
 #       deploy onto one rather than silently reproducing that incident.
 #
 # WHAT IT REFUSES TO DO
-#   No secret value is ever printed, returned to this script's local process,
-#   or written anywhere off the box. Every step that touches secret material
-#   (minting, setting env vars, reading env vars back to assert they're
-#   non-empty) runs as ONE remote script over SSH that never echoes a value —
-#   only key names and true/false presence. The Coolify API token is read
-#   FROM THE BOX on every call (/root/.pfin/coolify.env, written by
+#   No secret value is ever PRINTED or LOGGED. Every step that touches secret
+#   material (minting, setting env vars, reading env vars back to assert
+#   they're non-empty) runs as ONE remote script over SSH that never echoes a
+#   value -- only key names and true/false presence. The Coolify API token is
+#   read FROM THE BOX on every call (/root/.pfin/coolify.env, written by
 #   provision-vps.sh's admin-bootstrap step) — never from a local .env; that
 #   file's COOLIFY_API_TOKEN entry (a hand-run-era artifact) can be deleted
 #   once this script has run once. Nothing is created or mutated without
 #   --apply; the default is a preflight that only reads.
+#
+#   ⚠ CORRECTED 2026-09-11 -- this paragraph used to also claim no secret is
+#   ever "returned to this script's local process." That was true when
+#   written and stopped being true the moment this script gained an
+#   operator-provided secret: SMTP_PASS (the Resend API key -- see the SMTP_*
+#   paragraph below) is read from the repo-root .env into a LOCAL bash
+#   variable, exactly like provision-vps.sh already does for
+#   COOLIFY_ADMIN_PASSWORD. Never echoed, never logged, held only long enough
+#   to pipe it over SSH stdin into a file on the box (same mechanism, same
+#   file, same discipline provision-vps.sh's own "THE PASSWORD BOUNDARY"
+#   comment documents for that value) -- but it DOES pass through this
+#   script's memory, and the old absolute claim was wrong to leave standing.
 #
 # IDEMPOTENCE
 #   Project/environment/application: looked up by NAME, adopted if present
@@ -62,24 +73,33 @@
 #   this one Coolify resource.
 #
 #   ⚠ SMTP_* — set with Supabase's own reference NON-FUNCTIONAL placeholder
-#   values (SMTP_HOST=supabase-mail etc.), NOT real credentials, and NOT a
-#   silent decision that placeholder email is fine for prod. Measured
-#   2026-09-11: `auth` (GoTrue) FATALs on startup if SMTP_PORT isn't a
-#   parseable integer -- unlike the URL vars below, SMTP config blocks the
+#   values (SMTP_HOST=supabase-mail etc.) by default, NOT real credentials.
+#   Measured 2026-09-11: `auth` (GoTrue) FATALs on startup if SMTP_PORT isn't
+#   a parseable integer -- unlike the URL vars below, SMTP config blocks the
 #   stack from coming up at all, not just from sending real mail, so this
 #   script cannot leave it genuinely unset the way its scope note used to
-#   claim. mint-if-absent means these placeholders are NEVER written over
-#   a box that already has real values set (prod already does, from the
-#   hand-run era, untouched by this change) -- but on any box where they
-#   ARE absent, "auth starts" and "auth sends real confirmation email"
-#   are now two different, unverified claims. Wiring a REAL provider
-#   (Resend is the V1 default; SES documented as the alternative) is an
-#   operator step, fully documented, not resolved here or anywhere in this
-#   script -- see docs/email-smtp-runbook.md end to end, including exactly
-#   which var is the secret (SMTP_PASS -- production_only in
-#   secrets-manifest.yml, Sec joint-review) and which four are non-secret
-#   provider config this script's placeholders stand in for until an
-#   operator overwrites them by hand in Coolify.
+#   claim.
+#
+#   ⚠ OPERATOR OVERRIDE, added 2026-09-11 (F/CTO ask: "where do I enter the
+#   Resend token, and as what variable?"). SMTP_PASS is OPERATOR-PROVIDED --
+#   like HETZNER_API_TOKEN/COOLIFY_ADMIN_PASSWORD -- not box-generated the
+#   way POSTGRES_PASSWORD/JWT_SECRET are, so it follows THAT pattern, not
+#   mint-if-absent: read from the repo-root .env (see
+#   scripts/provision.env.example), and if present, unconditionally
+#   OVERWRITES the placeholders -- SMTP_PASS itself, plus SMTP_HOST/
+#   SMTP_PORT/SMTP_USER hardcoded to Resend's own values (this .env doesn't
+#   carry a provider CHOICE, only the key -- see docs/email-smtp-runbook.md's
+#   Provider B section to switch to SES, which means editing this script,
+#   not .env), plus the operator's own SMTP_ADMIN_EMAIL/SMTP_SENDER_NAME if
+#   those are also set in .env. If SMTP_PASS is absent from .env, this
+#   script changes nothing about SMTP_* (the mint-if-absent placeholders
+#   below still apply, unchanged) and prints a one-line reminder, every run,
+#   naming docs/email-smtp-runbook.md -- the documented, safe-inert state:
+#   the stack starts; auth email silently doesn't send until this is set.
+#   SMTP_PASS is production_only in secrets-manifest.yml (Sec joint-review);
+#   the other five SMTP_* vars are non-secret provider config, same
+#   reasoning that file already applies to SUPABASE_ANON_KEY/
+#   STUDIO_DEFAULT_ORGANIZATION.
 #
 #   ⚠ SITE_URL / API_EXTERNAL_URL / SUPABASE_PUBLIC_URL — set to Supabase's
 #   OWN reference docker/.env.example localhost defaults (see the
@@ -139,6 +159,28 @@ die()  { printf '\n\033[31mFAIL\033[0m  %s\n' "$*" >&2; exit 1; }
 ok()   { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
 info() { printf '      %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+# Same helper, same file, same `|| true` pipefail guard as
+# provision-vps.sh's own read_env_var() -- a no-match grep (the normal
+# "not set in .env" case) must not abort this script under set -e/pipefail.
+read_env_var() { grep -m1 "^$1=" "$REPO_ROOT/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r\n' || true; }
+
+# Operator-provided SMTP credential (scripts/provision.env.example) --
+# OPERATOR-provided like HETZNER_API_TOKEN/COOLIFY_ADMIN_PASSWORD, not
+# box-generated like POSTGRES_PASSWORD/JWT_SECRET below. Read here,
+# unconditionally, so the Plan step can show its status even during
+# preflight (APPLY=0 exits before anything is pushed to the box) -- never
+# echoed, matching COOLIFY_ADMIN_PASSWORD's own discipline in
+# provision-vps.sh. See this script's own "OPERATOR OVERRIDE" header
+# comment for the full mechanism.
+SMTP_PASS="$(read_env_var SMTP_PASS)"
+SMTP_ADMIN_EMAIL_OVERRIDE="$(read_env_var SMTP_ADMIN_EMAIL)"
+SMTP_SENDER_NAME_OVERRIDE="$(read_env_var SMTP_SENDER_NAME)"
+if [[ -n "$SMTP_PASS" ]]; then
+  SMTP_STATUS="real Resend credentials found in .env -- will OVERWRITE the stack's SMTP_* placeholders"
+else
+  SMTP_STATUS="none in .env -- placeholders stay (stack starts; real auth email won't send) -- see docs/email-smtp-runbook.md"
+fi
 
 # INCIDENT, 2026-09-11: BOX_IP used to default to prod's IP
 # (188.245.166.206) when unset. Running this script against a scratch box
@@ -262,6 +304,7 @@ cat <<PLAN
                      PG_META_CRYPTO_KEY
                      set-if-absent (non-secret): STUDIO_DEFAULT_ORGANIZATION
                      STUDIO_DEFAULT_PROJECT
+      smtp          $SMTP_STATUS
 PLAN
 
 if [[ $APPLY -eq 0 ]]; then
@@ -368,6 +411,26 @@ step "Materializing the real compose files (never a bogus empty directory this t
 # default matching by coincidence.
 COOLIFY_APP_UUID="$APP_UUID" COOLIFY_SSH_HOST="root@$BOX_IP" "$REPO_ROOT/scripts/coolify-materialize-supabase-mounts.sh" --apply
 
+step "SMTP: operator-provided credential (if any)"
+# Crosses the local->box boundary the same way provision-vps.sh's own
+# COOLIFY_ADMIN_PASSWORD does: piped over SSH stdin into a file on the box
+# (never a command-line arg on either side, never heredoc-embedded literal
+# text), read back by PATH only (never by value) everywhere downstream.
+# SMTP_SEED_FILE itself is just a path -- safe to interpolate into the
+# unquoted heredoc below the way APP_UUID/NEED_MINT already are.
+if [[ -n "$SMTP_PASS" ]]; then
+  SMTP_SEED_FILE="/root/.pfin/_smtp_seed.env.$$"
+  {
+    printf 'SMTP_PASS=%s\n' "$SMTP_PASS"
+    printf 'SMTP_ADMIN_EMAIL=%s\n' "$SMTP_ADMIN_EMAIL_OVERRIDE"
+    printf 'SMTP_SENDER_NAME=%s\n' "$SMTP_SENDER_NAME_OVERRIDE"
+  } | sshx "umask 077; mkdir -p /root/.pfin; cat > $SMTP_SEED_FILE"
+  ok "pushed operator-provided SMTP credential to the box -- will overwrite placeholders below"
+else
+  SMTP_SEED_FILE=""
+  info "no SMTP_PASS in .env -- leaving the stack's non-functional SMTP placeholders in place. See docs/email-smtp-runbook.md to wire real delivery."
+fi
+
 step "Secrets: mint-if-absent, set env vars, assert non-empty -- all on the box, no value ever leaves it"
 # Measured 2026-09-11 against a genuinely fresh scratch box: the OLD
 # "absent" check asked the API which KEYS have a row at all
@@ -421,11 +484,12 @@ mkdir -p /root/.pfin
 TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
 APP_UUID="$APP_UUID"
 NEED_MINT="$NEED_MINT"
+SMTP_SEED_FILE="$SMTP_SEED_FILE"
 
-python3 - "\$TOKEN" "\$APP_UUID" "\$NEED_MINT" <<'PYEOF'
+python3 - "\$TOKEN" "\$APP_UUID" "\$NEED_MINT" "\$SMTP_SEED_FILE" <<'PYEOF'
 import json, subprocess, sys, secrets as pysecrets
 
-token, app_uuid, need_mint_raw = sys.argv[1], sys.argv[2], sys.argv[3]
+token, app_uuid, need_mint_raw, smtp_seed_file = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 need_mint = set(need_mint_raw.split())
 
 def api(method, path, body=None):
@@ -531,6 +595,28 @@ for key, default in NONSECRET_DEFAULTS.items():
     if key in need_mint:
         to_set[key] = default
 
+# Operator-provided override (scripts/provision.env.example: SMTP_PASS) --
+# unconditional OVERWRITE, not mint-if-absent, per F/CTO's ask: an operator
+# who has set a real Resend key in .env wants it applied even on a re-run
+# where the placeholder is already sitting there from before. smtp_seed_file
+# is a PATH (never a secret itself) pushed over SSH stdin by the outer
+# script -- see this file's own "OPERATOR OVERRIDE" header comment. Resend's
+# own fixed HOST/PORT/USER: this .env carries the KEY, not a provider
+# CHOICE -- see docs/email-smtp-runbook.md's Provider B section to switch
+# providers, which means editing this script, not .env.
+if smtp_seed_file:
+    with open(smtp_seed_file) as f:
+        seed = dict(line.rstrip("\n").split("=", 1) for line in f if "=" in line)
+    to_set["SMTP_PASS"] = seed.get("SMTP_PASS", "")
+    to_set["SMTP_HOST"] = "smtp.resend.com"
+    to_set["SMTP_PORT"] = "465"
+    to_set["SMTP_USER"] = "resend"
+    if seed.get("SMTP_ADMIN_EMAIL"):
+        to_set["SMTP_ADMIN_EMAIL"] = seed["SMTP_ADMIN_EMAIL"]
+    if seed.get("SMTP_SENDER_NAME"):
+        to_set["SMTP_SENDER_NAME"] = seed["SMTP_SENDER_NAME"]
+    print("SMTP: operator-provided Resend credentials applied (overwrote placeholders)")
+
 if to_set:
     data = [{"key": k, "value": v} for k, v in to_set.items()]
     api("PATCH", f"/applications/{app_uuid}/envs/bulk", {"data": data})
@@ -544,6 +630,12 @@ else:
     print("MINTED: none -- all required keys already non-empty")
 PYEOF
 chmod 600 /root/.pfin/supabase.env 2>/dev/null || true
+# Seed file cleanup -- same shred-then-rm-fallback convention
+# provision-vps.sh's own SEED_ENV_FILE uses. No-op (empty path fails the
+# -n test) when no operator SMTP_PASS was pushed this run.
+if [ -n "\$SMTP_SEED_FILE" ]; then
+  shred -u "\$SMTP_SEED_FILE" 2>/dev/null || rm -f "\$SMTP_SEED_FILE"
+fi
 
 # Re-assert non-empty via Eloquent decryption, never ciphertext length --
 # proof the mint above actually worked, not just that it ran.

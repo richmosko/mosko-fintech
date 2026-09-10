@@ -27,8 +27,8 @@ The `supabase/config.toml` `[auth.email.smtp]` block documents this shape (kept 
 
 1. Create a Resend account; add + **verify your sending domain** (`<your-domain>`).
 2. Add the Resend-generated DNS records to your domain: **SPF**, **DKIM**, and a **DMARC** policy record. Wait for verification to go green.
-3. Create an API key → set `SMTP_PASS` in Coolify (and add the entry to `secrets-manifest.yml` — **Sec-review** as a new prod secret).
-4. Set the other env vars per the table (`SMTP_USER=resend`, `SMTP_HOST=smtp.resend.com`, `SMTP_PORT=465`).
+3. Create an API key → put it in the root, **gitignored** `.env` as `SMTP_PASS` (see [`scripts/provision.env.example`](../scripts/provision.env.example)) — **scripted, not a Coolify dashboard click**, same operator-provided pattern as `HETZNER_API_TOKEN`/`COOLIFY_ADMIN_PASSWORD`. `SMTP_PASS` is declared `production_only` in [`secrets-manifest.yml`](../secrets-manifest.yml) — **Sec-reviewed** as a prod secret.
+4. Run `scripts/provision-supabase-stack.sh --apply` — it reads `SMTP_PASS` (and, optionally, `SMTP_ADMIN_EMAIL`/`SMTP_SENDER_NAME`) from `.env`, pushes it to the box over SSH (never a command-line arg, never printed), and OVERWRITES the stack's non-functional placeholders with it — `SMTP_PASS` itself, plus `SMTP_USER=resend`, `SMTP_HOST=smtp.resend.com`, `SMTP_PORT=465` (this script's own fixed values for Resend; there is no separate "set the other env vars" step). Leave `SMTP_PASS` unset and the script leaves the placeholders alone, printing a one-line reminder pointing back here.
 5. Verify: trigger a signup → the confirmation email lands in a **real inbox, not spam**.
 
 ## Provider B — Amazon SES (alternative)
@@ -70,5 +70,6 @@ Running your own SMTP (Postfix / mailcow / …) is **not recommended** for this 
 ## Out-of-band / follow-up (not in the repo)
 
 - Resend account + domain verification + DNS records — operator action.
-- `secrets-manifest.yml` `SMTP_PASS` entry — **DevOps + Sec joint-review** (new prod secret on the Supabase-stack surface).
-- Prod GoTrue env wiring — done when the self-hosted Supabase stack is stood up (deploy phase).
+- Real prod value — an operator drops a real Resend API key into the root `.env` as `SMTP_PASS` (see Provider A step 3 above); this repo never holds it. Everything downstream of that is scripted (see Provider A step 4 / `scripts/provision-supabase-stack.sh`'s "OPERATOR OVERRIDE" header comment), not a follow-up task.
+
+⚠ `secrets-manifest.yml` `SMTP_PASS` declaration and this runbook's cross-link from `docs/deployment-runbook.md` §4 are **in-repo, scripted work** as of 2026-09-11 — not out-of-band. Declared `production_only` per DevOps + Sec joint-review (PR #732 at authoring time; check `secrets-manifest.yml` directly for current state, not this note).
