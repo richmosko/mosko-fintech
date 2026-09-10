@@ -2,13 +2,12 @@
 #
 # fence-tinker-no-echo — interactive-tinker CI fence (Sec spec, 2026-09-11).
 #
-# ⚠ NOT YET A CATALOGUED §10 INSTANCE / CI-FENCED-SET MEMBER BY NAME.
-# Assigning this fence an RT-NN id is an F/CTO Decision-4 ratify act, not
-# DevOps's or Sec's to mint by shipping a label — same precedent as
-# fence-datastore-private-bind.sh, which ships unlabeled for the identical
-# reason. Do not add an RT-NN string anywhere in this file, its CI job, or
-# its fixtures until F/CTO ratifies one; the fence protects the tree
-# regardless of whether it carries a catalog id yet.
+# RT-33, per F/CTO Decision-4 ratify 2026-09-10 (relayed via team-lead;
+# catalog entry docs/SECURITY/index.html §4.5 in #724, ADR-008 record in
+# #725). Shipped unlabeled from creation until this ratify landed; this
+# fence and its CI job now carry the id (fixture paths are unchanged --
+# they were never named after the id, only this comment and the job's
+# `name:` line were).
 #
 # WHY THIS EXISTS. Security incident, 2026-09-11: `provision-vps.sh` piped a
 # script into interactive tinker (no --execute) over `docker exec -i` to

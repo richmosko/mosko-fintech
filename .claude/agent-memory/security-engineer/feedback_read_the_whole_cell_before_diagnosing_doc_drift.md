@@ -59,6 +59,23 @@ happened to survive on a different rationale. **Verifying pointer + content is n
 the content is a claim about a DESIGN** — for those, verify against the tree, not against the ADR.
 Direction was benign here (over-scoped a review); the identical habit under-scopes just as easily.
 
+**⚠ A HANDED-OVER REPLACEMENT MEASUREMENT CAN ANSWER A DIFFERENT QUESTION THAN THE SENTENCE ASKS —
+AND THE STALE COUNT IS OFTEN THE LESSER DEFECT (SECURITY §4.3, 2026-09-10).** team-lead flagged
+*"3 Coolify containers"* as stale and, helpfully, supplied a live measurement: six `coolify-*`
+containers. **Different axis.** Those six are Coolify's OWN platform (`coolify` / `-db` / `-redis` /
+`-proxy` / `-realtime` / `-sentinel`); the sentence enumerates the **V1 application fleet deployed
+BY Coolify**. Substituting 6 for 3 would have put a precise number on the wrong subject and **read
+as a fix**. Measured myself: eleven containers, six platform + five Supabase-stack, and the app and
+workers not deployed at all — so **no integer described that sentence's subject that day**, which is
+itself the answer. **The bigger half: the same sentence carried a security CLAIM that was false** —
+*"privileged-context-write surfaces (cron + scheduled-poll + webhook) all live in (ii) pfin_back_etl"*
+— when the webhook and exchange routes are app-side (`api/src/routes/api/plaid/…`) and the Plaid
+credential path is provider-sync's. **A count-only correction would have left the false claim
+standing and looked complete.** Fix: rewrite by ROLE, pin no total, quote the superseded sentence so
+the correction is auditable, and say which part is unchanged and why.
+**Two questions on any handed-over figure: what is it a count OVER, and what else does the sentence
+holding it assert?**
+
 **How to apply:** on any doc-catalog finding — (1) read the entry to its end before naming the defect;
 (2) ask whether it was true of a prior ratified design; (3) ask what my edit un-covers; (4) if the
 answer is non-empty and the fix is another agent's call, make the gap visible in the same edit rather
