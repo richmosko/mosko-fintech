@@ -72,17 +72,29 @@
 #   a box that already has real values set (prod already does, from the
 #   hand-run era, untouched by this change) -- but on any box where they
 #   ARE absent, "auth starts" and "auth sends real confirmation email"
-#   are now two different, unverified claims. Real SMTP provisioning is an
-#   open F/CTO/ARCH decision, not resolved here.
+#   are now two different, unverified claims. Wiring a REAL provider
+#   (Resend is the V1 default; SES documented as the alternative) is an
+#   operator step, fully documented, not resolved here or anywhere in this
+#   script -- see docs/email-smtp-runbook.md end to end, including exactly
+#   which var is the secret (SMTP_PASS -- production_only in
+#   secrets-manifest.yml, Sec joint-review) and which four are non-secret
+#   provider config this script's placeholders stand in for until an
+#   operator overwrites them by hand in Coolify.
 #
-#   ⚠ SITE_URL / API_EXTERNAL_URL / SUPABASE_PUBLIC_URL — deliberately
-#   NOT set by this script at all (not even a placeholder). These are
-#   box/domain-specific and affect OAuth-callback and email-confirmation
-#   link correctness; picking a scheme is an ARCH/F/CTO call, not
-#   DevOps's to default silently. Whether `auth` actually needs them to
-#   START (vs. just to generate correct-looking URLs) was NOT settled as
-#   of this comment -- check the deployment-runbook.md / standup-log
-#   entry this incident produced for whatever was actually measured.
+#   ⚠ SITE_URL / API_EXTERNAL_URL / SUPABASE_PUBLIC_URL — set to Supabase's
+#   OWN reference docker/.env.example localhost defaults (see the
+#   NONSECRET_DEFAULTS comment below for the measurement that forced this:
+#   `auth` FATALs on startup with none of the three set, the same class as
+#   POSTGRES_PORT/SMTP_PORT above). ⚠ CORRECTED 2026-09-11 -- an earlier
+#   revision of this paragraph said these were "deliberately NOT set by
+#   this script at all," true when written and false since the FATAL was
+#   measured; left uncorrected until now. mint-if-absent means the
+#   placeholders never overwrite a box that already has real values (prod
+#   already does, from the hand-run era). These are box/domain-specific and
+#   affect OAuth-callback and email-confirmation link correctness; picking
+#   the REAL public-facing scheme (once pfindash.com DNS/domain routing is
+#   decided) is a separate, still-open ARCH/F/CTO call this script's
+#   placeholder values do not make.
 #
 # WHAT THIS SCRIPT HAS NOT BEEN EXERCISED AGAINST
 #   The project/environment/application CREATE path (all three already exist
@@ -494,7 +506,13 @@ NONSECRET_DEFAULTS = {"STUDIO_DEFAULT_ORGANIZATION": "mosko-fintech",
                        # they ARE absent, they exist ONLY so 'auth' can
                        # start at all (GoTrue FATALs on an unparseable
                        # SMTP_PORT) -- real outbound email needs a real
-                       # provider decided separately, not assumed here.
+                       # provider, wired by an operator: see
+                       # docs/email-smtp-runbook.md end to end (Resend is
+                       # the V1 default, SES the documented alternative).
+                       # SMTP_PASS is the one SECRET here (production_only
+                       # in secrets-manifest.yml) -- the other five below
+                       # are non-secret provider config an operator
+                       # overwrites in Coolify per that runbook's table.
                        "SMTP_HOST": "supabase-mail",
                        "SMTP_PORT": "2500",
                        "SMTP_USER": "fake_mail_user",
