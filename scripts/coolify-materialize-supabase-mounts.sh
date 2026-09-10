@@ -23,7 +23,7 @@
 #   the correction step Coolify's own deploy flow skips in this build_pack.
 #
 #   It also fixes local_file_volumes.content and .is_directory through
-#   Coolify's own Eloquent model (via `php artisan tinker` inside the
+#   Coolify's own Eloquent model (via `tinker --execute` inside the
 #   `coolify` container), never with a raw SQL UPDATE — LocalFileVolume casts
 #   `content` as `encrypted`; writing plaintext into that column directly
 #   would corrupt it (Coolify throws decrypting it on next read).
@@ -95,7 +95,7 @@ if [ "$APPLY" != true ]; then
   echo "==> Dry run only (pass --apply to execute). Plan:"
   echo "    1. scp infra/supabase/volumes/** to $SSH_HOST:/tmp/pfin-supabase-mounts"
   echo "    2. On the box: rmdir each stale bogus mount directory (fails if non-empty), cp the real file into place, chmod 644 (755 for docker-entrypoint.sh)"
-  echo "    3. Sync local_file_volumes.content + is_directory=false for all 12 rows via php artisan tinker inside the coolify container (Eloquent, not raw SQL — content is encrypted-cast)"
+  echo "    3. Sync local_file_volumes.content + is_directory=false for all 12 rows via tinker --execute inside the coolify container (Eloquent, not raw SQL — content is encrypted-cast)"
   echo "    4. Clean up the staged /tmp copy"
   echo "    5. Check whether <uuid>_db-data already exists; if so, warn loudly that this script cannot fix an already-initialized volume and print the destroy-and-reinit command instead of a bare redeploy instruction"
   exit 0
@@ -162,7 +162,24 @@ foreach ($manifest as [$mount, $staleMount, $content]) {
 PHPBODY
 } > "$PHP_SCRIPT"
 
-ssh -i "$SSH_KEY" "$SSH_HOST" "docker exec -i coolify php artisan tinker" < "$PHP_SCRIPT"
+# RT-32: never pipe a script into INTERACTIVE tinker. Sec flagged this line as
+# the same defect class as the 2026-09-11 provision-vps.sh token-leak
+# incident (piped/interactive tinker, no --execute, echoes an input+return-
+# value transcript to its own stdout). Checked the actual content this line
+# pipes, specifically for that incident: the manifest above is built entirely
+# from infra/supabase/volumes/** (vendored, committed to this PUBLIC repo --
+# a literal secret there would already be a gitleaksignore/gitleaks finding)
+# plus `\set pgpass \`echo "$POSTGRES_PASSWORD"\`` -style runtime references
+# that read the env INSIDE the db container at ITS OWN init time, never a
+# value this script itself ever holds. So this specific line never leaked a
+# real secret in any run to date -- but it is the same mechanism, and a
+# future re-vendor could add a literal without anyone noticing this line is
+# the reason that would matter. Fixed the same way as provision-vps.sh:
+# `--execute`, not piped stdin. The script text still travels via SSH's own
+# stdin (unchanged, still never a command-line argument) -- only the LOCAL
+# side changed, from "pipe straight into tinker" to "capture on the remote
+# shell, then hand it to tinker as --execute's value" (fence: RT-32).
+ssh -i "$SSH_KEY" "$SSH_HOST" 'SCRIPT_CONTENT="$(cat)"; docker exec coolify php artisan tinker --execute="$SCRIPT_CONTENT"' < "$PHP_SCRIPT"
 rm -f "$PHP_SCRIPT"
 
 echo "==> Cleaning up staged copy on the box"
