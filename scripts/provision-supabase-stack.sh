@@ -486,6 +486,21 @@ APP_UUID="$APP_UUID"
 NEED_MINT="$NEED_MINT"
 SMTP_SEED_FILE="$SMTP_SEED_FILE"
 
+# Sec-flagged hardening (pre-prod review follow-up, 2026-09-11): the manual
+# cleanup this used to rely on sat AFTER the python step, inside this same
+# \`set -e\` script -- if python (or an earlier line) failed, \`set -e\`
+# aborted BEFORE cleanup ran, leaving the mode-600 root-owned seed file
+# behind in /root/.pfin (accumulates across failed runs; on-box, root-only,
+# holds a key already destined for Coolify -- not an off-box exposure, but
+# untidy and worth closing cheaply). A trap runs on ANY exit from this
+# point on -- success, \`set -e\` abort, or signal -- so cleanup can no
+# longer be skipped by a failure partway through. \$SMTP_SEED_FILE is
+# resolved when the trap FIRES, not when it's registered (single-quoted
+# trap body), so it correctly sees whatever this script's variable holds
+# at exit time, including if it's still empty (no seed was ever pushed --
+# the guard below is then a no-op).
+trap 'if [ -n "\$SMTP_SEED_FILE" ]; then shred -u "\$SMTP_SEED_FILE" 2>/dev/null || rm -f "\$SMTP_SEED_FILE"; fi' EXIT
+
 python3 - "\$TOKEN" "\$APP_UUID" "\$NEED_MINT" "\$SMTP_SEED_FILE" <<'PYEOF'
 import json, subprocess, sys, secrets as pysecrets
 
@@ -630,12 +645,9 @@ else:
     print("MINTED: none -- all required keys already non-empty")
 PYEOF
 chmod 600 /root/.pfin/supabase.env 2>/dev/null || true
-# Seed file cleanup -- same shred-then-rm-fallback convention
-# provision-vps.sh's own SEED_ENV_FILE uses. No-op (empty path fails the
-# -n test) when no operator SMTP_PASS was pushed this run.
-if [ -n "\$SMTP_SEED_FILE" ]; then
-  shred -u "\$SMTP_SEED_FILE" 2>/dev/null || rm -f "\$SMTP_SEED_FILE"
-fi
+# Seed file cleanup now happens via the \`trap ... EXIT\` registered above --
+# fires here on normal completion same as it would on an earlier failure.
+# No separate manual cleanup call needed at this specific point anymore.
 
 # Re-assert non-empty via Eloquent decryption, never ciphertext length --
 # proof the mint above actually worked, not just that it ran.
