@@ -276,5 +276,5 @@ Each entry: the option taken · the options not taken · the losing side **as al
 - [ ] **Sec** — §7.35 item 4 (E-4): read-only archive at a Sec-acknowledged access-controlled location + cutover snapshot as an audit artifact; both are B.4 item 2 content.
 - [x] **QA** — the M-3 battery leg (under SELF-375). *(Discharged: the `audit_log_surface_name_vocab` vocabulary-growth leg is live in `supabase/tests/rls/111_audit_log_rls.sql`, landed at PR #663.)*
 - [ ] **Backend** — the M0 completeness check (B.1 Dependency 2), after B.5.
-- [ ] **F/CTO** — create the `role:devops` label; the deploy target month (§G's *not set* line) if a target is wanted ahead of B.5.
+- [ ] **F/CTO** — ~~create the `role:devops` label~~ **done** (verified live 2026-09-09 — label exists, id `f3e2f314-db62-402c-80c7-dbc17a2a1771`, tags SELF-386); the deploy target month (§G's *not set* line) remains open, if a target is wanted ahead of B.5.
 - [ ] **team-lead** — MILESTONES *Next deliverable* line (D-4 / D-1 / E-11) at the next ledger PR or the close-PR, whichever is first; WORKFLOW Phase 6 exit clause landed here (§G.1).

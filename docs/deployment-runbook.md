@@ -125,9 +125,59 @@ nmap -Pn -p 22,80,443,8000,8081 <box-ip>   # run from OUTSIDE the box's network
 
 Scope: point the production hostname(s) at the new VPS.
 
-- Incumbent hostname `pfindash.com` is **reference-only** — its disposition (reuse vs. new domain) is an open F/CTO decision, entangled with §9 cutover timing.
+- **RULED 2026-09-09 (F/CTO): reuse `pfindash.com`.** This is the open half of the Overview's "Incumbent is reference-only" principle resolving: the *domain* is reused even though the *box and its configuration* are not — no DB, no containers, no Coolify config transfer carries over (per Overview + `feedback_greenfield_no_existing_deployment_dependency`). Only the DNS records move, and only at §9's cutover.
 
-> **STUB —** Fill in: the V1 production hostname(s), DNS records (A/AAAA → new box IP), TLS/cert approach (Coolify-managed Let's Encrypt is the likely default — confirm in §3), and any subdomain split (app vs. Supabase vs. Coolify dashboard). **Flag for F/CTO:** reuse `pfindash.com` or stand up a new domain? This decision gates §9 cutover.
+- **⚠ This is a live-traffic change, not a greenfield write.** `pfindash.com` is reference-only in the sense that nothing else in this repo depends on the incumbent deployment — but the domain itself may still carry live A/AAAA (and possibly MX/TXT/other) records pointing at the incumbent cax21 box. Repointing those records is the literal traffic-switch action §9 exists to gate. **§2 documents the mechanism below; §9 owns the go/no-go and the timing** — do not run the record changes past step 1 (the snapshot) until §9's smoke-test gate says go.
+
+**Before touching anything — snapshot the live state (read-only, safe to run any time ahead of cutover):**
+
+```sh
+dig +short pfindash.com A
+dig +short pfindash.com AAAA
+dig +short pfindash.com MX
+dig +short pfindash.com TXT
+dig +short www.pfindash.com
+```
+
+Record what comes back — the incumbent's A/AAAA (its own cax21 IP), and, load-bearing on a domain that predates this project, **whether any mail (`MX`) or SPF/DKIM (`TXT`) records exist**. This runbook has no email-service scope; a `pfindash.com`-hosted mailbox is exactly the kind of side effect a "just repoint A/AAAA" mental model would silently break. If MX/TXT records exist, name them here at execution time and leave them untouched unless F/CTO explicitly says otherwise — this section only ever touches the records that route web traffic.
+
+**Subdomain split: app only — no public record for the Supabase surface.** Landing, and why:
+
+- Per §3's service table, **`app` is the only Coolify service assigned a public Domain**; `etl`, `pdf-render`, and `provider-sync` are internal-only by construction (Lock 13 mod #2, CA-4). The Supabase surface doesn't break that pattern: the sole verified consumer of `PUBLIC_SUPABASE_URL` is `api/src/hooks.server.ts`'s server-side `createServerClient()` call (`event.locals.supabase`, built per-request from `$env/dynamic/public`) — `grep -rn "createBrowserClient" api/src` returns **zero hits**, so no browser code ever opens a connection to the Supabase URL directly. The browser only ever talks to the SvelteKit app; the app's own server process is the sole thing that needs to reach Supabase, and that reach can stay entirely inside the Coolify project's internal Docker network — the same posture CA-4 already established for `provider-sync`↔`app`.
+- **Consequence: one public hostname, for `app` only.** No `api.pfindash.com` / `supabase.pfindash.com` DNS record is provisioned in this pass.
+- **Named exception, not resolved here:** §4's own STUB has not yet ruled which self-hosted Supabase services (db / auth / storage / realtime / **studio**) are in V1 scope. If Studio is scoped in and F/CTO wants browser-based remote admin access to it (rather than an SSH tunnel to the box), that is one additional subdomain + Domain assignment, decided when §4 resolves — do not pre-provision it here.
+
+**A/AAAA records — exact steps, IP filled in at execution (§1 doesn't produce it until the box is provisioned):**
+
+1. At §1's provisioning step, record the box's public IPv4 (and IPv6, if Hetzner assigns one to the CAX21 order — confirm in the console; don't assume).
+2. At the registrar for `pfindash.com`, set:
+   - `A` record, host `@` (apex) → `<box-ipv4>`
+   - `AAAA` record, host `@` → `<box-ipv6>` (only if the box has one)
+   - `www` → an alias of the apex (`CNAME` to `pfindash.com`, or a matching `A`/`AAAA` pair) — whether Coolify's Domain config for the `app` service carries both `pfindash.com` and `www.pfindash.com` as aliases is a §3 Domain-assignment decision, not a DNS-layer one.
+3. **Lower the TTL well before the cutover window, not at it.** A record changed cold at a 3600s registrar default means up to an hour of clients still resolving the incumbent IP during the go/no-go window. Drop TTL to something short (300s is a reasonable target) at least one full TTL-cycle ahead of the planned §9 cutover; do the actual A/AAAA swap at cutover time itself.
+4. Leave every other existing record (MX, TXT, any other subdomain) exactly as found in step 0's snapshot, unless F/CTO explicitly names one to change.
+
+**TLS.** Confirmed against §3, not restated here: Coolify's bundled Traefik automates Let's Encrypt issuance per-Domain once a service is assigned one (§3 "TLS/proxy approach" — no external nginx/Certbot layer). §1's firewall already opens `80` (HTTP-01 challenge + redirect) and `443` (issued-cert traffic); nothing new to open for DNS. Certificate issuance is blocked on the A/AAAA record actually resolving to the new box (the HTTP-01 challenge is fetched over the domain's current DNS answer) — the propagation check below must pass **before** assigning the Domain in Coolify, not after.
+
+**Propagation check — run from OUTSIDE any network that might hold a stale cached answer:**
+
+```sh
+# Pin at least two independent public resolvers — never rely on the operator's
+# own ISP/local resolver, which can already hold a cached answer from an
+# earlier lookup of the SAME name and read as "already propagated" when most
+# of the internet has not picked up the change yet.
+dig +short @8.8.8.8 pfindash.com A
+dig +short @1.1.1.1 pfindash.com A
+dig +short @8.8.8.8 pfindash.com AAAA   # only if an AAAA record was created
+```
+
+| Result | Reading |
+|---|---|
+| Both resolvers return `<box-ipv4>`; a TLS handshake against `pfindash.com:443` presents a cert for `pfindash.com` | **Correct.** Safe to proceed to Coolify Domain assignment (§3) and, later, §9's cutover checklist. |
+| One resolver returns the new IP, the other still returns the incumbent's IP | **Wrong-looking-but-fine, conditionally** — during the TTL window this is expected: resolvers refresh independently, not in lockstep. Not a failure unless it persists past the TTL set in step 3 plus a reasonable margin. Re-check after that window before escalating. |
+| Both public resolvers return `<box-ipv4>` immediately after the record change, with no visible delay at all | **Looks fine but is the wrong thing to draw confidence from** — a short TTL (step 3) makes fast propagation *expected*, not a signal that this check can be skipped on a future domain change that wasn't pre-lowered. Don't generalize "it was instant this time." |
+| `dig` from the operator's own machine (no `@resolver` pinned) shows the new IP, but both pinned public resolvers above still show the old one | **Wrong, and the case worth naming explicitly** — an unqualified `dig pfindash.com A` uses whatever resolver the operator's OS/network is configured with, which may already be primed from an earlier lookup of the same name. This is exactly the "looks resolved, isn't" failure propagation checks exist to catch. Always pin the resolver as shown above; never trust the ambient default. |
+| TLS handshake succeeds over IPv4 (`curl -4`) but times out over IPv6 (`curl -6 https://pfindash.com`), despite an AAAA record resolving correctly | **Wrong, and the AAAA record's presence is not sufficient evidence it's fine** — Hetzner's firewall or the box's own network config can leave IPv6 unreachable even with a published address, a known CAX-line gotcha since IPv6 is enabled by default but not always routed identically to IPv4 at the OS level. If an AAAA record was created, confirm the IPv6 path with an explicit `-6` request — a resolvable-but-unreachable AAAA record is worse than no AAAA record, since some clients will now prefer it and fail outright. |
 
 ---
 

@@ -45,7 +45,7 @@ The repo's planning vocabulary maps onto Linear objects as follows. **Two layers
 
 ### Label taxonomy
 
-- **Role** — `role:backend` · `role:frontend` · `role:arch` · `role:migration` · `role:sec-review` · `role:worker` · `role:fcto` · `role:pm`. **`role:qa` and `role:devops` do not exist** (see §2).
+- **Role** — `role:backend` · `role:frontend` · `role:arch` · `role:migration` · `role:sec-review` · `role:worker` · `role:fcto` · `role:pm` · `role:devops` (verified live 2026-09-09 — see §2; do not carry this enumeration forward as a durable total, re-check Linear live). **`role:qa` does not exist** (see §2).
 - **Milestone (cross-project tags)** — `V1.0` · `V1.x` · `V1.final`. Coarse tags used to pair a cross-cutting issue with the cluster release it ships alongside. **Distinct from the native project-milestones in §3** — the labels are the cross-project sequencing aid; the native milestones are the per-cluster sub-version objects.
 - **Surface** — `surface:auth` · `surface:rls` · `surface:plaid` · `surface:manual-entry` · `surface:pdf-render` · `surface:pfin-etl` · `surface:observability`.
 - **Discipline** — `V1-ship-block` · `sec-joint-review` · `conditional-lock-fallback` (per `feedback_conditional_lock_with_named_fallback`) · `plaid-tier-confirmation-dependent`.
@@ -67,7 +67,7 @@ Decision (F/CTO-ratified): **verify existing-label roles only; defer the rest** 
 | `role:sec-review` | SELF-269 (dual-labeled) | ✅ live | ✅ verified* |
 | `role:worker` | SELF-230 | ✅ live | ✅ verified* |
 | `role:qa` | — | n/a | **deferred** — label absent; verify at first Phase 6 QA issue |
-| `role:devops` | — | n/a | **deferred** — label absent; verify at first Phase 6 DevOps issue |
+| `role:devops` | SELF-386 | not yet verified | **deferred** — label live (verified live 2026-09-09, id `f3e2f314-db62-402c-80c7-dbc17a2a1771`, colour `#f2c94c`), already tags SELF-386; read/write permission proof not yet run |
 | `role:pm` | — | n/a | **deferred** — label exists, tags 0 issues (PM works directly on PRD/BACKLOG artifacts) |
 
 \* *Read scope verified live per-role (`get_issue`/`list_issues`). The **write path** (comment + status-update) was proven end-to-end on SELF-269: posted a test comment + flipped `Backlog → Todo`, both succeeded, then reverted `Todo → Backlog` + deleted the comment (left clean; only `updatedAt` moved). The MCP write mechanism is identical across roles, so one live cycle validates the path; per-role write was not repeated on each issue to avoid gratuitous backlog churn.*
@@ -107,7 +107,7 @@ Read/verify only (no mutations), per F/CTO Decision A:
 |---|---|---|
 | 1 | ~~Asset allocation milestone name~~ | ✅ **Resolved** — confirmed *V1.2 — Asset allocation full (§2.2)*. |
 | 2 | ~~Platform V1.0 progress = 6.25%~~ | ✅ **Resolved** — SELF-195 (pgsodium/Vault key mgmt) is `Done` (closed 2026-06-03, early dedup/fold-in vs PM Issue 1). 1/16 = 6.25%. The scout's "all 89 Backlog" tally was off by this one issue. |
-| 3 | **`role:qa` + `role:devops` labels absent** | Open — not created at Phase 4. Defer to Phase 6: create when each role's first issue is decomposed (F/CTO action). |
+| 3 | ~~`role:qa` + `role:devops` labels absent~~ | **Partially resolved** — `role:devops` verified live 2026-09-09 (id `f3e2f314-db62-402c-80c7-dbc17a2a1771`, colour `#f2c94c`), already tags SELF-386. `role:qa` remains open — not created at Phase 4; defer to Phase 6: create when QA's first issue is decomposed (F/CTO action). |
 | 4 | **`role:pm` label unused** | No action — PM works on PRD/BACKLOG artifacts, not labeled execution issues. |
 | 5 | **3 mosko issues in NO-PROJECT bucket** | Open — identify and attach to their cluster project (low priority; cosmetic). |
 | 6 | **Granularity framing in ADR-017 D2 vs labels** | ✅ **Resolved as a non-issue** — native project-milestones faithfully represent per-sub-version units (V1.0–V1.5 + V1.final); the coarse `V1.0/V1.x/V1.final` **labels** are a complementary cross-project sequencing aid, not a competing model. No doc reconciliation needed. |
