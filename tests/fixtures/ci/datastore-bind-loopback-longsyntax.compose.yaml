@@ -1,0 +1,18 @@
+# fence-datastore-private-bind: target
+# GOLDEN FIXTURE — evasion class: compose long syntax (exit 1, vector 1).
+#
+# Long-form `ports:` syntax (target:/published:/host_ip:/mode:) can express
+# the same public bind the enumeration exists to catch, but isn't a single
+# literal token the fence can compare byte-for-byte -- refused outright
+# rather than parsed. Exercised by the fence-datastore-bind CI job,
+# asserting exit 1 AND the vector-1 token.
+
+services:
+  studio:
+    container_name: supabase-studio
+    image: supabase/studio:2026.09.07-sha-7996410
+    restart: unless-stopped
+    ports:
+      - target: 3000
+        published: 3000
+        host_ip: 127.0.0.1
