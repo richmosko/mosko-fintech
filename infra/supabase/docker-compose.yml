@@ -9,14 +9,20 @@
 #   Pinned to upstream commit: 8c7a4d9dbbaf8b552893822e89d7bf06f33f9220
 #            ("chore(self-hosted): update 2026-09-09 - 0.8.1 (#50172)")
 #
-# Trim (§4 service-scope table): IN = db, auth, rest, api-gw (gateway), supavisor.
-# OUT = studio, meta, storage, imgproxy, realtime, analytics, vector, functions.
+# Trim (§4 service-scope table): IN = db, auth, rest, api-gw (gateway), supavisor,
+# studio (F/CTO exception, 2026-09-10, SSH-tunnel only), meta (IN with studio).
+# OUT = storage, imgproxy, realtime, analytics, vector, functions.
 #
 # Six changes from the corresponding upstream service blocks, all load-bearing:
 #
-#   1. api-gw's `depends_on: studio: condition: service_healthy` REMOVED.
-#      studio is OUT of this trim; left in place, `docker compose up` hard-errors
-#      on the undefined service reference and the gateway never starts.
+#   1. api-gw's `depends_on: studio: condition: service_healthy` REMOVED — and it
+#      stays removed now that studio is back IN (F/CTO ruling 2026-09-10). Upstream's
+#      gateway waits for the admin UI to report healthy before it will start. That
+#      makes the entire Data API — every app request, every worker — hostage to an
+#      F/CTO-only break-glass console: a wedged or slow-booting studio takes the
+#      product down. There is no offsetting benefit, because nothing in the gateway's
+#      request path routes to studio in this trim (its `/`, `/pg/`, `/mcp` and
+#      `/api/mcp` routes are DENY'd — see volumes/api/envoy/lds.template.yaml).
 #
 #   2. auth's GOTRUE_DISABLE_SIGNUP is HARDCODED "true", not read from a
 #      ${DISABLE_SIGNUP} interpolation. §4 step 5a (F/CTO Q5 ruling) makes
@@ -86,6 +92,11 @@
 #      services over the shared Coolify project network by service name
 #      once `connect_to_docker_network` is enabled at §6.
 
+# fence-datastore-private-bind: target
+# Do not remove the line above (must stand alone, no trailing text): it is
+# what lets scripts/ci/fence-datastore-private-bind.sh confirm it is scanning
+# the intended datastore manifest rather than silently passing over a
+# renamed/unmarked file.
 name: supabase
 
 services:
@@ -306,8 +317,118 @@ services:
         "/app/bin/migrate && /app/bin/supavisor eval \"$$(cat /etc/pooler/pooler.exs)\" && /app/bin/server"
       ]
 
+  # postgres-meta — Studio's ONLY data source. IN only because studio is IN (runbook §4:
+  # "Drop together with studio, never independently").
+  #
+  # ⚠ NO `ports:` and NO `expose:` beyond the project network, and — load-bearing — the
+  # gateway's `/pg/` route to this cluster is DENY'd (see lds.template.yaml). That route
+  # has basic auth DISABLED per-route upstream and is gated ONLY by an RBAC policy that
+  # accepts the service_role key in an `apikey` header. Left live, any holder of the
+  # service_role key (the app tier holds it) could execute arbitrary SQL as `postgres`
+  # through this service — bypassing RLS, TenantBoundConnection, and every ADR-011
+  # Decision 2 immutability fence. Studio does not need that route: it reaches this
+  # service directly on the project network via STUDIO_PG_META_URL.
+  meta:
+    container_name: supabase-meta
+    image: supabase/postgres-meta:v0.99.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: ${POSTGRES_HOST}
+      PG_META_DB_PORT: ${POSTGRES_PORT}
+      PG_META_DB_NAME: ${POSTGRES_DB}
+      # ⚠ `postgres` is the pfin object OWNER and superuser-equivalent on this image.
+      # Every statement typed into Studio's SQL editor runs with that identity — see
+      # the Sec ruling's point 3 for what that specifically permits and what is
+      # therefore forbidden by operator discipline until a least-privilege role lands.
+      PG_META_DB_USER: postgres
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      CRYPTO_KEY: ${PG_META_CRYPTO_KEY}
+
+  # Supabase Studio — ADMIN CONSOLE, F/CTO-only break-glass. Studio ships with NO
+  # authentication of its own: upstream's only control is the Envoy basic-auth filter
+  # on the gateway's `/` catch-all. This trim does NOT use that path (that route is
+  # DENY'd — see volumes/api/envoy/lds.template.yaml), so the ONLY thing standing in
+  # front of this container is the loopback bind below plus the box's SSH key.
+  #
+  # ⚠ THE BIND ADDRESS IS THE ENTIRE CONTROL. `127.0.0.1` is literal and load-bearing:
+  # a host-loopback listener is NOT reachable from the docker0 bridge, from any sibling
+  # container, or from the public interface — only from a process on the host, i.e.
+  # someone who already holds root SSH. Reach it with:
+  #     ssh -L 3000:localhost:3000 root@<box-ip>   then browse http://localhost:3000
+  # This is the pattern F/CTO ratified 2026-09-09 for the Coolify dashboard (runbook §1:
+  # "SSH tunnel, 8000 closed ← CHOSEN"), and it is STRICTLY STRONGER than that one:
+  # Coolify's dashboard binds 0.0.0.0:8000 and leans on the Hetzner cloud firewall,
+  # whereas this never binds a public interface at all and does not depend on the
+  # firewall being correct.
+  #
+  # NEVER: widen to 0.0.0.0, assign a Coolify Domain, add a Traefik Host() label, or
+  # route to this service from the gateway. Any of those makes an unauthenticated
+  # superuser SQL console internet-facing. Sec veto, 2026-09-10.
+  studio:
+    container_name: supabase-studio
+    image: supabase/studio:2026.09.07-sha-7996410
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://localhost:3000/api/platform/profile').then((r) => {if (r.status !== 200) throw new Error(r.status)})\""
+        ]
+      timeout: 10s
+      interval: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      meta:
+        condition: service_started
+    environment:
+      HOSTNAME: "0.0.0.0"
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER_READ_WRITE: postgres
+      PG_META_CRYPTO_KEY: ${PG_META_CRYPTO_KEY}
+      PGRST_DB_SCHEMAS: ${PGRST_DB_SCHEMAS}
+      PGRST_DB_MAX_ROWS: ${PGRST_DB_MAX_ROWS:-1000}
+      PGRST_DB_EXTRA_SEARCH_PATH: ${PGRST_DB_EXTRA_SEARCH_PATH:-public}
+      DEFAULT_ORGANIZATION_NAME: ${STUDIO_DEFAULT_ORGANIZATION}
+      DEFAULT_PROJECT_NAME: ${STUDIO_DEFAULT_PROJECT}
+      # ⚠ HARDCODED EMPTY, not a ${OPENAI_API_KEY} interpolation. Populating this turns
+      # on Studio's AI assistant, which transmits schema and query text to a third-party
+      # API — an unreviewed data-egress path out of a database holding real financial
+      # account data. Setting it is a Sec veto pending a separate review (2026-09-10).
+      OPENAI_API_KEY: ""
+      SUPABASE_URL: http://api-gw:8000
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL}
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      AUTH_JWT_SECRET: ${JWT_SECRET}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+      ENABLED_FEATURES_LOGS_ALL: "false"
+      SNIPPETS_MANAGEMENT_FOLDER: /app/snippets
+    volumes:
+      # NAMED VOLUME, not upstream's `./volumes/snippets:/app/snippets:z` bind — header
+      # point 4's reasoning verbatim (a bind under the git checkout is not guaranteed to
+      # survive a Coolify redeploy) AND header point 5's (Coolify's compose parser
+      # mis-reads two-flag mount combos like `:z` / `:ro,z` into mount_path itself).
+      - studio-snippets:/app/snippets
+      # Upstream's `EDGE_FUNCTIONS_MANAGEMENT_FOLDER` + its
+      # `./volumes/functions:/app/edge-functions:ro,z` mount are DROPPED: `functions` is
+      # OUT of this trim, the source directory is not vendored here, and a missing
+      # bind-mount source is silently auto-created as an empty directory (header point 3).
+
 volumes:
   db-config:
   db-data:
+  studio-snippets:
   # NOTE: upstream's `deno-cache` volume dropped — it was `functions`-only,
   # and `functions` is OUT of this trim.
