@@ -25,7 +25,22 @@ from a scoped `awk` range with **no positive control**. It carried it, on `main`
 existed. See [[feedback_my_review_measurements_become_quoted_sources]] — a scoped command that returns
 the reassuring answer is a prompt to re-measure, not a result.
 
+**Third instance, and the cheapest one to have avoided — PR #699 (2026-09-10).** I issued two
+merge conditions naming **two files** (`secrets-manifest.yml`, `docs/local-dev.md`) as the carriers
+of the falsified Plaid-on-ETL claim. DevOps swept `local-dev.md` correctly and found no third hit
+*in that file* — the sweep inherited my file scope, not just my line scope. The tree-wide
+`git grep -nE 'PLAID_(CLIENT_ID|SECRET)' <ref>` (32 carrying files) surfaced a live carrier in
+**neither** file: `workers/provider-sync/.env.example:39`, whose comment asserted the credential was
+*"also declared (unconsumed) in workers/etl/"*. ⚠ **That line was inside the file my OWN #697
+conditions had already corrected** (`8931c53d`) — a discharged condition re-falsified by a later PR.
+Two compounding lessons: **(a)** naming FILES scopes a sweep as hard as naming LINES; **(b)** the
+files a previous condition touched are the *first* place to re-grep, not a place to assume clean —
+see [[feedback_a_discharge_can_go_stale_against_its_own_pr]] and
+[[feedback_correcting_half_a_hand_maintained_mirror]].
+
 **How to apply:**
+0. **Before issuing conditions, run the tree-wide grep over the CLAIM, not over the files you
+   happen to be reading** — and re-grep every file a prior condition of mine touched.
 1. Run the **unfiltered** grep first; filter only for READING, never for the deliverable.
 2. Exclude `node_modules`, `.claude/agent-memory`, `docs/archive` — then `cut -c1-200` so a minified
    or long-line file cannot blow the output and force you into a narrower filter.
