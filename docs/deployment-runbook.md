@@ -59,9 +59,15 @@ Scope: stand up a fresh virtual server to host Coolify + all V1 containers.
 
 **OS image: Ubuntu 24.04 LTS (arm64).** Coolify's own installation requirements (`coolify.io/docs/get-started/installation`, read 2026-09-09) list Debian-based distros — Ubuntu explicitly, any version, though "non-LTS requires manual installation" — among several supported families, alongside RedHat-based, SUSE-based, Arch, Alpine, and Raspberry Pi OS 64-bit. Ubuntu LTS is chosen over the alternatives for the longest support window on a box that is meant to run unattended for a production single-user deployment, and because it is the distro this tree's Docker images (`FROM node:...`, `FROM python:...` base images across the four Dockerfiles) are built and tested against elsewhere in CI. Confirm `arm64` at image-selection time in the Hetzner console — the CAX line is Ampere ARM only; an `amd64` image will not boot.
 
+**Primary IPs — IPv4 and IPv6 both need to be persistent; they are not persistent the same way.** A Hetzner Primary IP created with `auto_delete=false` survives a server delete-and-recreate and re-attaches to the new box, so a rebuild does not force a DNS change. `scripts/provision-vps.sh` creates the **IPv4** primary IP this way explicitly — a named resource, `auto_delete=false`, created before the server. **IPv6 is different: Hetzner creates the IPv6 primary IP for you, automatically, at server-creation time, with `auto_delete=true`.** Unless something flips it, IPv6 dies with the first server it's attached to, and a rebuild silently hands out a different `/64` — the box otherwise comes up looking entirely correct. This happened once, 2026-09-09: the rebuild at step 3b below preserved IPv4 exactly as designed and silently changed the IPv6 `/64`, and it surfaced only because F/CTO pasted the box's SSH login banner into the session and its `IPv6 address for eth0` line disagreed with the record — **nothing in the provisioning or verification flow read IPv6 at all.** IPv6 primary IPs carry no additional charge (Hetzner's pricing feed lists a monthly price for `ipv4` only), so there was never a cost reason to leave it disposable. `scripts/provision-vps.sh` now reads the server's IPv6 primary IP on every run and flips it to `auto_delete=false` if it is still disposable — verified idempotent, a re-run reports it already persistent and changes nothing. **Do not treat IPv4's persistence as evidence IPv6 is also persistent — they are separate resources with different defaults; verify IPv6 explicitly (see the verification block below).**
+
 **Initial hardening — concrete steps, in order:**
 
 1. **SSH key-only from creation.** Create the server with the intended operator's SSH **public** key attached at Hetzner's server-creation step (cloud-init installs it to `~/.ssh/authorized_keys` for `root` before first boot) — never create the box with a password and harden after, which leaves a real window where a weak/default credential is live on the public internet. Coolify's own docs state the SSH key used for its server connection **"must not have a passphrase or 2FA enabled"** — that constraint is about the key Coolify itself uses to reach the box over SSH (§3), and does not weaken this step: the *key* still gates entry; only its own local unlock is passphrase-free so Coolify's automation can use it non-interactively.
+
+   **Hetzner injects SSH keys only at server creation.** Adding a key in the Hetzner console does **nothing** to a running box — it only stores the key for a *future* server. There is no live-box "add a key" operation at all; the only way to add a machine's access after the fact is to `ssh-copy-id` its public key onto the box from a machine that already has access (to **both** `root` and `deploy` — they carry separate `authorized_keys`), and that path itself requires a machine that already has access. **If no machine has access — the box is genuinely locked out — recovery goes through Hetzner's browser console** (reset the root password there, log in, add a key; rescue mode is the heavier fallback). So the real single point of failure is **the Hetzner account**, not any one laptop holding a key — which relocates the risk to wherever that account's own login/2FA lives. This is not hypothetical: it is the same fact that forced a destroy-and-recreate of the first production box, 2026-09-09 (`docs/records/v1final/standup-log.md` §3b) — it had come up correct in every respect except that its only key was passphrase-protected, so automation could not log in, and there was no way to add a usable key to the running box short of rebuilding it.
+
+   **Provision with at least two keys, and treat them as unequal.** `scripts/provision-vps.sh` installs two: a personal key (passphrase-protected — the file alone is useless without the passphrase, so it's reasonable to store in a password manager) and an automation key (passphrase-free by necessity, since a script has no terminal to unlock a passphrase into). **Whoever holds the automation key's private-key file has root on this box, full stop.** Do not copy that file between machines "for convenience" — generate a separate passphrase-free key per machine that needs automated access instead, so a compromised machine costs one key, not the one key.
 2. **Disable password auth, then disable root login over SSH:**
    ```sh
    # /etc/ssh/sshd_config
@@ -70,7 +76,21 @@ Scope: stand up a fresh virtual server to host Coolify + all V1 containers.
    PermitRootLogin prohibit-password   # Coolify's own documented recommendation
    ```
    `prohibit-password` (not a flat `no`) is Coolify's own recommended setting, not an arbitrary choice — Coolify's server-connection step authenticates as `root` over key-based SSH by default, and a flat `PermitRootLogin no` would break that unless a non-root user with `sudo`/Docker-group access is wired into Coolify's connection config instead (a viable alternative — see the non-root note below — but not the default this runbook assumes).
-3. **Create a non-root operator user** (`adduser deploy && usermod -aG sudo deploy`), with the same public key copied to its `~/.ssh/authorized_keys`, for interactive/manual operator work (migrations, the §6.1/§6.2 credential handoffs, verification reads). This is **separate from** the identity Coolify itself connects as (step 2's `root`, per Coolify's default) — conflating the two is a real foot-gun: locking down `root` further "for safety" after Coolify is already configured to use it breaks Coolify's own deploy path.
+3. **Create a non-root operator user**, with the same public keys copied to its `~/.ssh/authorized_keys`, for interactive/manual operator work (migrations, the §6.1/§6.2 credential handoffs, verification reads). This is **separate from** the identity Coolify itself connects as (step 2's `root`, per Coolify's default) — conflating the two is a real foot-gun: locking down `root` further "for safety" after Coolify is already configured to use it breaks Coolify's own deploy path.
+
+   **Do not create it as `adduser deploy && usermod -aG sudo deploy`.** `adduser` alone prompts interactively for a password, which a script cannot answer; using `--disabled-password` to dodge that prompt instead leaves the account with **no password at all**, and an account with no password cannot authenticate to `sudo` either — `sudo: a password is required` for an account that has nothing to give. Use this instead:
+
+   ```sh
+   adduser --disabled-password --gecos "" deploy
+   mkdir -p /home/deploy/.ssh
+   cp ~/.ssh/authorized_keys /home/deploy/.ssh/authorized_keys
+   chown -R deploy:deploy /home/deploy/.ssh
+   chmod 700 /home/deploy/.ssh && chmod 600 /home/deploy/.ssh/authorized_keys
+   printf 'deploy ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/90-deploy
+   chmod 440 /etc/sudoers.d/90-deploy
+   ```
+
+   **The reasoning for `NOPASSWD`, stated so it can be challenged:** the same SSH keys copied above already grant *direct* `root` login (step 2 keeps `PermitRootLogin prohibit-password`, required because Coolify itself connects as `root`) — so `NOPASSWD` sudo for `deploy` grants no capability those keys did not already carry directly; it only removes a password prompt an account with no password can never satisfy. **⚠ This argument holds only as long as `PermitRootLogin` stays `prohibit-password`.** If root login is ever tightened to a flat `no` (the non-root-Coolify-connection alternative named in step 2), revisit this grant — at that point `deploy`'s passwordless sudo would be a real escalation the keys no longer carry on their own, and the tradeoff needs re-deciding rather than carried forward unexamined.
 4. **Firewall — exact ports, and why each is open:**
 
    | Port | Direction | Why |
@@ -98,7 +118,19 @@ Scope: stand up a fresh virtual server to host Coolify + all V1 containers.
    Coolify's own first-run admin setup works through the tunnel. **The losing side, named:** every dashboard visit needs the tunnel command first, and an operator who forgets it sees a dead port rather than a login page — which reads as an outage if you do not know why.
 
 **Deliberately closed, and why it matters that they stay closed:** the provider-sync admission port `:8081` (§7 CA-2/CA-4) is never firewall-opened at all — it is reached only over the Coolify **project-internal** Docker network by service name, never via the host's public IP. Use the cloud provider's own firewall (Hetzner Cloud Firewall) as the enforcement point, **not** a host-level tool like `ufw` alone — Coolify's own docs note that Docker manipulates `iptables` directly via its NAT rules, which can **bypass `ufw`/host-firewall rules** for published container ports. A cloud-level firewall sits in front of the box entirely and is not subject to that bypass; treat it as the primary control and a host-level firewall (if used at all) as defense-in-depth, never the reverse.
-5. **Base packages:** none beyond what Coolify's own installer brings (it installs Docker itself if absent). Do not pre-install a competing reverse proxy, Postgres, or Docker Compose plugin version — let Coolify's installer own that surface, since §3's pinned-version procedure below assumes it is running against the versions Coolify's own installer sets up.
+5. **Apply security updates — before Coolify is installed, not after.** Positioned here deliberately: at this point nothing on the box is serving anything, so a bad patch has zero blast radius. The same updates applied *after* cutover are a change to a live system, on the wrong side of that risk trade.
+
+   ```sh
+   apt update
+   apt list --upgradable 2>/dev/null | grep -i security   # see what's security-flagged before applying
+   apt upgrade -y
+   # reboot only if apt/needrestart says the kernel or a core library needs it — not on principle.
+   ```
+
+   On the first production box (2026-09-09), the fresh Ubuntu 24.04 image came up with 51 pending updates, 49 of them security; 46 applied cleanly, 0 remained upgradable afterward, no reboot was required, and all six Coolify containers verified healthy once installed (§3).
+
+   **Open decision, not made here — flagged rather than silently decided:** whether `unattended-upgrades` is configured for ongoing patching after go-live, or patching stays a manual recurring step. **Not configured as of 2026-09-09.** Owner: F/CTO + DevOps — decide before or shortly after cutover; a box serving live financial data with no patching cadence at all is not an acceptable default-by-omission.
+6. **Base packages:** none beyond what Coolify's own installer brings (it installs Docker itself if absent). Do not pre-install a competing reverse proxy, Postgres, or Docker Compose plugin version — let Coolify's installer own that surface, since §3's pinned-version procedure below assumes it is running against the versions Coolify's own installer sets up.
 
 **Confirm ARM-vs-x86 across the fleet:** CAX21 is Ampere ARM (`arm64`); the incumbent cax21 box is also ARM, and every container image in this tree (`api/Dockerfile`, `workers/etl/Dockerfile`, `workers/pdf-render/Dockerfile`, `workers/provider-sync/Dockerfile`) must resolve to `arm64` base images for a clean pull/build on this box. This is a build-time property, not something §1 provisioning changes — flagged here as the check to run if any container fails to start after §6/§7 with an "exec format error" or a base-image pull for the wrong platform.
 
@@ -136,6 +168,18 @@ nmap -Pn -p 22,80,443,8000,8081 <box-ip>   # run from OUTSIDE the box's network
 | `8000` shows **open** | **Wrong.** The firewall did not apply, or a rule was added by hand. The dashboard is meant to be unreachable from the internet entirely — reach it over the SSH tunnel above. Fix before installing Coolify, not after. |
 | `8081` shows **open** | **Wrong, and load-bearing** — this is the exact regression §7 CA-4 / §10 CA-2 exist to catch downstream at the application layer; catching it here, before any service is even deployed, is cheaper. Re-check the cloud firewall rules; nothing at this stage should be publishing that port. |
 | Every port shows `filtered` including `22` | **Wrong-looking-but-fine, conditionally** — if this scan is run from a network Hetzner's Cloud Firewall doesn't allowlist yet (e.g. before the operator's own IP is added to the firewall's SSH rule), a fully-filtered result is expected and does **not** mean the box is unreachable to the operator; re-run from the network holding the firewall-allowlisted IP before concluding anything is actually broken. |
+
+```sh
+# (4) IPv6 — confirm the persisted /64 actually matches what was recorded, not assumed
+#     unchanged. Nothing else in this block reads IPv6 at all.
+ssh deploy@<box-ip> "ip -6 addr show scope global | awk '/inet6/{print \$2}'"
+```
+
+| Result | Reading |
+|---|---|
+| Matches the `/64` recorded in `docs/records/v1final/standup-log.md` | **Correct.** |
+| Differs from the recorded value — especially right after a `--rebuild` | **Wrong, and easy to miss rather than a false alarm.** Hetzner creates the IPv6 primary IP at server-creation time with `auto_delete=true` by default — unlike IPv4, it does **not** survive a delete-and-recreate unless it was flipped to persistent first. `scripts/provision-vps.sh` does this flip on every run, so a run against this box should already show it persistent; if this check still disagrees, confirm via the API (`GET /primary_ips?name=<name>-v6` → `auto_delete: false`) **before** touching DNS — an AAAA record pointed at a stale `/64` is a silent partial outage (§2), not a loud one, since IPv4 keeps working the whole time. |
+| No global-scope IPv6 address at all | **Wrong** — `enable_ipv6` was not set at server creation, or the interface never came up. Check `public_net.ipv6` on the server via the Hetzner API before proceeding. |
 
 ---
 
@@ -203,6 +247,8 @@ dig +short @8.8.8.8 pfindash.com AAAA   # only if an AAAA record was created
 
 Scope: install Coolify on the fresh box; it is the deployment control plane for all V1 containers (per ARCH §5 — config lives in the Coolify UI; this repo holds only source-of-truth `Dockerfile`s + env-var contracts).
 
+**Status (2026-09-09): install and first-run setup DONE.** Coolify `4.3.18` is installed and all six containers (`coolify`, `coolify-db`, `coolify-redis`, `coolify-proxy`, `coolify-realtime`, `coolify-sentinel`) report healthy. The first-run admin account has been created and claimed (F/CTO). A `localhost` server is registered in Coolify — this is Coolify's own auto-created entry for the box it runs on, not a separate provisioning step. A GitHub source row connecting this repo exists. **Not yet done:** Domain assignment for `app` (blocked on §2's DNS cutover), the four-service topology below, and the ARCH §6 item (f) auto-deploy webhook.
+
 - Deploys go through the **Coolify UI**, not from chat or CI (per ARCH §5). This repo's job is to make the repo-side artifacts (Dockerfiles, `.env.example` contracts) deploy cleanly when F/CTO triggers a deploy.
 
 **Install method — pinned, not `latest`.** Coolify's installer is a single script (`coolify.io/docs/get-started/installation`, read 2026-09-09) that supports installing an exact version by passing it as an argument:
@@ -211,7 +257,7 @@ Scope: install Coolify on the fresh box; it is the deployment control plane for 
 curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash -s <version>
 ```
 
-**How to determine `<version>` at execution time (not fixed in this doc, because the right value changes and a stale pin here would be worse than no pin):** read `https://cdn.coollabs.io/coolify/versions.json` immediately before installing and take the `coolify.v4` value — **as read live on 2026-09-09 while authoring this section, that value was `4.3.18`; treat that as an illustration of the mechanism, not the version to install.** Omitting `<version>` entirely (`bash` with no argument) installs whatever that file currently resolves to, which is exactly the non-reproducible "latest" the prior STUB flagged — passing the version explicitly is what turns the same command into a pinned, repeatable install.
+**How to determine `<version>` at execution time (not fixed in this doc, because the right value changes and a stale pin here would be worse than no pin):** read `https://cdn.coollabs.io/coolify/versions.json` immediately before installing and take the `coolify.v4` value — **as read live on 2026-09-09 while authoring this section, that value was `4.3.18`; treat that as an illustration of the mechanism, not the version to install.** Omitting `<version>` entirely (`bash` with no argument) installs whatever that file currently resolves to, which is exactly the non-reproducible "latest" the prior STUB flagged — passing the version explicitly is what turns the same command into a pinned, repeatable install. **This is what was actually installed on the production box, same day: `4.3.18`, pinned and verified running.**
 
 **Record the pinned version, don't just install it.** Write the exact version string installed into `docs/records/v1final/production-standup.md`'s deploy log (the file this runbook's own hand-off convention already treats as the authority for what got deployed) at the time of install — the version isn't reproducible later if only "whatever `versions.json` said that day" is remembered.
 
