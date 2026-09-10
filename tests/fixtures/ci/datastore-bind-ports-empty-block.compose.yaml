@@ -1,0 +1,15 @@
+# fence-datastore-private-bind: target
+# GOLDEN FIXTURE — STRUCTURAL: a `ports:` key with zero value lines
+# (exit 2, fail closed).
+#
+# A `ports:` key the walker cannot read the contents of must never produce a
+# pass -- same fail-closed discipline as the missing-sentinel case. Exercised
+# by the fence-datastore-bind CI job, asserting exit 2 specifically.
+
+services:
+  studio:
+    container_name: supabase-studio
+    image: supabase/studio:2026.09.07-sha-7996410
+    restart: unless-stopped
+    ports:
+    image_placeholder: unused
