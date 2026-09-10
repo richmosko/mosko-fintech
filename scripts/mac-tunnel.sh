@@ -3,11 +3,24 @@
 # box as a macOS LaunchAgent, so reaching the Coolify dashboard/API/MCP and
 # Studio stops being a command you remember to run.
 #
-# Runs on F/CTO's OWN Mac, as F/CTO's OWN ssh identity — never the
-# passphrase-free automation key `provision-vps.sh` uses. Nothing on the
-# production box or its firewall changes: 8000 and 3000 stay closed to the
-# internet exactly as decided in the runbook's §1/§4 exposure tables; this
-# only makes the *local* end of the existing tunnel pattern automatic.
+# Runs on F/CTO's OWN Mac, but AS the passphrase-free automation key
+# (`~/.ssh/id_ed25519_claude_mosko-fintech` — the same one provision-vps.sh
+# and provision-supabase-stack.sh use) rather than F/CTO's personal key.
+# F/CTO ruling, 2026-09-11, correcting this script's original design (which
+# specced the personal key "because the tunnel is the human's" — over-
+# thought): a LaunchAgent is an unattended process with no terminal to type
+# a passphrase into, which is exactly what the automation key is for, and a
+# local port-forward is strictly LESS capability than that key already
+# grants (it's already a full root shell on the box) — using it here adds
+# zero new exposure. Tradeoff, accepted: the tunnel dies if this key is
+# ever removed from this Mac. F/CTO's long-term answer for that is
+# Tailscale (a private mesh, independent of this key), not reverting to the
+# personal key — not built here, noted for whoever picks that up.
+#
+# Nothing on the production box or its firewall changes: 8000 and 3000 stay
+# closed to the internet exactly as decided in the runbook's §1/§4 exposure
+# tables; this only makes the *local* end of the existing tunnel pattern
+# automatic.
 #
 # Supply-chain minimalism (house rule): plain `ssh` under launchd KeepAlive,
 # not autossh. See the plist template's own header comment for why that is
@@ -29,7 +42,7 @@ SSH_HOST_ALIAS="pfin-prod"
 ACTION="install"
 APPLY=0
 BOX_IP=""
-IDENTITY="$HOME/.ssh/id_ed25519"
+IDENTITY="$HOME/.ssh/id_ed25519_claude_mosko-fintech"
 YES=0
 
 info() { printf '\033[36m[mac-tunnel]\033[0m %s\n' "$*"; }
@@ -53,9 +66,11 @@ Options:
   --box-ip <ip>          Production box primary IPv4. Needed only if
                          ~/.ssh/config has no "Host $SSH_HOST_ALIAS" block yet.
   --identity <path>      SSH private key to reference in the config block.
-                         Default: $HOME/.ssh/id_ed25519 (F/CTO's own key —
-                         see the plist template header for why this is never
-                         the automation key).
+                         Default: $HOME/.ssh/id_ed25519_claude_mosko-fintech
+                         (the passphrase-free automation key — see the
+                         plist template header for why this key, not F/CTO's
+                         personal one, is deliberate for an unattended
+                         LaunchAgent).
   --yes                  Don't prompt before appending to ~/.ssh/config.
   --kill-test             (verify only) kill the running tunnel process and
                          confirm launchd restarts it within ~15s. Disrupts
@@ -95,8 +110,6 @@ Host $SSH_HOST_ALIAS
     User root
     IdentityFile $IDENTITY
     IdentitiesOnly yes
-    UseKeychain yes
-    AddKeysToAgent yes
 BLOCK
 }
 
@@ -133,28 +146,17 @@ check_ssh_alias() {
   ok "appended Host $SSH_HOST_ALIAS to $SSH_CONFIG"
 }
 
-check_key_loaded() {
-  if ssh-add -l 2>/dev/null | grep -qF "$(ssh-keygen -lf "$IDENTITY" 2>/dev/null | awk '{print $2}')"; then
-    ok "$IDENTITY is loaded in the agent."
-  else
-    warn "$IDENTITY is not currently loaded in the ssh-agent."
-    warn "One-time fix so launchd (no terminal to type a passphrase into) can use it:"
-    warn "    ssh-add --apple-use-keychain $IDENTITY"
-    warn "(UseKeychain/AddKeysToAgent in the config block above make this persist across reboots.)"
-  fi
-}
-
 do_install() {
   [[ -f "$TEMPLATE" ]] || die "template missing: $TEMPLATE"
   check_ssh_alias
-  check_key_loaded
 
   info "Plan:"
   echo "      plist       $PLIST_DST"
   echo "      log         $LOG_FILE"
   echo "      forwards    127.0.0.1:8000 -> localhost:8000 (Coolify dashboard/API/MCP)"
   echo "                  127.0.0.1:3000 -> localhost:3000 (Studio, once deployed)"
-  echo "      identity    $IDENTITY (F/CTO's own key, NOT the automation key)"
+  echo "      identity    $IDENTITY (the automation key -- passphrase-free by design,"
+  echo "                  no keychain/ssh-agent step needed; see this script's header)"
 
   if [[ $APPLY -eq 0 ]]; then
     printf '\n\033[33mPREFLIGHT ONLY.\033[0m Nothing was installed. Re-run with --apply.\n'

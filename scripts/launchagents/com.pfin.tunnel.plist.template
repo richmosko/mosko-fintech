@@ -24,11 +24,17 @@
             harmless to forward before then — it just won't accept
             connections yet)
 
-  Runs as F/CTO's OWN ssh identity via the `pfin-prod` Host alias in
-  ~/.ssh/config (see scripts/mac-tunnel.sh) — NOT the passphrase-free
-  automation key `provision-vps.sh` uses. The tunnel is the human's; the
-  automation key exists for scripts, and broad agent SSH access is the
-  larger risk this design deliberately does not reintroduce.
+  Runs as the passphrase-free AUTOMATION key (same one provision-vps.sh and
+  provision-supabase-stack.sh use) via the `pfin-prod` Host alias in
+  ~/.ssh/config (see scripts/mac-tunnel.sh) — deliberately, not F/CTO's
+  personal identity. F/CTO ruling, 2026-09-11: a LaunchAgent is an
+  unattended process with no terminal to unlock a passphrase-protected key,
+  which is exactly what the automation key is for, and a local port-forward
+  is strictly LESS capability than that key already grants (it already
+  holds a full root shell on the box) — reusing it here adds zero new
+  exposure. Accepted tradeoff: the tunnel dies if this key is ever removed
+  from this Mac; F/CTO's long-term answer for that is Tailscale, not the
+  personal key.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
