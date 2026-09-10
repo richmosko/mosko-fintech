@@ -255,7 +255,7 @@ step "Secrets: mint-if-absent, set env vars, assert non-empty -- all on the box,
 # openssl-quality randomness for any of the 8 manifest secrets genuinely
 # absent, PATCHes .../envs/bulk, then asserts non-empty the ONLY reliable
 # way: decrypts each required key server-side via the app's own Eloquent
-# cast (tinker --execute -- see below; never piped/interactive, per RT-32)
+# cast (tinker --execute -- see below; never piped/interactive)
 # and reports true/false -- never ciphertext
 # length (meaningless: an empty string still encrypts to a non-trivial
 # blob) and never the plaintext itself.

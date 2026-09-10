@@ -162,7 +162,7 @@ foreach ($manifest as [$mount, $staleMount, $content]) {
 PHPBODY
 } > "$PHP_SCRIPT"
 
-# RT-32: never pipe a script into INTERACTIVE tinker. Sec flagged this line as
+# Never pipe a script into INTERACTIVE tinker. Sec flagged this line as
 # the same defect class as the 2026-09-11 provision-vps.sh token-leak
 # incident (piped/interactive tinker, no --execute, echoes an input+return-
 # value transcript to its own stdout). Checked the actual content this line
@@ -178,7 +178,8 @@ PHPBODY
 # `--execute`, not piped stdin. The script text still travels via SSH's own
 # stdin (unchanged, still never a command-line argument) -- only the LOCAL
 # side changed, from "pipe straight into tinker" to "capture on the remote
-# shell, then hand it to tinker as --execute's value" (fence: RT-32).
+# shell, then hand it to tinker as --execute's value" (see
+# scripts/ci/fence-tinker-no-echo.sh, unlabeled pending F/CTO ratify).
 ssh -i "$SSH_KEY" "$SSH_HOST" 'SCRIPT_CONTENT="$(cat)"; docker exec coolify php artisan tinker --execute="$SCRIPT_CONTENT"' < "$PHP_SCRIPT"
 rm -f "$PHP_SCRIPT"
 

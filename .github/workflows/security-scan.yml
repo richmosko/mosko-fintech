@@ -535,9 +535,17 @@ jobs:
           fi
           echo "OK: TBC-node fence caught the same-basename violator (exit $rc)."
 
-  fence-rt32:
-    name: RT-32 — interactive-tinker CI fence
+  fence-tinker-no-echo:
+    name: interactive-tinker CI fence
     runs-on: ubuntu-latest
+    # ⚠ UNLABELED, DELIBERATELY. Assigning this fence an RT-NN id is an
+    # F/CTO Decision-4 ratify act, not DevOps's or Sec's to mint by shipping
+    # a label — same precedent as fence-datastore-bind (below), which ships
+    # unlabeled for the identical reason. No RT-NN string anywhere in this
+    # job, its script, or its fixtures until F/CTO ratifies one; do not add
+    # one here without that ratify, and do not reconcile this job against
+    # the §10 catalogued ledger in the meantime.
+    #
     # Security incident, 2026-09-11: provision-vps.sh's token-mint step piped
     # a script into INTERACTIVE `php artisan tinker` (docker exec -i), which
     # echoes an input+return-value REPL transcript to its own stdout — the
@@ -547,31 +555,26 @@ jobs:
     # provision-vps.sh, and in the same-class instance found during triage in
     # scripts/coolify-materialize-supabase-mounts.sh. This job is the
     # mechanical guarantee neither regresses and that no third instance
-    # lands unnoticed. Sec owns the docs/SECURITY/index.html RT-32 catalog
-    # entry (separate PR, docs/security-rt32-token-leak) — this file is the
-    # ENFORCEMENT VENUE only, per this file's own §10-attribution-discipline
-    # header convention. Do NOT add RT-32 to the §10 catalogued ledger
-    # (stays RT-22/26/27) — CI-fenced and §10-catalogued are different sets,
-    # never reconciled, per this repo's own standing convention.
+    # lands unnoticed.
     steps:
       - uses: actions/checkout@v4
 
-      - name: RT-32 production-mode (scripts/)
-        run: bash scripts/ci/fence-rt32-tinker-no-echo.sh scripts/
+      - name: interactive-tinker production-mode (scripts/)
+        run: bash scripts/ci/fence-tinker-no-echo.sh scripts/
 
-      - name: RT-32 inversion-mode (golden fixture; expects violation)
+      - name: interactive-tinker inversion-mode (golden fixture; expects violation)
         run: |
           set +e
-          bash scripts/ci/fence-rt32-tinker-no-echo.sh tests/fixtures/ci/rt32-tinker-violation/
+          bash scripts/ci/fence-tinker-no-echo.sh tests/fixtures/ci/tinker-violation/
           rc=$?
           set -e
           if [ $rc -ne 1 ]; then
-            echo "FATAL: RT-32 inversion expected exit 1 (violation caught) but got exit $rc — fence is broken; failing closed."
+            echo "FATAL: inversion expected exit 1 (violation caught) but got exit $rc — fence is broken; failing closed."
             exit 1
           fi
-          echo "OK: RT-32 fence caught the golden fixture's interactive-tinker line (exit $rc)."
+          echo "OK: fence caught the golden fixture's interactive-tinker line (exit $rc)."
 
-      - name: RT-32 token-shape pattern regression (Sec's second fixture)
+      - name: token-shape pattern regression (Sec's second fixture)
         # Different property from the two legs above: those prove the FENCE
         # catches interactive tinker. This proves the STRUCTURAL leak-check
         # inside scripts/provision-vps.sh (which the token-mint step now
@@ -589,8 +592,8 @@ jobs:
             exit 2
           fi
           PATTERN="$(printf '%s' "$PATTERN_LINE" | sed -E "s/.*grep -qE '([^']*)'.*/\1/")"
-          if ! grep -qE "$PATTERN" tests/fixtures/ci/rt32-token-shape-sample.txt; then
-            echo "FATAL: the live leak-check pattern ('$PATTERN') does NOT match the known Sanctum-shaped token sample (tests/fixtures/ci/rt32-token-shape-sample.txt)." >&2
+          if ! grep -qE "$PATTERN" tests/fixtures/ci/tinker-token-shape-sample.txt; then
+            echo "FATAL: the live leak-check pattern ('$PATTERN') does NOT match the known Sanctum-shaped token sample (tests/fixtures/ci/tinker-token-shape-sample.txt)." >&2
             echo "The structural leak-check in provision-vps.sh has rotted vacuous — it would no longer catch a real token leak. Fix the pattern, do not delete this check." >&2
             exit 1
           fi

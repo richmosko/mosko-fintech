@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 #
-# RT-32 — interactive-tinker CI fence (Sec spec, 2026-09-11).
+# fence-tinker-no-echo — interactive-tinker CI fence (Sec spec, 2026-09-11).
+#
+# ⚠ NOT YET A CATALOGUED §10 INSTANCE / CI-FENCED-SET MEMBER BY NAME.
+# Assigning this fence an RT-NN id is an F/CTO Decision-4 ratify act, not
+# DevOps's or Sec's to mint by shipping a label — same precedent as
+# fence-datastore-private-bind.sh, which ships unlabeled for the identical
+# reason. Do not add an RT-NN string anywhere in this file, its CI job, or
+# its fixtures until F/CTO ratifies one; the fence protects the tree
+# regardless of whether it carries a catalog id yet.
 #
 # WHY THIS EXISTS. Security incident, 2026-09-11: `provision-vps.sh` piped a
 # script into interactive tinker (no --execute) over `docker exec -i` to
@@ -35,7 +43,7 @@
 # same shape as every other line-oriented fence in this repo.
 #
 # Usage:
-#   bash fence-rt32-tinker-no-echo.sh <scope-dir>
+#   bash fence-tinker-no-echo.sh <scope-dir>
 #
 #   <scope-dir>   Directory to scan (e.g. scripts/, or a golden-fixture dir
 #                 for inversion-mode). Only *.sh files under it are scanned.
@@ -65,7 +73,7 @@ if [ -n "$HITS" ]; then
   echo "VIOLATION: 'artisan tinker' invoked without --execute on the same line:" >&2
   echo "$HITS" | sed 's/^/  /' >&2
   echo "" >&2
-  echo "RT-32 fence: scope $SCOPE failed. Failing closed." >&2
+  echo "interactive-tinker fence: scope $SCOPE failed. Failing closed." >&2
   echo "" >&2
   echo "Piped/interactive tinker echoes an input+return-value transcript to its" >&2
   echo "own stdout — this is how the 2026-09-11 token-leak incident happened." >&2
@@ -77,5 +85,5 @@ if [ -n "$HITS" ]; then
   exit 1
 fi
 
-echo "RT-32 fence: scope $SCOPE clean (every 'artisan tinker' invocation uses --execute)."
+echo "interactive-tinker fence: scope $SCOPE clean (every 'artisan tinker' invocation uses --execute)."
 exit 0

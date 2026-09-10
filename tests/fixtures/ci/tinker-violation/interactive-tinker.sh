@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# RT-32 golden fixture — POSITIVE CONTROL. This file exists ONLY to prove
-# fence-rt32-tinker-no-echo.sh actually catches what it claims to: an
-# interactive/piped `artisan tinker` invocation, the exact shape that
+# Interactive-tinker golden fixture — POSITIVE CONTROL. This file exists
+# ONLY to prove fence-tinker-no-echo.sh actually catches what it claims to:
+# an interactive/piped `artisan tinker` invocation, the exact shape that
 # leaked a Coolify automation token's plaintext on 2026-09-11 (see
 # scripts/provision-vps.sh's incident comment and
-# scripts/ci/fence-rt32-tinker-no-echo.sh's header for the full account).
+# scripts/ci/fence-tinker-no-echo.sh's header for the full account).
 #
 # This is NOT real provisioning code and is never executed by anything —
 # the CI job runs the fence AGAINST this directory in inversion-mode and
