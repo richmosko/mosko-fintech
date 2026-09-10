@@ -1,0 +1,17 @@
+# fence-datastore-private-bind: target
+# GOLDEN FIXTURE — VECTOR 1 (published host-port mapping → fence FAILS, exit 1).
+#
+# Reproduces the live 2026-09-10 incident this fence exists to catch:
+# supavisor's wire-protocol + pooler-proxy ports published straight to the
+# host's public interface. Exercised by the fence-datastore-bind CI job,
+# asserting exit 1 AND the vector-1 token (not just a non-zero exit — see
+# fence-admission-private-bind's Sec F-2 discipline, mirrored here).
+
+services:
+  supavisor:
+    container_name: supabase-pooler
+    image: supabase/supavisor:2.9.12
+    restart: unless-stopped
+    ports:
+      - 5432:5432
+      - 6543:6543
