@@ -78,6 +78,7 @@
 - [Pass-if-absent substitutes a path convention](feedback_pass_if_absent_substitutes_a_path_convention.md) — the inversion step must assert the output TOKEN.
 - [A name-key denylist misses every spec form in the value](feedback_a_name_key_denylist_misses_every_spec_form_in_the_value.md) — enumerate value grammars; always run a negative control.
 - [A manifest fence stops at the fields it parses](feedback_a_manifest_fence_stops_at_the_fields_it_parses.md) — lifecycle scripts and the lockfile `resolved` host are the two open doors.
+- [A fence sentinel asserts SUBJECT, not layer](feedback_fence_sentinel_asserts_subject_not_layer.md) — same layer + different subject ⇒ sibling fence; an `RT-NN` in a workflow mints a CI-fenced-set member by side effect.
 - [Per-role settings bypass a LOGIN role's whole posture](feedback_per_role_settings_bypass_a_login_roles_posture.md) — assert `rolconfig IS NULL`; `ALTER ROLE r SET role=` is self-grantable and catalog-invisible.
 
 ## Standing constraints on future work
