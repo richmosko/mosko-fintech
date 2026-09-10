@@ -977,7 +977,10 @@ cat <<NEXT
       you change them -- pfindash.com may still resolve to the incumbent
       box, so this is a live-traffic change, not a greenfield write.
 
-      Next script: scripts/provision-supabase-stack.sh --apply
+      Next script: BOX_IP=$BOX_IP scripts/provision-supabase-stack.sh --apply
+        BOX_IP is required there, not defaulted (2026-09-11 incident: a
+        missing override used to fall through to prod silently) -- always
+        pass it explicitly, copy-paste the line above, don't retype it.
         Reads the token this run wrote to /root/.pfin/coolify.env ON THE BOX
         -- nothing to copy here.
 NEXT
