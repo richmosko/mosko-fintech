@@ -28,8 +28,8 @@
 |---|---|---|---|
 | 1 | Hosting target decided | F/CTO | ✅ Ruled 2026-09-08 — Hetzner CAX21 |
 | 2 | `pfin_provider_sync` login-role migration (S5) | Architect | ✅ Migration `116` on `main` (PR #671) |
-| 3 | Provision VPS + install Coolify | DevOps + F/CTO | ⏳ Runbook §1/§3 being authored |
-| 4 | DNS / domain decision + records | F/CTO + DevOps | ⛔ Blocked — domain not chosen |
+| 3 | Provision VPS + install Coolify | DevOps + F/CTO | 🟡 **VPS PROVISIONED 2026-09-09** — Coolify not yet installed |
+| 4 | DNS / domain decision + records | F/CTO + DevOps | 🟡 Domain RULED (`pfindash.com` reuse) — records not yet cut over |
 | 5 | Stand up self-hosted Supabase; apply migrations | DevOps | ⛔ Blocked on 3 |
 | 5a | Production signup OFF (`GOTRUE_DISABLE_SIGNUP=true`) | DevOps | ⛔ Blocked on 5 · ruled Q5 |
 | 6 | Deploy the four services from one `main` sha | DevOps | ⛔ Blocked on 5 |
@@ -66,11 +66,69 @@ Sec joint-review reached no-veto over several rounds (round 1 AMBER; conditions 
 
 **API token — open decision, not a blocker.** A Hetzner API token is scoped per project (Cloud Console → project → Security → API tokens → Generate, Read & Write, value shown once). It is required only for `hcloud`/Terraform-driven provisioning; a single box can be provisioned through the web console with no token at all. **Decide before generating a credential that then has to be managed.** If one is generated, its name goes in `secrets-manifest.yml`; its value goes nowhere in this repo.
 
-> **Fill in when executed:** region, OS image, hostname, IP, SSH key fingerprint, firewall rules as applied, Coolify version installed, and the verification-block results from runbook §1/§3.
+### 3a. VPS provisioned — 2026-09-09
+
+Provisioned by `scripts/provision-vps.sh --apply`, F/CTO having chosen scripted provisioning over the console so the box is a function of a versioned file rather than of what someone clicked.
+
+| | |
+|---|---|
+| Server | `pfin-prod-1` · id `165377820` |
+| Type | `cax21` · arm · 4 cores · 8 GB · 80 GB |
+| Location | `fsn1` (Falkenstein) · `fsn1-dc14` |
+| Image | `ubuntu-24.04` (arm) · id `161547270` |
+| IPv4 | **188.245.166.206** — primary IP `pfin-prod-ipv4`, id `148918358`, `auto_delete=false` |
+| IPv6 | `2a01:4f8:c013:4348::/64` |
+| Firewall | `pfin-prod-fw` id `11600487` — inbound 22 / 80 / 443 only |
+| SSH keys | 2 — `mosko-fintech-id_ed25519` (`SHA256:sbjUXz5Mvzi3lyr5cfgCLZ/LSHBa6mtJ73bwFxrS3pA`, passphrase-protected, human use) and `mosko-fintech-id_ed25519_claude_mosko-fintech` (`SHA256:R2q4NlrUXwEyeoqqX6Z4Yv4hu/cjBb7q8WolntiviH4`, passphrase-free, automation) |
+| Cost | EUR 12.49/mo server + EUR 0.60/mo primary IP, gross |
+
+**Runbook §1 verification block — run, not assumed:**
+
+```
+cores: 4          mem: 7.5Gi        disk: 75G
+arch:  aarch64    os:  Ubuntu 24.04.4 LTS
+keys:  2 in authorized_keys
+```
+
+`aarch64` is the one that matters. An `x86_64` box boots, runs Docker, and looks entirely healthy while every image in this repo fails to build.
+
+**Port exposure, probed from outside the box by TCP behaviour:**
+
+| Port | Result | Reading |
+|---|---|---|
+| 22 | service answered | correct |
+| 80, 443 | reachable, nothing listening | correct — Coolify's proxy is not installed yet |
+| 8000 | **filtered** | correct — dashboard is tunnel-only by ruling |
+| 8081 | **filtered** | correct — the CA-4 regression this check exists to catch |
+
+⚠ **A first probe reported every port filtered, including 22, seconds after SSH had succeeded over port 22.** The probe was broken, not the firewall. Recorded because a port scan that fails uniformly looks exactly like a firewall that blocks everything, and believing it would have sent someone to debug a healthy box.
+
+**Coolify dashboard access** (§3, when installed) — the installer prints `http://<box-ip>:8000` and **that URL will not resolve, which is correct**:
+
+```sh
+ssh -L 8000:localhost:8000 root@188.245.166.206
+# then browse http://localhost:8000
+```
+
+**Still outstanding on this box:** §1's hardening beyond key-only auth — password authentication off, root SSH login restricted, non-root operator user. Coolify itself (§3) is not installed.
+
+### 3b. The first box was destroyed and rebuilt — the failure is the point
+
+The first server (`165377261`) came up **correct in every respect**: right spec, right image, sshd listening, firewall exactly as specified. It was also **unreachable by automation**, because the only key on it was `id_ed25519`, which is passphrase-protected. A script has no terminal to type a passphrase into.
+
+**A key you cannot use is indistinguishable from a key that is not there, and you find out after provisioning.** The box was deleted and recreated carrying both keys.
+
+Two things came out of it. `scripts/provision-vps.sh` now takes a **list** of keys and **refuses to provision** unless at least one private half is passphrase-free, naming which key is which. And the rebuild proved the primary IP's whole purpose for real: the address survived the delete and re-attached to the new server, so DNS pointed at it would never have moved.
 
 ## Step 4 — DNS / domain
 
-**⛔ Blocked on an F/CTO decision.** Reuse `pfindash.com` (reference-only today) or register a new domain. The choice is entangled with cutover timing, so runbook §2 is deliberately left unwritten until it is made.
+**RULED 2026-09-09 (F/CTO): reuse `pfindash.com`.** Runbook §2 is written.
+
+⚠ **This is a live-traffic change, not a greenfield write.** `pfindash.com` may still resolve to the incumbent box. Check the current records before changing them; §9 cutover timing is entangled with it.
+
+**When cut over, point the A record at 188.245.166.206** — the primary IP, not any address a future rebuild might hand out. That is what the primary IP is for.
+
+**No subdomain split** (DevOps call, verified): nothing in the browser bundle talks to Supabase directly — the only consumer of the Supabase URL is server-side — so Supabase stays fully internal with no public DNS record.
 
 ---
 
@@ -81,4 +139,7 @@ Sec joint-review reached no-veto over several rounds (round 1 AMBER; conditions 
 | Date | Step | Expected | Actual | Runbook corrected? |
 |---|---|---|---|---|
 | 2026-09-08 | 7 | Adopt F/CTO's 9 existing Plaid Items | Old Plaid team deleted; its Items were already orphaned with tokens lost. Step struck; replaced by the step 8 attach-at-Link build against a fresh 10-Item Trial team. | n/a — plan record updated |
-| 2026-09-09 | 3 | Follow runbook §1/§3 | Both sections were STUBs; no procedure existed to follow. | In progress |
+| 2026-09-09 | 3 | Follow runbook §1/§3 | Both sections were STUBs; no procedure existed to follow. | ✅ Authored, PR #684 |
+| 2026-09-09 | 3 | Provision once, cleanly | First box carried only a passphrase-protected key — correct in every other respect and unreachable by automation. Destroyed and recreated with both keys. | ✅ Script now validates key usability and refuses to provision without an automation-usable key |
+| 2026-09-09 | 3 | Script runs clean | Five bugs, each found only by running against the live API: shell brace expansion mangled the SSH-key JSON; an unassigned primary IP is created against a `location`, not a `datacenter`; `public_net` takes `ipv4:<id>` while `enable_ipv4` is a bool; key lookup must be by **fingerprint** (Hetzner 409s on duplicate material whatever you name it); and the server delete returns **before** the primary IP detaches, so creating into that window 422s with nothing about timing. | ✅ All five fixed; the race now waits and refuses rather than creating into it |
+| 2026-09-09 | 3 | Verify ports from outside | First probe reported **every** port filtered, including 22, seconds after SSH had succeeded on 22. The instrument was broken, not the box. | n/a — re-probed by TCP behaviour |
