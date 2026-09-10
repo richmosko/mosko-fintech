@@ -21,10 +21,10 @@
 #     layer-attribution drift ADR-011 Decision 4 catalogues).
 #   - Models scripts/ci/fence-admission-private-bind.sh's shape (same three
 #     vectors, same structural fail-closed guards) — NOT its sentinel, NOT its
-#     §10/RT attribution. This file carries NO RT-NN string anywhere: whether
-#     this exposure class earns a catalog entry (and a fourth §10 instance) is
-#     a separate F/CTO Decision-4-ratify + docs/SECURITY/index.html step, not
-#     performed here. Label this job with an RT id only after that entry lands.
+#     §10/RT attribution. This file carries RT-32, per F/CTO Decision-4
+#     ratify 2026-09-10 (relayed via team-lead; catalog entry
+#     docs/SECURITY/index.html §4.5 in #724, ADR-008 record in #725).
+#     Shipped unlabeled from creation until this ratify landed.
 #
 # ┌─ WHAT THIS FENCE ENFORCES ─────────────────────────────────────────────────┐
 # │ Over a COMMITTED Coolify Compose manifest describing a datastore/infra       │
