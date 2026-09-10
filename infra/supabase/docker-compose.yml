@@ -31,29 +31,29 @@
 #      the correct friction for a one-way-door security control, not a Coolify
 #      env-var toggle anyone with dashboard access could flip.
 #
-#   3. Every relative bind-mount source is written REPO-ROOT-RELATIVE
-#      (./infra/supabase/volumes/...), not compose-file-relative (./volumes/...)
-#      as upstream writes them. This is deploying via Coolify's `dockercompose`
-#      build pack with `docker_compose_location` pointing at this file inside a
-#      git checkout — NOT running `docker compose up` by hand from this
-#      directory, which is what upstream's own paths assume. Multiple Coolify
-#      GitHub issues (#1996, #2444, #3294, #3375, #4468, #6056, #8107 — spanning
-#      a wide version range, none confirmed fixed as of this writing) report
-#      that Coolify resolves a Docker Compose build pack's relative volume
-#      sources against the application's checkout ROOT, not the compose file's
-#      own directory, when the compose file lives in a subdirectory. Written
-#      compose-file-relative, every bind mount below would resolve to a
-#      nonexistent path at the repo root, and Docker auto-creates a bind mount's
-#      missing source as an EMPTY DIRECTORY rather than erroring — Envoy would
-#      boot with no config, and the DB init scripts would silently not run,
-#      both "comes up healthy, serves the wrong config" failures rather than a
-#      loud one. THIS ASSUMPTION IS NOT VERIFIED AGAINST THIS BOX'S Coolify
-#      4.3.18 SPECIFICALLY — it is the best call from the external evidence
-#      available, not a live-tested fact. Verify empirically at first deploy:
-#      check `docker logs supabase-envoy` for a real config load (not just
-#      "container running"), and check `docker logs supabase-db` during first
-#      boot for each init-script filename actually executing, before trusting
-#      this stack with anything.
+#   3. Relative bind-mount sources are left COMPOSE-FILE-RELATIVE (./volumes/...),
+#      matching upstream, ON CONDITION that this Coolify resource is created with
+#      base_directory = /infra/supabase and docker_compose_location = /docker-compose.yml
+#      — NOT base_directory = / with docker_compose_location = /infra/supabase/docker-compose.yml,
+#      which looks equivalent and is not. Source-verified (team-lead read
+#      Coolify's ApplicationDeploymentJob.php:791-793): the deploy job runs
+#      `docker compose --project-name {uuid} --project-directory {workdir}
+#      -f {workdir}{docker_compose_location} ...`, where `workdir` is the
+#      checkout root ADJUSTED BY base_directory — and Compose resolves every
+#      relative bind mount against --project-directory, not against the
+#      compose file's own location. With base_directory at the repo root,
+#      `workdir` is the checkout root and every `./volumes/...` mount below
+#      would resolve to `<checkout-root>/volumes/...`, WHICH DOES NOT EXIST.
+#      ⚠ THE FAILURE MODE IS SILENT: Docker does not error on a missing
+#      bind-mount source — it auto-creates it as an EMPTY DIRECTORY. The stack
+#      reports "healthy" while `db` has no roles.sql/jwt.sql/any init script
+#      and `api-gw` has an empty /etc/envoy. Setting base_directory to
+#      /infra/supabase makes `workdir` == this directory, so `./volumes/...`
+#      resolves correctly. VERIFY AT FIRST DEPLOY ANYWAY, because a healthy
+#      status cannot distinguish this from success: check the gateway
+#      container's own log for a real config load (not just "container
+#      running"), and check the db container's boot log for each init-script
+#      filename actually executing — see §4's verification step.
 #
 #   4. `db`'s data directory is a NAMED VOLUME (`db-data`), not upstream's
 #      relative bind mount (./volumes/db/data). Multiple Coolify sources
@@ -89,10 +89,10 @@ services:
     ports:
       - ${API_GW_HTTP_PORT:-${KONG_HTTP_PORT:-8000}}:8000/tcp
     volumes:
-      - ./infra/supabase/volumes/api/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
-      - ./infra/supabase/volumes/api/envoy/cds.yaml:/etc/envoy/cds.yaml:ro
-      - ./infra/supabase/volumes/api/envoy/lds.template.yaml:/etc/envoy/lds.template.yaml:ro
-      - ./infra/supabase/volumes/api/envoy/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+      - ./volumes/api/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./volumes/api/envoy/cds.yaml:/etc/envoy/cds.yaml:ro
+      - ./volumes/api/envoy/lds.template.yaml:/etc/envoy/lds.template.yaml:ro
+      - ./volumes/api/envoy/docker-entrypoint.sh:/docker-entrypoint.sh:ro
     environment:
       ANON_KEY: ${ANON_KEY}
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
@@ -183,16 +183,16 @@ services:
     image: supabase/postgres:17.6.1.136
     restart: unless-stopped
     volumes:
-      - ./infra/supabase/volumes/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
-      - ./infra/supabase/volumes/db/webhooks.sql:/docker-entrypoint-initdb.d/init-scripts/98-webhooks.sql:Z
-      - ./infra/supabase/volumes/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:Z
-      - ./infra/supabase/volumes/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:Z
+      - ./volumes/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
+      - ./volumes/db/webhooks.sql:/docker-entrypoint-initdb.d/init-scripts/98-webhooks.sql:Z
+      - ./volumes/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:Z
+      - ./volumes/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:Z
       # NAMED VOLUME, not a bind mount — see header note point 4. Upstream uses
       # ./volumes/db/data here; that is unsafe under Coolify's redeploy model.
       - db-data:/var/lib/postgresql/data:Z
-      - ./infra/supabase/volumes/db/_supabase.sql:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql:Z
-      - ./infra/supabase/volumes/db/logs.sql:/docker-entrypoint-initdb.d/migrations/99-logs.sql:Z
-      - ./infra/supabase/volumes/db/pooler.sql:/docker-entrypoint-initdb.d/migrations/99-pooler.sql:Z
+      - ./volumes/db/_supabase.sql:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql:Z
+      - ./volumes/db/logs.sql:/docker-entrypoint-initdb.d/migrations/99-logs.sql:Z
+      - ./volumes/db/pooler.sql:/docker-entrypoint-initdb.d/migrations/99-pooler.sql:Z
       - db-config:/etc/postgresql-custom
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
@@ -228,7 +228,7 @@ services:
       - ${POSTGRES_PORT}:5432
       - ${POOLER_PROXY_PORT_TRANSACTION}:6543
     volumes:
-      - ./infra/supabase/volumes/pooler/pooler.exs:/etc/pooler/pooler.exs:ro,z
+      - ./volumes/pooler/pooler.exs:/etc/pooler/pooler.exs:ro,z
     healthcheck:
       test: ["CMD", "curl", "-sSfL", "--head", "-o", "/dev/null", "http://127.0.0.1:4000/api/health"]
       interval: 10s

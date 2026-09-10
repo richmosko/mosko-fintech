@@ -304,7 +304,9 @@ Scope: bring up a fresh self-hosted Supabase stack (Postgres 17) on the new box 
 
 **Do not fetch the reference compose once and commit it verbatim into this repo.** Its service set and image tags move — the gateway service alone has been renamed and re-implemented since earlier tree references were written (see the `kong` row below). Pull it fresh at execution time, apply the trim below, and record the exact tags actually deployed in `docs/records/v1final/standup-log.md` (the as-executed log, not this file, per its own "records measurements, not intentions" rule).
 
-**The trimmed compose lives at [`infra/supabase/docker-compose.yml`](../infra/supabase/docker-compose.yml)**, alongside its vendored Envoy config and DB init scripts (see that directory's `README.md` for provenance and the two changes made from the corresponding upstream service blocks). Sibling to the `workers/*/docker-compose.yaml` pattern §3 already uses, not nested under `supabase/` (CLI-config/migration territory) or `docs/` (reference docs, not deploy artifacts).
+**The trimmed compose lives at [`infra/supabase/docker-compose.yml`](../infra/supabase/docker-compose.yml)**, alongside its vendored Envoy config and DB init scripts (see that directory's `README.md` for provenance and the four changes made from the corresponding upstream service blocks). Sibling to the `workers/*/docker-compose.yaml` pattern §3 already uses, not nested under `supabase/` (CLI-config/migration territory) or `docs/` (reference docs, not deploy artifacts).
+
+**⚠ The Coolify resource for this compose MUST be created with `base_directory: /infra/supabase` and `docker_compose_location: /docker-compose.yml`** — not `base_directory: /` with `docker_compose_location: /infra/supabase/docker-compose.yml`, which looks equivalent and is not. Source-verified in Coolify's own deploy code (`ApplicationDeploymentJob.php:791-793`): the deploy job's working directory (against which every relative bind mount in the compose resolves) is the checkout root adjusted by `base_directory`, not the compose file's own location. Get this wrong and the failure is **silent** — Docker auto-creates a missing bind-mount source as an empty directory rather than erroring, so the stack reports healthy while `db` has no init scripts at all and the gateway has an empty config directory. See `infra/supabase/README.md` for the full mechanism and the verification step below.
 
 **Service scope for V1 — decided service by service, evidence-based.** Cross-checked against `supabase/config.toml`'s `enabled` sections and the current reference compose (read live 2026-09-09); the note after the table says why `config.toml`'s flags don't settle this by themselves.
 
@@ -391,6 +393,22 @@ curl -s -o /dev/null -w '%{http_code}\n' "$PUBLIC_SUPABASE_URL/rest/v1/"
 | All services report `healthy` in Coolify/`docker compose ps`, but `server_version` is anything other than `17.x` | **Looks fine but is wrong, and easy to miss** — a container health check proves a process answered, not which image tag it's running. This is exactly the failure mode Coolify's one-click template would have produced silently (see the bring-up-method table above); confirming version by direct query, not by dashboard color, is the point of this row. |
 | The gateway probe returns `2xx` with a data response, no `apikey` supplied | **Wrong, and worse than a clean failure** — the Data API is not enforcing its own key check; every `pfin` table's RLS is the *second* layer of a two-layer fence (`config.toml`'s own header comment: anon holds zero grants outer, RLS inner). A gateway that skips key-checking removes the layer meant to stop unauthenticated traffic from ever reaching PostgREST at all. Stop and re-check the gateway config before proceeding. |
 | `studio` / `meta` show up in `docker compose ps` when the trim decision above dropped them | **Wrong, and worth checking explicitly rather than inferring** — a stale prior deploy attempt, or a compose file that wasn't actually re-pulled with the trim applied, can leave them running even though *this* execution's compose file omits them. Confirm their absence directly; don't infer it from "I used the trimmed file this time." |
+
+**(1b) Bind-mount sanity — every kept service healthy is NOT proof its config/init-script mounts resolved to the right files.** `infra/supabase/docker-compose.yml`'s bind mounts are written compose-file-relative (`./volumes/...`), which is only correct if this Coolify resource's `base_directory` was set to `/infra/supabase` (see that directory's `README.md`). Get `base_directory` wrong and Docker does not fail loudly — it auto-creates each missing bind-mount source as an empty directory, so `api-gw` and `db` both come up "healthy" while actually unconfigured.
+
+```sh
+# Confirm the gateway loaded a real config, not an empty directory.
+docker logs supabase-envoy 2>&1 | tail -30
+# EXPECTED: Envoy's own startup log (listener/cluster config lines). A
+# near-empty log or an immediate crash-loop means /etc/envoy mounted empty.
+
+# Confirm each DB init script actually ran on first boot (only meaningful
+# on a FRESH db-data volume — a script only runs once, at first init).
+docker logs supabase-db 2>&1 | grep -iE "roles\.sql|jwt\.sql|webhooks\.sql|realtime\.sql|_supabase\.sql|logs\.sql|pooler\.sql"
+# EXPECTED: all seven filenames appear (Postgres logs each init-scripts/
+# migrations file it executes). A short or empty result means the init
+# directory mounted empty — the base_directory misconfiguration above.
+```
 
 **Secrets this step produces.** Names only — never values, here or anywhere in this repo; most (not all — each row below states whether it is a manifest entry) are drawn from `secrets-manifest.yml`'s `production_only` set. **§5's secrets-provisioning procedure is still a STUB and its Sec joint-review flag is NOT discharged by this section** — this only names where these five land; rotation/injection-order procedure is §5's job.
 
