@@ -27,7 +27,7 @@ Every file under `volumes/` here was vendored from that same commit (`docker/vol
 
 **OUT:** `studio`, `meta`, `storage`, `imgproxy`, `realtime`, `analytics`, `vector`, `functions`. None of the kept services retain a `depends_on`, healthcheck, volume, or env var pointing at a dropped one — checked explicitly, not inferred.
 
-## Five changes from the corresponding upstream service blocks
+## Six changes from the corresponding upstream service blocks
 
 1. **`api-gw`'s `depends_on: studio` removed.** Upstream's gateway waits on `studio` being healthy before starting. `studio` is OUT of this trim; left in place, `docker compose up` hard-errors on the undefined service reference and the gateway never starts.
 
@@ -40,6 +40,8 @@ Every file under `volumes/` here was vendored from that same commit (`docker/vol
 4. **`db`'s data directory is a named volume (`db-data`), not upstream's relative bind mount (`./volumes/db/data`).** Independent of point 3's path-resolution question: a bind mount under the application's git checkout is not guaranteed to survive a redeploy (the checkout can be cleared/re-cloned — corroborated by multiple Coolify sources: "if you use a bind mount with a path that gets cleared during deploy instead of a named volume, you'll lose data"), whereas a named volume is managed by Docker/Coolify directly and does survive. Upstream's own compose is written for a manually-run, never-re-cloned checkout, where this distinction doesn't matter — it does here. This change is correct regardless of how point 3 resolves.
 
 5. **`supavisor`'s pooler config mount is `:ro`, not the two-flag `:ro,z` an SELinux-aware host would use.** Dropped, not carried over: this box runs Ubuntu with no SELinux, so `:z` is a no-op there regardless — but Coolify's own compose-string parser (`bootstrap/helpers/parsers.php`) mis-parses the two-flag combination, bleeding `:ro,z` into the `mount_path` it records rather than stopping at the first `:`. Coolify's single-flag forms (`:ro` alone, `:Z` alone — used on all seven `db` mounts) parse cleanly. Discovered on the first live deploy attempt; see the empty-directory issue immediately below for the deploy that surfaced it.
+
+6. **`api-gw` and `supavisor` are `expose:`-only — upstream's `ports:` mappings are dropped, not carried over.** Discovered on the first *successful-mount* live deploy attempt: `api-gw`'s upstream `ports: - 8000:8000` collides with Coolify's own dashboard on the same host port — `api-gw` failed to start (`Bind for 0.0.0.0:8000 failed: port is already allocated`). Separately, `supavisor`'s upstream `ports:` came up live bound to `0.0.0.0:5432`/`0.0.0.0:6543` — a multi-tenant Postgres's wire protocol and pooler proxy directly on the host's public interface, unreachable only because the Hetzner cloud firewall happened to filter those ports, not by design. Matches this repo's existing precedent for internal-only services (`workers/provider-sync`, `workers/pdf-render`): `expose:`-only, never a published `ports:` mapping, by construction. `app` and `workers/*` reach both services over the shared Coolify project network by service name (`http://api-gw:8000`, the pooler's service name + port) once `connect_to_docker_network` is enabled per-resource at §6 — it is not automatic and not project-scoped.
 
 ## Known gap: first deploy pre-creates every file-shaped bind mount as an empty directory
 
