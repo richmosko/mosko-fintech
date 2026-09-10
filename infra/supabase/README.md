@@ -23,9 +23,9 @@ Every file under `volumes/` here was vendored from that same commit (`docker/vol
 
 ## Service trim (§4)
 
-**IN:** `db`, `auth`, `rest`, `api-gw` (the gateway — upstream renamed this from `kong` to `api-gw`/Envoy; see `docker-compose.yml`'s header comment), `supavisor`.
+**IN:** `db`, `auth`, `rest`, `api-gw` (the gateway — upstream renamed this from `kong` to `api-gw`/Envoy; see `docker-compose.yml`'s header comment), `supavisor`, `studio` (F/CTO exception, 2026-09-10, SSH-tunnel-only — see `../../docs/deployment-runbook.md` §4's `studio` row and "Studio exposure shape" below), `meta` (IN with `studio`, per the rule that the two move together).
 
-**OUT:** `studio`, `meta`, `storage`, `imgproxy`, `realtime`, `analytics`, `vector`, `functions`. None of the kept services retain a `depends_on`, healthcheck, volume, or env var pointing at a dropped one — checked explicitly, not inferred.
+**OUT:** `storage`, `imgproxy`, `realtime`, `analytics`, `vector`, `functions`. None of the kept services retain a `depends_on`, healthcheck, volume, or env var pointing at a dropped one — checked explicitly, not inferred.
 
 ## Six changes from the corresponding upstream service blocks
 
@@ -42,6 +42,27 @@ Every file under `volumes/` here was vendored from that same commit (`docker/vol
 5. **`supavisor`'s pooler config mount is `:ro`, not the two-flag `:ro,z` an SELinux-aware host would use.** Dropped, not carried over: this box runs Ubuntu with no SELinux, so `:z` is a no-op there regardless — but Coolify's own compose-string parser (`bootstrap/helpers/parsers.php`) mis-parses the two-flag combination, bleeding `:ro,z` into the `mount_path` it records rather than stopping at the first `:`. Coolify's single-flag forms (`:ro` alone, `:Z` alone — used on all seven `db` mounts) parse cleanly. Discovered on the first live deploy attempt; see the empty-directory issue immediately below for the deploy that surfaced it.
 
 6. **`api-gw` and `supavisor` are `expose:`-only — upstream's `ports:` mappings are dropped, not carried over.** Discovered on the first *successful-mount* live deploy attempt: `api-gw`'s upstream `ports: - 8000:8000` collides with Coolify's own dashboard on the same host port — `api-gw` failed to start (`Bind for 0.0.0.0:8000 failed: port is already allocated`). Separately, `supavisor`'s upstream `ports:` came up live bound to `0.0.0.0:5432`/`0.0.0.0:6543` — a multi-tenant Postgres's wire protocol and pooler proxy directly on the host's public interface, unreachable only because the Hetzner cloud firewall happened to filter those ports, not by design. Matches this repo's existing precedent for internal-only services (`workers/provider-sync`, `workers/pdf-render`): `expose:`-only, never a published `ports:` mapping, by construction. `app` and `workers/*` reach both services over the shared Coolify project network by service name (`http://api-gw:8000`, the pooler's service name + port) once `connect_to_docker_network` is enabled per-resource at §6 — it is not automatic and not project-scoped.
+
+## Studio exposure shape (F/CTO exception, 2026-09-10)
+
+`studio` and `meta` are IN, reversing the original trim, because F/CTO named a concrete keep-reason (browser-based ad-hoc DB inspection) — the exception this section's original "OUT by default" framing always anticipated needing to name. **The access pattern is narrower than that original framing assumed: F/CTO asked for the Coolify-dashboard pattern specifically (SSH tunnel), not a public Domain.**
+
+**The bind address is the entire access control, and it is a literal, not a pattern.** `studio`'s only `ports:` mapping is `- "127.0.0.1:3000:3000"` — byte-exact, because `scripts/ci/fence-datastore-private-bind.sh` allowlists this one string and nothing that merely starts with `127.0.0.1`. A host-loopback listener is unreachable from the docker0 bridge, from any sibling container, or from the public interface — only from a process already on the host, i.e. someone who already holds root SSH:
+
+```sh
+ssh -L 3000:localhost:3000 root@<box-ip>
+# then browse http://localhost:3000
+```
+
+This is strictly stronger than the Coolify-dashboard pattern it mirrors (that one binds `0.0.0.0:8000` and leans on the Hetzner cloud firewall; this never binds a public interface at all).
+
+**Two more controls, both load-bearing, neither optional:**
+- **The gateway's `/pg/` and `/` (catch-all) routes to `meta`/`studio` are `RBACPerRoute` DENY'd** in `volumes/api/envoy/lds.template.yaml` — upstream's own idiom, already used on `/mcp`/`/api/mcp` in the same file. `/pg/` matters most: upstream gates it on the `service_role` key with basic auth explicitly disabled, and `meta` connects to Postgres as `postgres` (owner/superuser-equivalent) — left live, any holder of the `service_role` key (the app tier holds it) could run arbitrary SQL as `postgres` through the gateway, outside RLS, outside `TenantBoundConnection`, able to disable the ADR-011 Decision 2 immutability triggers. Studio never uses that route — it reaches `meta` directly at `STUDIO_PG_META_URL`.
+- **`OPENAI_API_KEY` is hardcoded `""`, never a `${VAR}` interpolation.** Populating it turns on Studio's AI assistant, which sends schema and query text to a third-party API — an unreviewed data-egress path out of a database holding real financial account data. Sec veto, pending a separate review.
+
+**Accepted, recorded, not fixed:** Studio serves its own `/api/mcp` on port 3000, so the loopback publish reaches it directly and the gateway DENY doesn't cover it. Accepted because the reachable set for that port is identical to "already holds root SSH on the box," which already implies superuser SQL via `docker exec` regardless.
+
+**Never:** widen the bind to `0.0.0.0`, assign a Coolify Domain, add a Traefik `Host()` label, or route to `studio`/`meta` from the gateway. Any of those makes an unauthenticated superuser SQL console internet-facing — Studio has no login of its own; the loopback bind plus the box's SSH key **are** the access control. Sec joint-review before any change to this shape.
 
 ## Known gap: first deploy pre-creates every file-shaped bind mount as an empty directory
 
