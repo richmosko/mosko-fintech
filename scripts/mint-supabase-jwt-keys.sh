@@ -73,6 +73,62 @@
 #   on every run -- never cached locally, never accepted as a script
 #   argument or env var from this side.
 #
+# FIX LOG, 2026-09-10 -- two defects a clean-slate prod rebuild exposed
+#   (1) UUID ASSUMPTION: this script used to default to a HARDCODED stack
+#       app uuid (`eepvlmaq4uortakmido7jgvn`), lifted from
+#       coolify-materialize-supabase-mounts.sh's own documented default.
+#       provision-supabase-stack.sh's create-path mints a FRESH uuid on
+#       every from-scratch stand-up -- the whole point of a create-path is
+#       that the uuid is NOT stable -- so the hardcoded default silently
+#       targeted a torn-down resource and every call 404/failed. Fixed: the
+#       stack app is now resolved by NAME (`$COOLIFY_APP_NAME`, defaulting
+#       to `pfin-supabase-stack` -- the same default provision-supabase-
+#       stack.sh's own APP_NAME uses) via a `GET /applications` + name-match
+#       lookup, mirroring the `--app-name` lookup this script already did
+#       for the app-side resource. No uuid is ever assumed.
+#   (2) CREDENTIAL LEAK: when defect (1) made the very next Coolify API call
+#       fail, `subprocess.run(cmd, ..., check=True)` raised
+#       `CalledProcessError`, whose default string representation embeds
+#       the ENTIRE argv list it was given -- including the literal
+#       `-H "Authorization: Bearer <token>"` element -- and that string
+#       reached the operator's terminal, the run log, and a teammate's
+#       context over the SSH channel this script's remote python runs
+#       through. (Confirmed empirically in isolation: the old
+#       `["curl","-fsS","-X",method,"-H",f"Authorization: Bearer {token}"]`
+#       shape prints the live token in Python's default unhandled-exception
+#       traceback the moment curl returns non-zero; the box-side argv
+#       exposure itself was already an accepted posture elsewhere in this
+#       repo -- root-only, behind SSH -- but a traceback surfacing it to the
+#       LOCAL operator/log is not.) Fixed, made impossible by construction
+#       rather than merely caught: the Coolify API token is now passed to
+#       curl as a `header = "Authorization: Bearer <token>"` config-file
+#       directive fed over STDIN (`curl -K -`), so it is NEVER a curl argv
+#       element at all -- it cannot appear in `ps`, and it cannot appear in
+#       a subprocess exception's string representation, because it was
+#       never part of `cmd`. Every curl call in this script (envs-shape
+#       preflight, app-name lookup, mint/overwrite) goes through the same
+#       `api()` helper, and every call site wraps `subprocess.run(...,
+#       check=True)` in `try/except CalledProcessError`, re-raising a
+#       SANITIZED message (HTTP/exit status + curl's own -S diagnostic text
+#       only -- which describes URL/connection status, never request
+#       headers -- truncated defensively) instead of letting the default
+#       traceback through. Verified in isolation (no box, no real token):
+#       a mock HTTP server returning 401 was hit with both the old and new
+#       `api()` shapes -- the old shape's unhandled exception printed the
+#       full fake token; the new shape's sanitized `die()` message did not,
+#       while a success call still delivered the header correctly server-
+#       side. Flagged for Sec: this is the SAME leak class as the RT-33
+#       interactive-`tinker`-echo fence (docs/SECURITY/index.html
+#       #provisioning-token-mint-leak), but that fence (refuse `artisan
+#       tinker` without `--execute`) does not catch a Python subprocess
+#       traceback printing argv -- whether the fence/lesson should widen to
+#       "no secret in a subprocess argv element that can surface in a
+#       traceback" is a Sec/DevOps call, not decided here.
+#   Both fixes are prep-only in this commit -- not run with --apply against
+#   prod. See this repo's PR for the isolation-test detail and the sibling
+#   finding that scripts/provision-supabase-stack.sh's own `api()` helper
+#   (DevOps-owned; not edited here) has the identical argv-token pattern.
+#
 # WHAT IT OVERWRITES (the whole point -- read before running)
 #   Unlike provision-supabase-stack.sh's mint-if-absent secrets, THIS script
 #   unconditionally overwrites ANON_KEY / SERVICE_ROLE_KEY on the Supabase
@@ -106,15 +162,21 @@
 #                                     # + a real apikey call against api-gw
 #                                     # (only meaningful once the stack is
 #                                     # actually deployed and healthy)
+#   COOLIFY_APP_NAME=<name>  # override the stack app's Coolify resource
+#                             # name to resolve (default: pfin-supabase-
+#                             # stack, matching provision-supabase-stack.sh)
 #
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOX_IP="${BOX_IP:-188.245.166.206}"
 AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
-# Matches scripts/coolify-materialize-supabase-mounts.sh's documented
-# default -- the pfin-supabase-stack production resource's known UUID.
-STACK_APP_UUID="${COOLIFY_APP_UUID:-eepvlmaq4uortakmido7jgvn}"
+# NAME, not uuid -- provision-supabase-stack.sh's create-path mints a fresh
+# uuid on every from-scratch stand-up, so a uuid can never be safely
+# hardcoded or cached across a teardown/rebuild. Resolved to a uuid below,
+# every run, via a live Coolify API lookup. Matches provision-supabase-
+# stack.sh's own `APP_NAME="${APP_NAME:-pfin-supabase-stack}"` default.
+STACK_APP_NAME="${COOLIFY_APP_NAME:-pfin-supabase-stack}"
 APP_NAME=""
 APPLY=0
 VERIFY_LIVE=0
@@ -155,6 +217,51 @@ sshx 'test -s /root/.pfin/coolify.env' >/dev/null 2>&1 \
 sshx 'grep -q "^JWT_SECRET=" /root/.pfin/supabase.env 2>/dev/null' \
   || die "no JWT_SECRET line in /root/.pfin/supabase.env -- run scripts/provision-supabase-stack.sh --apply first (it mints JWT_SECRET)"
 
+# Every remote python step below shares this exact api() shape: the Coolify
+# API token is fed to curl as a config-file `header = "..."` directive over
+# STDIN (`-K -`), never as a `-H`/`--header` argv element -- so it cannot
+# appear in `ps`, and a failed call's CalledProcessError carries no token in
+# its argv to leak via Python's default traceback. Any curl -S diagnostic
+# text describes only the URL and HTTP/connection status, never request
+# headers, so it is safe to include (truncated, defensively) in the
+# sanitized die() message. See the FIX LOG header comment for the incident
+# this replaces.
+
+step "Resolving Coolify application uuid for '$STACK_APP_NAME'"
+STACK_APP_UUID="$(sshx_in <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "$STACK_APP_NAME" <<'PYEOF'
+import json, subprocess, sys
+
+token, stack_name = sys.argv[1], sys.argv[2]
+
+def die(msg):
+    print(f"FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def api(method, path):
+    if '"' in token or "\n" in token:
+        die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    cmd = ["curl", "-fsS", "-K", "-", "-X", method, f"http://localhost:8000/api/v1{path}"]
+    try:
+        result = subprocess.run(cmd, input=config, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.strip()[:200]})")
+    return json.loads(result.stdout) if result.stdout.strip() else None
+
+apps = api("GET", "/applications") or []
+matches = [a for a in apps if a.get("name") == stack_name]
+if not matches:
+    die(f"no Coolify application named '{stack_name}'")
+print(matches[0]["uuid"])
+PYEOF
+REMOTE
+)"
+[[ -n "$STACK_APP_UUID" ]] || die "no Coolify application named '$STACK_APP_NAME' -- run scripts/provision-supabase-stack.sh --apply first (it creates/names this resource), or set COOLIFY_APP_NAME= to match a differently-named one."
+ok "resolved '$STACK_APP_NAME' -> $STACK_APP_UUID"
+
 step "Preflight -- current key shape on $STACK_APP_UUID (structure only, never a value)"
 sshx_in <<REMOTE
 set -e
@@ -164,11 +271,20 @@ import json, subprocess, sys
 
 token, app_uuid = sys.argv[1], sys.argv[2]
 
+def die(msg):
+    print(f"FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
 def api(method, path):
-    cmd = ["curl", "-fsS", "-X", method, "-H", f"Authorization: Bearer {token}",
-           f"http://localhost:8000/api/v1{path}"]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
-    return json.loads(out) if out.strip() else None
+    if '"' in token or "\n" in token:
+        die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    cmd = ["curl", "-fsS", "-K", "-", "-X", method, f"http://localhost:8000/api/v1{path}"]
+    try:
+        result = subprocess.run(cmd, input=config, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.strip()[:200]})")
+    return json.loads(result.stdout) if result.stdout.strip() else None
 
 envs = {e["key"]: e for e in api("GET", f"/applications/{app_uuid}/envs")}
 for key in ("ANON_KEY", "SERVICE_ROLE_KEY"):
@@ -184,11 +300,35 @@ REMOTE
 
 if [[ -n "$APP_NAME" ]]; then
   step "Preflight -- looking up app resource '$APP_NAME'"
-  APP_RESOURCE_UUID="$(sshx "TOKEN=\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-); curl -fsS -H \"Authorization: Bearer \$TOKEN\" http://localhost:8000/api/v1/applications" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-m = [a for a in d if a['name'] == '$APP_NAME']
-print(m[0]['uuid'] if m else '')")"
+  APP_RESOURCE_UUID="$(sshx_in <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "$APP_NAME" <<'PYEOF'
+import json, subprocess, sys
+
+token, app_name = sys.argv[1], sys.argv[2]
+
+def die(msg):
+    print(f"FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def api(method, path):
+    if '"' in token or "\n" in token:
+        die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    cmd = ["curl", "-fsS", "-K", "-", "-X", method, f"http://localhost:8000/api/v1{path}"]
+    try:
+        result = subprocess.run(cmd, input=config, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.strip()[:200]})")
+    return json.loads(result.stdout) if result.stdout.strip() else None
+
+apps = api("GET", "/applications") or []
+matches = [a for a in apps if a.get("name") == app_name]
+print(matches[0]["uuid"] if matches else "")
+PYEOF
+REMOTE
+)"
   if [[ -n "$APP_RESOURCE_UUID" ]]; then
     ok "app resource '$APP_NAME' found -- $APP_RESOURCE_UUID"
   else
@@ -224,13 +364,23 @@ import base64, hashlib, hmac, json, subprocess, sys, time
 
 token, jwt_secret, stack_uuid, app_uuid = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
+def die(msg):
+    print(f"FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
 def api(method, path, body=None):
-    cmd = ["curl", "-fsS", "-X", method, "-H", f"Authorization: Bearer {token}"]
+    if '"' in token or "\n" in token:
+        die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    cmd = ["curl", "-fsS", "-K", "-", "-X", method]
     if body is not None:
         cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
     cmd += [f"http://localhost:8000/api/v1{path}"]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
-    return json.loads(out) if out.strip() else None
+    try:
+        result = subprocess.run(cmd, input=config, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.strip()[:200]})")
+    return json.loads(result.stdout) if result.stdout.strip() else None
 
 def b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
@@ -316,7 +466,10 @@ if [[ $VERIFY_LIVE -eq 1 ]]; then
     # signature and mapped the role; 401 means the key still does not
     # authenticate. Container healthy is NOT sufficient evidence on its own
     # (the gap that hid the original random-hex-key defect) -- this is a
-    # real authenticated call.
+    # real authenticated call. Audited 2026-09-10 alongside the argv-token
+    # fix above: this path uses plain bash (no Python subprocess, so no
+    # CalledProcessError-with-argv leak vector) and never echoes $ANON_KEY
+    # to this script's own stdout -- only the HTTP status code is printed.
     sshx_in <<REMOTE2
 set -e
 ANON_KEY="\$(docker exec coolify php artisan tinker --execute="
