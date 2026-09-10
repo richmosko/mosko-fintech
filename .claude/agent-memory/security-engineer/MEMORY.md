@@ -47,6 +47,7 @@
 - [A lettered clause set collides without matching](feedback_lettered_clause_set_collides_without_matching.md) — canonical CARDINALITY with swapped CLAUSES passes a count check.
 - [An RPC-held FOR UPDATE lock binds only RPC callers](feedback_rpc_held_lock_binds_only_rpc_callers.md) — read the GRANTS; move the lock into the deferred fence.
 - [A shared predicate covers only that predicate](feedback_shared_predicate_then_second_narrowing.md) — find the SECOND narrowing.
+- [A stored status column beside a derived history half](feedback_stored_status_column_vs_derived_history_half.md) — two truths in one view row; the affordance keys off the MUTABLE one, and an unlocked RMW inside ONE plpgsql fn still races.
 - [Re-derive a uniform-response rationale against the built predicate](feedback_uniform_response_rationale_vs_built_predicate.md) — an explicit `.eq('users_id')` voids every cross-tenant-existence argument; ⚠ an aal2 policy clause behind an RPC-held `FOR UPDATE` is a 0-ROW effect, so `42501→403` is DEAD and "step up" reads as "row missing" — classify the TRANSPORT first. ⚠⚠ Before agreeing a FAMILY fix covers a member, grade each for the PRESENCE of the construct being fixed — a sibling had NO mapper at all, so "widen the copy" would have closed the item and left it unfixed; absent/dead/live is per ACTION.
 - [The DELETE↔SELECT policy conjunction is CONDITIONAL](feedback_rls_delete_select_policy_conjunction_is_conditional.md) — a bare `DELETE FROM t` is gated by DELETE's `USING` alone.
 - [A DB UNKNOWN signal is discharged in the CONSUMER](feedback_db_unknown_signal_is_discharged_in_the_consumer.md) — fail-closed only if the fold tests NULL BEFORE membership.
@@ -60,7 +61,8 @@
 - [Walk the UN-SET path of a reversible flag](feedback_walk_the_unset_path_of_a_reversible_flag.md) — the recommended un-set PROCEDURE is where the defect re-enters.
 - [A seed-delta battery that replays the migration watches itself](feedback_seed_delta_battery_watches_itself.md) — pin the DEFAULT/global half directly.
 - [Same-transaction predicate must not use a cluster-wide counter](feedback_same_transaction_predicate_must_not_use_a_cluster_wide_counter.md) — `pg_xact_status(...) = 'in progress'` is the primitive.
-- **[Plaid confinement RULED (PR #697); ETL half still open](project_plaid_credential_confinement_contradiction.md)** — provider-sync is sole holder; §5 may lock EXCEPT no Plaid injection into `pfin_back_etl`.
+- **[Plaid confinement RULED both halves (#697 + #699)](project_plaid_credential_confinement_contradiction.md)** — provider-sync sole holder; §5 carve-out CONVERTED; SD-19's cross-language rationale falsified but its ENUM must not relax.
+- [Provisioning prose is a merge condition; stale prose is not](project_plaid_credential_confinement_contradiction.md) — the precedent: prose that INSTRUCTS the failure blocks; a manifest/local-dev is where an operator places a real secret.
 - [Correcting half a hand-maintained mirror](feedback_correcting_half_a_hand_maintained_mirror.md) — check EVERY half in the same read; stale prose = follow-up, prose that instructs the failure = merge condition.
 - [A `PUBLIC_` prefix is a declaration, not an emission](feedback_public_prefix_is_a_declaration_not_an_emission.md) — measure the framework's emission gate; rest the ruling on the DESIGN MODEL; a removal deletes a pointer.
 - [prosrc presence checks are vacuous because the comments are good](feedback_prosrc_presence_checks_are_vacuous_because_the_comments_are_good.md) — strip comments, exact count, NULL `prosrc` is a silent pass.

@@ -58,6 +58,7 @@
 - [A `p_users_id` on an INVOKER helper fails SILENT](reference_p_users_id_on_an_invoker_helper_fails_silent.md) — bind an identity, never pass an id.
 - [A ratified DDL sketch can be UNBUILDABLE](reference_ratified_ddl_sketch_can_be_unbuildable.md) — test sketches against sibling rulings about write ORDER.
 - [An ADR-named function's SEMANTICS can move under its name](reference_adr_named_function_semantics_can_move_under_the_name.md) — read the live body's row set.
+- [A Lock's OPTION SET is dated too](reference_a_locks_option_set_is_dated_too.md) — a newer container isn't a reversal; check the lock's date before framing an amendment.
 - [A Lock's join list is a DATED artifact](reference_lock_join_lists_are_dated_artifacts.md) — the RULING stands; grep the identifiers.
 - [The PDF worker PULLS HTML; it is not pushed JSON](reference_pdf_worker_pulls_html_it_is_not_pushed_json.md) — ⚠ superseded by R2 (C) 2026-09; verify live.
 - [RLS qual privilege semantics](reference_rls_qual_privilege_semantics.md) — quals call by stored OID; a harness missing the REVOKEs is more permissive than prod.
@@ -89,6 +90,7 @@
 - [A check I RAN is not a check that EXISTS](feedback_a_check_i_ran_is_not_a_check_that_exists.md) — name its file:line; inversion-prove watchers.
 - [Agent worktree location](reference_agent_worktree_location.md) — `<repo>/.claude/worktrees/<agent>`; a failing `cd` means RELOCATED.
 - [Route the SHA, not the description](feedback_route_the_sha_not_the_description.md) — a stacked branch is a separate review scope.
+- **[`&nbsp;` defeats grep in the HTML docs](reference_entity_encoding_defeats_grep_in_html.md)** — normalize entities before any count; a correction note quoting the retired value looks like the defect.
 - [A filtered grep is a claim about the FILTER](feedback_a_filtered_grep_is_a_claim_about_the_filter.md) — anchor findings by content, not line number.
 - [Fix the CITATION, not the referent](feedback_fix_the_citation_not_the_referent.md) — cite by CONTENT, not ordinal.
 - [A self-authored label hardens into fact](feedback_self_authored_label_hardens_into_fact.md) — grep the dispatch, not your own earlier use.
