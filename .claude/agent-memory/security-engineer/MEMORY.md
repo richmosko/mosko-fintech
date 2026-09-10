@@ -60,7 +60,7 @@
 - [Walk the UN-SET path of a reversible flag](feedback_walk_the_unset_path_of_a_reversible_flag.md) — the recommended un-set PROCEDURE is where the defect re-enters.
 - [A seed-delta battery that replays the migration watches itself](feedback_seed_delta_battery_watches_itself.md) — pin the DEFAULT/global half directly.
 - [Same-transaction predicate must not use a cluster-wide counter](feedback_same_transaction_predicate_must_not_use_a_cluster_wide_counter.md) — `pg_xact_status(...) = 'in progress'` is the primitive.
-- **[OPEN: Plaid credential confinement contradiction](project_plaid_credential_confinement_contradiction.md)** — 3 artifacts disagree on which container holds `PLAID_*`; rule before runbook §5 locks.
+- **[Plaid confinement RULED (PR #697); ETL half still open](project_plaid_credential_confinement_contradiction.md)** — provider-sync is sole holder; §5 may lock EXCEPT no Plaid injection into `pfin_back_etl`.
 - [Correcting half a hand-maintained mirror](feedback_correcting_half_a_hand_maintained_mirror.md) — check EVERY half in the same read; stale prose = follow-up, prose that instructs the failure = merge condition.
 - [A `PUBLIC_` prefix is a declaration, not an emission](feedback_public_prefix_is_a_declaration_not_an_emission.md) — measure the framework's emission gate; rest the ruling on the DESIGN MODEL; a removal deletes a pointer.
 - [prosrc presence checks are vacuous because the comments are good](feedback_prosrc_presence_checks_are_vacuous_because_the_comments_are_good.md) — strip comments, exact count, NULL `prosrc` is a silent pass.
