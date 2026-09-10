@@ -23,9 +23,28 @@ Scope: what this runbook is, and the non-negotiable principles that shape every 
 
 ## Prerequisites
 
-Scope: accounts, CLI tooling, and the domain you need in hand before starting.
+Scope: accounts, CLI tooling, and the domain you need in hand before starting. Split by who obtains it — F/CTO-only items gate the box; DevOps-preparable items can happen ahead of time.
 
-> **STUB —** Enumerate as each step below is exercised. Known candidates (confirm at first real deploy): Hetzner Cloud account + API token; a domain registrar account; `ssh` keypair for the new box; Coolify (installed in §3, no local CLI required — UI-driven per ARCH §5); Supabase CLI (`supabase`) for migrations (§6); GitHub account with repo access (CI runs there). Pin exact versions when the deploy is rehearsed.
+**F/CTO-only** (credentials only the account owner can create or hold — never handled by an agent, never placed in the repo):
+
+| Item | What it's for |
+|---|---|
+| **Hetzner Cloud account + payment method** | Owns the billing relationship for the VPS provisioned in §1. |
+| **Hetzner Cloud API token** (or console access, if provisioning by hand through the web console instead of the API) | Creates the CAX21 server. A token is only needed if §1 is scripted via the Hetzner API/CLI; console-driven provisioning needs only login access. Either way, this credential never enters the repo or a Coolify env var — it is used once, at provisioning time, from F/CTO's own machine or the Hetzner console. |
+| **Domain registrar access** for the eventual production hostname | §2 (DNS) is an open F/CTO decision (reuse `pfindash.com` vs. a new domain) — out of scope for this PR, but registrar access is F/CTO-only regardless of which way that decision goes. |
+| **An SSH keypair F/CTO controls** | The key whose **public** half is installed on the box at creation (§1) for key-only root/operator access. The private half never leaves F/CTO's machine; it is not a repo artifact. |
+| **Production secret values** — `SUPABASE_SERVICE_ROLE_KEY`, `PLAID_CLIENT_ID`/`PLAID_SECRET`, etc. (names only, per [`secrets-manifest.yml`](../secrets-manifest.yml) `production_only`) | Entered directly into Coolify's UI at §5 (STUB, not this PR). Never transit chat, a file, or an agent's context. |
+
+**DevOps-preparable** (no F/CTO-only credential required to produce these; can happen before the box exists):
+
+| Item | What it's for |
+|---|---|
+| This runbook's §1/§3 procedures (this PR) | The executable steps F/CTO runs once the F/CTO-only items above are in hand. |
+| Coolify itself | No separate account or license needed — Coolify is **self-hosted**, installed by the §3 script directly onto the box F/CTO provisions in §1. Its own admin account is created during §3's first-run setup (F/CTO does this, since it's the account that then holds every other secret — noted again at §3). |
+| Supabase CLI (`supabase`) | Only needed locally/in CI for authoring and dry-running migrations (§6) — not required to provision the box or install Coolify. Not a §1/§3 prerequisite. |
+| GitHub repo access for Coolify's source connection (§3) | An existing asset — this repo, on GitHub, with F/CTO's account already having admin access. §3 documents connecting Coolify to it as a step, not a new account to obtain. |
+
+**Not yet enumerable — deferred to their owning sections:** exact secret values (§5, STUB), the DNS registrar's specific hostname (§2, open F/CTO decision), and the Coolify admin credentials themselves (created live during §3, not pre-obtained).
 
 ---
 
@@ -36,7 +55,69 @@ Scope: stand up a fresh virtual server to host Coolify + all V1 containers.
 - **RULED 2026-09-08 (F/CTO): Option A — a new Hetzner CAX21 box.** Corrected spec, read from Hetzner's own product page/search results the same day: **CAX21 = 4 ARM vCPU / 8 GB RAM / 80 GB NVMe disk, Germany; price unverified** (Hetzner's pricing page did not render a figure to a direct fetch on 2026-09-08 — do not carry forward the €9.50/mo figure without re-reading it live). The previously-recorded "8 ARM vCores / 16 GB RAM / 160 GB disk, ~€9.50/mo" figure was **CAX31's** spec, misattributed to cax21 throughout the tree (a one-tier shift) — see `docs/records/v1final/production-standup.md` §5 for the sizing evidence supporting this class.
 - The new box is provisioned clean — fresh OS, no carried-over state from the incumbent cax21 box (whose own actual tier is itself unestablished from anything in this tree — it is referenced by name only, never read back from a live console).
 
-> **STUB —** Fill in: chosen provider/region (Hetzner + CAX21 class is now decided; exact region/instance still to provision), OS image + initial hardening (SSH key-only, firewall, non-root user), and any base packages. Confirm ARM-vs-x86 (incumbent is ARM; container images must match — CAX21 is Ampere ARM, consistent).
+**Region: Falkenstein (`fsn1`), fall back to Helsinki (`hel1`) if capacity-constrained.** Reason, stated: `production-standup.md` §5 finding #9 recorded that a direct fetch of Hetzner's cost-optimized pricing page on 2026-09-08 showed CAX21 as *"currently unavailable"*, unresolved as to whether that was a real regional stock-out or a rendering artifact of the fetch tool. `fsn1` and `hel1` are Hetzner's two ARM (CAX-line) locations; `fsn1` is Hetzner's original, highest-capacity datacenter and the documented default in Hetzner's own tooling, so it is the first thing to try. **Operator action, not a repo-side check:** at provisioning time, confirm CAX21 shows as orderable in `fsn1` in the live Hetzner console before creating the server; if it still reads unavailable, retry in `hel1` — do not reopen the Option A / class ruling over a regional availability blip.
+
+**OS image: Ubuntu 24.04 LTS (arm64).** Coolify's own installation requirements (`coolify.io/docs/get-started/installation`, read 2026-09-09) list Debian-based distros — Ubuntu explicitly, any version, though "non-LTS requires manual installation" — among several supported families, alongside RedHat-based, SUSE-based, Arch, Alpine, and Raspberry Pi OS 64-bit. Ubuntu LTS is chosen over the alternatives for the longest support window on a box that is meant to run unattended for a production single-user deployment, and because it is the distro this tree's Docker images (`FROM node:...`, `FROM python:...` base images across the four Dockerfiles) are built and tested against elsewhere in CI. Confirm `arm64` at image-selection time in the Hetzner console — the CAX line is Ampere ARM only; an `amd64` image will not boot.
+
+**Initial hardening — concrete steps, in order:**
+
+1. **SSH key-only from creation.** Create the server with the intended operator's SSH **public** key attached at Hetzner's server-creation step (cloud-init installs it to `~/.ssh/authorized_keys` for `root` before first boot) — never create the box with a password and harden after, which leaves a real window where a weak/default credential is live on the public internet. Coolify's own docs state the SSH key used for its server connection **"must not have a passphrase or 2FA enabled"** — that constraint is about the key Coolify itself uses to reach the box over SSH (§3), and does not weaken this step: the *key* still gates entry; only its own local unlock is passphrase-free so Coolify's automation can use it non-interactively.
+2. **Disable password auth, then disable root login over SSH:**
+   ```sh
+   # /etc/ssh/sshd_config
+   PasswordAuthentication no
+   PubkeyAuthentication yes
+   PermitRootLogin prohibit-password   # Coolify's own documented recommendation
+   ```
+   `prohibit-password` (not a flat `no`) is Coolify's own recommended setting, not an arbitrary choice — Coolify's server-connection step authenticates as `root` over key-based SSH by default, and a flat `PermitRootLogin no` would break that unless a non-root user with `sudo`/Docker-group access is wired into Coolify's connection config instead (a viable alternative — see the non-root note below — but not the default this runbook assumes).
+3. **Create a non-root operator user** (`adduser deploy && usermod -aG sudo deploy`), with the same public key copied to its `~/.ssh/authorized_keys`, for interactive/manual operator work (migrations, the §6.1/§6.2 credential handoffs, verification reads). This is **separate from** the identity Coolify itself connects as (step 2's `root`, per Coolify's default) — conflating the two is a real foot-gun: locking down `root` further "for safety" after Coolify is already configured to use it breaks Coolify's own deploy path.
+4. **Firewall — exact ports, and why each is open:**
+
+   | Port | Direction | Why |
+   |---|---|---|
+   | `22` (or a custom SSH port, if changed from default) | Inbound | Operator SSH + Coolify's own SSH connection to the box (§3) |
+   | `80` | Inbound | Let's Encrypt HTTP-01 challenge + HTTP→HTTPS redirect, via Coolify's built-in reverse proxy (Traefik) |
+   | `443` | Inbound | HTTPS traffic to every Coolify-fronted service |
+   | `8000` | Inbound, **narrow this to the operator's own IP(s) if the firewall supports source restriction** | Coolify's own dashboard/admin UI, which listens here by default per Coolify's install output (`http://<ip>:8000`) — this is the box's most privileged surface (§5's admin-trust-boundary item (i)) and has no reason to be open to the entire internet the way 80/443 do |
+
+   **Deliberately closed, and why it matters that they stay closed:** the provider-sync admission port `:8081` (§7 CA-2/CA-4) is never firewall-opened at all — it is reached only over the Coolify **project-internal** Docker network by service name, never via the host's public IP. Use the cloud provider's own firewall (Hetzner Cloud Firewall) as the enforcement point, **not** a host-level tool like `ufw` alone — Coolify's own docs note that Docker manipulates `iptables` directly via its NAT rules, which can **bypass `ufw`/host-firewall rules** for published container ports. A cloud-level firewall sits in front of the box entirely and is not subject to that bypass; treat it as the primary control and a host-level firewall (if used at all) as defense-in-depth, never the reverse.
+5. **Base packages:** none beyond what Coolify's own installer brings (it installs Docker itself if absent). Do not pre-install a competing reverse proxy, Postgres, or Docker Compose plugin version — let Coolify's installer own that surface, since §3's pinned-version procedure below assumes it is running against the versions Coolify's own installer sets up.
+
+**Confirm ARM-vs-x86 across the fleet:** CAX21 is Ampere ARM (`arm64`); the incumbent cax21 box is also ARM, and every container image in this tree (`api/Dockerfile`, `workers/etl/Dockerfile`, `workers/pdf-render/Dockerfile`, `workers/provider-sync/Dockerfile`) must resolve to `arm64` base images for a clean pull/build on this box. This is a build-time property, not something §1 provisioning changes — flagged here as the check to run if any container fails to start after §6/§7 with an "exec format error" or a base-image pull for the wrong platform.
+
+**Verification block — run after provisioning, before §3:**
+
+```sh
+# (1) Reachability + identity — confirm the box is up and matches the ruled spec.
+ssh deploy@<box-ip> 'nproc; free -h; df -h /; uname -m; lsb_release -ds'
+# EXPECTED: 4 (vCPUs) · ~8Gi total memory · ~80G on / · aarch64 · Ubuntu 24.04.x LTS
+```
+
+| Result | Reading |
+|---|---|
+| `nproc` = 4, `aarch64`, `~8Gi` mem | **Correct** — matches the ruled CAX21 spec. |
+| `nproc` = 8, `~16Gi` mem, still `aarch64` | **Wrong-looking-but-actually-wrong**, not a false alarm — this is CAX31's spec, i.e. the exact one-tier misattribution `production-standup.md` §5 already found and corrected elsewhere in this tree. If the Hetzner console handed you this instead of CAX21, the order was placed against the wrong SKU — stop and re-provision against CAX21, don't just note the discrepancy and continue. |
+| `nproc` = 4, `~8Gi` mem, but `x86_64` | **Looks fine but is wrong** — Hetzner's console can list both ARM and Intel/AMD lines side by side, and an `x86_64` box will boot, run Docker, and even pull most images successfully (multi-arch tags silently resolve to an `amd64` layer) right up until an ARM-only or single-arch image in this tree fails to run — a failure that surfaces at §6/§7 deploy time, far from this check, unless caught here. Confirm `arm64`/`aarch64` explicitly; do not infer it from "the order said CAX21."
+| `df -h /` shows well under 80G (e.g. a resized/undersized volume) | **Wrong** — re-check the disk was attached/sized correctly at creation; do not proceed to §3 with less than the ruled spec. |
+
+```sh
+# (2) SSH hardening — confirm password auth is actually off, not just configured.
+ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no deploy@<box-ip> echo should-fail
+# EXPECTED: connection refused/denied — password auth is not accepted.
+```
+
+`Permission denied (publickey)` or a closed connection is correct. If this instead **prompts for a password**, `sshd_config`'s `PasswordAuthentication no` either was not applied or `sshd` was not reloaded after editing it (`systemctl reload sshd`) — this is the single most common **looks-fine-but-wrong** case here: the file can read `no` on disk while the running daemon still has the old value in memory, and a login attempt that never gets this far to notice (because the operator always logs in with a key anyway) will not catch it.
+
+```sh
+# (3) Firewall — confirm only the intended ports are reachable from outside.
+nmap -Pn -p 22,80,443,8000,8081 <box-ip>   # run from OUTSIDE the box's network
+```
+
+| Result | Reading |
+|---|---|
+| `22, 80, 443` open; `8000` open only from the operator's IP (or open to all, if source-restriction wasn't configured — acceptable but weaker); `8081` **filtered/closed** | **Correct.** |
+| `8081` shows **open** | **Wrong, and load-bearing** — this is the exact regression §7 CA-4 / §10 CA-2 exist to catch downstream at the application layer; catching it here, before any service is even deployed, is cheaper. Re-check the cloud firewall rules; nothing at this stage should be publishing that port. |
+| Every port shows `filtered` including `22` | **Wrong-looking-but-fine, conditionally** — if this scan is run from a network Hetzner's Cloud Firewall doesn't allowlist yet (e.g. before the operator's own IP is added to the firewall's SSH rule), a fully-filtered result is expected and does **not** mean the box is unreachable to the operator; re-run from the network holding the firewall-allowlisted IP before concluding anything is actually broken. |
 
 ---
 
@@ -56,7 +137,38 @@ Scope: install Coolify on the fresh box; it is the deployment control plane for 
 
 - Deploys go through the **Coolify UI**, not from chat or CI (per ARCH §5). This repo's job is to make the repo-side artifacts (Dockerfiles, `.env.example` contracts) deploy cleanly when F/CTO triggers a deploy.
 
-> **STUB —** Fill in: Coolify install method + pinned version, initial admin setup, GitHub source connection (so Coolify pulls this repo per Base Directory), TLS/proxy config, and the project/service topology skeleton (one Coolify "project" → the V1 services in §6–§7). **Flag:** pin the Coolify version actually used; "latest" is not reproducible.
+**Install method — pinned, not `latest`.** Coolify's installer is a single script (`coolify.io/docs/get-started/installation`, read 2026-09-09) that supports installing an exact version by passing it as an argument:
+
+```sh
+curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash -s <version>
+```
+
+**How to determine `<version>` at execution time (not fixed in this doc, because the right value changes and a stale pin here would be worse than no pin):** read `https://cdn.coollabs.io/coolify/versions.json` immediately before installing and take the `coolify.v4` value — **as read live on 2026-09-09 while authoring this section, that value was `4.3.18`; treat that as an illustration of the mechanism, not the version to install.** Omitting `<version>` entirely (`bash` with no argument) installs whatever that file currently resolves to, which is exactly the non-reproducible "latest" the prior STUB flagged — passing the version explicitly is what turns the same command into a pinned, repeatable install.
+
+**Record the pinned version, don't just install it.** Write the exact version string installed into `docs/records/v1final/production-standup.md`'s deploy log (the file this runbook's own hand-off convention already treats as the authority for what got deployed) at the time of install — the version isn't reproducible later if only "whatever `versions.json` said that day" is remembered.
+
+**How to re-check it later:** Coolify's dashboard displays its own running version (Settings/Configuration screen); to check whether a newer release exists, re-read `versions.json`'s `coolify.v4` key and diff against the recorded install-time value. Coolify's docs do not document a CLI "check for updates" command distinct from the dashboard's own update-checker — the dashboard is the source of truth for "what's running," `versions.json` is the source of truth for "what's current."
+
+**Initial admin setup.** The installer's own output prints the first-access URL, `http://<box-ip>:8000` — Coolify's dashboard listens on **8000** by default (§1's firewall table already scopes this port to the operator, ideally by source-IP restriction, since it is the box's most privileged surface). **F/CTO creates the admin account at first visit to that URL** — this is not a value this runbook or any agent can pre-fill; Coolify has no separate "provision an admin via API before first login" path documented, so this is inherently an interactive, F/CTO-run step, the same way §5's secret values are.
+
+**GitHub source connection.** From the Coolify dashboard: Sources → add a GitHub App (or a deploy-key-based Git source, if F/CTO prefers not to install a GitHub App on the org) → authorize it against this repo. This is what lets Coolify pull `main` per each service's **Base Directory** setting (already named per-service in §7 — `api/`, `workers/etl/`, `workers/pdf-render/`, `workers/provider-sync/`). **Do not configure auto-deploy-on-push yet** — that is ARCH §6 item (f)'s webhook lock, named as its own later step below, not part of this install pass.
+
+**TLS/proxy approach.** Coolify ships its own reverse proxy (Traefik, per Coolify's own docs) and automates Let's Encrypt certificate issuance per-domain once a service is assigned a domain — this is the default and this runbook does not depart from it (no external nginx/Certbot layer). §1's firewall already opens the ports this depends on (`80` for the HTTP-01 challenge + redirect, `443` for the issued cert's traffic). Concrete domain assignment is blocked on §2 (DNS — open F/CTO decision, out of scope here); this section documents the mechanism, not a hostname.
+
+**Project/service topology skeleton — one Coolify project, four services, per ARCH §6/§7's hybrid topology:**
+
+| Coolify service | Base Directory | Build pack | Notes |
+|---|---|---|---|
+| `app` (V1 web-app) | `api/` | Dockerfile (`api/Dockerfile`) — the one container in the fleet still on the plain Dockerfile+Base-Directory build pack | The only service assigned a public Domain — everything else stays internal-only on this project's Docker network. |
+| `etl` (`pfin_back_etl`) | `workers/etl/` | **Compose** — [`workers/etl/docker-compose.yaml`](../workers/etl/docker-compose.yaml) | One image, **two Coolify units** per the compose file's own header (each entrypoint — the nightly ingest and the monthly-report cron — gets its own deploy/restart/resource ceiling and its own Scheduled Task attached, per §7's Pattern A convention: the `CMD` stays a resident `tail -f /dev/null` and Coolify execs the actual work into it on a cron). No public Domain on either unit. |
+| `pdf-render` (Node PDF worker) | `workers/pdf-render/` | **Compose** — [`workers/pdf-render/docker-compose.yaml`](../workers/pdf-render/docker-compose.yaml) (adopted at SELF-348 A4 item 4c / Sec N-4, superseding the plain-Dockerfile pack this container shipped with at Phase 5 — the committed compose is what makes its render-endpoint admission surface lintable by `fence-admission-private-bind.sh`, same reasoning as `provider-sync` below) | Zero-DB-isolation per Lock 13 mod #2 — no public Domain, no DB credential; reachable only from `app` over the internal network. |
+| `provider-sync` | `workers/provider-sync/` | **Compose** — [`workers/provider-sync/docker-compose.yaml`](../workers/provider-sync/docker-compose.yaml) (build pack must be Compose, not bare Dockerfile, per §7's own CA-1/CA-4 text: the committed compose file is what makes the admission port's `expose:`-only, no-`ports:`, no-Domain shape lintable rather than a UI setting nothing can check) | **CA-4 hard prerequisite (§7): this service and `app` MUST be created in the same Coolify project** — internal DNS (`http://provider-sync:8081`) only resolves within one project's network. Verify this at creation, not after — a cross-project placement is the exact failure shape §10 CA-2's smoke test exists to catch downstream. |
+
+All four services are created under **one Coolify project** for this reason — the `provider-sync` ↔ `app` internal-DNS dependency (CA-4) requires it, and there is no offsetting reason to split the other two services out. Env-var wiring per service is §5 (STUB — not this PR).
+
+**Carried forward, not configured here: ARCH §6 item (f), the Coolify auto-deploy webhook lock.** Per ARCH §6, deploys are auto-triggered by Coolify watching `main` after CI goes green — but wiring that watch is its own Sec-consult-mandatory step (§6 item (f)), gated on: (i) Coolify configured to watch `main` only — no other branch, no pattern match; (ii) GitHub branch-protection admin-bypass disabled or restricted to F/CTO with an audit trail, so a bypassed direct push can't trigger a deploy that skipped CI; (iii) the webhook URL held as a production secret, never in the repo; (iv) auto-deploy permission boundaries documented. **This PR does not configure that webhook** — it is named here as the next named step after the four services exist, not performed as part of install.
+
+**Where the deployed-sha authority lives.** Per `docs/records/v1final/production-standup.md` §1 (OPEN-1, resolved): the authority for "what sha is actually running" is **Coolify's own API/UI record of the deployed commit** — `GET /api/v1/applications/{uuid}` → `git_commit_sha`, cross-checked against `GET /api/v1/deployments/applications/{uuid}`'s per-deployment history — read and transcribed into that record's deploy log at every deploy, never held as a memory or inferred from `main`'s tip. This runbook does not duplicate that mechanism; it names where it lives so nobody re-derives it differently at execution time.
 
 ---
 
