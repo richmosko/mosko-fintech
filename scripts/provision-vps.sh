@@ -651,6 +651,29 @@ COOLIFY_ADMIN_PASSWORD="$(read_env_var COOLIFY_ADMIN_PASSWORD)"
 ADMIN_STATE="$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\User::where('id',0)->exists() ? 'EXISTS' : 'ABSENT';\"" 2>/dev/null | tail -1)"
 TOKEN_STATE="$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','provisioning-automation')->exists() ? 'EXISTS' : 'ABSENT';\"" 2>/dev/null | tail -1)"
 
+# Orphan-token detection. Measured 2026-09-11: the token-capture bug fixed
+# below (container-unwritable path) left a 'provisioning-automation' DB row
+# behind with a plaintext nobody holds -- id=2, PLAINTEXT LOST. A naive
+# TOKEN_STATE==EXISTS-means-skip check makes that permanent: the row exists
+# forever, the script always skips minting, and nothing can ever use it. The
+# row (DB) and /root/.pfin/coolify.env (host file) are two halves of one
+# fact -- the row says a token SHOULD exist, the file says whether this box
+# actually HOLDS one. When they disagree, the row is an orphan from a failed
+# capture, not a completed provision: clear it and re-mint, the same way any
+# other step here treats a state mismatch as "redo," not "skip."
+if [[ "$TOKEN_STATE" == "EXISTS" ]]; then
+  HOST_TOKEN_USABLE="$(sshx "test -s /root/.pfin/coolify.env && grep -q '^COOLIFY_API_TOKEN=.' /root/.pfin/coolify.env && echo USABLE || echo ORPHAN" 2>/dev/null | tail -1)"
+  if [[ "$HOST_TOKEN_USABLE" == "ORPHAN" ]]; then
+    if [[ $APPLY -eq 0 ]]; then
+      info "token row 'provisioning-automation' exists in the DB but /root/.pfin/coolify.env has no usable value -- orphan from a failed capture. Would delete the row and re-mint."
+    else
+      sshx "docker exec coolify php artisan tinker --execute=\"\\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','provisioning-automation')->delete();\"" >/dev/null
+      ok "deleted orphaned 'provisioning-automation' token row -- re-minting"
+    fi
+    TOKEN_STATE="ABSENT"
+  fi
+fi
+
 NEED_CREDENTIALS=0
 [[ "$ADMIN_STATE" != "EXISTS" ]] && NEED_CREDENTIALS=1
 [[ $RESET_ADMIN_PASSWORD -eq 1 ]] && NEED_CREDENTIALS=1
@@ -717,28 +740,60 @@ null;"
     fi
 
     if [[ "$TOKEN_STATE" != "EXISTS" ]]; then
+      # Measured 2026-09-11 on the real box: the previous version of this
+      # step wrote the token to a file INSIDE the container
+      # (file_put_contents("/root/.pfin/...")) then read it back with a
+      # second `docker exec ... cat`. Coolify's container runs as www-data
+      # (uid 9999), not root -- /root/anything is unwritable from inside it,
+      # on every box, not just this one. The write failed, the read of a
+      # file that was never created returned empty, and the token had
+      # already been minted server-side with no way left to retrieve its
+      # plaintext (Sanctum only returns plaintext once, at creation).
+      #
+      # Fixed by never routing the secret through a container-written file
+      # at all: createToken() returns the plaintext as an expression value,
+      # so capture it from tinker's OWN stdout via an explicit `echo`, the
+      # same channel the leak-check already reads. It rides inside
+      # $BOOTSTRAP_LOG only as long as it takes the code just below this
+      # block to pull it out and scrub the carrier line -- see there for why
+      # that order matters.
       TOKEN_SCRIPT='$user = \App\Models\User::find(0);
 $team = \App\Models\Team::find(0);
 session(["currentTeam" => $team]);
 $token = $user->createToken("provisioning-automation", ["root"]);
-file_put_contents("/root/.pfin/_coolify_token.tmp", $token->plainTextToken);
+echo "PFIN_TOKEN=" . $token->plainTextToken;
 echo "MINTED";
 null;'
       echo "$TOKEN_SCRIPT" | sshx "docker exec -i coolify php artisan tinker"
-      TOKEN_VALUE="$(sshx "docker exec coolify cat /root/.pfin/_coolify_token.tmp 2>/dev/null" || true)"
-      sshx "docker exec coolify rm -f /root/.pfin/_coolify_token.tmp"
-      if [[ -n "$TOKEN_VALUE" ]]; then
-        printf 'COOLIFY_API_TOKEN=%s\n' "$TOKEN_VALUE" | sshx "umask 077; cat >> /root/.pfin/coolify.env; chmod 600 /root/.pfin/coolify.env"
-        echo "TOKEN_WRITTEN"
-      fi
     fi
   } > "$BOOTSTRAP_LOG" 2>&1
 
   sshx "shred -u $SEED_ENV_FILE 2>/dev/null || rm -f $SEED_ENV_FILE"
 
+  # Pull the token out of the captured log and SCRUB its carrier line before
+  # anything else reads $BOOTSTRAP_LOG -- in particular before the leak-check
+  # right below, which greps this same file for the token value. Order
+  # matters: if the carrier line were still present, that grep would find
+  # its own source and die() on every single run, not just a real leak.
+  TOKEN_VALUE=""
+  if grep -q '^PFIN_TOKEN=' "$BOOTSTRAP_LOG"; then
+    TOKEN_VALUE="$(grep -m1 '^PFIN_TOKEN=' "$BOOTSTRAP_LOG" | cut -d= -f2-)"
+    grep -v '^PFIN_TOKEN=' "$BOOTSTRAP_LOG" > "$BOOTSTRAP_LOG.scrubbed"
+    mv "$BOOTSTRAP_LOG.scrubbed" "$BOOTSTRAP_LOG"
+  fi
+  if [[ -n "$TOKEN_VALUE" ]]; then
+    # This write was never the broken half -- it goes over SSH straight to
+    # the HOST filesystem (root-owned, outside the container entirely), not
+    # through `docker exec`. Unchanged from before this fix.
+    printf 'COOLIFY_API_TOKEN=%s\n' "$TOKEN_VALUE" | sshx "umask 077; cat >> /root/.pfin/coolify.env; chmod 600 /root/.pfin/coolify.env"
+    echo "TOKEN_WRITTEN" >> "$BOOTSTRAP_LOG"
+  fi
+
   # The assertion team-lead asked for, run every --apply, not once by hand:
   # grep the captured log for both secrets while they're still in scope. Zero
-  # hits is the test.
+  # hits is the test -- and now a REAL test: the token's own carrier line was
+  # scrubbed above, so this can only fire on an actual leak, not its own
+  # source line.
   LEAK=0
   [[ -n "${COOLIFY_ADMIN_PASSWORD:-}" ]] && grep -qF -- "$COOLIFY_ADMIN_PASSWORD" "$BOOTSTRAP_LOG" && LEAK=1
   [[ -n "${TOKEN_VALUE:-}" ]] && grep -qF -- "$TOKEN_VALUE" "$BOOTSTRAP_LOG" && LEAK=1
