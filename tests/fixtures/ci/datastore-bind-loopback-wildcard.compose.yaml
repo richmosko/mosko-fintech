@@ -1,0 +1,15 @@
+# fence-datastore-private-bind: target
+# GOLDEN FIXTURE — BOUNDARY PAIR, FAIL HALF (wildcard bind → exit 1, vector 1).
+#
+# Byte-identical to datastore-bind-loopback-allowed.compose.yaml except
+# 127.0.0.1 -> 0.0.0.0 — proves the fence keys on the exact address, not
+# merely on whether a `ports:` block is present. Exercised by the
+# fence-datastore-bind CI job, asserting exit 1 AND the vector-1 token.
+
+services:
+  studio:
+    container_name: supabase-studio
+    image: supabase/studio:2026.09.07-sha-7996410
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:3000:3000"

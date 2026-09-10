@@ -1,0 +1,33 @@
+# fence-datastore-private-bind: target
+# GOLDEN FIXTURE — NEGATIVE CONTROL (correct internal-only config → fence PASSES).
+#
+# Proves fence-datastore-private-bind does NOT false-positive the correct
+# shape: `expose:`-only gateway + pooler ports, NO published `ports:` mapping,
+# NO proxy Domain / Traefik Host() label / Coolify SERVICE_FQDN magic, NO
+# network_mode: host. Mirrors the real infra/supabase/docker-compose.yml
+# post-fix shape. Exercised in production-mode (expects exit 0) by the
+# fence-datastore-bind CI job.
+
+services:
+  api-gw:
+    container_name: supabase-envoy
+    image: envoyproxy/envoy:v1.39.1
+    restart: unless-stopped
+    expose:
+      - "8000"
+  supavisor:
+    container_name: supabase-pooler
+    image: supabase/supavisor:2.9.12
+    restart: unless-stopped
+    expose:
+      - "5432"
+      - "6543"
+  db:
+    container_name: supabase-db
+    image: supabase/postgres:17.6.1.136
+    restart: unless-stopped
+    volumes:
+      - db-data:/var/lib/postgresql/data:Z
+
+volumes:
+  db-data:
