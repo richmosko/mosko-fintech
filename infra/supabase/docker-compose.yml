@@ -12,7 +12,7 @@
 # Trim (§4 service-scope table): IN = db, auth, rest, api-gw (gateway), supavisor.
 # OUT = studio, meta, storage, imgproxy, realtime, analytics, vector, functions.
 #
-# Four changes from the corresponding upstream service blocks, all load-bearing:
+# Six changes from the corresponding upstream service blocks, all load-bearing:
 #
 #   1. api-gw's `depends_on: studio: condition: service_healthy` REMOVED.
 #      studio is OUT of this trim; left in place, `docker compose up` hard-errors
@@ -64,6 +64,27 @@
 #      own compose is written for a manually-run, never-re-cloned checkout,
 #      where this distinction doesn't matter — it does here. This is the one
 #      change of the four that is correct regardless of how point 3 resolves.
+#
+#   5. supavisor's pooler-config mount is `:ro`, not upstream's two-flag `:ro,z`.
+#      Discovered on the first live deploy attempt: Coolify's compose-string
+#      parser mis-reads the two-flag combo into `mount_path` itself
+#      (`/etc/pooler/pooler.exs:ro,z` instead of `/etc/pooler/pooler.exs`) —
+#      single-flag forms (`:ro` alone, `:Z` alone, used on all seven `db`
+#      mounts) parse cleanly. Dropping `:z` costs nothing: this box runs
+#      Ubuntu with no SELinux, where `:z` is a no-op regardless.
+#
+#   6. api-gw and supavisor are `expose:`-only — no published `ports:`.
+#      Discovered on the first live deploy attempt: api-gw's upstream
+#      `ports: - 8000:8000` collides with Coolify's OWN dashboard on the
+#      same host port ("port is already allocated" — api-gw never started),
+#      and supavisor's upstream `ports:` would put a multi-tenant Postgres's
+#      wire protocol and pooler proxy directly on the host's public
+#      interface with only the Hetzner cloud firewall standing in the way.
+#      Matches this repo's existing precedent (workers/provider-sync,
+#      workers/pdf-render): internal-only services are `expose:`-only, never
+#      published, by construction. `app` and `workers/*` reach these two
+#      services over the shared Coolify project network by service name
+#      once `connect_to_docker_network` is enabled at §6.
 
 name: supabase
 
@@ -86,8 +107,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-    ports:
-      - ${API_GW_HTTP_PORT:-${KONG_HTTP_PORT:-8000}}:8000/tcp
+    # INTERNAL-ONLY gateway port. `expose:` = reachable to sibling containers
+    # on the project network; NOT host-published. Host port 8000 collides
+    # with Coolify's own dashboard (observed live, 2026-09-10: `api-gw`
+    # failed to start with "port is already allocated"), and publishing it
+    # would put the Data API gateway on the public interface with only the
+    # Hetzner cloud firewall standing between it and the internet. `app`
+    # reaches this service over the shared Coolify project network by
+    # service name (`http://api-gw:8000`) once `connect_to_docker_network`
+    # is enabled on both resources at §6 — see docs/deployment-runbook.md
+    # §4 (1c). NEVER convert this to a `ports:` mapping.
+    expose:
+      - "8000"
     volumes:
       - ./volumes/api/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
       - ./volumes/api/envoy/cds.yaml:/etc/envoy/cds.yaml:ro
@@ -224,9 +255,20 @@ services:
     container_name: supabase-pooler
     image: supabase/supavisor:2.9.12
     restart: unless-stopped
-    ports:
-      - ${POSTGRES_PORT}:5432
-      - ${POOLER_PROXY_PORT_TRANSACTION}:6543
+    # INTERNAL-ONLY pooler ports (Postgres wire protocol + transaction-mode
+    # pooler proxy). `expose:` = reachable to sibling containers on the
+    # project network; NOT host-published. Publishing 5432/6543 would put a
+    # multi-tenant Postgres directly on the public interface with only the
+    # Hetzner cloud firewall standing in the way (observed live, 2026-09-10:
+    # both ports came up bound to 0.0.0.0 — unreachable only because the
+    # firewall happened to filter them, not by design). `app` and the
+    # `workers/*` services reach this service over the shared Coolify
+    # project network by service name once `connect_to_docker_network` is
+    # enabled at §6 — see docs/deployment-runbook.md §4 (1c). NEVER convert
+    # this to a `ports:` mapping.
+    expose:
+      - "5432"
+      - "6543"
     volumes:
       - ./volumes/pooler/pooler.exs:/etc/pooler/pooler.exs:ro
     healthcheck:
