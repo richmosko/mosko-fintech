@@ -396,15 +396,17 @@ curl -s -o /dev/null -w '%{http_code}\n' "$PUBLIC_SUPABASE_URL/rest/v1/"
 
 **(1b) Bind-mount sanity — every kept service healthy is NOT proof its config/init-script mounts resolved to the right files.** `infra/supabase/docker-compose.yml`'s bind mounts are written compose-file-relative (`./volumes/...`), which is only correct if this Coolify resource's `base_directory` was set to `/infra/supabase` (see that directory's `README.md`). Get `base_directory` wrong and Docker does not fail loudly — it auto-creates each missing bind-mount source as an empty directory, so `api-gw` and `db` both come up "healthy" while actually unconfigured.
 
+**⚠ Do not `docker logs` by the container names this compose file specifies (`supabase-envoy`, `supabase-db`, ...).** Coolify's `dockercompose` build pack silently overrides every service's `container_name` to `{service-name}-{application-uuid}` (source-verified: `bootstrap/helpers/parsers.php`'s `applicationParser()`, the `$containerName = "$serviceName-{$resource->uuid}"` / `collect($service)->merge(['container_name' => $containerName, ...])` pair) — the names in this compose file never reach the running container. Use `docker compose --project-name <the resource's uuid> logs <service-name>` instead, which addresses by the compose **service** name (`api-gw`, `db`, ...) and is unaffected by the override:
+
 ```sh
 # Confirm the gateway loaded a real config, not an empty directory.
-docker logs supabase-envoy 2>&1 | tail -30
+docker compose --project-name <app-uuid> logs api-gw 2>&1 | tail -30
 # EXPECTED: Envoy's own startup log (listener/cluster config lines). A
 # near-empty log or an immediate crash-loop means /etc/envoy mounted empty.
 
 # Confirm each DB init script actually ran on first boot (only meaningful
 # on a FRESH db-data volume — a script only runs once, at first init).
-docker logs supabase-db 2>&1 | grep -iE "roles\.sql|jwt\.sql|webhooks\.sql|realtime\.sql|_supabase\.sql|logs\.sql|pooler\.sql"
+docker compose --project-name <app-uuid> logs db 2>&1 | grep -iE "roles\.sql|jwt\.sql|webhooks\.sql|realtime\.sql|_supabase\.sql|logs\.sql|pooler\.sql"
 # EXPECTED: all seven filenames appear (Postgres logs each init-scripts/
 # migrations file it executes). A short or empty result means the init
 # directory mounted empty — the base_directory misconfiguration above.
