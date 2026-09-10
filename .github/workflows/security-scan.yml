@@ -536,15 +536,12 @@ jobs:
           echo "OK: TBC-node fence caught the same-basename violator (exit $rc)."
 
   fence-tinker-no-echo:
-    name: interactive-tinker CI fence
+    name: RT-33 — interactive-tinker CI fence
     runs-on: ubuntu-latest
-    # ⚠ UNLABELED, DELIBERATELY. Assigning this fence an RT-NN id is an
-    # F/CTO Decision-4 ratify act, not DevOps's or Sec's to mint by shipping
-    # a label — same precedent as fence-datastore-bind (below), which ships
-    # unlabeled for the identical reason. No RT-NN string anywhere in this
-    # job, its script, or its fixtures until F/CTO ratifies one; do not add
-    # one here without that ratify, and do not reconcile this job against
-    # the §10 catalogued ledger in the meantime.
+    # RT-33, per F/CTO Decision-4 ratify 2026-09-10 (relayed via team-lead;
+    # catalog entry docs/SECURITY/index.html §4.5 in #724, ADR-008 record in
+    # #725). Shipped unlabeled from creation (#723) until this ratify
+    # landed; this job and its script now both carry the id going forward.
     #
     # Security incident, 2026-09-11: provision-vps.sh's token-mint step piped
     # a script into INTERACTIVE `php artisan tinker` (docker exec -i), which
@@ -1022,7 +1019,7 @@ jobs:
           echo "OK: fence caught the pdf-render published-ports exposure vector via its vector-1 token (exit $rc)."
 
   fence-datastore-bind:
-    name: datastore private-bind config-lint (Supabase compose)
+    name: RT-32 — datastore private-bind config-lint (Supabase compose)
     runs-on: ubuntu-latest
     # Sec-mandated (2026-09-10 ruling, relayed via team-lead) after a live
     # production incident: infra/supabase/docker-compose.yml originally
@@ -1038,9 +1035,10 @@ jobs:
     # credential-admission-channel subject); this one asserts a DATASTORE
     # manifest. Same layer, different subject — reusing the admission
     # sentinel would be the layer-attribution drift ADR-011 Decision 4
-    # catalogues. Deliberately carries NO RT-NN string: whether this exposure
-    # class earns a catalog entry is a separate F/CTO Decision-4-ratify step,
-    # not performed here.
+    # catalogues. Carries RT-32, per F/CTO Decision-4 ratify 2026-09-10
+    # (relayed via team-lead; catalog entry docs/SECURITY/index.html §4.5
+    # in #724, ADR-008 record in #725). Shipped unlabeled from creation
+    # until this ratify landed.
     #
     # Run-always (no paths filter), matching the admission fence's own
     # reasoning: a path-trigger leaves a trigger-drift meta-risk.
