@@ -61,7 +61,7 @@
      all non-JWT writers (ADR-011 Decisions 1–4).</p>
 
   <p>The system runs on the Founder/CTO's existing <strong>Hetzner cax21 VPS</strong>
-     (8&nbsp;ARM vCores / 16&nbsp;GB / 160&nbsp;GB, ~€9.50/mo) under <strong>Coolify</strong>, alongside the
+     (4&nbsp;ARM vCPU / 8&nbsp;GB / 80&nbsp;GB, price unverified &mdash; the &ldquo;8&nbsp;ARM vCores / 16&nbsp;GB / 160&nbsp;GB, ~€9.50/mo&rdquo; figures previously here were <strong>CAX31&rsquo;s</strong>, a one-tier misattribution corrected 2026-09-08; this box is the reference-precedent sizing baseline only, <strong>not</strong> the V1 deploy target, and its own actual tier is unestablished from anything in this tree) under <strong>Coolify</strong>, alongside the
      already-in-production <code>pfin_back_etl</code> Python ETL. Phase 3 <strong>extends</strong> that footprint
      rather than greenfielding it: per ADR-011 Decision 17, V1 spreads work across <strong>three Coolify
      containers</strong> — <code>pfin_back_etl</code> (Python; gains the monthly-report cron, the Plaid
