@@ -957,6 +957,114 @@ jobs:
           fi
           echo "OK: fence caught the pdf-render published-ports exposure vector via its vector-1 token (exit $rc)."
 
+  fence-datastore-bind:
+    name: datastore private-bind config-lint (Supabase compose)
+    runs-on: ubuntu-latest
+    # Sec-mandated (2026-09-10 ruling, relayed via team-lead) after a live
+    # production incident: infra/supabase/docker-compose.yml originally
+    # published api-gw on host port 8000 (colliding with Coolify's own
+    # dashboard) and supavisor on host ports 5432/6543 (a multi-tenant
+    # Postgres's wire protocol + pooler proxy on the host's public interface,
+    # unreachable that day only because the Hetzner cloud firewall happened to
+    # filter those ports). See docs/deployment-runbook.md §4 (1d).
+    #
+    # Models fence-admission-bind's shape (same three vectors, same structural
+    # fail-closed guards) but is its OWN fence with its OWN sentinel — the
+    # admission fence's sentinel asserts an ADMISSION MANIFEST (RT-27's
+    # credential-admission-channel subject); this one asserts a DATASTORE
+    # manifest. Same layer, different subject — reusing the admission
+    # sentinel would be the layer-attribution drift ADR-011 Decision 4
+    # catalogues. Deliberately carries NO RT-NN string: whether this exposure
+    # class earns a catalog entry is a separate F/CTO Decision-4-ratify step,
+    # not performed here.
+    #
+    # Run-always (no paths filter), matching the admission fence's own
+    # reasoning: a path-trigger leaves a trigger-drift meta-risk.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Production-mode — real compose (expects internal-only; exit 0)
+        run: bash scripts/ci/fence-datastore-private-bind.sh infra/supabase/docker-compose.yml
+
+      - name: Inversion — negative control fixture (correct config; expects exit 0)
+        run: bash scripts/ci/fence-datastore-private-bind.sh tests/fixtures/ci/datastore-bind-private.compose.yaml
+
+      - name: "Inversion — golden 1: published ports (expects violation, exit 1, vector-1 token)"
+        # Sec F-2 lesson (mirrored from fence-admission-bind): assert the
+        # SPECIFIC vector token, not just a non-zero exit — a structural error
+        # (missing sentinel, non-compose file) also exits non-zero (2) and
+        # would print "OK: caught..." having proven nothing.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-datastore-private-bind.sh tests/fixtures/ci/datastore-bind-public-ports.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: datastore-bind fence expected exit 1 on the published-ports golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 1: published host-port mapping'; then
+            echo "FATAL: published-ports golden exited 1 but the expected vector-1 token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the published-ports exposure vector via its vector-1 token (exit $rc)."
+
+      - name: "Inversion — golden 2: proxy Domain / Host() label (expects violation, exit 1, vector-2 token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-datastore-private-bind.sh tests/fixtures/ci/datastore-bind-public-domain.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: datastore-bind fence expected exit 1 on the proxy-Domain golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 2: reverse-proxy Domain'; then
+            echo "FATAL: proxy-Domain golden exited 1 but the expected vector-2 token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the proxy-Domain exposure vector via its vector-2 token (exit $rc)."
+
+      - name: "Inversion — golden 3: host-network mode (expects violation, exit 1, vector-3 token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-datastore-private-bind.sh tests/fixtures/ci/datastore-bind-host-network.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: datastore-bind fence expected exit 1 on the host-network golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 3: host-network mode'; then
+            echo "FATAL: host-network golden exited 1 but the expected vector-3 token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the host-network exposure vector via its vector-3 token (exit $rc)."
+
+      - name: "Inversion — golden 4: sentinel absent (expects structural refusal, exit 2)"
+        # Proves the fence fails CLOSED (never a clean 0) over a file it
+        # cannot confirm is the intended datastore manifest — the property a
+        # bare non-zero-exit assertion alone cannot distinguish from "caught
+        # a real vector".
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-datastore-private-bind.sh tests/fixtures/ci/datastore-bind-no-sentinel.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: datastore-bind fence expected exit 2 (structural refusal) on the no-sentinel golden but got $rc."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'sentinel not found'; then
+            echo "FATAL: no-sentinel golden exited 2 but the expected sentinel-absent message is missing — failing closed."
+            exit 1
+          fi
+          echo "OK: fence refused to pass an unmarked file, failing closed (exit $rc)."
+
   fence-entity-grep:
     name: entity-grep — HTML-entity-obscured §/# in doc artifacts
     runs-on: ubuntu-latest
