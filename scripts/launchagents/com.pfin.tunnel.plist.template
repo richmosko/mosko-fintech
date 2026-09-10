@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.pfin.tunnel.plist — TEMPLATE, not the installed file.
+
+  scripts/mac-tunnel.sh generates the real plist from this by substituting
+  __HOME__ with $HOME at install time (launchd plists cannot expand `~` or
+  $HOME themselves — every path here must be a literal absolute path once
+  installed). Do not hand-edit a copy of this file with a real home
+  directory baked in and commit it; that bakes one person's machine into
+  the repo. Edit this template, re-run the installer.
+
+  Design (F/CTO ruling, 2026-09-11): plain `ssh` under launchd KeepAlive,
+  not autossh. `-o ServerAliveInterval=30 -o ServerAliveCountMax=3` makes a
+  dead link exit; `-o ExitOnForwardFailure=yes` makes a failed local bind
+  exit instead of running uselessly; KeepAlive=true is what restarts it —
+  together that is everything autossh would add, with no third-party
+  dependency (supply-chain minimalism — see scripts/mac-tunnel.sh header).
+
+  Forwards, both bound to 127.0.0.1 explicitly (the default can bind
+  wildcard, which would put the Coolify control plane and Studio's
+  passwordless SQL console on the LAN, not just localhost):
+    8000 -> Coolify dashboard, REST API, and the /mcp endpoint
+    3000 -> Studio (once the datastore's studio service is deployed;
+            harmless to forward before then — it just won't accept
+            connections yet)
+
+  Runs as F/CTO's OWN ssh identity via the `pfin-prod` Host alias in
+  ~/.ssh/config (see scripts/mac-tunnel.sh) — NOT the passphrase-free
+  automation key `provision-vps.sh` uses. The tunnel is the human's; the
+  automation key exists for scripts, and broad agent SSH access is the
+  larger risk this design deliberately does not reintroduce.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pfin.tunnel</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/ssh</string>
+        <string>-N</string>
+        <string>-o</string><string>BatchMode=yes</string>
+        <string>-o</string><string>ExitOnForwardFailure=yes</string>
+        <string>-o</string><string>ServerAliveInterval=30</string>
+        <string>-o</string><string>ServerAliveCountMax=3</string>
+        <string>-L</string><string>127.0.0.1:8000:localhost:8000</string>
+        <string>-L</string><string>127.0.0.1:3000:localhost:3000</string>
+        <string>pfin-prod</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/pfin-tunnel.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/pfin-tunnel.log</string>
+
+    <!--
+      Throttle restarts: KeepAlive+immediate-exit (e.g. a genuine local port
+      collision hitting ExitOnForwardFailure every time) would otherwise spin
+      launchd as fast as it can relaunch. ThrottleInterval is the floor
+      between relaunches, not a fixed retry cadence.
+    -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
