@@ -93,7 +93,7 @@ Secrets **never** go in the repo — every `.env` is gitignored; real values are
 |---|---|---|
 | `api/.env` | `api/.env.example` | **non-secret only** — `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `PLAID_ENV` |
 | `workers/provider-sync/.env` | `workers/provider-sync/.env.example` | Plaid client_id/secret, SimpleFIN token, `PFIN_DB_*`, admission secret |
-| `workers/etl/.env` | `workers/etl/.env.example` | Plaid creds (ETL poll) + BLS/FMP |
+| `workers/etl/.env` | `workers/etl/.env.example` | BLS/FMP + `PFIN_DB_*` — **no Plaid credential** |
 | root `.env` | `.env.example` | web-app container secret-surface contract (`WORKER_ADMISSION_SHARED_SECRET`, …) |
 
 ### Plaid
@@ -107,7 +107,7 @@ PLAID_SECRET=…
 ```
 
 - In **`api/.env`** set only `PLAID_ENV=sandbox` (it drives the browser CSP `connect-src` host). **Do not** put the Plaid secret in `api/.env` — that file is public-vars only; the relay never reads a Plaid secret.
-- Mirror the two Plaid vars into `workers/etl/.env` too if you run the ETL poll.
+- **Do not** put any Plaid credential in `workers/etl/.env`. `provider-sync` is the sole holder (F/CTO 2026-09-09; ADR-011 Decision 17 / Lock 13 amendment). There is no ETL Plaid poll — the scheduled poll is `workers/provider-sync/src/cli/poll.ts`.
 - There is **no `PLAID_WEBHOOK_SECRET`** — Plaid v27 webhook verification is asymmetric ES256/JWK; the worker fetches Plaid's public key at verify time. (The `PLAID_SANDBOX_*` names in `secrets-manifest.yml` are CI-only QA fixtures — not what you set locally; sandbox-vs-production is the `PLAID_ENV` value.)
 
 ### SimpleFIN
