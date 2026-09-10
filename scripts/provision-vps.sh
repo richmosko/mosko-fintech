@@ -32,6 +32,16 @@
 #   makes "prove this script is a no-op against the box we already have"
 #   possible without a flag that mutates production.
 #
+# WHAT THE PREFLIGHT CANNOT PROVE
+#   Preflight (no --apply) only runs read paths — every --apply-only command
+#   is printed, never executed, so nothing about it is exercised until the
+#   real run. Measured 2026-09-11: the sshd-reload step named `sshd.service`
+#   unconditionally and passed preflight cleanly every time, then died for
+#   real on Ubuntu 24.04's actual unit name (`ssh.service`, socket-activated).
+#   Any --apply-only command that names a system object — a unit, a path, a
+#   package — needs that object's existence checked at the point of use, not
+#   assumed from what worked on some other box.
+#
 # IDEMPOTENCE
 #   Every create is preceded by a lookup — by resource NAME on the Hetzner
 #   side, by remote STATE (file content, package existence, DB row presence)
@@ -496,9 +506,32 @@ if [[ "$CURRENT_SSHD" == "$DESIRED_SSHD" ]]; then
 elif [[ $APPLY -eq 0 ]]; then
   info "sshd drop-in missing or differs -- would write /etc/ssh/sshd_config.d/99-pfin-hardening.conf and reload sshd"
 else
+  # Measured 2026-09-11 on the real box, --apply: `systemctl reload sshd`
+  # died with "Unit sshd.service not found." Ubuntu 24.04 ships `ssh.service`
+  # (socket-activated -- `ssh.socket` is what's enabled; `ssh.service` starts
+  # per-connection and is normally inactive between connections), not
+  # `sshd.service`. The dry-run path above can't catch this -- it never runs
+  # this command, only prints that it would -- so this line is exactly the
+  # class the script's own header lesson names: every --apply-only command
+  # that names a system object has to have that object's existence checked,
+  # not assumed, because nothing short of running it for real exercises it.
+  # Detect the actual unit name rather than hardcoding either. `sshd -t`
+  # validates the config BEFORE any reload is attempted, on either unit name
+  # -- refuse to push a config sshd itself rejects; that is the failure mode
+  # that locks an operator out. `try-reload-or-restart`, not `reload` or
+  # `reload-or-restart`: reload a running sshd, but if the unit is inactive
+  # (the normal state under socket activation between connections) do
+  # nothing rather than starting a second listener that would fight
+  # ssh.socket for port 22 -- the next connection gets the new config from
+  # the drop-in regardless, since socket-activated sshd re-reads config on
+  # every spawn.
   printf '%s\n' "$DESIRED_SSHD" | ssh "${SSH_OPTS[@]}" "root@$BOX_IP" \
-    'cat > /etc/ssh/sshd_config.d/99-pfin-hardening.conf && sshd -t && systemctl reload sshd'
-  ok "sshd drop-in written and reloaded"
+    'cat > /etc/ssh/sshd_config.d/99-pfin-hardening.conf && sshd -t && {
+       UNIT=ssh
+       systemctl list-unit-files --type=service 2>/dev/null | grep -qE "^sshd\.service" && UNIT=sshd
+       systemctl try-reload-or-restart "$UNIT"
+     }'
+  ok "sshd drop-in written and reloaded (unit auto-detected)"
 fi
 
 step "Operator user 'deploy' + NOPASSWD sudo (runbook §1 step 3)"
