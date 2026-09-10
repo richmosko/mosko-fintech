@@ -78,9 +78,26 @@ Scope: stand up a fresh virtual server to host Coolify + all V1 containers.
    | `22` (or a custom SSH port, if changed from default) | Inbound | Operator SSH + Coolify's own SSH connection to the box (§3) |
    | `80` | Inbound | Let's Encrypt HTTP-01 challenge + HTTP→HTTPS redirect, via Coolify's built-in reverse proxy (Traefik) |
    | `443` | Inbound | HTTPS traffic to every Coolify-fronted service |
-   | `8000` | Inbound, **narrow this to the operator's own IP(s) if the firewall supports source restriction** | Coolify's own dashboard/admin UI, which listens here by default per Coolify's install output (`http://<ip>:8000`) — this is the box's most privileged surface (§5's admin-trust-boundary item (i)) and has no reason to be open to the entire internet the way 80/443 do |
+   | ~~`8000`~~ | **NOT opened** | Coolify's dashboard listens here, but it is **not exposed**. See *Why 8000 is closed* below. |
 
-   **Deliberately closed, and why it matters that they stay closed:** the provider-sync admission port `:8081` (§7 CA-2/CA-4) is never firewall-opened at all — it is reached only over the Coolify **project-internal** Docker network by service name, never via the host's public IP. Use the cloud provider's own firewall (Hetzner Cloud Firewall) as the enforcement point, **not** a host-level tool like `ufw` alone — Coolify's own docs note that Docker manipulates `iptables` directly via its NAT rules, which can **bypass `ufw`/host-firewall rules** for published container ports. A cloud-level firewall sits in front of the box entirely and is not subject to that bypass; treat it as the primary control and a host-level firewall (if used at all) as defense-in-depth, never the reverse.
+   **Why 8000 is closed — RULED 2026-09-09 (F/CTO).** The Coolify dashboard is the box's most privileged surface. Three options were weighed:
+
+   | Approach | Exposure | Fails when |
+   |---|---|---|
+   | **SSH tunnel, 8000 closed** ← **CHOSEN** | none | never |
+   | Source-restrict to the operator's address | one address | the ISP rotates the lease |
+   | Leave open, rely on Coolify's login | the whole internet | a Coolify auth vulnerability lands |
+
+   Source-restriction was the obvious middle option and it does not work here: the operator's connection is a **residential dynamic lease** (F/CTO, 2026-09-09), so a rotation locks the operator out of the dashboard at whatever moment the lease turns over — recoverable through the API, but always at a bad time. The tunnel removes the exposure class instead of narrowing it, costs one command, and is immune to the address changing:
+
+   ```sh
+   ssh -L 8000:localhost:8000 root@<box-ip>
+   # leave open, then browse http://localhost:8000
+   ```
+
+   Coolify's own first-run admin setup works through the tunnel. **The losing side, named:** every dashboard visit needs the tunnel command first, and an operator who forgets it sees a dead port rather than a login page — which reads as an outage if you do not know why.
+
+**Deliberately closed, and why it matters that they stay closed:** the provider-sync admission port `:8081` (§7 CA-2/CA-4) is never firewall-opened at all — it is reached only over the Coolify **project-internal** Docker network by service name, never via the host's public IP. Use the cloud provider's own firewall (Hetzner Cloud Firewall) as the enforcement point, **not** a host-level tool like `ufw` alone — Coolify's own docs note that Docker manipulates `iptables` directly via its NAT rules, which can **bypass `ufw`/host-firewall rules** for published container ports. A cloud-level firewall sits in front of the box entirely and is not subject to that bypass; treat it as the primary control and a host-level firewall (if used at all) as defense-in-depth, never the reverse.
 5. **Base packages:** none beyond what Coolify's own installer brings (it installs Docker itself if absent). Do not pre-install a competing reverse proxy, Postgres, or Docker Compose plugin version — let Coolify's installer own that surface, since §3's pinned-version procedure below assumes it is running against the versions Coolify's own installer sets up.
 
 **Confirm ARM-vs-x86 across the fleet:** CAX21 is Ampere ARM (`arm64`); the incumbent cax21 box is also ARM, and every container image in this tree (`api/Dockerfile`, `workers/etl/Dockerfile`, `workers/pdf-render/Dockerfile`, `workers/provider-sync/Dockerfile`) must resolve to `arm64` base images for a clean pull/build on this box. This is a build-time property, not something §1 provisioning changes — flagged here as the check to run if any container fails to start after §6/§7 with an "exec format error" or a base-image pull for the wrong platform.
@@ -115,7 +132,8 @@ nmap -Pn -p 22,80,443,8000,8081 <box-ip>   # run from OUTSIDE the box's network
 
 | Result | Reading |
 |---|---|
-| `22, 80, 443` open; `8000` open only from the operator's IP (or open to all, if source-restriction wasn't configured — acceptable but weaker); `8081` **filtered/closed** | **Correct.** |
+| `22, 80, 443` open; `8000` **filtered**; `8081` **filtered/closed** | **Correct.** |
+| `8000` shows **open** | **Wrong.** The firewall did not apply, or a rule was added by hand. The dashboard is meant to be unreachable from the internet entirely — reach it over the SSH tunnel above. Fix before installing Coolify, not after. |
 | `8081` shows **open** | **Wrong, and load-bearing** — this is the exact regression §7 CA-4 / §10 CA-2 exist to catch downstream at the application layer; catching it here, before any service is even deployed, is cheaper. Re-check the cloud firewall rules; nothing at this stage should be publishing that port. |
 | Every port shows `filtered` including `22` | **Wrong-looking-but-fine, conditionally** — if this scan is run from a network Hetzner's Cloud Firewall doesn't allowlist yet (e.g. before the operator's own IP is added to the firewall's SSH rule), a fully-filtered result is expected and does **not** mean the box is unreachable to the operator; re-run from the network holding the firewall-allowlisted IP before concluding anything is actually broken. |
 
@@ -199,7 +217,7 @@ curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash -s <version>
 
 **How to re-check it later:** Coolify's dashboard displays its own running version (Settings/Configuration screen); to check whether a newer release exists, re-read `versions.json`'s `coolify.v4` key and diff against the recorded install-time value. Coolify's docs do not document a CLI "check for updates" command distinct from the dashboard's own update-checker — the dashboard is the source of truth for "what's running," `versions.json` is the source of truth for "what's current."
 
-**Initial admin setup.** The installer's own output prints the first-access URL, `http://<box-ip>:8000` — Coolify's dashboard listens on **8000** by default (§1's firewall table already scopes this port to the operator, ideally by source-IP restriction, since it is the box's most privileged surface). **F/CTO creates the admin account at first visit to that URL** — this is not a value this runbook or any agent can pre-fill; Coolify has no separate "provision an admin via API before first login" path documented, so this is inherently an interactive, F/CTO-run step, the same way §5's secret values are.
+**Initial admin setup.** The installer's own output prints the first-access URL as `http://<box-ip>:8000`. **That URL will not resolve from your machine, and that is correct** — §1 deliberately leaves 8000 closed. Open the tunnel first (`ssh -L 8000:localhost:8000 root@<box-ip>`), then browse `http://localhost:8000` and complete the first-run admin account creation there. Everything the installer says about the dashboard applies; only the address you type differs.
 
 **GitHub source connection.** From the Coolify dashboard: Sources → add a GitHub App (or a deploy-key-based Git source, if F/CTO prefers not to install a GitHub App on the org) → authorize it against this repo. This is what lets Coolify pull `main` per each service's **Base Directory** setting (already named per-service in §7 — `api/`, `workers/etl/`, `workers/pdf-render/`, `workers/provider-sync/`). **Do not configure auto-deploy-on-push yet** — that is ARCH §6 item (f)'s webhook lock, named as its own later step below, not part of this install pass.
 

@@ -44,9 +44,21 @@ FIREWALL_NAME="${FIREWALL_NAME:-pfin-prod-fw}"
 # forcing a DNS change and a propagation wait. Costs EUR 0.60/mo gross, and it
 # keeps billing while unassigned -- that is what you are buying.
 PRIMARY_IP_NAME="${PRIMARY_IP_NAME:-pfin-prod-ipv4}"
-# Source-restrict the Coolify dashboard (:8000). Empty = open to the world,
-# which the runbook calls acceptable-but-weaker. Set to your own IP/32.
-ADMIN_CIDR="${ADMIN_CIDR:-}"
+# :8000 (the Coolify dashboard) is DELIBERATELY NOT in the firewall.
+#
+# The two alternatives were both worse. Leaving it open to the world is a
+# standing bet that Coolify never ships an auth vulnerability. Pinning the
+# operator's own address does not work either: it is a residential dynamic
+# lease (confirmed by F/CTO 2026-09-09), so an ISP rotation locks the
+# operator out of the dashboard at whatever moment the lease turns over.
+#
+# The dashboard is reached over an SSH tunnel instead -- the operator already
+# holds the key, so this removes the exposure class rather than narrowing it,
+# and it is immune to the address changing:
+#
+#   ssh -L 8000:localhost:8000 root@<box-ip>   # then browse localhost:8000
+#
+# Coolify's own first-run admin setup works through the tunnel.
 
 API="https://api.hetzner.cloud/v1"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -138,11 +150,11 @@ step "Plan"
 cat <<PLAN
       server    $SERVER_NAME  ($SERVER_TYPE, $IMAGE, $LOCATION)
       ssh key   $SSH_KEY_NAME  <- $SSH_PUBKEY_PATH
-      firewall  $FIREWALL_NAME  in: 22, 80, 443, 8000${ADMIN_CIDR:+ (8000 restricted to $ADMIN_CIDR)}
-                                :8081 deliberately NOT opened (runbook §1 / §7 CA-4)
+      firewall  $FIREWALL_NAME  in: 22, 80, 443 only
+                                :8000 NOT opened — dashboard via SSH tunnel
+                                :8081 NOT opened (runbook §1 / §7 CA-4)
       primary   $PRIMARY_IP_NAME  (ipv4, auto_delete=false — survives a rebuild)
 PLAN
-[[ -z "$ADMIN_CIDR" ]] && info "NOTE: ADMIN_CIDR unset — :8000 will be open to the world. Weaker; runbook §1 allows it."
 
 if [[ $APPLY -eq 0 ]]; then
   printf '\n\033[33mPREFLIGHT ONLY.\033[0m Nothing was created. Re-run with --apply to execute.\n'
@@ -165,14 +177,11 @@ fi
 FW_ID="$(api GET "/firewalls?name=$FIREWALL_NAME" | jqp "
 d=json.load(sys.stdin)['firewalls']; print(d[0]['id'] if d else '')")"
 if [[ -z "$FW_ID" ]]; then
-  ADMIN_SRC='["0.0.0.0/0","::/0"]'
-  [[ -n "$ADMIN_CIDR" ]] && ADMIN_SRC="[\"$ADMIN_CIDR\"]"
   FW_ID="$(api POST /firewalls "$(cat <<JSON
 {"name":"$FIREWALL_NAME","rules":[
  {"direction":"in","protocol":"tcp","port":"22","source_ips":["0.0.0.0/0","::/0"],"description":"operator SSH + Coolify server connection"},
  {"direction":"in","protocol":"tcp","port":"80","source_ips":["0.0.0.0/0","::/0"],"description":"ACME HTTP-01 + HTTP->HTTPS redirect"},
- {"direction":"in","protocol":"tcp","port":"443","source_ips":["0.0.0.0/0","::/0"],"description":"HTTPS to Coolify-fronted services"},
- {"direction":"in","protocol":"tcp","port":"8000","source_ips":$ADMIN_SRC,"description":"Coolify dashboard"}
+ {"direction":"in","protocol":"tcp","port":"443","source_ips":["0.0.0.0/0","::/0"],"description":"HTTPS to Coolify-fronted services"}
 ]}
 JSON
 )" | jqp "print(json.load(sys.stdin)['firewall']['id'])")"
@@ -238,8 +247,15 @@ cat <<'NEXT'
           repo is arm64 and will fail to build. Stop and rebuild.
 
         nmap -Pn -p 22,80,443,8000,8081 <ip>
-          EXPECT: 22/80/443 open · 8081 filtered
+          EXPECT: 22/80/443 open · 8000 AND 8081 filtered
           8081 open is the CA-4 regression; fix before installing anything.
+          8000 open means the firewall did not apply -- the dashboard is
+          meant to be unreachable from the internet entirely.
+
+      Coolify dashboard (§3) — over the tunnel, never a public port:
+
+        ssh -L 8000:localhost:8000 root@<ip>
+        # leave that open, then browse http://localhost:8000
 
       Then complete §1's hardening (password auth off, non-root operator user)
       and record the box's IP, key fingerprint and Coolify version in
