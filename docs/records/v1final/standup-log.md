@@ -77,7 +77,7 @@ Provisioned by `scripts/provision-vps.sh --apply`, F/CTO having chosen scripted 
 | Location | `fsn1` (Falkenstein) · `fsn1-dc14` |
 | Image | `ubuntu-24.04` (arm) · id `161547270` |
 | IPv4 | **188.245.166.206** — primary IP `pfin-prod-ipv4`, id `148918358`, `auto_delete=false` |
-| IPv6 | `2a01:4f8:c013:4348::/64` |
+| IPv6 | `2a01:4f8:c012:57f8::/64` — primary IP `pfin-prod-ipv6`, id `148919739`, **`auto_delete` flipped to false 2026-09-09** (see §3f) |
 | Firewall | `pfin-prod-fw` id `11600487` — inbound 22 / 80 / 443 only |
 | SSH keys | 2 — `mosko-fintech-id_ed25519` (`SHA256:sbjUXz5Mvzi3lyr5cfgCLZ/LSHBa6mtJ73bwFxrS3pA`, passphrase-protected, human use) and `mosko-fintech-id_ed25519_claude_mosko-fintech` (`SHA256:R2q4NlrUXwEyeoqqX6Z4Yv4hu/cjBb7q8WolntiviH4`, passphrase-free, automation) |
 | Cost | EUR 12.49/mo server + EUR 0.60/mo primary IP, gross |
@@ -151,6 +151,24 @@ ssh -L 8000:localhost:8000 root@188.245.166.206
 
 ⚠ **`/data/coolify/source/.env` on the box holds Coolify's own secrets** and the installer recommends backing it up off-server. It belongs in a password manager, **never in this repo**.
 
+### 3f. IPv6 was NOT protected by the primary IP — found by a login banner
+
+**The record was wrong and the box was right.** This log recorded IPv6 as `2a01:4f8:c013:4348::/64`; the box reports `2a01:4f8:c012:57f8::/64`. Both were true — of *different servers*. The first value belonged to the box destroyed at §3b.
+
+**The cause.** Hetzner creates the IPv6 primary IP **for you** at server-creation time with **`auto_delete = true`**, so unlike the IPv4 one it dies with its server. The rebuild preserved IPv4 exactly as designed and **silently changed IPv6**. The design worked for the address it was pointed at and said nothing about the one nobody had thought about.
+
+**How it surfaced:** F/CTO pasted the box's SSH login banner into the session and its `IPv6 address for eth0` line disagreed with this file. Nothing in the provisioning flow would have caught it — every check written so far reads IPv4.
+
+**Fixed, and the fix is free.** IPv6 primary IPs carry no charge (the pricing feed lists a monthly price for `ipv4` only), so there was never a cost argument for leaving it disposable. The existing IPv6 was renamed `pfin-prod-ipv6` and flipped to `auto_delete = false`. `scripts/provision-vps.sh` now does this on every run: it reads the server's IPv6 primary IP, and flips it if it is still disposable. Verified idempotent — a re-run reports *already persistent* and changes nothing.
+
+**What this actually cost, stated:** nothing, because no AAAA record exists yet. Had DNS been cut over before the rebuild, IPv6 clients would have been sent to a dead address while IPv4 clients were fine — a partial outage affecting only some visitors, which is materially harder to diagnose than a total one.
+
+### 3g. Security patching — 2026-09-09
+
+The login banner reported **51 updates, 49 of them security**. Applied: **46 security updates**, 0 remaining upgradable, **no reboot required**, and all six Coolify containers verified still healthy afterwards.
+
+Done now deliberately: nothing is serving yet, so the blast radius of a bad patch is zero. The same 46 updates applied after cutover would be a change to a live system.
+
 ### 3e. Key custody — a single point of failure, named
 
 Both keys on this box exist only on one laptop. Recorded because the recovery path is not obvious:
@@ -191,4 +209,5 @@ Two things came out of it. `scripts/provision-vps.sh` now takes a **list** of ke
 | 2026-09-09 | 3 | Provision once, cleanly | First box carried only a passphrase-protected key — correct in every other respect and unreachable by automation. Destroyed and recreated with both keys. | ✅ Script now validates key usability and refuses to provision without an automation-usable key |
 | 2026-09-09 | 3 | Script runs clean | Five bugs, each found only by running against the live API: shell brace expansion mangled the SSH-key JSON; an unassigned primary IP is created against a `location`, not a `datacenter`; `public_net` takes `ipv4:<id>` while `enable_ipv4` is a bool; key lookup must be by **fingerprint** (Hetzner 409s on duplicate material whatever you name it); and the server delete returns **before** the primary IP detaches, so creating into that window 422s with nothing about timing. | ✅ All five fixed; the race now waits and refuses rather than creating into it |
 | 2026-09-09 | 3 | `adduser deploy` per runbook §1 step 3 | Created with `--disabled-password` to avoid an interactive prompt, which left the account unable to authenticate to `sudo` at all. | ✅ `NOPASSWD` granted; reasoning recorded at §3c — the same keys already grant direct root |
+| 2026-09-09 | 3 | The primary IP preserves the box's addresses across a rebuild | It preserved **IPv4 only**. Hetzner creates the IPv6 primary IP with `auto_delete=true`, so the rebuild silently changed the `/64`. Caught only because F/CTO pasted the box's login banner and it disagreed with this record. | ✅ IPv6 flipped to persistent; the script now enforces it every run |
 | 2026-09-09 | 3 | Verify ports from outside | First probe reported **every** port filtered, including 22, seconds after SSH had succeeded on 22. The instrument was broken, not the box. | n/a — re-probed by TCP behaviour |
