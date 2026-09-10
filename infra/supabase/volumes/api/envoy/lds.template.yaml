@@ -534,6 +534,29 @@ resources:
                             allow_headers: "*"
                             expose_headers: "*"
                             max_age: "3600"
+                          # DENY'd by Sec ruling 2026-09-10. Upstream gates this route
+                          # on an RBAC policy accepting the service_role key in an
+                          # `apikey` header, with basic auth explicitly DISABLED above.
+                          # postgres-meta connects to Postgres as `postgres` (owner +
+                          # superuser-equivalent), so a live route here would let any
+                          # holder of the service_role key run arbitrary SQL as that
+                          # role through the gateway — outside RLS, outside
+                          # TenantBoundConnection, and able to disable the ADR-011
+                          # Decision 2 immutability triggers. Studio does not use this
+                          # route (it reaches meta directly at STUDIO_PG_META_URL);
+                          # nothing else in this tree references /pg/ at all.
+                          envoy.filters.http.rbac:
+                            '@type': >-
+                              type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute
+                            rbac:
+                              rules:
+                                action: DENY
+                                policies:
+                                  deny_all:
+                                    permissions:
+                                      - any: true
+                                    principals:
+                                      - any: true
 
                       - match:
                           prefix: /api/mcp
@@ -624,14 +647,26 @@ resources:
                               value: /
                             append_action: ADD_IF_ABSENT
                         typed_per_filter_config:
+                          # DENY'd by Sec ruling 2026-09-10. Upstream serves Studio here
+                          # behind the Envoy basic-auth filter. This trim does not: Studio
+                          # is reached ONLY on its 127.0.0.1:3000 loopback publish over an
+                          # SSH tunnel. Leaving this route live would couple Studio's
+                          # reachability to the gateway's — so the day api-gw is assigned
+                          # a Coolify Domain (which §5's API_EXTERNAL_URL / email-link path
+                          # is likely to force), an unauthenticated-by-itself superuser SQL
+                          # console becomes internet-facing behind one shared SHA1-hashed
+                          # basic-auth password. DENY here makes that impossible by
+                          # construction rather than by remembering not to assign a Domain.
+                          # Effect: unmatched paths get 403 from the gateway. Nothing in
+                          # this tree requests `/` at the gateway.
                           envoy.filters.http.rbac:
                             '@type': >-
                               type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute
                             rbac:
                               rules:
-                                action: ALLOW
+                                action: DENY
                                 policies:
-                                  allow_all:
+                                  deny_all:
                                     permissions:
                                       - any: true
                                     principals:
