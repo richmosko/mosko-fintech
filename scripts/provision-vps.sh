@@ -291,6 +291,7 @@ JSON
   PIP_ID="$(echo "$PIP_JSON" | jqp "print(json.load(sys.stdin)['primary_ip']['id'])")"
   PIP_ADDR="$(echo "$PIP_JSON" | jqp "print(json.load(sys.stdin)['primary_ip']['ip'])")"
   ok "primary IP created — $PIP_ADDR (id $PIP_ID, auto_delete=false)"
+  PIP_V4_NEW=1
 else
   PIP_ADDR="$(api GET "/primary_ips/$PIP_ID" | jqp "print(json.load(sys.stdin)['primary_ip']['ip'])")"
   ok "primary IP already present — $PIP_ADDR (id $PIP_ID)"
@@ -339,6 +340,28 @@ print('      ipv6 %s' % (s['public_net']['ipv6'] or {}).get('ip'))
   ok "server created"
 else
   ok "server already existed — not recreated"
+fi
+
+# The IPv6 primary IP is created FOR you by Hetzner at server-creation time,
+# with auto_delete=TRUE — so unlike the IPv4 one it dies with the server and a
+# rebuild hands out a different /64. Measured 2026-09-09: the rebuild at §3b
+# preserved IPv4 exactly as designed and silently changed IPv6, which was only
+# caught because the box's login banner disagreed with the record.
+# IPv6 primary IPs are free, so there is no cost argument for leaving it.
+V6_ID="$(api GET "/servers/$(api GET "/servers?name=$SERVER_NAME" | jqp "
+d=json.load(sys.stdin)['servers']; print(d[0]['id'] if d else 0)")" | jqp "
+s=json.load(sys.stdin).get('server') or {}
+v6=(s.get('public_net') or {}).get('ipv6') or {}
+print(v6.get('id') or '')")"
+if [[ -n "$V6_ID" ]]; then
+  v6state="$(api GET "/primary_ips/$V6_ID" | jqp "
+p=json.load(sys.stdin)['primary_ip']; print('%s %s' % (p['auto_delete'], p['ip']))")"
+  if [[ "$v6state" == True* ]]; then
+    api PUT "/primary_ips/$V6_ID" "{\"name\":\"$PRIMARY_IP_NAME-v6\",\"auto_delete\":false}" >/dev/null
+    ok "IPv6 primary IP made persistent — ${v6state#* }"
+  else
+    ok "IPv6 primary IP already persistent — ${v6state#* }"
+  fi
 fi
 
 step "Next — runbook §1 verification block"
