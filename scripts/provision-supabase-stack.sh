@@ -372,8 +372,23 @@ step "Secrets: mint-if-absent, set env vars, assert non-empty -- all on the box,
 # correct. Fixed: determine what needs minting via Eloquent decryption
 # FIRST (same non-echoing tinker --execute mechanism the assert step
 # already used), THEN mint only those, THEN re-assert.
+#
+# Sec REQUIRED fix (pre-prod review, 2026-09-11): this body, like the
+# assert-non-empty body below, has bare top-level statements ($app = ...,
+# $check = [...]) whose return values --execute may auto-echo the same way
+# it auto-echoed $user = $user->createToken(...) in provision-vps.sh's own
+# incident. Its output IS captured into NEED_MINT below -- whether an
+# auto-echoed $app (an Eloquent model with decrypted attributes on it,
+# depending on Application's $appends/$with, unverifiable from here) would
+# leak a secret into that capture is exactly the assumption
+# provision-vps.sh's own fix refused to make. Same fix: wrap the whole body
+# in one IIFE so there is exactly one top-level statement, whose value is
+# an explicit null -- the intended `echo $key` name-only prints inside it
+# still work; nothing else can echo regardless of how many intermediate
+# statements execute or whether --execute echoes every one or only the last.
 NEED_MINT="$(sshx_in <<REMOTE
 docker exec coolify php artisan tinker --execute="
+(function () {
 \\\$app = \\App\\Models\\Application::where('uuid','$APP_UUID')->firstOrFail();
 \\\$check = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
 foreach (\\\$check as \\\$key) {
@@ -381,6 +396,8 @@ foreach (\\\$check as \\\$key) {
   \\\$nonEmpty = \\\$env && strlen((string) \\\$env->value) > 0;
   if (!\\\$nonEmpty) { echo \\\$key . PHP_EOL; }
 }
+return null;
+})();
 "
 REMOTE
 )"
@@ -512,7 +529,22 @@ chmod 600 /root/.pfin/supabase.env 2>/dev/null || true
 
 # Re-assert non-empty via Eloquent decryption, never ciphertext length --
 # proof the mint above actually worked, not just that it ran.
-docker exec coolify php artisan tinker --execute="
+#
+# Sec REQUIRED fixes (pre-prod review, 2026-09-11), both applied here:
+#   (B) Same IIFE wrap as NEED_MINT above and provision-vps.sh's own fix --
+#       this body's bare top-level statements could auto-echo an Eloquent
+#       model under --execute; wrapping removes the dependency on an
+#       unverifiable appends/with-cast assumption entirely.
+#   (A) This step previously only PRINTED "KEY: OK/MISSING" -- nothing
+#       ever died on a MISSING, so a partial PATCH failure or a future
+#       required key added to the check list without a matching
+#       mint/default would deploy anyway, empty. Today's MINT_SECRETS union
+#       NONSECRET_DEFAULTS covers every checked key, so a normal run never
+#       hits this -- but "doesn't happen today" is not fail-closed. Capture
+#       the output, then die on any line ending ": MISSING" before the
+#       poisoned-volume check / deploy step that follows.
+ASSERT_OUT="\$(docker exec coolify php artisan tinker --execute="
+(function () {
 \\\$app = \\App\\Models\\Application::where('uuid','$APP_UUID')->firstOrFail();
 \\\$required = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
 foreach (\\\$required as \\\$key) {
@@ -520,7 +552,16 @@ foreach (\\\$required as \\\$key) {
   \\\$nonEmpty = \\\$env && strlen((string) \\\$env->value) > 0;
   echo \\\$key . ': ' . (\\\$nonEmpty ? 'OK' : 'MISSING') . PHP_EOL;
 }
-"
+return null;
+})();
+")"
+echo "\$ASSERT_OUT"
+if echo "\$ASSERT_OUT" | grep -q ': MISSING\$'; then
+  echo "" >&2
+  echo "FATAL: required secret(s)/config var(s) still empty after mint -- refusing to deploy:" >&2
+  echo "\$ASSERT_OUT" | grep ': MISSING\$' >&2
+  exit 1
+fi
 REMOTE
 
 step "Refusing to deploy onto a poisoned db-data volume"
