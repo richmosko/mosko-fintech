@@ -879,7 +879,22 @@ docker exec coolify php artisan tinker --execute='
 docker cp coolify:/tmp/.pfin_token /root/.pfin/_coolify_token.tmp
 docker exec coolify rm -f /tmp/.pfin_token
 umask 077
-printf 'COOLIFY_API_TOKEN=%s\n' "$(cat /root/.pfin/_coolify_token.tmp)" >> /root/.pfin/coolify.env
+# REPLACE-BY-KEY, not append. A re-mint (e.g. after --reset-admin-password,
+# or an operator re-running this step) used to `>>` a second
+# COOLIFY_API_TOKEN= line onto the file; every reader downstream uses
+# `grep -m1 '^COOLIFY_API_TOKEN='` (first match wins), so a re-mint left the
+# STALE first line authoritative and the fresh token unreachable -- every
+# subsequent Coolify API call 401'd with a token that looked freshly minted
+# in the log output. Filter out any existing COOLIFY_API_TOKEN= line by KEY
+# (never touching the value), then append the new one -- exactly one line
+# survives, always the latest. `touch` + `grep -v ... || true` handles both
+# a missing file and a file where the filtered result is empty (grep -v
+# exits 1 when it drops every line, which would otherwise abort under
+# set -e here).
+touch /root/.pfin/coolify.env
+grep -v '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env > /root/.pfin/coolify.env.new || true
+printf 'COOLIFY_API_TOKEN=%s\n' "$(cat /root/.pfin/_coolify_token.tmp)" >> /root/.pfin/coolify.env.new
+mv /root/.pfin/coolify.env.new /root/.pfin/coolify.env
 chmod 600 /root/.pfin/coolify.env
 shred -u /root/.pfin/_coolify_token.tmp 2>/dev/null || rm -f /root/.pfin/_coolify_token.tmp
 echo TOKEN_WRITTEN
