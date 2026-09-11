@@ -77,7 +77,12 @@
 #   The remaining 8 map to specific resources (SECRET_RESOURCE_MAP below),
 #   cross-checked against each target's own .env.example (the enumeration
 #   IS the confinement property -- this script must not push a name to a
-#   resource whose own .env.example doesn't declare it):
+#   resource whose own .env.example doesn't declare it). Sec review of this
+#   PR caught one real gap in that check: workers/etl/.env.example did NOT
+#   declare DISCORD_WEBHOOK_URL even though secrets-manifest.yml already
+#   named the ETL's monthly_report cron as its fourth consumer -- brought
+#   into line in this same PR (workers/etl/.env.example now declares it)
+#   rather than left as a false "verified" claim:
 #     app            SUPABASE_SERVICE_ROLE_KEY, PDF_WORKER_SIGNING_KEY,
 #                    DISCORD_WEBHOOK_URL, WORKER_ADMISSION_SHARED_SECRET
 #     pdf-render     PDF_WORKER_SIGNING_KEY (same value as app -- SD-20)
@@ -122,8 +127,9 @@
 #   runbook §6.1/§6.2's interactive handoff. This script SKIPS it with a
 #   printed reason every run, never silently.
 #
-# KNOT 4 -- resource-existence ordering: this runs functionally AFTER §7,
-#   not before it, even though it's numbered §5 in the runbook.
+# KNOT 4 -- resource-existence ordering: RATIFIED (F/CTO) -- this runs
+#   functionally AFTER §7, not before it, even though it's numbered §5 in
+#   the runbook.
 #   The app/etl/pdf-render/provider-sync Coolify resources are CREATED in
 #   §7 -- this script can only push env vars onto a resource that already
 #   exists (Coolify's envs/bulk PATCH targets an application UUID; there
@@ -144,7 +150,12 @@
 #   deliberate partial run (e.g. pushing app-tier secrets before the
 #   worker resources exist) and prints, per skipped resource, exactly
 #   which secrets were NOT pushed and why -- an operator opts into that
-#   gap by name, never falls into it by a swallowed error.
+#   gap by name, never falls into it by a swallowed error. Sec condition
+#   (non-blocking, addressed here): a partial run must be MACHINE-
+#   distinguishable from a complete one, not just human-readable in the
+#   log -- this script exits 3 (not 0) whenever --skip-missing-resource
+#   actually skipped something, in both preflight and --apply. See
+#   EXIT CODES in --help / the usage() function below.
 #
 # KNOT 5 -- WORKER_ADMISSION_SHARED_SECRET: NOT a Coolify "shared
 #   variable" via this script, and here's why.
@@ -163,8 +174,8 @@
 #   already use. Assuming an unverified endpoint exists and silently
 #   falling back would be exactly the kind of unstated design call this
 #   header is supposed to surface instead.
-#   RESOLUTION PROPOSED HERE (a deviation from the manifest's literal
-#   text, flagged for Sec/F/CTO ratification, not decided unilaterally):
+#   RESOLUTION -- RATIFIED (F/CTO + Sec, PR #738; a deviation from the
+#   manifest's literal text, decided explicitly rather than assumed):
 #   push the SAME literal value as an ordinary per-application env var to
 #   BOTH `app` and `provider-sync` in the same script run, generated or
 #   read from .env exactly like every other secret here. This achieves the
@@ -174,6 +185,15 @@
 #   manifest's stated MECHANISM (a single dashboard edit point) -- rotation
 #   here means re-running this script (which already batches both
 #   resources in one invocation), not editing one shared-variable row.
+#   ⚠ ROTATION DISCIPLINE (Sec condition): the two stores are rotated
+#   ONLY together, via one invocation of this script -- never hand-edit
+#   one Coolify resource's copy without the other. If they ever drift
+#   (a value changed on one side only, outside this script), the failure
+#   mode is FAIL-CLOSED, never a bypass: provider-sync's constant-time
+#   compare against `app`'s relayed value mismatches and admission is
+#   DENIED, not granted on a stale/wrong secret. Drift degrades to an
+#   outage, not an exposure -- same shape as every other fail-closed
+#   control in this stack.
 #   If F/CTO/Sec still want the literal Coolify SharedEnvironmentVariable
 #   for its own sake, that stays a one-time manual UI step this script
 #   does not perform; the two are not mutually exclusive, but this script
@@ -259,6 +279,17 @@ the plan (names + resource groupings only). Nothing pushed.
 --apply: pushes the plan for real.
 --skip-missing-resource: a target resource that doesn't exist yet is named
   and skipped instead of aborting the whole run. Default: abort, naming it.
+
+EXIT CODES
+  0  clean run, nothing skipped (preflight or --apply)
+  1  a real failure (missing BOX_IP/.env, unreachable box, a resource
+     missing without --skip-missing-resource, a Coolify API error, ...)
+  2  the push PLAN itself is invalid (a manifest name has no
+     SECRET_RESOURCE_MAP entry, or the manifest is malformed/missing)
+  3  --skip-missing-resource was given AND it actually skipped one or
+     more resources this run -- a PARTIAL run, distinct from a clean
+     complete one (0) or an error (1/2) so a caller can tell them apart
+     without parsing output. Applies to both preflight and --apply.
 
 See this script's own header comment for the full design-knot reasoning
 (what's excluded and why, the WORKER_ADMISSION_SHARED_SECRET deviation,
@@ -470,6 +501,11 @@ print(' '.join(sorted(r['resources'])))" "$PLAN_JSON_FILE")"
 # hypothetical). Plain `for pair in "${arr[@]}"` sidesteps both problems on
 # any bash this repo's other scripts already assume.
 RESOLVED_PAIRS=()
+# Tracks whether --skip-missing-resource actually skipped anything this
+# run (Sec condition): a partial push must be machine-distinguishable
+# from a complete one, not just human-readable in the log. Drives the
+# exit-3 branches below.
+ANY_SKIPPED=0
 
 for resource in $RESOURCE_NAMES; do
   found="$(api GET "/applications?name=$resource" | jqp "
@@ -479,6 +515,7 @@ print(d[0]['uuid'] if d else '')")"
   if [[ -z "$found" ]]; then
     if [[ $SKIP_MISSING -eq 1 ]]; then
       info "SKIPPING '$resource' -- no Coolify resource by that name yet (--skip-missing-resource given). Its secrets are NOT pushed this run."
+      ANY_SKIPPED=1
       continue
     fi
     die "no Coolify resource named '$resource' -- it hasn't been created yet (runbook §7). Either create it first, or pass --skip-missing-resource to push to the resources that DO exist and skip this one explicitly (never silently)."
@@ -489,6 +526,10 @@ done
 
 if [[ $APPLY -eq 0 ]]; then
   printf '\n\033[33mPREFLIGHT ONLY.\033[0m Nothing was pushed. Re-run with --apply to execute.\n'
+  if [[ $ANY_SKIPPED -eq 1 ]]; then
+    info "exiting 3 -- this preflight would be a PARTIAL run (one or more resources skipped); see EXIT CODES in --help."
+    exit 3
+  fi
   exit 0
 fi
 
@@ -564,4 +605,9 @@ for resource in ${PUSHED_RESOURCES[@]+"${PUSHED_RESOURCES[@]}"}; do
   info "  - $resource (${PUSHED_UUIDS[$i]}): Coolify UI Deploy button, or POST /deploy?uuid=${PUSHED_UUIDS[$i]}"
   i=$((i + 1))
 done
+if [[ $ANY_SKIPPED -eq 1 ]]; then
+  ok "push-production-secrets.sh --apply complete -- PARTIAL (one or more resources skipped; exiting 3, see EXIT CODES in --help)"
+  exit 3
+fi
 ok "push-production-secrets.sh --apply complete"
+exit 0
