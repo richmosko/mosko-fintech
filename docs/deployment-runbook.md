@@ -491,6 +491,27 @@ Confirm the volume is actually gone before redeploying — `down` without `-v` l
 | `PFIN_DB_USER` | Non-secret username, fixed per container (`pfin_etl` / `pfin_provider_sync`) | Coolify env on `workers/etl` / `workers/provider-sync` respectively. |
 | `PFIN_DB_PASSWORD` | Generated at the §6.1/§6.2 two-step credential handoff (`openssl rand -hex 32`) — **after** migrations apply, per the ordering dependency §6.1 already states | Coolify env on `workers/etl` / `workers/provider-sync` — **different value per container**, same secret name, per `secrets-manifest.yml`'s own note. |
 
+**Minting the real `ANON_KEY`/`SERVICE_ROLE_KEY` — `scripts/mint-supabase-jwt-keys.sh`.** The `ANON_KEY`/`SERVICE_ROLE_KEY` row above is what `provision-supabase-stack.sh` mints **first** — deliberately inert `secrets.token_hex(32)` random hex (Sec: "safe-but-inert," zero access, no RLS bypass), not a valid JWT, chosen so the stack can stand up before real keys exist. `rest`/`auth`/`api-gw` all verify the `apikey`/bearer value as an HS256 JWT signed with the deployed `JWT_SECRET` — random hex has no valid signature over anything, so the placeholder **cannot authenticate to anything**. Replace it once the stack is deployed and healthy:
+
+```sh
+BOX_IP=<box-ip> scripts/mint-supabase-jwt-keys.sh --apply
+# once the `app` (V1 web-app) Coolify resource exists, also propagate app-side:
+BOX_IP=<box-ip> scripts/mint-supabase-jwt-keys.sh --apply --app-name <app-resource-name> --verify-live
+```
+
+**⚠ An env-var overwrite alone does not take effect — Coolify only injects the env store into a container at deploy (container-recreate) time.** `docker restart` is **not** a substitute: it restarts the same container with the same baked-in env, it does not re-read the store. `--apply` therefore triggers a real redeploy of the Supabase-stack Coolify resource immediately after the overwrite (`POST /deploy?uuid=...` + poll to `finished`, the same idiom this section's own "Triggering the deploy" step above uses), then waits for every stack container to report healthy again before returning — so `--apply --verify-live` is one coherent mint → redeploy → verify invocation, not a three-step manual dance. The redeploy is skipped (with a printed reason) only when the stack has no containers yet, in which case `provision-supabase-stack.sh`'s own first deploy picks up the freshly-minted values already written to the env store. Recreating containers this way keeps the `db-data` volume (compose up/down semantics, never `down -v`) — no data loss. **Scope note:** this redeploy covers the stack app only — the app-side propagation (`--app-name`, `PUBLIC_SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY`) is env-overwrite only; redeploy that resource separately (Coolify UI Deploy button, or the same `POST /deploy?uuid=<app-uuid>` call) once it exists.
+
+**`--verify-live` runs four probes against the real gateway, not one.** A single anon-key `GET /rest/v1/` probe expecting `200` cannot pass by design: per [`infra/supabase/volumes/api/envoy/lds.template.yaml`](../infra/supabase/volumes/api/envoy/lds.template.yaml)'s `rest-v1-openapi-protected` route, the exact path `/rest/v1/` RBAC-allows `SERVICE_ROLE_KEY` (and its asymmetric counterpart) only — anon on the root is `403` by design, not a broken key. The verify block instead runs and prints all four of:
+
+| Probe | Path | PASS criterion | What it proves |
+|---|---|---|---|
+| `service_role` | `GET /rest/v1/` | `200` | The minted service_role key authenticates on the RBAC-gated root route. |
+| `anon` | `GET /rest/v1/<nonexistent-table>` | **NOT** `401` (expect `404` pre-Wave-6, since no tables exist yet) | The minted anon key authenticates on the `rest-v1-protected` prefix route PostgREST actually serves tables through. |
+| no key | `GET /rest/v1/<nonexistent-table>` | `401` | Control — without any key, the gateway/PostgREST still refuses. |
+| `anon` | `GET /auth/v1/health` | `200` | Routing sanity for `auth`, independent of the apikey gate. |
+
+A single explicit `VERIFIED`/`NOT VERIFIED` line closes the block. Both keys are read back on the box via the same Eloquent-decrypt `tinker --execute` path already used elsewhere in this script — never echoed to this script's own stdout, only the HTTP status codes are.
+
 ### 4.1 Database TimeZone — pinned to UTC · NOT a stub · financial-correctness dependency
 
 **The invariant: the production database's session `TimeZone` is `UTC`, by declaration, and that declaration is read back — never inferred from an image default.**

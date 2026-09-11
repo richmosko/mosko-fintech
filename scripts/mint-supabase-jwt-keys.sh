@@ -153,15 +153,56 @@
 #   SUPABASE_SERVICE_ROLE_KEY (app). Does not touch JWT_SECRET itself, any
 #   other secrets-manifest.yml entry, or DB roles/passwords.
 #
+# REDEPLOY, 2026-09-11 fix -- an env-var overwrite ALONE never takes effect
+#   Coolify only injects the env store into a container at DEPLOY
+#   (container-recreate) time; a running `auth`/`rest`/`api-gw` keeps
+#   whatever apikey it was started with baked in regardless of what the env
+#   store now says, and `docker restart` re-starts the SAME container with
+#   the SAME baked env -- it does not re-read the store either. `--apply`
+#   therefore triggers a real redeploy of the STACK app immediately after
+#   the env overwrite (the same POST /deploy?uuid=... + poll-to-`finished`
+#   idiom `provision-supabase-stack.sh` uses), waits for every stack
+#   container to report healthy again, and only then proceeds -- so
+#   `--apply --verify-live` is a coherent mint -> redeploy -> verify close
+#   in one invocation, not three manual steps. Skipped (with a printed
+#   reason) only when the stack has no containers yet (nothing to
+#   redeploy -- `provision-supabase-stack.sh`'s own first deploy will pick
+#   up the freshly-minted values already written to the env store).
+#   Recreating containers from the existing image keeps the `db-data`
+#   volume (compose up/down semantics, not `down -v`) -- no data loss.
+#   Scope note: this redeploy covers the STACK app only. The APP-side
+#   propagation (--app-name, PUBLIC_SUPABASE_ANON_KEY /
+#   SUPABASE_SERVICE_ROLE_KEY) remains env-overwrite only -- redeploy that
+#   resource separately once it exists.
+#
+# --verify-live SEMANTICS, 2026-09-11 fix -- four probes, not one
+#   The old verify-live ran ONE probe (anon key, GET /rest/v1/, expects
+#   200) that was broken two ways: (a) `docker compose exec -T` with no
+#   stdin redirect of its own drained this script's own SSH heredoc,
+#   silently swallowing the status echo and verdict line every time
+#   (nothing ever printed pass/fail); (b) exact `/rest/v1/` is
+#   RBAC-gated to SERVICE_ROLE_KEY only (see
+#   infra/supabase/volumes/api/envoy/lds.template.yaml's
+#   `rest-v1-openapi-protected` route) -- anon on that exact path is 403
+#   BY DESIGN, so the probe could never pass regardless of key
+#   correctness. Replaced with four probes, printed individually, with an
+#   explicit VERIFIED/NOT VERIFIED closing line:
+#     service_role -> GET /rest/v1/                    -> PASS iff 200
+#     anon         -> GET /rest/v1/<nonexistent-table> -> PASS iff NOT 401
+#     no-key       -> GET /rest/v1/<nonexistent-table> -> PASS iff 401
+#     anon         -> GET /auth/v1/health              -> PASS iff 200
+#   See the verify-live block itself for the full reasoning.
+#
 # USAGE
 #   scripts/mint-supabase-jwt-keys.sh                        # preflight only
 #   scripts/mint-supabase-jwt-keys.sh --apply                # mint + overwrite
+#                                                   # + redeploy the stack app
 #   scripts/mint-supabase-jwt-keys.sh --apply --app-name NAME
-#                                                   # also propagate app-side
+#                                        # also propagate (not redeploy) app-side
 #   scripts/mint-supabase-jwt-keys.sh --apply --verify-live
-#                                     # + a real apikey call against api-gw
-#                                     # (only meaningful once the stack is
-#                                     # actually deployed and healthy)
+#                                     # + the four-probe live check above
+#                                     # (skipped with a reason if the stack
+#                                     # has no containers yet)
 #   COOLIFY_APP_NAME=<name>  # override the stack app's Coolify resource
 #                             # name to resolve (default: pfin-supabase-
 #                             # stack, matching provision-supabase-stack.sh)
@@ -410,6 +451,44 @@ api("PATCH", f"/applications/{stack_uuid}/envs/bulk", {"data": [
 ]})
 print(f"OVERWRITTEN on stack app {stack_uuid}: ANON_KEY, SERVICE_ROLE_KEY")
 
+# BUG 3 FIX -- Coolify only injects env vars into a container at DEPLOY
+# (container-recreate) time; Envoy/PostgREST/GoTrue keep whatever apikey
+# they were started with baked in, so an env overwrite with no redeploy
+# leaves the RUNNING stack on the stale keys (401/403) until whenever the
+# next unrelated deploy happens to occur. A `docker restart` is NOT
+# equivalent -- it restarts the same container with the same baked env,
+# it does not re-read Coolify's env store. Trigger the same POST
+# /deploy?uuid=... + poll-to-`finished` idiom provision-supabase-stack.sh
+# already uses (~its "Deploying" step), so `--apply` is a coherent
+# mint -> redeploy -> (optionally) verify close instead of a mint that
+# silently does nothing to the running stack. Recreating containers from
+# the existing image keeps the db-data volume (compose down/up semantics,
+# not down -v) -- no data loss.
+existing = subprocess.run(
+    ["docker", "ps", "-a", "--filter", f"label=com.docker.compose.project={stack_uuid}",
+     "--format", "{{.Names}}"],
+    capture_output=True, text=True,
+).stdout.strip()
+if not existing:
+    print("SKIPPED redeploy -- stack has no containers yet (not deployed); provision-supabase-stack.sh's own first deploy will pick up these values")
+else:
+    deploy = api("POST", f"/deploy?uuid={stack_uuid}") or {}
+    deployments = deploy.get("deployments") or [{}]
+    deploy_uuid = deployments[0].get("deployment_uuid", "")
+    if not deploy_uuid:
+        die("redeploy trigger (POST /deploy) did not return a deployment_uuid -- env overwrite above is NOT yet live on the running stack")
+    print(f"redeploy queued: {deploy_uuid}")
+    status = ""
+    for _ in range(90):
+        d = api("GET", f"/deployments/{deploy_uuid}") or {}
+        status = d.get("status", "")
+        if status in ("finished", "failed"):
+            break
+        time.sleep(4)
+    if status != "finished":
+        die(f"redeploy {deploy_uuid} did not reach 'finished' (last status: {status or 'unknown, timed out after 360s'}) -- check the Coolify dashboard/deployment log; the env overwrite above is NOT confirmed live")
+    print(f"redeploy finished: {deploy_uuid}")
+
 if app_uuid:
     api("PATCH", f"/applications/{app_uuid}/envs/bulk", {"data": [
         {"key": "PUBLIC_SUPABASE_ANON_KEY", "value": anon_jwt},
@@ -449,44 +528,128 @@ foreach (['ANON_KEY','SERVICE_ROLE_KEY'] as \\\$key) {
 "
 REMOTE
 
-if [[ $VERIFY_LIVE -eq 1 ]]; then
-  step "Live verification -- real apikey call against the running gateway"
-  HEALTHY="$(sshx "docker ps --filter 'label=com.docker.compose.project=$STACK_APP_UUID' --filter 'health=healthy' --format '{{.Names}}'" | wc -l | tr -d ' ')"
-  if [[ "$HEALTHY" -lt 3 ]]; then
-    info "stack does not look deployed/healthy ($HEALTHY healthy containers) -- skipping live verify. Re-run with --verify-live once the stack is up."
-  else
-    # Runs entirely on the box: reads the just-set ANON_KEY back via the
-    # SAME tinker decrypt path (never echoes it to this script's own
-    # stdout beyond the remote shell -- it stays inside the SSH session),
-    # then execs into `supavisor` (has curl per its own healthcheck; no new
-    # image pulled, matching the verification battery's existing
-    # `docker compose --project-name ... exec -T <service>` idiom) to hit
-    # api-gw's internal service DNS name (`api-gw:8000`) with it as the
-    # apikey header. 200/anything-but-401 means PostgREST verified the JWT
-    # signature and mapped the role; 401 means the key still does not
-    # authenticate. Container healthy is NOT sufficient evidence on its own
-    # (the gap that hid the original random-hex-key defect) -- this is a
-    # real authenticated call. Audited 2026-09-10 alongside the argv-token
-    # fix above: this path uses plain bash (no Python subprocess, so no
-    # CalledProcessError-with-argv leak vector) and never echoes $ANON_KEY
-    # to this script's own stdout -- only the HTTP status code is printed.
-    sshx_in <<REMOTE2
+# BUG 3 FIX, continued -- if the python mint step above triggered a redeploy,
+# the containers were just recreated and can read "starting" for several
+# seconds after Coolify's own "finished" status (same lag
+# provision-supabase-stack.sh's "Verification battery" step already
+# documented and polls around). Wait for the stack to re-converge on
+# healthy BEFORE either --verify-live's real call or handing control back
+# to the operator -- a probe against a still-restarting container is not
+# evidence of anything. Skips cleanly (TOTAL=0) when the stack was never
+# deployed (the python step's own SKIPPED-redeploy path).
+TOTAL_CONTAINERS="$(sshx "docker ps -a --filter 'label=com.docker.compose.project=$STACK_APP_UUID' --format '{{.Names}}'" | wc -l | tr -d ' ')"
+if [[ "$TOTAL_CONTAINERS" -gt 0 ]]; then
+  step "Waiting for containers healthy after mint/redeploy"
+  HEALTHY_AFTER=0
+  for _ in $(seq 1 45); do
+    HEALTHY_AFTER="$(sshx "docker ps --filter 'label=com.docker.compose.project=$STACK_APP_UUID' --filter 'health=healthy' --format '{{.Names}}'" | wc -l | tr -d ' ')"
+    [[ "$HEALTHY_AFTER" == "$TOTAL_CONTAINERS" ]] && break
+    sleep 4
+  done
+  info "$HEALTHY_AFTER/$TOTAL_CONTAINERS containers healthy"
+  [[ "$HEALTHY_AFTER" == "$TOTAL_CONTAINERS" ]] || die "expected all $TOTAL_CONTAINERS containers healthy after mint/redeploy, got $HEALTHY_AFTER after 180s -- check 'docker ps -a' on the box before trusting --verify-live's result"
+  ok "all $TOTAL_CONTAINERS containers healthy"
+fi
+
+if [[ $VERIFY_LIVE -eq 1 && "$TOTAL_CONTAINERS" -eq 0 ]]; then
+  info "stack has no containers yet (not deployed) -- skipping live verify. Re-run with --apply --verify-live once provision-supabase-stack.sh --apply has deployed it."
+elif [[ $VERIFY_LIVE -eq 1 ]]; then
+  step "Live verification -- multi-probe check against the running gateway"
+  # BUG 2 FIX -- this block replaces a single anon-key GET /rest/v1/ probe
+  # that was broken two independent ways:
+  #
+  # (2a) SILENT VERDICT: `docker compose exec -T supavisor curl ...` ran
+  #      inside this same SSH heredoc with no stdin redirection of its own,
+  #      so it inherited this script's stdin -- the very heredoc still
+  #      feeding the rest of THIS script to the remote `bash -s`. `exec -T`
+  #      still attaches stdin by default; it drained the remaining heredoc
+  #      bytes into curl's (unused) stdin before bash ever got to read them
+  #      as script text, so every line after that one command -- the
+  #      status echo and the PASS/FAIL verdict -- silently never executed.
+  #      Fixed by redirecting each probe's stdin from /dev/null so it can
+  #      never compete with the outer heredoc for bytes.
+  # (2b) WRONG PROBE PATH: the old probe expected 200 from anon on exact
+  #      `/rest/v1/` (root). Per infra/supabase/volumes/api/envoy/lds.
+  #      template.yaml, the `rest-v1-openapi-protected` route (exact path
+  #      `/rest/v1/`) RBAC-allows only SERVICE_ROLE_KEY (and its asymmetric
+  #      counterpart) -- anon on the root is 403 BY DESIGN, so the old
+  #      probe could never pass. Replaced with four probes whose PASS
+  #      criteria distinguish "the key doesn't authenticate" from
+  #      "the key authenticates and RBAC is doing its job":
+  #        service_role -> GET /rest/v1/                  -> PASS iff 200
+  #        anon         -> GET /rest/v1/<nonexistent-table> -> PASS iff NOT 401
+  #                         (the `rest-v1-protected` PREFIX route lets anon
+  #                         through to PostgREST; 404 is the expected
+  #                         pre-Wave-6 verdict, not 200 -- no tables exist
+  #                         to actually list yet)
+  #        no-key       -> GET /rest/v1/<nonexistent-table> -> PASS iff 401
+  #                         (control: without a key at all, envoy/PostgREST
+  #                         must reject)
+  #        anon         -> GET /auth/v1/health             -> PASS iff 200
+  #                         (routing sanity, independent of the apikey gate)
+  #      Reproduces the exact 200/403/404/401/200 sequence measured
+  #      against the live stack 2026-09-10 (service_role root / old anon
+  #      root probe / anon nonexistent-table / no-key nonexistent-table /
+  #      anon auth-health, respectively).
+  #
+  # Both keys are read back on the box via the same tinker decrypt path
+  # already used above -- neither is ever echoed to this script's own
+  # stdout, only the HTTP status codes are.
+  sshx_in <<REMOTE2
 set -e
 ANON_KEY="\$(docker exec coolify php artisan tinker --execute="
 \\\$app = \\App\\Models\\Application::where('uuid','$STACK_APP_UUID')->firstOrFail();
 echo (string) \\\$app->environment_variables()->where('key','ANON_KEY')->first()->value;
 " 2>/dev/null | tail -1)"
-STATUS="\$(docker compose --project-name $STACK_APP_UUID exec -T supavisor curl -s -o /dev/null -w '%{http_code}' -H "apikey: \$ANON_KEY" -H "Authorization: Bearer \$ANON_KEY" http://api-gw:8000/rest/v1/)"
-echo "PostgREST /rest/v1/ with minted ANON_KEY -> HTTP \$STATUS"
-if [[ "\$STATUS" == "200" ]]; then
-  echo "VERIFIED: gateway/PostgREST accepted the minted anon JWT"
+SERVICE_ROLE_KEY="\$(docker exec coolify php artisan tinker --execute="
+\\\$app = \\App\\Models\\Application::where('uuid','$STACK_APP_UUID')->firstOrFail();
+echo (string) \\\$app->environment_variables()->where('key','SERVICE_ROLE_KEY')->first()->value;
+" 2>/dev/null | tail -1)"
+[[ -n "\$ANON_KEY" && -n "\$SERVICE_ROLE_KEY" ]] || { echo "NOT VERIFIED: ANON_KEY or SERVICE_ROLE_KEY read back empty -- cannot probe"; exit 1; }
+
+PROBE_TABLE="_pfin_nonexistent_probe_table"
+
+probe() { # probe <apikey-or-empty> <path>
+  local key="\$1" path="\$2"
+  if [[ -n "\$key" ]]; then
+    docker compose --project-name $STACK_APP_UUID exec -T supavisor \\
+      curl -s -o /dev/null -w '%{http_code}' \\
+      -H "apikey: \$key" -H "Authorization: Bearer \$key" \\
+      "http://api-gw:8000\$path" </dev/null
+  else
+    docker compose --project-name $STACK_APP_UUID exec -T supavisor \\
+      curl -s -o /dev/null -w '%{http_code}' \\
+      "http://api-gw:8000\$path" </dev/null
+  fi
+}
+
+set +e
+SVC_ROOT="\$(probe "\$SERVICE_ROLE_KEY" "/rest/v1/")"
+ANON_TBL="\$(probe "\$ANON_KEY" "/rest/v1/\$PROBE_TABLE")"
+NOKEY_TBL="\$(probe "" "/rest/v1/\$PROBE_TABLE")"
+ANON_AUTH="\$(probe "\$ANON_KEY" "/auth/v1/health")"
+set -e
+
+echo "service_role -> GET /rest/v1/                    -> HTTP \$SVC_ROOT   (PASS iff 200)"
+echo "anon         -> GET /rest/v1/<nonexistent-table> -> HTTP \$ANON_TBL   (PASS iff NOT 401)"
+echo "no-key       -> GET /rest/v1/<nonexistent-table> -> HTTP \$NOKEY_TBL  (PASS iff 401)"
+echo "anon         -> GET /auth/v1/health              -> HTTP \$ANON_AUTH  (PASS iff 200)"
+
+PASS=1
+[[ "\$SVC_ROOT" == "200" ]] || PASS=0
+[[ "\$ANON_TBL" != "401" ]] || PASS=0
+[[ "\$NOKEY_TBL" == "401" ]] || PASS=0
+[[ "\$ANON_AUTH" == "200" ]] || PASS=0
+
+if [[ \$PASS -eq 1 ]]; then
+  echo "VERIFIED: all four probes matched their expected verdict"
 else
-  echo "NOT VERIFIED: expected 200, got \$STATUS -- investigate before relying on this key"
+  echo "NOT VERIFIED: at least one probe did not match its expected verdict -- see codes above"
 fi
 REMOTE2
-  fi
 fi
 
 step "Done"
 info "Operator step once prod is up: scripts/mint-supabase-jwt-keys.sh --apply --app-name <the V1 web-app Coolify resource name> --verify-live"
-info "Restart the affected containers (auth, rest, api-gw, and the app once it exists) after the env-var overwrite -- Coolify env changes require a redeploy/restart to take effect, this script does not trigger one."
+info "The stack-app redeploy needed for the new keys to take effect already ran above (this script triggers + polls it under --apply) -- no separate restart/redeploy step needed for the Supabase stack itself."
+info "The app-side propagation (PUBLIC_SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY, only when --app-name resolved) is env-overwrite ONLY -- this script does NOT redeploy the app resource. Redeploy it separately (Coolify UI Deploy button, or the same POST /deploy?uuid=<app-uuid> idiom) once it exists."
