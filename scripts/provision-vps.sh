@@ -404,6 +404,17 @@ BOX_IP="$(api GET "/servers?name=$SERVER_NAME" | jqp "
 d=json.load(sys.stdin)['servers']
 print((d[0]['public_net']['ipv4'] or {}).get('ip') or '' if d else '')")"
 [[ -n "$BOX_IP" ]] || die "could not resolve $SERVER_NAME's IPv4 address after create/lookup"
+# Machine-readable BOX_IP handoff for scripts/standup.sh (the top-level
+# orchestrator that runs this script then passes BOX_IP into
+# provision-supabase-stack.sh and mint-supabase-jwt-keys.sh). A plain
+# `KEY=value` sentinel to stdout, greppable with `grep -m1 '^BOX_IP='` --
+# added instead of a local state file so there is nothing to go stale or
+# collide across concurrent runs; the value is only ever derived, live,
+# from this same Hetzner lookup. Printed unconditionally once resolved
+# (preflight against an existing box included), never just before the
+# "Next" block at the very end, so a wrapper can capture it even on a
+# preflight run that exits early during Phase 2's SSH-reachability wait.
+echo "BOX_IP=$BOX_IP"
 
 if [[ $APPLY -eq 1 ]]; then
 # The IPv6 primary IP is created FOR you by Hetzner at server-creation time,
