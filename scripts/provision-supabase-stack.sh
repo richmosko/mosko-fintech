@@ -507,13 +507,54 @@ import json, subprocess, sys, secrets as pysecrets
 token, app_uuid, need_mint_raw, smtp_seed_file = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 need_mint = set(need_mint_raw.split())
 
+# SECURITY FIX, 2026-09-11 (Sec-flagged sibling finding to #734 -- Backend
+# hit this EXACT defect class live in mint-supabase-jwt-keys.sh's own api()
+# during the clean prod rebuild: a Coolify API call failed on a stale uuid,
+# subprocess.run(cmd, ..., check=True) raised CalledProcessError, and its
+# default string representation embeds its WHOLE argv -- including the
+# literal -H f"Authorization: Bearer {token}" element -- which then
+# reached the operator/log/team-lead's context over this script's own SSH
+# channel. This file's api() had the IDENTICAL shape and never happened to
+# leak only because no call here failed on that run -- any future
+# create/deploy failure would leak the live Coolify token the same way.
+# Mirrors #734's fix exactly, for consistency across both scripts:
+#   (1) the token is now a 'header = "Authorization: Bearer <token>"'
+#       config-file directive fed to curl over STDIN (-K -), never a
+#       -H/argv element at all -- it cannot appear in ps, and it cannot
+#       appear in an exception's string representation because it was
+#       never part of cmd.
+#   (2) every call is wrapped in try/except CalledProcessError, re-raising
+#       a SANITIZED message (exit status + curl's own -S diagnostic text,
+#       truncated -- which describes URL/connection status, never request
+#       headers) instead of letting Python's default unhandled-exception
+#       traceback through.
+# Note this ALSO closes the wider exposure team-lead asked to check: the
+# -d json.dumps(body) argv element (unchanged, still present -- matching
+# #734, which does not move the body out of argv either) carries every OTHER
+# secret this step PATCHes in the SAME call -- JWT_SECRET, POSTGRES_PASSWORD,
+# SECRET_KEY_BASE, VAULT_ENC_KEY, SERVICE_ROLE_KEY, ANON_KEY,
+# DASHBOARD_PASSWORD, PG_META_CRYPTO_KEY, and SMTP_PASS when the operator
+# override applies -- ALL of them, not just the Coolify token, would have
+# been printed by the SAME unhandled CalledProcessError. The try/except
+# wrapper protects all of them at once, since it controls what die() prints
+# regardless of what cmd itself contains.
+def die(msg):
+    print(f"FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
 def api(method, path, body=None):
-    cmd = ["curl", "-fsS", "-X", method, "-H", f"Authorization: Bearer {token}"]
+    if '"' in token or "\n" in token:
+        die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    cmd = ["curl", "-fsS", "-K", "-", "-X", method]
     if body is not None:
         cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
     cmd += [f"http://localhost:8000/api/v1{path}"]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
-    return json.loads(out) if out.strip() else None
+    try:
+        result = subprocess.run(cmd, input=config, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.strip()[:200]})")
+    return json.loads(result.stdout) if result.stdout.strip() else None
 
 # Measured 2026-09-11: MOST secrets have no length requirement (any random
 # value is fine, 64 hex chars is generous), but VAULT_ENC_KEY does --
