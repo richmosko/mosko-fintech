@@ -403,7 +403,36 @@ fi  # end: if [[ $APPLY -eq 1 ]] (Hetzner-side "Applying" section)
 BOX_IP="$(api GET "/servers?name=$SERVER_NAME" | jqp "
 d=json.load(sys.stdin)['servers']
 print((d[0]['public_net']['ipv4'] or {}).get('ip') or '' if d else '')")"
-[[ -n "$BOX_IP" ]] || die "could not resolve $SERVER_NAME's IPv4 address after create/lookup"
+if [[ -z "$BOX_IP" ]]; then
+  # PREFLIGHT + no resolvable IP is a NORMAL, expected state -- not a
+  # defect -- whenever the box hasn't been created yet (the common
+  # first-ever-run case the line-271 early exit already covers) OR, more
+  # generally, whenever the server row exists but has no IPv4 yet for any
+  # other reason. Reported as a wrapper-unfriendly `die` before this fix
+  # (scripts/standup.sh's own "box doesn't exist yet, preview and exit 0"
+  # preflight branch was unreachable dead code as a result -- team-lead
+  # caught this reviewing PR #737). Under --apply, by contrast, every
+  # create/lookup path above should have produced a real IPv4 by this
+  # point -- an empty result there IS a genuine defect, so the die() stays
+  # for that branch.
+  if [[ $APPLY -eq 0 ]]; then
+    info "no resolvable IPv4 for '$SERVER_NAME' yet -- would be created (and its IP assigned) under --apply. No BOX_IP to hand off yet."
+    printf '\n\033[33mPREFLIGHT ONLY.\033[0m Nothing was created. Re-run with --apply to execute.\n'
+    exit 0
+  fi
+  die "could not resolve $SERVER_NAME's IPv4 address after create/lookup"
+fi
+# Machine-readable BOX_IP handoff for scripts/standup.sh (the top-level
+# orchestrator that runs this script then passes BOX_IP into
+# provision-supabase-stack.sh and mint-supabase-jwt-keys.sh). A plain
+# `KEY=value` sentinel to stdout, greppable with `grep -m1 '^BOX_IP='` --
+# added instead of a local state file so there is nothing to go stale or
+# collide across concurrent runs; the value is only ever derived, live,
+# from this same Hetzner lookup. Printed unconditionally once resolved
+# (preflight against an existing box included), never just before the
+# "Next" block at the very end, so a wrapper can capture it even on a
+# preflight run that exits early during Phase 2's SSH-reachability wait.
+echo "BOX_IP=$BOX_IP"
 
 if [[ $APPLY -eq 1 ]]; then
 # The IPv6 primary IP is created FOR you by Hetzner at server-creation time,
