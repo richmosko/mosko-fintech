@@ -698,7 +698,30 @@ Real artifacts this section binds to (all verified present):
   - [`workers/etl/.env.example`](../workers/etl/.env.example) — `pfin_back_etl` container (discrete `PFIN_DB_*` + FMP + BLS + Plaid creds).
   - [`workers/pdf-render/.env.example`](../workers/pdf-render/.env.example) — PDF worker container (**exactly one** secret: `PDF_WORKER_SIGNING_KEY` — zero-DB-isolation per Lock 13 mod #2; RT-22 enforces no DB credential ever appears here).
 
-> **STUB —** Fill in: the actual Coolify secret-injection procedure (per-service env-var entry), the generation/rotation procedure for each production secret (esp. `PDF_WORKER_SIGNING_KEY` — the SAME value on web-app + PDF worker per SD-20; and `SUPABASE_SERVICE_ROLE_KEY` — RT-26 ARCH §4.1-allowlist-confined), and the order of injection vs. first deploy. **Sec joint-review REQUIRED at lock.** Open discrepancies flagged in the artifacts to resolve here: (a) ARCH §5 frames the ETL DB secret as a single conn-string while incumbent code consumes discrete `PFIN_DB_*` — representation difference, reconcile deliberately; (b) ARCH §5 frames BLS as "free/open" (no key) while incumbent code requires `BLS_API_KEY` — reconcile with ARCH/Sec.
+**Scripted injection — `scripts/push-production-secrets.sh` — PROPOSED, pending Sec joint-review, not yet ratified for use against prod.** Replaces the by-hand Coolify UI entry for the app/worker secrets below with one scripted push, using the same `envs/bulk` API + SSH-stdin pattern `scripts/provision-supabase-stack.sh` already uses for its own `SMTP_PASS` operator override (no new mechanism). Reads secret **names** live from [`secrets-manifest.yml`](../secrets-manifest.yml)'s `production_only` set (never hardcoded — that would be exactly the drift the manifest exists to prevent) and **values** from the operator's gitignored local `.env`; never prints a value; reports names-only, grouped by resource.
+
+`BOX_IP=<box-ip> scripts/push-production-secrets.sh [--apply] [--skip-missing-resource]` — same preflight/`--apply` convention as its siblings. See the script's own header comment for the full reasoning; summarized here as the proposed secret → resource mapping for Sec + F/CTO to sanity-check:
+
+| Secret | Resource(s) | Note |
+|---|---|---|
+| `SUPABASE_SERVICE_ROLE_KEY` | `app` | RT-26 §4.1-allowlist-confined |
+| `PDF_WORKER_SIGNING_KEY` | `app`, `pdf-render` | same value on both, per SD-20 |
+| `DISCORD_WEBHOOK_URL` | `app`, `etl`, `provider-sync` | same value on all three (fourth consumer is Coolify's own control-plane notification setting, not a container env) |
+| `WORKER_ADMISSION_SHARED_SECRET` | `app`, `provider-sync` | ⚠ pushed as an ordinary per-application env var identically to both, **not** via a Coolify "project-scoped shared variable" — Coolify's `SharedEnvironmentVariable` feature (Team/Project/Environment scope, `{{scope.NAME}}` reference syntax) has no documented public REST API endpoint, only a dashboard (Livewire) flow; this is a deviation from the manifest's literal wording, proposed here rather than assumed, flagged for Sec/F/CTO ratification |
+| `FMP_API_KEY`, `BLS_API_KEY` | `etl` | |
+| `PLAID_CLIENT_ID`, `PLAID_SECRET`, `SIMPLEFIN_TOKEN` | `provider-sync` | sole holder per ADR-011 D17/Lock 13 amendment |
+
+**Explicitly excluded from this script** (fails closed — see script header — if the manifest ever adds a name with no mapping-table entry, rather than silently dropping it):
+- The Supabase stack's own 9 `production_only` names (`POSTGRES_PASSWORD`, `JWT_SECRET`, `SECRET_KEY_BASE`, `VAULT_ENC_KEY`, `SERVICE_ROLE_KEY`, `ANON_KEY`, `DASHBOARD_PASSWORD`, `PG_META_CRYPTO_KEY`, `SMTP_PASS`) — already minted/overwritten by `provision-supabase-stack.sh` (+ the real JWT pair by `mint-supabase-jwt-keys.sh`); double-handling here would race that mint-if-absent logic.
+- `PFIN_DB_PASSWORD` — **different value per container** (`pfin_etl` vs. `pfin_provider_sync`), and not generated until the interactive §6.1/§6.2 `\password` role handoff **after** migrations apply. Stays exactly where it already lives — never pushed by this script.
+
+**Ordering note — this runs functionally after §7, not before it, despite being numbered §5.** The `app`/`etl`/`pdf-render`/`provider-sync` Coolify resources are created in §7; this script can only push env vars onto a resource that already exists, and fails closed (naming the missing resource) rather than silently skipping one — `--skip-missing-resource` opts into a deliberate partial run instead. The runbook's document order (§5 secrets, §6 migrations, §7 workers) and this script's actual execution order therefore diverge; that divergence is flagged for F/CTO/Sec to ratify explicitly rather than silently resequencing this file's section numbers.
+
+**A redeploy is still required after pushing** — Coolify only injects the env store into a container at deploy (container-recreate) time; the script does not auto-redeploy the resources it touches (unlike `mint-supabase-jwt-keys.sh`, which owns exactly one resource and safely can) and prints which resources need a manual redeploy.
+
+**Non-secret `PUBLIC_SUPABASE_URL` / `PUBLIC_SUPABASE_ANON_KEY`** (see the classification note above) are **not** pushed by this script — they're outside its manifest-driven charter and their real values are box state (the stack's own gateway URL and the real `ANON_KEY` already minted on the box), not an operator-`.env` value. Flagged as a natural follow-up, not built here.
+
+> **STUB —** Still open regardless of the scripted push above, and NOT resolved by this PR: (a) ARCH §5 frames the ETL DB secret as a single conn-string while incumbent code consumes discrete `PFIN_DB_*` — representation difference, reconcile deliberately; (b) ARCH §5 frames BLS as "free/open" (no key) while incumbent code requires `BLS_API_KEY` — reconcile with ARCH/Sec. Also open: whether runbook §3's "ETL is one image, two Coolify units" resolves to one Coolify resource or two at §7 resource-creation time — `push-production-secrets.sh` currently assumes one (`ETL_RESOURCE_NAME`, overridable); if §7 registers two, the mapping table needs a second entry.
 
 ---
 
