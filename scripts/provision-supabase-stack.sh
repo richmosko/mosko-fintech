@@ -465,7 +465,7 @@ NEED_MINT="$(sshx_in <<REMOTE
 docker exec coolify php artisan tinker --execute="
 (function () {
 \\\$app = \\App\\Models\\Application::where('uuid','$APP_UUID')->firstOrFail();
-\\\$check = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
+\\\$check = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','MIGRATOR_DB_USER','MIGRATOR_DB_PASSWORD','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
 foreach (\\\$check as \\\$key) {
   \\\$env = \\\$app->environment_variables()->where('key', \\\$key)->first();
   \\\$nonEmpty = \\\$env && strlen((string) \\\$env->value) > 0;
@@ -567,7 +567,20 @@ def api(method, path, body=None):
 # constant for all of MINT_SECRETS.
 MINT_SECRETS = {"POSTGRES_PASSWORD": 32, "JWT_SECRET": 32, "SECRET_KEY_BASE": 32,
                 "VAULT_ENC_KEY": 16, "SERVICE_ROLE_KEY": 32, "ANON_KEY": 32,
-                "DASHBOARD_PASSWORD": 32, "PG_META_CRYPTO_KEY": 32}
+                "DASHBOARD_PASSWORD": 32, "PG_META_CRYPTO_KEY": 32,
+                # ADR-072 (Option E) Decision 4 / Sec C7/C8 -- the `migrator`
+                # service's own bounded DDL credential. Minted HERE, not by
+                # push-production-secrets.sh: `migrator` is a SIBLING service
+                # in THIS SAME infra/supabase/docker-compose.yml Compose
+                # resource (one Coolify app UUID, one shared env store),
+                # exactly like POSTGRES_PASSWORD/JWT_SECRET above -- it is
+                # NOT a standalone Coolify application the way
+                # etl/pdf-render/provider-sync are. secrets-manifest.yml is
+                # the canonical rationale; this is that entry's provisioning
+                # side. Mint-if-absent (never overwrites an already-set
+                # value) -- same idempotence contract as every other key
+                # here.
+                "MIGRATOR_DB_PASSWORD": 32}
 # Measured 2026-09-11 against a genuinely fresh scratch box: this script's
 # own header claims its scope is "exactly the Supabase-stack secrets ...
 # plus the two non-secret Studio vars" -- that was never actually
@@ -618,6 +631,13 @@ NONSECRET_DEFAULTS = {"STUDIO_DEFAULT_ORGANIZATION": "mosko-fintech",
                        "POSTGRES_DB": "postgres",
                        "POSTGRES_HOST": "db",
                        "POSTGRES_PORT": "5432",
+                       # ADR-072 -- non-secret login-role name for the
+                       # `migrator` service (see MIGRATOR_DB_PASSWORD in
+                       # MINT_SECRETS above for the secret half). Distinct
+                       # from every other login identity in this stack
+                       # (postgres / authenticator / pfin_etl /
+                       # pfin_provider_sync).
+                       "MIGRATOR_DB_USER": "migrator",
                        # NON-FUNCTIONAL PLACEHOLDERS (Supabase's own
                        # reference docker/.env.example values, read live
                        # 2026-09-11) -- mint-if-absent means these NEVER
@@ -709,7 +729,7 @@ chmod 600 /root/.pfin/supabase.env 2>/dev/null || true
 ASSERT_OUT="\$(docker exec coolify php artisan tinker --execute="
 (function () {
 \\\$app = \\App\\Models\\Application::where('uuid','$APP_UUID')->firstOrFail();
-\\\$required = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
+\\\$required = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','MIGRATOR_DB_USER','MIGRATOR_DB_PASSWORD','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
 foreach (\\\$required as \\\$key) {
   \\\$env = \\\$app->environment_variables()->where('key', \\\$key)->first();
   \\\$nonEmpty = \\\$env && strlen((string) \\\$env->value) > 0;
