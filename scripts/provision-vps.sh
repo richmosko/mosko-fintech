@@ -75,6 +75,30 @@ IMAGE="ubuntu-24.04"         # runbook §1: Coolify supports Debian-based; arm64
 # there, and you find out AFTER provisioning.
 SSH_PUBKEYS="${SSH_PUBKEYS:-$HOME/.ssh/id_ed25519.pub $HOME/.ssh/id_ed25519_claude_mosko-fintech.pub}"
 SSH_KEY_PREFIX="${SSH_KEY_PREFIX:-mosko-fintech}"
+# ADR-072 (Option E) chunk 2 — the ci-migrate forced-command trigger.
+#
+# CI_MIGRATE_SSH_PUBKEY: path to the PUBLIC half of the ci_only keypair an
+# F/CTO `!`-step generates (`ssh-keygen -t ed25519 -N '' -f <path>` — no
+# passphrase, this key authenticates a headless GitHub-Actions runner, not a
+# human) and whose PRIVATE half F/CTO places in this repo's GitHub Actions
+# secrets as CI_MIGRATE_SSH_PRIVATE_KEY (secrets-manifest.yml `ci_only`).
+# Only the public half ever touches this script or this box's disk in a
+# way this repo can see — same "provisioning-time input, never generated
+# here" shape as SSH_PUBKEYS above, distinct KEY from every key in that
+# list (ci-migrate's authorized_keys holds ONLY this one line, C1).
+CI_MIGRATE_SSH_PUBKEY="${CI_MIGRATE_SSH_PUBKEY:-$HOME/.ssh/id_ed25519_ci_migrate.pub}"
+# Non-secret Coolify resource identifiers the orchestration script needs
+# (scripts/migrator-orchestrate.sh) — written into the box-resident
+# /etc/pfin/migrator-trigger.conf this script materializes below. These are
+# UUIDs Coolify assigns when the migrator Scheduled Task and the V1 web app
+# resource are created (chunk 1 / runbook §7); there is no API to "look them
+# up by name" reliably before they exist, so the operator supplies them
+# after creating those resources, the same way scripts/push-production-
+# secrets.sh's ETL_RESOURCE_NAME is an operator-supplied resource identifier
+# rather than something this script discovers.
+MIGRATOR_SERVICE_UUID="${MIGRATOR_SERVICE_UUID:-}"
+MIGRATOR_TASK_UUID="${MIGRATOR_TASK_UUID:-}"
+APP_UUID="${APP_UUID:-}"
 # Escape hatch: allow an all-passphrase key set. Only for a box a human will
 # ever touch by hand. Nothing scripted will be able to reach it.
 ALLOW_NO_AUTOMATION_KEY="${ALLOW_NO_AUTOMATION_KEY:-0}"
@@ -995,6 +1019,204 @@ else
   ok "Coolify API enabled (was off by Coolify's own default; provision-supabase-stack.sh needs it)"
 fi
 
+##############################################################################
+# ADR-072 (Option E) chunk 2 -- the ci-migrate forced-command SSH trigger.
+# Box-side materialization per Decision 5 ("box side ... versioned in
+# scripts/, materialized by provision-vps.sh"). Chunk 1 (already on main)
+# built the migrator container, its credential, and the Scheduled Task
+# definition (scripts/migrator-scheduled-task.md) -- nothing calls that task
+# automatically until this section's steps are applied. Ownership split,
+# stated once: this script creates the USER, the KEY, and the ORCHESTRATION
+# SCRIPT; the GitHub Actions workflow that actually opens the SSH session
+# lives at .github/workflows/migrator-trigger.yml and is a separate half of
+# this same chunk.
+##############################################################################
+
+step "ci-migrate user (ADR-072 C1 -- non-root, NO sudo)"
+CI_MIGRATE_STATE="$(sshx 'id ci-migrate >/dev/null 2>&1 && echo EXISTS || echo ABSENT')"
+if [[ "$CI_MIGRATE_STATE" == "EXISTS" ]]; then
+  ok "ci-migrate user already present"
+elif [[ $APPLY -eq 0 ]]; then
+  info "ci-migrate user missing -- would create (adduser --disabled-password; no sudo group; no sudoers.d entry)"
+else
+  sshx "adduser --disabled-password --gecos '' ci-migrate && mkdir -p /home/ci-migrate/.ssh && chmod 700 /home/ci-migrate/.ssh && chown ci-migrate:ci-migrate /home/ci-migrate/.ssh"
+  ok "ci-migrate user created"
+fi
+# Negative check, every run -- not just at creation. Catches a future
+# hand-edit that adds ci-migrate to sudo or drops a sudoers.d file naming
+# it, which would silently defeat C1 without this script ever objecting
+# otherwise. A missing user makes both greps/lookups fail closed to empty
+# (`|| true` on each pipeline), which is the correct "no evidence of sudo"
+# answer for a user that doesn't exist yet.
+SUDOERS_HIT="$(sshx "grep -rl ci-migrate /etc/sudoers.d/ 2>/dev/null" || true)"
+[[ -z "$SUDOERS_HIT" ]] || die "ci-migrate is named in a sudoers.d file ($SUDOERS_HIT) -- C1 requires NO sudo capability. Remove it by hand."
+IN_SUDO_GROUP="$(sshx "id -nG ci-migrate 2>/dev/null | tr ' ' '\n' | grep -x sudo" || true)"
+[[ -z "$IN_SUDO_GROUP" ]] || die "ci-migrate is a member of the sudo group -- C1 requires NO sudo. Fix by hand: gpasswd -d ci-migrate sudo"
+ok "C1 verified: no sudoers.d entry, not in the sudo group"
+
+step "orchestration script (ADR-072 C2/C4/C5 -- absolute path, root-owned, 0755, NOT writable by ci-migrate)"
+ORCH_SCRIPT_PATH="/usr/local/sbin/migrator-orchestrate.sh"
+DESIRED_ORCH="$(cat "$REPO_ROOT/scripts/migrator-orchestrate.sh")"
+CURRENT_ORCH="$(sshx "cat $ORCH_SCRIPT_PATH 2>/dev/null" || true)"
+if [[ "$CURRENT_ORCH" == "$DESIRED_ORCH" ]]; then
+  ok "$ORCH_SCRIPT_PATH already matches scripts/migrator-orchestrate.sh"
+elif [[ $APPLY -eq 0 ]]; then
+  info "$ORCH_SCRIPT_PATH missing or differs from the repo's scripts/migrator-orchestrate.sh -- would write it"
+else
+  # `cat file | ssh ...` (not `ssh ... < file`, which this script uses
+  # nowhere else): sshx_in already claims stdin for the bash -s convention
+  # this file uses elsewhere, and this is a one-off raw ssh call like the
+  # sshd drop-in write above it -- piping keeps the same shape as that step.
+  cat "$REPO_ROOT/scripts/migrator-orchestrate.sh" | ssh "${SSH_OPTS[@]}" "root@$BOX_IP" \
+    "cat > $ORCH_SCRIPT_PATH && chown root:root $ORCH_SCRIPT_PATH && chmod 0755 $ORCH_SCRIPT_PATH"
+  ok "$ORCH_SCRIPT_PATH written -- root:root, 0755 (ci-migrate can execute it via the forced command; cannot write it)"
+fi
+
+step "ci-migrate authorized_keys -- forced command (ADR-072 C3 -- 'restrict', not a hand-listed no-* set)"
+[[ -f "$CI_MIGRATE_SSH_PUBKEY" ]] || die "no public key at CI_MIGRATE_SSH_PUBKEY=$CI_MIGRATE_SSH_PUBKEY -- generate the ci_only keypair first (ssh-keygen -t ed25519 -N '' -f <path>), give F/CTO the PRIVATE half for this repo's CI_MIGRATE_SSH_PRIVATE_KEY GitHub Actions secret, and point this var at the PUBLIC half."
+CI_MIGRATE_PUBVAL="$(tr -d '\r\n' < "$CI_MIGRATE_SSH_PUBKEY")"
+# 'restrict' (OpenSSH >= 7.2), NOT a hand-listed no-agent-forwarding,no-X11-
+# forwarding,... set -- Sec C3, verbatim: restrict is fail-closed against
+# future authorized_keys OPTION ADDITIONS (a new no-* flag OpenSSH ships
+# later is off by default under restrict; a hand-listed set would silently
+# omit it). A permitted port-forward in particular would tunnel INTO the
+# expose:-only internal Docker network this box's firewall design depends
+# on -- restrict is what keeps that off without enumerating it by name.
+DESIRED_AUTHKEY="restrict,command=\"$ORCH_SCRIPT_PATH\" $CI_MIGRATE_PUBVAL"
+CURRENT_AUTHKEY="$(sshx 'cat /home/ci-migrate/.ssh/authorized_keys 2>/dev/null' || true)"
+if [[ "$CURRENT_AUTHKEY" == "$DESIRED_AUTHKEY" ]]; then
+  ok "ci-migrate authorized_keys already matches (restrict + forced command + the one ci_only public key)"
+elif [[ $APPLY -eq 0 ]]; then
+  info "ci-migrate authorized_keys missing or differs -- would write the single restrict,command=\"$ORCH_SCRIPT_PATH\" line"
+else
+  # The file this writes is ci-migrate's OWN, so ci-migrate owning it is
+  # correct and does not conflict with C1/C5 -- C5's "not writable by
+  # ci-migrate" binds the ORCHESTRATION SCRIPT, not this key file (sshd
+  # itself requires authorized_keys be writable only by its owner or root,
+  # which ci-migrate ownership already satisfies).
+  printf '%s\n' "$DESIRED_AUTHKEY" | ssh "${SSH_OPTS[@]}" "root@$BOX_IP" \
+    'cat > /home/ci-migrate/.ssh/authorized_keys && chmod 600 /home/ci-migrate/.ssh/authorized_keys && chown ci-migrate:ci-migrate /home/ci-migrate/.ssh/authorized_keys'
+  ok "ci-migrate authorized_keys written -- restrict (agent/X11/port-forwarding all off by construction), forced command $ORCH_SCRIPT_PATH"
+fi
+
+step "migrator-trigger box-resident config (non-secret UUIDs; scripts/migrator-orchestrate.sh's only input)"
+[[ -n "$MIGRATOR_SERVICE_UUID" && -n "$MIGRATOR_TASK_UUID" && -n "$APP_UUID" ]] || die "MIGRATOR_SERVICE_UUID / MIGRATOR_TASK_UUID / APP_UUID must all be set (in .env or the environment) before provisioning the ci-migrate trigger -- these are the Coolify resource UUIDs from chunk 1's Scheduled Task and the V1 web app resource (see scripts/migrator-scheduled-task.md for where the Scheduled Task's UUID comes from)."
+DESIRED_TRIGGER_CONF="MIGRATOR_SERVICE_UUID=$MIGRATOR_SERVICE_UUID
+MIGRATOR_TASK_UUID=$MIGRATOR_TASK_UUID
+APP_UUID=$APP_UUID"
+CURRENT_TRIGGER_CONF="$(sshx 'cat /etc/pfin/migrator-trigger.conf 2>/dev/null' || true)"
+if [[ "$CURRENT_TRIGGER_CONF" == "$DESIRED_TRIGGER_CONF" ]]; then
+  ok "/etc/pfin/migrator-trigger.conf already matches"
+elif [[ $APPLY -eq 0 ]]; then
+  info "/etc/pfin/migrator-trigger.conf missing or differs -- would write it (non-secret; group-readable by ci-migrate)"
+else
+  # /etc/pfin -- deliberately NOT /root/.pfin (that directory is root-owned,
+  # mode 700, and unreadable by ci-migrate at the DIRECTORY level regardless
+  # of any file's own permissions inside it; the two directories hold
+  # different tiers of value for different readers and are not the same
+  # path with a typo).
+  sshx "mkdir -p /etc/pfin && chown root:root /etc/pfin && chmod 0755 /etc/pfin"
+  printf '%s\n' "$DESIRED_TRIGGER_CONF" | ssh "${SSH_OPTS[@]}" "root@$BOX_IP" \
+    'cat > /etc/pfin/migrator-trigger.conf && chown root:ci-migrate /etc/pfin/migrator-trigger.conf && chmod 0640 /etc/pfin/migrator-trigger.conf'
+  ok "/etc/pfin/migrator-trigger.conf written (root:ci-migrate, 0640 -- ci-migrate reads via group, cannot write)"
+fi
+
+step "migrator-trigger Coolify API token -- scoped read+write+deploy, NOT root (ADR-072 C4/C5)"
+# Distinct from the box's OWN 'provisioning-automation' token (root ability,
+# minted above in the admin-bootstrap step; used by provision-supabase-
+# stack.sh / push-production-secrets.sh from the OPERATOR's machine, over an
+# SSH tunnel). This one, 'migrator-trigger', is consumed ONLY by
+# scripts/migrator-orchestrate.sh, running AS ci-migrate, ON the box.
+#
+# ADR-072 C4 accepted the residual that Coolify v1 API tokens are "typically
+# root or read-only, not action-scoped" and that the trigger path
+# "effectively holds deploy + env-write authority." Verified against
+# Coolify 4.3.18's own routes/api.php (the box's measured version, ADR-072
+# Decision 7) -- read live 2026-09-12, not assumed -- Coolify's abilities
+# are actually FOUR strings (read / write / deploy / root, plus a
+# write:sensitive variant unused here), and the three endpoints this script
+# calls resolve to exactly:
+#   GET  /services/{uuid}/scheduled-tasks/{task}/executions  -> ability:read
+#   POST /services/{uuid}/scheduled-tasks/{task}/execute     -> ability:write
+#   GET|POST /deploy?uuid=...                                -> ability:deploy
+# So the NARROWEST token that actually works is read+write+deploy -- NOT
+# root, which additionally bypasses is_api_enabled and every other
+# ability-gated route repo-wide. This is real narrowing, not a
+# reclassification of the residual: 'write' remains Coolify's single
+# broadest non-root ability (it also gates env-var writes on OTHER
+# resources this token is never given a UUID for), which is exactly the
+# "deploy + env-write authority" shape C4 already named and F/CTO already
+# accepted -- flagged here for Sec's joint review as a candidate to tighten
+# C4's own wording from "effectively root" to "read+write+deploy," not as
+# an unreviewed reopening of the ratified residual.
+MIGRATOR_TOKEN_STATE="$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','migrator-trigger')->exists() ? 'EXISTS' : 'ABSENT';\"" 2>/dev/null | tail -1)"
+if [[ "$MIGRATOR_TOKEN_STATE" == "EXISTS" ]]; then
+  # Same orphan-detection shape as the admin-bootstrap token above: a DB
+  # row with no usable host-side value is evidence of a failed capture, not
+  # a completed provision.
+  MIGRATOR_TOKEN_FILE_USABLE="$(sshx "test -s /etc/pfin/migrator-coolify-token.env && grep -q '^COOLIFY_API_TOKEN=.' /etc/pfin/migrator-coolify-token.env && echo USABLE || echo ORPHAN" 2>/dev/null | tail -1)"
+  if [[ "$MIGRATOR_TOKEN_FILE_USABLE" == "ORPHAN" ]]; then
+    if [[ $APPLY -eq 0 ]]; then
+      info "migrator-trigger token row exists in the DB but /etc/pfin/migrator-coolify-token.env has no usable value -- orphan from a failed capture. Would delete the row and re-mint."
+    else
+      sshx "docker exec coolify php artisan tinker --execute=\"\\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','migrator-trigger')->delete();\"" >/dev/null
+      ok "deleted orphaned 'migrator-trigger' token row -- re-minting"
+    fi
+    MIGRATOR_TOKEN_STATE="ABSENT"
+  fi
+fi
+
+if [[ "$MIGRATOR_TOKEN_STATE" == "EXISTS" ]]; then
+  ok "migrator-trigger token already provisioned -- not touched (delete the DB row by hand + re-run --apply to rotate)"
+elif [[ $APPLY -eq 0 ]]; then
+  info "migrator-trigger token missing -- would mint one (abilities: read, write, deploy) and write it to /etc/pfin/migrator-coolify-token.env (ci-migrate:ci-migrate, 0600), printing nothing secret"
+else
+  MIGRATOR_TOKEN_LOG="$(mktemp)"
+  chmod 600 "$MIGRATOR_TOKEN_LOG"
+  # Same shape as the admin-bootstrap token mint above -- non-interactive
+  # tinker via --execute, a single IIFE statement returning null, the
+  # plaintext never crossing back into this script's own variables or
+  # stdout (container -> host /root/.pfin staging -> /etc/pfin, chowned to
+  # ci-migrate, never printed). See that step's incident note for why this
+  # shape is load-bearing, not stylistic.
+  {
+    sshx_in <<'REMOTE'
+set -euo pipefail
+docker exec coolify php artisan tinker --execute='
+(function () {
+  $user = \App\Models\User::find(0);
+  if (!$user) {
+    fwrite(STDERR, "FATAL: admin user id=0 not found -- migrator-trigger token mint cannot proceed.\n");
+    exit(1);
+  }
+  $team = \App\Models\Team::find(0);
+  session(["currentTeam" => $team]);
+  $token = $user->createToken("migrator-trigger", ["read", "write", "deploy"]);
+  file_put_contents("/tmp/.pfin_migrator_token", $token->plainTextToken);
+  return null;
+})();
+'
+docker cp coolify:/tmp/.pfin_migrator_token /root/.pfin/_migrator_token.tmp
+docker exec coolify rm -f /tmp/.pfin_migrator_token
+umask 077
+mkdir -p /etc/pfin && chmod 0755 /etc/pfin
+printf 'COOLIFY_API_TOKEN=%s\n' "$(cat /root/.pfin/_migrator_token.tmp)" > /etc/pfin/migrator-coolify-token.env
+chown ci-migrate:ci-migrate /etc/pfin/migrator-coolify-token.env
+chmod 0600 /etc/pfin/migrator-coolify-token.env
+shred -u /root/.pfin/_migrator_token.tmp 2>/dev/null || rm -f /root/.pfin/_migrator_token.tmp
+echo MIGRATOR_TOKEN_WRITTEN
+REMOTE
+  } > "$MIGRATOR_TOKEN_LOG" 2>&1
+
+  if grep -qE '[0-9]+\|[A-Za-z0-9]{20,}' "$MIGRATOR_TOKEN_LOG"; then
+    die "a token-shaped string appeared in the migrator-trigger mint step's own captured output. PRESERVED for diagnosis (mode 600) at: $MIGRATOR_TOKEN_LOG -- read it, fix the leak at its source, then 'shred -u $MIGRATOR_TOKEN_LOG' yourself once done. Treat the token as exposed until confirmed otherwise -- delete the DB row (tinker, as in the orphan-clear branch above) and re-mint."
+  fi
+  grep -vE '^MIGRATOR_TOKEN_WRITTEN$' "$MIGRATOR_TOKEN_LOG" | sed 's/^/      /'
+  grep -q MIGRATOR_TOKEN_WRITTEN "$MIGRATOR_TOKEN_LOG" || die "migrator-trigger token mint did not report success -- see output above; log preserved at $MIGRATOR_TOKEN_LOG"
+  ok "migrator-trigger token minted (read+write+deploy, NOT root) -- value never left the box, never printed, never even returned to this script"
+  rm -f "$MIGRATOR_TOKEN_LOG"
+fi
+
 step "Phase 2 verification"
 HEALTHY="$(sshx "docker ps --filter 'name=coolify' --filter 'health=healthy' --format '{{.Names}}'" | wc -l | tr -d ' ')"
 info "$HEALTHY of 6 coolify-* containers healthy"
@@ -1027,4 +1249,14 @@ cat <<NEXT
         pass it explicitly, copy-paste the line above, don't retype it.
         Reads the token this run wrote to /root/.pfin/coolify.env ON THE BOX
         -- nothing to copy here.
+
+      ADR-072 (Option E) chunk 2 -- ci-migrate CI trigger (operator step, NOT
+      run by this script): put the ci_only keypair's PRIVATE half into this
+      repo's GitHub Actions secrets as CI_MIGRATE_SSH_PRIVATE_KEY (Settings ->
+      Secrets and variables -> Actions -> New repository secret), and set a
+      PROD_SSH_HOST repository VARIABLE (not a secret -- an SSH destination
+      address is not confidential) to $BOX_IP or pfindash.com once DNS points
+      there. Never commit either value. See docs/deployment-runbook.md §6.4
+      for the full sequence and .github/workflows/migrator-trigger.yml for
+      what consumes them.
 NEXT
