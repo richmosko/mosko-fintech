@@ -869,6 +869,58 @@ select rolcanlogin, rolinherit, rolsuper, rolbypassrls
 
 ---
 
+### 6.3 `migrator` role provisioning — SUPERVISED first-bootstrap step · 🔒 SECURITY-SENSITIVE
+
+**This is the ADR-072 Option-E DDL-apply identity, and it differs from §6.1/§6.2 in *who runs it* and *what it governs*.** Migration [`118_migrator_role.sql`](../supabase/migrations/118_migrator_role.sql) creates `migrator` **NOLOGIN, NOINHERIT, CREATEROLE, with NO password** — inert. Unlike the worker roles, this one is switched on so it can run *future unsupervised* `supabase db push` (migrations 119+) inside the resident migrator container. **The first bootstrap that creates `migrator` is itself run by the `postgres` superuser** (ADR-072 first-bootstrap model), so the whole handoff below is a **supervised, `postgres`-run** step — `migrator` never switches itself on. *(ADR-072 Decision 4 + Amendment 1; Option-E build chunk 1; SELF-398 Sec joint-review.)*
+
+> **Precedence.** Described here and in [`118`](../supabase/migrations/118_migrator_role.sql)'s DEPLOY-TIME CREDENTIAL HANDOFF block. **If they disagree, `118` wins.**
+
+**Ordering dependency — do not reorder:**
+
+> **first bootstrap applied by `postgres` (§6, creating `migrator` inert)** → **`ALTER DATABASE … OWNER TO migrator` + `\password migrator` *then* `LOGIN` (this step, as `postgres`)** → **`MIGRATOR_DB_*` env injected into the migrator service (§5; minted on-box by `provision-supabase-stack.sh` MINT_SECRETS)** → **migrator container brought up → subsequent applies run unsupervised as `migrator`**
+
+**Why the OWNER flip is here and not in `118` (placement resolved).** `ALTER DATABASE … OWNER TO` requires a superuser, or `CREATEDB` **plus** membership in the new owner. `migrator` is deliberately **neither superuser nor `CREATEDB`**, so it can **never** run this statement — not even to set the owner to itself. If it rode migration `118`, every *unsupervised* re-apply (run *by* `migrator`) would fail on it. It requires `postgres`; the only `postgres`-run apply is this supervised bootstrap; therefore the flip lives here — exactly symmetric with the `\password`/`LOGIN` flip, which `055`/`116` also keep out of the migration. `migrator` must own the database before its first unsupervised apply so that `061`'s `ALTER DATABASE … SET` succeeds under it; this step, run at bootstrap, satisfies that.
+
+**The step.** Run **once** against the target database, in an interactive `psql` session, **as `postgres`** (never from a committed file). `<app_db>` is the application database the stack runs (the Supabase stack's `postgres` database). **Three statements; the `\password`→`LOGIN` pair is order-load-bearing:**
+
+```
+ALTER DATABASE <app_db> OWNER TO migrator;   -- postgres-only; migrator is not CREATEDB
+\password migrator                            -- prompts; verifier computed CLIENT-SIDE; role still NOLOGIN → inert
+ALTER ROLE migrator LOGIN;                    -- carries no secret
+```
+
+`\password` sets **only** the password — the credential lands while the role is still `NOLOGIN`, and `LOGIN` then flips onto an already-credentialed role, so **LOGIN-with-no-password never exists at any instant** (the state `118` is built to prevent).
+
+**The single-statement form `ALTER ROLE migrator WITH LOGIN PASSWORD '…'` is PROHIBITED** (Sec B10, for every role of this shape): wherever statement logging is on it writes the credential to the server log in cleartext, and it lands in psql's `~/.psql_history`. **The prohibition does not depend on any per-stack measurement.**
+
+**Generate the password with `openssl rand -hex 32`** (256-bit) — the residual is an offline attack bounded by the secret's entropy, so a high-entropy generated value is what makes it acceptable. In production the value is **minted on-box by `provision-supabase-stack.sh`'s `MINT_SECRETS`** as `MIGRATOR_DB_PASSWORD` (a new `production_only` name, distinct from `POSTGRES_PASSWORD` and `PFIN_DB_PASSWORD`), because the migrator is a sibling service in the Supabase-stack compose — **not** pushed by `push-production-secrets.sh` (ADR-072 Amendment 1).
+
+**Operator privilege:** all three statements require `postgres` (superuser). `ALTER DATABASE … OWNER` needs superuser-or-`CREATEDB`+membership; `\password` is `ALTER USER` underneath.
+
+**Verify before relying on the migrator service** (read-only; run as `postgres`):
+
+```sql
+-- (1) role attributes — expect: canlogin t, inherit f, createrole t, super f, createdb f, bypassrls f
+select rolcanlogin, rolinherit, rolcreaterole, rolsuper, rolcreatedb, rolbypassrls
+  from pg_catalog.pg_roles where rolname = 'migrator';
+-- (2) database ownership — the half migration 118 cannot assert (it is set HERE)
+select d.datname, pg_catalog.pg_get_userbyid(d.datdba) as owner
+  from pg_catalog.pg_database d where d.datname = current_database();
+-- expect owner = migrator
+-- (3) no app-role membership (defense; 118 also hard-asserts this at apply time)
+select pg_catalog.pg_has_role('migrator','service_role','MEMBER') as in_service_role,
+       pg_catalog.pg_has_role('migrator','authenticated','MEMBER') as in_authenticated;
+-- expect: f | f
+```
+
+`rolcanlogin = f` means `\password`/`LOGIN` has not run. Owner ≠ `migrator` means the `ALTER DATABASE` flip was skipped — a future unsupervised `061`-class apply will fail. `118`'s idempotency guard reports but does **not** repair a pre-existing role (auto-repair would flip a legitimately-`LOGIN` role back to `NOLOGIN`), so this verification is the operator's own confirmation.
+
+**The by-design tripwire (do not "fix" it).** `migrator` holds no `ADMIN OPTION` on `postgres`/`authenticator`/`pfin_etl`/`pfin_provider_sync` (created by `postgres`, not by it) and is not superuser, so a future migration that `ALTER ROLE`s or `COMMENT`s those roles — or that needs true superuser (a new extension, `ALTER SYSTEM`) — **fails when applied unsupervised as `migrator`**. That forces a supervised, `postgres`-run apply and a Sec conversation, rather than silently widening a standing DDL credential. It is the intended Decision-4 behaviour.
+
+**Scripted (non-interactive) bind depends on SELF-395.** `\password` is interactive, which is why this first bootstrap is supervised. SELF-395 (client-side SCRAM scripting, SECURITY-GATED, not yet built) is what will let the bind be scripted for a fully hands-off bootstrap.
+
+---
+
 ## 7. Workers
 
 Scope: deploy the background-worker containers. Per ARCH Lock 13, the V1 runtime is a **hybrid 3-container topology** on Coolify: (1) V1 web-app, (2) `pfin_back_etl` ETL, (3) Node PDF worker — plus the Phase-6/V1.5 cron + scheduled-poll additions.
