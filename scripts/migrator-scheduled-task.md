@@ -15,12 +15,19 @@ fail-closed exit-code-backed status ADR-072 Decision 3 gates on.
 ## What this is NOT (chunk boundary)
 
 This is the Scheduled Task **definition** only — the resource that CAN be
-executed. The trigger path that actually calls it (the `ci-migrate` SSH user,
-the forced-command orchestration script, the GitHub Actions workflow that
-polls `.../executions` and gates the app deploy on `success`) is **chunk 2**.
-Until chunk 2 lands, this task exists but nothing calls it automatically —
-an operator can still run it by hand from the Coolify dashboard or via a
-direct API `POST` for the first supervised bootstrap (ADR-072 Decision 6).
+executed. **Chunk 2 (this repo, same PR generation as this note's update)
+built the trigger path** — the `ci-migrate` SSH user (C1), the forced-command
+`authorized_keys` line (C3), `scripts/migrator-orchestrate.sh` (C2/C4/C5,
+which polls `.../executions` and gates the app deploy on `success`), the
+scoped `migrator-trigger` Coolify token, and
+`.github/workflows/migrator-trigger.yml` — but the trigger is **not yet
+LIVE**: the `CI_MIGRATE_SSH_PRIVATE_KEY` GitHub Actions secret is not yet
+provisioned and `provision-vps.sh --apply` has not yet run this section
+against the production box. Both are F/CTO `!`-steps after this PR merges
+and clears Sec joint-review (docs/deployment-runbook.md §6.4). Until then,
+this task exists but nothing calls it automatically — an operator can still
+run it by hand from the Coolify dashboard or via a direct API `POST` for the
+first supervised bootstrap (ADR-072 Decision 6).
 
 ## Resource attachment
 

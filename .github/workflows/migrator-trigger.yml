@@ -1,0 +1,128 @@
+# .github/workflows/migrator-trigger.yml
+#
+# ADR-072 (Option E) chunk 2 — the CI half of the production migration
+# trigger. On a push to `main` that touches supabase/migrations/**, this
+# workflow opens ONE SSH session to the production box as the dedicated
+# `ci-migrate` user (ADR-072 C1). sshd's forced command
+# (authorized_keys `restrict,command="..."` — C3) replaces whatever this
+# workflow sends with `scripts/migrator-orchestrate.sh`, which does the
+# actual work: execute the migrator Coolify Scheduled Task, poll it to a
+# terminal state, and trigger the app deploy ONLY on success (ADR-072
+# Decision 3). See that script's own header for the fail-closed sequencing
+# it implements.
+#
+# ⚠ WHY THIS JOB HAS ONLY ONE STEP THAT TOUCHES THE BOX
+#   GHA's native step-sequencing IS the fail-closed gate here — deliberately,
+#   per ADR-072's own Consequences ("Do NOT poll Coolify's deployment status
+#   as the pass/fail signal — that reinherits D's swallow-the-failure bug").
+#   The migration apply AND the app-deploy trigger both happen INSIDE the one
+#   orchestration script this workflow's SSH command runs; this workflow
+#   itself never calls the Coolify API and never polls anything. Its only
+#   job is: did the SSH command exit 0? If migrations fail on the box, the
+#   orchestration script exits non-zero, the SSH step fails, and the job
+#   stops — no separate "did it deploy" step exists to accidentally paper
+#   over that with a different (wrong) success signal.
+#
+# WHAT THIS WORKFLOW DOES NOT DO
+#   It does not read migration file contents, does not construct SQL, and
+#   does not pass anything client-side into the SSH session that the box
+#   acts on — the forced command ignores $SSH_ORIGINAL_COMMAND entirely
+#   (ADR-072 C2), so what this workflow's `ssh` invocation asks for is
+#   irrelevant beyond opening the session. All real inputs (which Scheduled
+#   Task, which app to deploy) live in box-resident config
+#   (/etc/pfin/migrator-trigger.conf), not here.
+#
+# SECRETS / VARS THIS WORKFLOW CONSUMES (repo-level, F/CTO `!`-steps —
+# neither is provisioned by any script in this repo; see
+# docs/deployment-runbook.md §6.4):
+#   secrets.CI_MIGRATE_SSH_PRIVATE_KEY — the ci_only keypair's PRIVATE half
+#     (secrets-manifest.yml `ci_only`). Disjoint-by-construction from every
+#     production_only credential — it authenticates a BOX LOGIN as a
+#     no-sudo user whose only capability is the forced command; it is never
+#     a database or application credential.
+#   vars.PROD_SSH_HOST — the box's SSH destination (IP or pfindash.com once
+#     DNS points there). A REPOSITORY VARIABLE, not a secret: an SSH
+#     destination address is not confidential (the box's IP is already
+#     visible to anyone who resolves pfindash.com or runs
+#     scripts/provision-vps.sh), and secrets-manifest.yml's two lists
+#     enumerate confidential VALUES only — putting a non-secret here would
+#     assert a blast radius that does not exist, the same reasoning that
+#     keeps PUBLIC_SUPABASE_URL out of that file.
+
+name: Migrator trigger (ADR-072 Option E)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+
+# One in flight at a time, and never cancel one that's already running: a
+# cancelled mid-migration SSH session is not necessarily a cancelled
+# mid-migration APPLY (the script does not clean up mid-way — see its own
+# header). `cancel-in-progress: false` queues a second push behind the
+# first rather than racing it.
+concurrency:
+  group: migrator-trigger
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    name: Trigger migrator (SSH -> forced command -> apply + deploy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SSH to ci-migrate — forced command applies migrations and (on success only) deploys
+        env:
+          CI_MIGRATE_SSH_PRIVATE_KEY: ${{ secrets.CI_MIGRATE_SSH_PRIVATE_KEY }}
+          PROD_SSH_HOST: ${{ vars.PROD_SSH_HOST }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CI_MIGRATE_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "::error::secrets.CI_MIGRATE_SSH_PRIVATE_KEY is not set. This is an F/CTO"
+            echo "  !-step per docs/deployment-runbook.md §6.4 -- generate the ci_only"
+            echo "  keypair, add the PRIVATE half as this repo secret, and run"
+            echo "  provision-vps.sh --apply with the PUBLIC half before this workflow"
+            echo "  can do anything. Failing closed rather than silently no-op'ing."
+            exit 1
+          fi
+          if [[ -z "${PROD_SSH_HOST:-}" ]]; then
+            echo "::error::vars.PROD_SSH_HOST is not set (repository VARIABLE, not a secret --"
+            echo "  Settings > Secrets and variables > Actions > Variables). Failing closed."
+            exit 1
+          fi
+
+          # Private key lands ONLY in this runner's own ephemeral $RUNNER_TEMP
+          # (destroyed with the VM at job end regardless), never in a
+          # command-line argument (ps-visible) and never echoed. 0600 is a
+          # hard requirement -- OpenSSH refuses a group/world-readable
+          # identity file outright.
+          KEY_PATH="$RUNNER_TEMP/ci_migrate_ed25519"
+          umask 077
+          printf '%s\n' "$CI_MIGRATE_SSH_PRIVATE_KEY" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+
+          # accept-new, not a pinned known_hosts entry -- same TOFU posture
+          # scripts/provision-vps.sh already uses for every SSH call it
+          # makes against this same box. A future hardening pass can pin
+          # the host key (ssh-keyscan once, store as another repo variable)
+          # without changing anything else about this step.
+          #
+          # The command sent (`true`) is IRRELEVANT and never reaches the
+          # box's shell as anything but a discarded value -- ci-migrate's
+          # authorized_keys forced command (ADR-072 C3) replaces it
+          # unconditionally with scripts/migrator-orchestrate.sh, which
+          # itself never reads $SSH_ORIGINAL_COMMAND (C2). This SSH
+          # invocation's ONLY jobs are: open the session, and let its exit
+          # code become this step's exit code.
+          ssh -i "$KEY_PATH" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=accept-new \
+              -o ConnectTimeout=10 \
+              "ci-migrate@$PROD_SSH_HOST" true
