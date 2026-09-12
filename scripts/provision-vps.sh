@@ -1043,16 +1043,47 @@ else
   ok "ci-migrate user created"
 fi
 # Negative check, every run -- not just at creation. Catches a future
-# hand-edit that adds ci-migrate to sudo or drops a sudoers.d file naming
-# it, which would silently defeat C1 without this script ever objecting
-# otherwise. A missing user makes both greps/lookups fail closed to empty
-# (`|| true` on each pipeline), which is the correct "no evidence of sudo"
-# answer for a user that doesn't exist yet.
-SUDOERS_HIT="$(sshx "grep -rl ci-migrate /etc/sudoers.d/ 2>/dev/null" || true)"
-[[ -z "$SUDOERS_HIT" ]] || die "ci-migrate is named in a sudoers.d file ($SUDOERS_HIT) -- C1 requires NO sudo capability. Remove it by hand."
-IN_SUDO_GROUP="$(sshx "id -nG ci-migrate 2>/dev/null | tr ' ' '\n' | grep -x sudo" || true)"
-[[ -z "$IN_SUDO_GROUP" ]] || die "ci-migrate is a member of the sudo group -- C1 requires NO sudo. Fix by hand: gpasswd -d ci-migrate sudo"
-ok "C1 verified: no sudoers.d entry, not in the sudo group"
+# hand-edit that grants ci-migrate sudo, which would silently defeat C1
+# without this script ever objecting otherwise.
+#
+# HARDENED (Sec PR #744 note): the prior check only grepped
+# /etc/sudoers.d/ by ci-migrate's NAME and the literal `sudo` GROUP. Both
+# are pattern-matches over sudo's config surface, not sudo's own policy
+# evaluation, and each missed a vector: (a) a NOPASSWD (or any) line for
+# ci-migrate landing in the MAIN /etc/sudoers file rather than a
+# /etc/sudoers.d/ drop-in -- the name-grep never looked there; (b) a
+# differently-named group (not literally "sudo") carrying sudo rights via
+# a `%groupname ALL=(ALL) ALL` line -- the group-grep only ever checked
+# membership in the one hardcoded group name.
+#
+# `sudo -l -U <user>` is sudo's OWN list-mode policy evaluator: it resolves
+# sudoers.d includes, the main file, and every group membership the exact
+# way a live `sudo` invocation by that user would, so it is definitive
+# rather than one more pattern to keep in sync with sudo's own config
+# surface. `-n` (non-interactive) refuses to prompt for a password rather
+# than hang the run.
+#
+# Exit-code contract (sudo's own list-mode semantics): exit 0 means the
+# target has at least one matching rule -- i.e. HAS sudo of some kind --
+# and is the fail-closed die case. A non-zero exit covers both "not
+# allowed to run sudo" (the expected safe case) and "unknown user"
+# (ci-migrate not created yet); both are confirmed here by matching sudo's
+# own message text, so a non-zero exit that names NEITHER string (a stale
+# SSH pipe, a sudo/PAM config error) dies instead of being silently read
+# as safe -- a check that only asserted "non-zero" would conflate "sudo
+# says no" with "the check itself broke."
+set +e
+SUDO_CHECK_OUT="$(sshx "sudo -ln -U ci-migrate" 2>&1)"
+SUDO_CHECK_RC=$?
+set -e
+if [[ $SUDO_CHECK_RC -eq 0 ]]; then
+  die "sudo -ln -U ci-migrate reports ci-migrate HAS sudo rights -- C1 requires NONE. Output: $SUDO_CHECK_OUT"
+fi
+if echo "$SUDO_CHECK_OUT" | grep -qiE "not allowed to run sudo|unknown user"; then
+  ok "C1 verified: sudo -ln -U ci-migrate confirms no sudo rights (definitive policy check -- covers sudoers.d, the main sudoers file, and any group membership regardless of group name)"
+else
+  die "sudo -ln -U ci-migrate exited non-zero ($SUDO_CHECK_RC) with unrecognized output -- cannot confirm C1 either way. Output: $SUDO_CHECK_OUT. Failing closed."
+fi
 
 step "orchestration script (ADR-072 C2/C4/C5 -- absolute path, root-owned, 0755, NOT writable by ci-migrate)"
 ORCH_SCRIPT_PATH="/usr/local/sbin/migrator-orchestrate.sh"

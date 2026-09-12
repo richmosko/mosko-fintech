@@ -1042,6 +1042,24 @@ jobs:
     #
     # Run-always (no paths filter), matching the admission fence's own
     # reasoning: a path-trigger leaves a trigger-drift meta-risk.
+    #
+    # ADR-072 C9 (2026-09-12, DevOps determination, Sec review pending):
+    # the `migrator` service (ADR-072 Option E) landed as a SIBLING SERVICE
+    # inside THIS SAME FILE (infra/supabase/docker-compose.yml), not a
+    # separate compose. scripts/ci/fence-datastore-private-bind.sh's three
+    # vectors are NOT service-scoped — Vector 1 walks every `ports:` key at
+    # any service-nesting indent in the whole file, Vector 2/3 grep the
+    # whole file for a proxy label / `network_mode: host` line, with no
+    # per-service allow/deny list anywhere in the script (read live,
+    # scripts/ci/fence-datastore-private-bind.sh lines 116-289). A future
+    # `ports:`/Domain/`network_mode: host` on `migrator` therefore ALREADY
+    # trips this fence with zero code change — C9 is satisfied by the
+    # fence's existing whole-file scope, not by a migrator-specific
+    # extension. The "migrator canary" steps below EMPIRICALLY prove this
+    # against the REAL migrator block (not a synthetic fixture asserting
+    # the same code path a golden fixture above already exercises),
+    # mirroring the Studio-loopback canary's own "bites on the real file,
+    # not just a fixture shaped to be caught" discipline.
     steps:
       - uses: actions/checkout@v4
 
@@ -1272,6 +1290,71 @@ jobs:
             exit 1
           fi
           echo "OK: fence catches a widened Studio bind on the REAL compose file, not just on a fixture (exit $rc)."
+
+      - name: "Canary — migrator gets a published port (ADR-072 C9; expects violation, exit 1, vector-1 token)"
+        # Proves C9's "already covered" determination (see job header) empirically
+        # rather than by reading the fence's code and trusting the read. Corrupts a
+        # scratch copy of the REAL infra/supabase/docker-compose.yml by inserting a
+        # `ports:` block under the migrator service's `container_name:` line (a
+        # unique anchor — no other service shares this exact string) and asserts
+        # the fence catches it via Vector 1, same as any other service in this file.
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          awk '{ print } /container_name: supabase-migrator/ { print "    ports:"; print "      - \"9999:9999\"" }' \
+            infra/supabase/docker-compose.yml > "$SCRATCH"
+          if ! grep -q '9999:9999' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the migrator container_name anchor to insert ports: after — either the migrator service hasn't landed yet or its container_name changed out from under this canary. Update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-datastore-private-bind.sh "$SCRATCH" 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: canary expected exit 1 against the migrator-with-ports corrupted REAL compose but got $rc — ADR-072 C9's 'already covered' determination is WRONG; the fence does not bite on migrator."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 1:'; then
+            echo "FATAL: canary exited 1 but no vector-1 token is present — failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a published port on the migrator service on the REAL compose file (exit $rc) — ADR-072 C9 confirmed."
+
+      - name: "Canary — migrator gets a Coolify Domain (ADR-072 C9; expects violation, exit 1, vector-2 token)"
+        # Same discipline as the ports canary above, targeting Vector 2 instead:
+        # inserts a Coolify SERVICE_FQDN_* magic var (the real mechanism Coolify
+        # uses to request a public domain for a compose service) into the
+        # migrator service's `environment:` block, anchored on its unique
+        # PROD_DB_URL line.
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          awk '{ print } /PROD_DB_URL:/ { print "      SERVICE_FQDN_MIGRATOR: ${SERVICE_FQDN_MIGRATOR}" }' \
+            infra/supabase/docker-compose.yml > "$SCRATCH"
+          if ! grep -q 'SERVICE_FQDN_MIGRATOR' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the migrator PROD_DB_URL anchor to insert SERVICE_FQDN_MIGRATOR after — either the migrator service hasn't landed yet or its env var changed out from under this canary. Update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-datastore-private-bind.sh "$SCRATCH" 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: canary expected exit 1 against the migrator-with-Domain corrupted REAL compose but got $rc — ADR-072 C9's 'already covered' determination is WRONG; the fence does not bite on migrator."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 2:'; then
+            echo "FATAL: canary exited 1 but no vector-2 token is present — failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a Coolify Domain request on the migrator service on the REAL compose file (exit $rc) — ADR-072 C9 confirmed."
 
   fence-entity-grep:
     name: entity-grep — HTML-entity-obscured §/# in doc artifacts
