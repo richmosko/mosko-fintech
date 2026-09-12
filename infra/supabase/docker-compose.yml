@@ -260,6 +260,55 @@ services:
         "log_min_messages=fatal" # prevents Realtime polling queries from appearing in logs (harmless: no realtime container in this trim)
       ]
 
+  # migrator — ADR-072 (Option E) production migration-apply mechanism.
+  # DevOps-owned. Sibling of `db`, added on the shared compose network for
+  # free (no `connect_to_docker_network` toggle — that prerequisite is only
+  # for CROSS-project reach; this is same-project). CHUNK 1 build (the
+  # container + credential plumbing); the ci-migrate SSH trigger path and
+  # the RT-27/RT-32 fence extension are later chunks (ADR-072 Consequences).
+  #
+  # ┌─ NO ports:, NO Coolify Domain, NO firewall change (ADR-072 C9) ────────┐
+  # │ This service takes ZERO inbound connections of any kind — not even an   │
+  # │ `expose:` entry, unlike api-gw/supavisor above. It is invoked ONLY by a │
+  # │ Coolify Scheduled Task `docker exec`ing into it; nothing ever dials IN  │
+  # │ to this container. Its only network activity is OUTBOUND, to `db`, on  │
+  # │ the shared project network by service-name DNS. Adding `ports:` or a   │
+  # │ Domain here is a CI-fenced-set regression (RT-27/RT-32 extension,       │
+  # │ chunk 3) — never do it.                                                │
+  # └─────────────────────────────────────────────────────────────────────────┘
+  #
+  # CREDENTIAL (ADR-072 Decision 4 / Sec C7/C8): PROD_DB_URL is built here
+  # from a DEDICATED `migrator` login role — CREATEROLE + owner of the app
+  # database, NOT `postgres`, NOT `authenticator`, NOT a `pfin_*` worker
+  # role, and NOT a member of `service_role`/`authenticated`. MIGRATOR_DB_USER
+  # (non-secret) / MIGRATOR_DB_PASSWORD (`production_only`, secrets-manifest.yml)
+  # are minted/injected by scripts/provision-supabase-stack.sh (MINT_SECRETS /
+  # NONSECRET_DEFAULTS) into THIS SAME Coolify Compose resource's shared env
+  # store — the same mechanism as POSTGRES_PASSWORD/JWT_SECRET above, NOT
+  # scripts/push-production-secrets.sh's per-worker push (that script targets
+  # separate standalone Coolify applications; `migrator` is a sibling service
+  # in this one). Lands ONLY here — never CI, never the `app` container, never
+  # any other worker. See infra/supabase/migrator/.env.example for the
+  # per-surface contract and this PR's description for the migrator-role
+  # bootstrapping open question (flagged for Architect).
+  #
+  # Pattern-A resident container (CMD tail -f /dev/null, baked in the
+  # Dockerfile) — the Scheduled Task's `command` runs the fixed verb:
+  #   supabase db push --db-url "$PROD_DB_URL" --workdir /workspace
+  # See docs/deployment-runbook.md §6 for the full trigger/fail-closed
+  # sequencing and the Coolify Scheduled Task config this service expects.
+  migrator:
+    container_name: supabase-migrator
+    build:
+      context: .
+      dockerfile: migrator/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PROD_DB_URL: postgres://${MIGRATOR_DB_USER}:${MIGRATOR_DB_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+
   # Update the DATABASE_URL if you are using an external Postgres database
   # (not applicable here).
   supavisor:
