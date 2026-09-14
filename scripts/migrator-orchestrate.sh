@@ -105,14 +105,28 @@ api() { # api <METHOD> <PATH>
 }
 jqp() { python3 -c "import json,sys;$1"; }
 
-log "executing migrator Scheduled Task ($MIGRATOR_TASK_UUID) on service $MIGRATOR_SERVICE_UUID"
-api POST "/services/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID/execute" >/dev/null \
+log "executing migrator Scheduled Task ($MIGRATOR_TASK_UUID) on application $MIGRATOR_SERVICE_UUID"
+# Item 15 fix (Sec-gated, booked BACKLOG.md §7.36 #15): the migrator
+# Scheduled Task is attached to an APPLICATION resource (the Supabase-stack
+# Coolify app, standup-log.md Phase A.2 — created via
+# `POST /applications/{uuid}/scheduled-tasks`, i.e.
+# ScheduledTasksController::create_scheduled_task_by_application_uuid), not
+# a Service resource. Coolify 4.3.18's routes/api.php defines TWO separate
+# route families for scheduled tasks, each bound to its own controller
+# method and resource table: `/applications/{uuid}/scheduled-tasks/...`
+# (execute -> execute_scheduled_task_by_application_uuid, executions ->
+# executions_by_application_uuid) and `/services/{uuid}/scheduled-tasks/...`
+# (its own distinct by_service_uuid methods). Addressing an
+# application-attached task under `/services/` 404s — confirmed by reading
+# routes/api.php directly (github.com/coollabsio/coolify, tag v4.3.18),
+# not assumed. Corrected to the `/applications/` family below.
+api POST "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID/execute" >/dev/null \
   || fail "could not start the Scheduled Task (execute call itself failed — check the token's write ability and the UUIDs in $CONF_FILE)"
 
 log "polling execution status (never Coolify's deployment status — ADR-072 Decision 3)"
 STATUS=""
 for _ in $(seq 1 "$POLL_MAX_ATTEMPTS"); do
-  STATUS="$(api GET "/services/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID/executions" | jqp "
+  STATUS="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID/executions" | jqp "
 d=json.load(sys.stdin)
 rows=d if isinstance(d, list) else d.get('data', d)
 print((rows[0] or {}).get('status','') if rows else '')
