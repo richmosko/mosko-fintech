@@ -32,7 +32,7 @@
 | 4 | DNS / domain decision + records | F/CTO + DevOps | 🟡 Domain RULED (`pfindash.com` reuse) — records not yet cut over |
 | 5 | Stand up self-hosted Supabase; apply migrations | DevOps | 🟡 **Stack LIVE 2026-09-10** — 5 services healthy, verified. Migrations NOT applied (that is step 6 / runbook §6) |
 | 5a | Production signup OFF (`GOTRUE_DISABLE_SIGNUP=true`) | DevOps | ✅ **DONE 2026-09-10** — hardcoded in the compose, verified on the running `auth` container |
-| 6 | Deploy the four services from one `main` sha | DevOps | 🟡 **Phase A.1/A.2 DONE 2026-09-13** (`APP_UUID`, migrator Scheduled Task created); Phase A.3/B.4 ⛔ **blocked** on a migrator build-context fix landing on `main` (PR open, unmerged) |
+| 6 | Deploy the four services from one `main` sha | DevOps | 🟡 **Phase A DONE 2026-09-14** (`APP_UUID`, migrator Scheduled Task, `migrator` container confirmed `Up` on `main` `2107f7e7`); Phase B step 4 ⛔ **blocked** — bootstrap apply hit a second real bug (`supabase-go` binary missing from the migrator image), fix on `feat/standup-step6-phase-b`, unmerged |
 | 7 | ~~Register 9 existing Plaid Items~~ | — | ❌ Struck 2026-09-08 — Items orphaned, tokens lost |
 | 7′ | Historical categorized-transaction backfill walk | Backend + F/CTO | ⛔ SELF-388 / SELF-389 not started |
 | 8 | Attach-a-provider-account-at-Link-time build | Backend + Sec | ⛔ SELF-390 not started |
@@ -301,6 +301,26 @@ Runbook line 322 carried `studio` as **OUT by default, "unless F/CTO names a con
 
 **Phase B step 4 — NOT RUN.** Blocked on the above. The exact command, and the §6.1/§6.2/§6.3 verify-block SQL for the interactive handoffs at Phase B step 5 (F/CTO's, unattempted, per this task's own stop-before boundary), are in the hand-off below.
 
+### Phase B.4 — bootstrap apply attempt, 2026-09-14
+
+**A.3's tail — DONE.** PR #752 merged to `main` at `2107f7e7`. Confirmed `git_branch=main` on the Supabase-stack resource (unchanged — the earlier off-branch test attempt was refused and never applied). Redeployed explicitly (`POST /api/v1/deploy?uuid=nz7mbexygw9lesjlazcxeltn`, deployment `gvvsdh0dw2mnehmchvx3efck`) — `finished`. All eight services present and running: `api-gw`/`auth`/`db`/`meta`/`rest`/`studio`/`supavisor` `healthy`, **`migrator` `Up`** (no healthcheck defined — Pattern-A `tail -f /dev/null`, matches `etl`/`provider-sync` convention). Confirmed `pfin`/`supabase_migrations` schemas do not yet exist (migrations not yet applied).
+
+⚠ **Note, not chased down further:** `rest` reported `healthy` (`docker inspect .State.Health.Status`) almost immediately after this redeploy, before any migration had run — earlier in this log (§5f) `rest` was recorded unhealthy until the `pfin` schema exists. Not re-investigated here (out of this step's scope); flagged in case it signals a healthcheck-target change worth a future look, not treated as evidence against the schema-dependency explanation §5f already gives.
+
+**Phase B step 4 — attempted, BLOCKED on a second real bug.** Ran the exact stdin-piped bootstrap form now documented at runbook §6 (`set -a; . /root/.pfin/supabase.env; set +a` then `printf '%s' "$POSTGRES_PASSWORD" | docker compose ... exec -T migrator sh -c 'IFS= read -r PGPW; supabase db push --db-url "postgres://postgres:${PGPW}@db:5432/postgres" --workdir /workspace'`). Failed:
+
+```
+Could not find the `supabase-go` binary.
+The Supabase CLI ships as two co-located binaries: `supabase` (this shim)
+and `supabase-go` (the Go CLI that the shim forwards to)...
+```
+
+**Root cause, measured:** the pinned CLI release tarball (`supabase_linux_arm64.tar.gz`, v2.107.0) contains **two** binaries — confirmed by downloading and listing it (`tar -tzf`): `supabase` and `supabase-go`. `infra/supabase/migrator/Dockerfile`'s extraction step took only `supabase`; `supabase --version` (the build-time self-check) doesn't need the companion and passed, masking the gap until a DB-affecting subcommand (`db push`) was actually run. CI's `.github/actions/supabase-cli-setup` is unaffected — it uses the official `supabase/setup-cli@v2` action, not a manual tarball extraction, so this is isolated to the migrator image.
+
+**Fixed** — Dockerfile now extracts and `chmod`s both `supabase` and `supabase-go` — committed on `feat/standup-step6-phase-b` (`94a8b1f`), **not yet on `main`**. Same shape as the build-context blocker in Phase A.3: fixing it requires a merge, which is out of this step's scope; deploying off a non-`main` branch to test is correctly outside this role's lane per the same guardrail that held before.
+
+**Phase B step 4 remains NOT RUN.** Blocked on `94a8b1f` (or equivalent) landing on `main` and a redeploy. `schema_migrations` head-row/count, `pfin` schema existence, role `rolcanlogin` checks, and `rest`'s post-migration health could not be confirmed this pass — for reference, `main` currently carries **118** migration files (`ls supabase/migrations/*.sql | wc -l`), so a clean apply's expected `schema_migrations` row count is 118 with head version `118`.
+
 ---
 
 ## Departures from plan
@@ -326,5 +346,6 @@ Runbook line 322 carried `studio` as **OUT by default, "unless F/CTO names a con
 | 2026-09-10 | 5 | All services healthy after a good deploy | `rest` is `unhealthy` because schema `pfin` does not exist until step 6's migrations. Correct behaviour, not a fault. Third instance of §4's checks assuming a post-§6 world. | 🟡 Flagged; structural fix outstanding |
 | 2026-09-10 | 5 | Container names come from the compose | Coolify overrides every `container_name`. Verification commands addressing `supabase-db` / `supabase-envoy` would have read as mount failures. | ✅ §4 (1b) uses `docker compose --project-name <uuid> logs <service>`, PR #704 |
 | 2026-09-13 | 6 | `scripts/migrator-scheduled-task.md`'s inert far-future cron (`0 0 31 2 *`) is accepted by Coolify's create-task API | Rejected, 422, `"Invalid cron expression or frequency format."` — Coolify 4.3.18's validator checks the date is a real calendar date, not just syntactically well-formed (measured via `artisan tinker`: `validate_cron_expression('0 0 31 2 *')` → `false`). | ✅ `enabled: false` used instead (source-verified: the automatic scheduler's own selection query filters on it; the explicit `.../execute` trigger path does not) — `scripts/migrator-scheduled-task.md` corrected in place |
-| 2026-09-13 | 6 | `infra/supabase/docker-compose.yml`'s `migrator` service builds with `context: .` | Failed live: Coolify clones the full repo but runs compose with `--project-directory <clone>/infra/supabase`, so `context: .` resolved to `infra/supabase/` — no `supabase/` subdirectory there for the Dockerfile's `COPY supabase/migrations/` to find. `failed to calculate checksum ...: "/supabase/migrations": not found`. | 🟡 Fixed on `feat/standup-step6-migrator-bringup` (`context: ../..`, repo root) — **not yet on `main`**; the `migrator` container cannot come up and Phase B step 4 cannot run until this PR merges and the stack redeploys |
+| 2026-09-13 | 6 | `infra/supabase/docker-compose.yml`'s `migrator` service builds with `context: .` | Failed live: Coolify clones the full repo but runs compose with `--project-directory <clone>/infra/supabase`, so `context: .` resolved to `infra/supabase/` — no `supabase/` subdirectory there for the Dockerfile's `COPY supabase/migrations/` to find. `failed to calculate checksum ...: "/supabase/migrations": not found`. | ✅ Fixed (`context: ../..`, repo root), merged to `main` at `2107f7e7` (PR #752); redeploy confirmed `migrator` container `Up` |
 | 2026-09-13 | 6 | `$PROD_DB_URL` is a defined shell variable somewhere an operator can read it | §4/§6 use it throughout with no definition. Only the `migrator` container's own baked env defines it, and only with the `migrator` role's credential — not usable for the first bootstrap apply, which must run as `postgres` before that role exists. | ✅ Runbook §6 now defines both forms (container steady-state vs. `postgres`-override bootstrap via `docker compose exec migrator`) |
+| 2026-09-14 | 6 | The pinned Supabase CLI (v2.107.0) release tarball is self-contained — `supabase --version` succeeding at build time proves `supabase db push` will work at runtime | `supabase db push` failed: `Could not find the `supabase-go` binary`. The tarball ships two binaries (`supabase` + `supabase-go`, confirmed via `tar -tzf`); the CLI shim forwards DB-affecting subcommands to the co-located Go binary, which `--version` doesn't need. `infra/supabase/migrator/Dockerfile`'s extraction step took only `supabase`. | 🟡 Fixed on `feat/standup-step6-phase-b` (`94a8b1f`, extracts+chmods both binaries) — **not yet on `main`**; Phase B step 4 blocked until this merges and the stack redeploys |
