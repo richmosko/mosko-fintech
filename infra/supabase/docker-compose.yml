@@ -329,6 +329,12 @@ services:
       # `supavisor` becomes reachable off-host -- if any RT-32 vector is
       # ever opened, TLS on this hop becomes required, not optional.
       PROD_DB_URL: postgres://${MIGRATOR_DB_USER}:${MIGRATOR_DB_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable
+      # Belt-and-braces per Sec (§7.36 item 26 follow-up, 2026-09-14): the CLI
+      # (apps/cli/src/legacy/shared/legacy-db-config.parse.ts) resolves sslmode
+      # from the URL's own query param OR the PGSSLMODE env var OR a service
+      # default -- setting both closes the gap if the URL-embedded param is
+      # ever dropped (e.g. a shell that eats an unquoted `?`).
+      PGSSLMODE: disable
 
   # Update the DATABASE_URL if you are using an external Postgres database
   # (not applicable here).
