@@ -32,7 +32,7 @@
 | 4 | DNS / domain decision + records | F/CTO + DevOps | 🟡 Domain RULED (`pfindash.com` reuse) — records not yet cut over |
 | 5 | Stand up self-hosted Supabase; apply migrations | DevOps | 🟡 **Stack LIVE 2026-09-10** — 5 services healthy, verified. Migrations NOT applied (that is step 6 / runbook §6) |
 | 5a | Production signup OFF (`GOTRUE_DISABLE_SIGNUP=true`) | DevOps | ✅ **DONE 2026-09-10** — hardcoded in the compose, verified on the running `auth` container |
-| 6 | Deploy the four services from one `main` sha | DevOps | ✅ **Phase A + Phase B step 4 DONE 2026-09-14.** Sec ruled on TLS (§7.36 item 26, F/CTO-ratified) — `sslmode=disable` + `PGSSLMODE=disable` (belt-and-braces) — bootstrap apply completed clean: 118/118 migrations, `pfin` schema, 3 roles `rolcanlogin=f`, db owner `postgres`, `rest` healthy. `MIGRATOR_DB_PASSWORD` rotated (disclosure incident closed). **Next: Phase B step 5 — F/CTO, interactive, at a terminal.** |
+| 6 | Deploy the four services from one `main` sha | DevOps | ✅ **Phase A + Phase B DONE 2026-09-14.** Sec ruled on TLS (§7.36 item 26) — `sslmode=disable` + `PGSSLMODE=disable` — bootstrap apply completed clean: 118/118 migrations, `pfin` schema, `rest` healthy. **Phase B step 5 (F/CTO-executed)** — `pfin_etl`/`pfin_provider_sync` LOGIN as `postgres`; `migrator`'s OWNER flip required `supabase_admin` (`postgres` is not superuser on this image, measured live). All verify blocks pass; db owner = `migrator`. ⚠ New finding: `migrator` lacks `USAGE` on `supabase_migrations` schema (booked, item 32) — untested for the write path. |
 | 7 | ~~Register 9 existing Plaid Items~~ | — | ❌ Struck 2026-09-08 — Items orphaned, tokens lost |
 | 7′ | Historical categorized-transaction backfill walk | Backend + F/CTO | ⛔ SELF-388 / SELF-389 not started |
 | 8 | Attach-a-provider-account-at-Link-time build | Backend + Sec | ⛔ SELF-390 not started |
@@ -435,6 +435,40 @@ Connecting to remote database...
 
 **Phase B step 4 is DONE.** BACKLOG §7.36 item 26 closed. Phase B step 5 (the three interactive handoffs) is next — F/CTO's, at a terminal, per this task's own stop-before boundary.
 
+### Phase B.5 — the three interactive role handoffs, F/CTO-executed, 2026-09-14
+
+**Departure 1 — bare `ssh` gave `psql` no terminal.** F/CTO's first attempt, `ssh root@<box-ip> '… exec -it db psql …'` (no `-t`), produced no prompt and no output — silent, not an error. `-t` (pseudo-terminal allocation through the SSH hop) is required whenever `ssh` wraps a `docker ... exec -it` call; without it the remote `-it` has no TTY to attach to. Runbook §6.0 (new) states this.
+
+**Departure 2 — `postgres` is not superuser on this image.** Connected `-U postgres` (prompt `postgres=>`); `\password pfin_etl` / `ALTER ROLE pfin_etl LOGIN` and the same pair for `pfin_provider_sync` succeeded (both only need `CREATEROLE`/`ADMIN OPTION`, which `postgres` holds). `ALTER DATABASE postgres OWNER TO migrator` then failed:
+```
+ERROR:  must be able to SET ROLE "migrator"
+```
+**Recovery — reconnected as `-U supabase_admin`** (prompt `postgres=#`, the true superuser on this image). Ran all three §6.3 statements as `supabase_admin` — `ALTER DATABASE postgres OWNER TO migrator; \password migrator; ALTER ROLE migrator LOGIN;` — all three printed as expected. Runbook §6.0/§6.3 corrected in place: §6.1/§6.2 stay `postgres` (unaffected — they never needed superuser); §6.3 now documents `supabase_admin`.
+
+**Departure 3 — `118`'s own migration header still says `postgres`.** Read live: `118_migrator_role.sql`'s DEPLOY-TIME CREDENTIAL HANDOFF block and its surrounding rationale repeat "run as `postgres`" / "SUPERUSER (`postgres`)" at several lines. Not edited here — per this repo's migration-file convention, a stale header claim is a comment-only correction that belongs to Architect (no DDL touched). Booked at `BACKLOG.md` §7.36 item 31.
+
+**Verification — read-only, `exec -T db psql -U supabase_admin -d postgres`, all confirmed post-handoff:**
+
+| Check | Result |
+|---|---|
+| `pfin_etl` / `pfin_provider_sync` `rolcanlogin`, `rolinherit`, `rolsuper`, `rolbypassrls` | `t\|f\|f\|f` both |
+| `migrator` `rolcanlogin`, `rolinherit`, `rolcreaterole`, `rolsuper`, `rolcreatedb`, `rolbypassrls` | `t\|f\|t\|f\|f\|f` |
+| Database owner | `migrator` |
+| `migrator` app-role membership (`service_role`/`authenticated`) | `f\|f` |
+
+**Migrator-auth proof, without printing the credential.** Redeployed the stack first (the running `migrator` container was still on the pre-PR-#759 image, with no `PGSSLMODE` set — confirmed by name-only `env` check before redeploying). Post-redeploy, ran inside the `migrator` container, using its own baked `PROD_DB_URL` with no override:
+```
+supabase migration list --db-url "$PROD_DB_URL"
+```
+Result:
+```
+Connecting to remote database...
+failed to parse rows: ERROR: permission denied for schema supabase_migrations (SQLSTATE 42501)
+```
+**This IS proof of successful authentication** — a `42501` permission-denied error is a post-auth SQL-level failure, categorically different from (and postdating) a connection or password-auth failure; the earlier `PGSSLMODE`-missing attempts failed at the TLS handshake, before any credential was even checked. ⚠ **New finding, not fixed here:** `migrator` owns the *database* but not the `supabase_migrations` *schema* (owned by `postgres`; `has_schema_privilege('migrator','supabase_migrations','USAGE')` = `f`). The bootstrap apply that landed migrations 1–118 ran as the `postgres` override, never as `migrator` itself — so this is the first time `migrator`'s own credential was exercised for anything, and it surfaced a real gap that would block a future unsupervised `migration list`/`db push` run as `migrator`. Booked at `BACKLOG.md` §7.36 item 32.
+
+`rest` re-confirmed `healthy`.
+
 ---
 
 ## Departures from plan
@@ -468,3 +502,6 @@ Connecting to remote database...
 | 2026-09-14 | 6 | `?sslmode=disable` appended to `--db-url` overrides the CLI's default TLS behavior | Identical failure to the unmodified URL: `tls error (server refused TLS connection)`. The CLI **forces** `sslmode=require` onto the supplied URL rather than defaulting to it when silent — the query parameter is accepted but ignored. Sec-ruled fallback question (pin a different CLI version, or reopen TLS-on-`db`) — not decided, per Sec's instruction not to try alternative flags on the box. | ⛔ Not fixed — Sec ruling's target posture (§7.36 item 26) landed in compose+runbook regardless (`db push`'s mechanism is a separate, still-open question); Phase B step 4 remains blocked |
 | 2026-09-14 | 6 | The migrator service's `environment:` block (1 declared var, `PROD_DB_URL`) confines the live container's actual environment to that one credential (Sec's C7 "confinement-by-non-reference", cited in the credential-disclosure disposition) | Measured (names/booleans-only): the live `migrator` container holds 66 non-empty env names, not 1 — including `JWT_SECRET`/`SERVICE_ROLE_KEY`/`POSTGRES_PASSWORD`/`VAULT_ENC_KEY`/`ANON_KEY`/`SECRET_KEY_BASE`. Same pattern on `meta` (7 declared, 74 actual). `docker inspect .Config.Env` (container-creation time, not the exec path) shows the same set — ruling out an exec-path artifact — and Coolify's persistent per-application `docker-compose.yaml` (`/data/coolify/applications/<uuid>/`, distinct from the deleted build-time copy) confirms the mechanism directly: `env_file: - .env` on every service plus a Coolify-expanded `environment:` block, neither present in our source. Not introduced by this PR; the first disclosure incident's own filtered output (re-read, not re-run) shows only `PROD_DB_URL` actually carried a credential that time, so the completed rotation still fully covers it. | ⛔ Not fixed — booked; feeds ADR-072's C7 record (held for Sec/ADR owner) |
 | 2026-09-14 | 6 | A URL query parameter (`?sslmode=disable`) is sufficient to override the CLI's sslmode resolution | **Corrected 2026-09-14 (Sec C-1, PR #759):** the query param **did reach** the CLI (the bootstrap's password-elided DSN echo shows it present on the string received) and was **not honoured** on the `db push` path — not a quoting failure. At v2.107.0 `supabase` is a shim forwarding to `supabase-go`, which resolves TLS from libpq env vars; that is why `PGSSLMODE=disable` (belt-and-braces, compose `environment:` + bootstrap `exec`) connected and the URL param alone did not. `PGSSLMODE` is the mechanism of record; never rely on the URL — the same silent drop would direction-blindly ignore a `verify-full` request too. | ✅ Fixed — `PGSSLMODE` is the load-bearing mechanism; bootstrap apply completed clean, all verifications passed; PR #759 |
+| 2026-09-14 | 6 | A bare `ssh root@<box-ip> '… exec -it db psql …'` gives `psql` an interactive prompt over the wrapped SSH hop | No prompt, no output, no error — silent. `-it` on the remote `docker compose exec` needs a TTY allocated all the way through the SSH connection itself; without `ssh -t`, the pseudo-terminal never reaches the remote command. | ✅ Runbook §6.0 (new) states `ssh -t`/`-tt` is required for every interactive vehicle in §6 |
+| 2026-09-14 | 6 | `postgres` is a superuser on this Supabase Postgres image, per every prior draft of §6.3 and migration `118`'s own header | `ALTER DATABASE postgres OWNER TO migrator` failed as `postgres`: `ERROR: must be able to SET ROLE "migrator"`. Measured: `postgres` has `rolsuper=f` on this image (holds `rolcreaterole`/`rolcreatedb`, which is why §6.1/§6.2's lighter-weight `\password`/`LOGIN` statements DID succeed as `postgres`). `supabase_admin` is the actual superuser (`rolsuper=t`). | ✅ Runbook §6.0/§6.3 corrected — §6.3's three statements now run as `supabase_admin`; §6.1/§6.2 unaffected. `118`'s own header still says `postgres` — booked for Architect (comment-only), `BACKLOG.md` §7.36 item 31, not edited here |
+| 2026-09-14 | 6 | `migrator` owning the database is sufficient for it to read its own migration-tracking schema | `supabase migration list --db-url "$PROD_DB_URL"` (migrator's own credential, no override) connected (proving successful auth) but failed `permission denied for schema supabase_migrations (SQLSTATE 42501)` — `migrator` has no `USAGE` on that schema (owned by `postgres`, not `migrator`). The bootstrap apply that landed migrations 1–118 ran as the `postgres` override, never as `migrator` itself, so this gap was never exercised until this verification. | ⛔ Not fixed — booked, `BACKLOG.md` §7.36 item 32; threatens ADR-072's steady-state "future unsupervised applies run as `migrator`" premise until resolved or a real migration 119 is watched closely |
