@@ -504,4 +504,24 @@ failed to parse rows: ERROR: permission denied for schema supabase_migrations (S
 | 2026-09-14 | 6 | A URL query parameter (`?sslmode=disable`) is sufficient to override the CLI's sslmode resolution | **Corrected 2026-09-14 (Sec C-1, PR #759):** the query param **did reach** the CLI (the bootstrap's password-elided DSN echo shows it present on the string received) and was **not honoured** on the `db push` path — not a quoting failure. At v2.107.0 `supabase` is a shim forwarding to `supabase-go`, which resolves TLS from libpq env vars; that is why `PGSSLMODE=disable` (belt-and-braces, compose `environment:` + bootstrap `exec`) connected and the URL param alone did not. `PGSSLMODE` is the mechanism of record; never rely on the URL — the same silent drop would direction-blindly ignore a `verify-full` request too. | ✅ Fixed — `PGSSLMODE` is the load-bearing mechanism; bootstrap apply completed clean, all verifications passed; PR #759 |
 | 2026-09-14 | 6 | A bare `ssh root@<box-ip> '… exec -it db psql …'` gives `psql` an interactive prompt over the wrapped SSH hop | No prompt, no output, no error — silent. `-it` on the remote `docker compose exec` needs a TTY allocated all the way through the SSH connection itself; without `ssh -t`, the pseudo-terminal never reaches the remote command. | ✅ Runbook §6.0 (new) states `ssh -t`/`-tt` is required for every interactive vehicle in §6 |
 | 2026-09-14 | 6 | `postgres` is a superuser on this Supabase Postgres image, per every prior draft of §6.3 and migration `118`'s own header | `ALTER DATABASE postgres OWNER TO migrator` failed as `postgres`: `ERROR: must be able to SET ROLE "migrator"`. Measured: `postgres` has `rolsuper=f` on this image (holds `rolcreaterole`/`rolcreatedb`, which is why §6.1/§6.2's lighter-weight `\password`/`LOGIN` statements DID succeed as `postgres`). `supabase_admin` is the actual superuser (`rolsuper=t`). | ✅ Runbook §6.0/§6.3 corrected — §6.3's three statements now run as `supabase_admin`; §6.1/§6.2 unaffected. `118`'s own header still says `postgres` — booked for Architect (comment-only), `BACKLOG.md` §7.36 item 31, not edited here |
-| 2026-09-14 | 6 | `migrator` owning the database is sufficient for it to read its own migration-tracking schema | `supabase migration list --db-url "$PROD_DB_URL"` (migrator's own credential, no override) connected (proving successful auth) but failed `permission denied for schema supabase_migrations (SQLSTATE 42501)` — `migrator` has no `USAGE` on that schema (owned by `postgres`, not `migrator`). The bootstrap apply that landed migrations 1–118 ran as the `postgres` override, never as `migrator` itself, so this gap was never exercised until this verification. | ⛔ Not fixed — booked, `BACKLOG.md` §7.36 item 32; threatens ADR-072's steady-state "future unsupervised applies run as `migrator`" premise until resolved or a real migration 119 is watched closely |
+| 2026-09-14 | 6 | `migrator` owning the database is sufficient for it to read its own migration-tracking schema | `supabase migration list --db-url "$PROD_DB_URL"` (migrator's own credential, no override) connected (proving successful auth) but failed `permission denied for schema supabase_migrations (SQLSTATE 42501)` — `migrator` has no `USAGE` on that schema (owned by `postgres`, not `migrator`). The bootstrap apply that landed migrations 1–118 ran as the `postgres` override, never as `migrator` itself, so this gap was never exercised until this verification. | ✅ **Ruled (Sec review of PR #763):** owner-transfer, not a GRANT — `ALTER SCHEMA supabase_migrations OWNER TO migrator` + one `ALTER TABLE … OWNER TO migrator` per table (today: `schema_migrations` only, measured — no sequences/functions). Written into runbook §6.3 as step 4, for F/CTO to run supervised, before Phase C/D. Proof is the WRITE verb (`supabase db push`), not `migration list` — even that is not the true write proof; Phase D's first real migration, watched, is |
+
+**Item 32 measurement, taken as `supabase_admin` (read-only) for Sec's ruling, 2026-09-14:**
+```
+\dn+ supabase_migrations
+                         List of schemas
+        Name         |  Owner   | Access privileges | Description
+---------------------+----------+-------------------+-------------
+ supabase_migrations | postgres |                   |
+(1 row)
+
+select c.relname, c.relkind, pg_get_userbyid(c.relowner) from pg_class c
+  join pg_namespace n on n.oid=c.relnamespace where n.nspname='supabase_migrations';
+schema_migrations      | r (table) | postgres
+schema_migrations_pkey | i (index) | postgres
+```
+No sequences, no functions in the schema. Index ownership follows table ownership automatically under `ALTER TABLE … OWNER TO` — no separate statement needed for `schema_migrations_pkey`. **Exact statements for F/CTO, per Sec's ruling (also in runbook §6.3 step 4):**
+```sql
+ALTER SCHEMA supabase_migrations OWNER TO migrator;
+ALTER TABLE supabase_migrations.schema_migrations OWNER TO migrator;
+```
