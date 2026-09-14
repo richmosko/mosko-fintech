@@ -945,6 +945,38 @@ select pg_catalog.pg_has_role('migrator','service_role','MEMBER') as in_service_
 
 ---
 
+### 6.5 Migrator bring-up — operator execution order
+
+**This is a consolidation index, not a new procedure.** The ADR-072 Option-E migrator (chunks 1–3: #741/#743/#744/#746, plus Amendments 1–2: #742/#745) is code-complete on `main` but **not yet live** — §6 already says so. This section is the single place a stranger reads the whole go-live order; every step below points at the section that owns its commands and detail. **No command or claim here is new** — where a step's detail does not yet exist in a referenced section, that gap is named as a gap, not filled in.
+
+**Ordering dependencies (do not reorder across phases):** Phase A before Phase C — the CI trigger step (§6.4) consumes the UUIDs Phase A produces. Phase B before Phase D — the `migrator` role must exist and be switched on (§6.3) before any unsupervised, CI-triggered apply (§6.4) is safe to exercise. Within Phase B, the `\password`/`LOGIN` handoffs stay a supervised, interactive operator action until SELF-395 (client-side SCRAM scripting) ships — see §6.3's own note.
+
+**Phase A — Coolify resources & migrator container**
+
+1. Create the V1 web-app Coolify resource; note its `APP_UUID`. **Gap:** §7 is still a STUB for this step — it names the web-app as the 3rd fleet container but does not yet carry concrete Coolify resource-creation instructions. Until §7 is filled in, this step has no home to point at beyond the Coolify dashboard itself.
+2. Create the migrator Coolify Scheduled Task (`scripts/migrator-scheduled-task.md` — task fields, resource attachment, the fail-closed `status` semantics); note the `MIGRATOR_SERVICE_UUID` (the Supabase-stack resource) and `MIGRATOR_TASK_UUID` (the task itself).
+3. Redeploy the Supabase stack so the `migrator` sibling service comes up and `provision-supabase-stack.sh`'s `MINT_SECRETS` mints `MIGRATOR_DB_PASSWORD` (§6's credential bullet; §5).
+
+**Phase B — supervised first bootstrap, run as `postgres` (§6.1 / §6.3)**
+
+4. Bootstrap apply — `postgres` runs `supabase db push` (§6's fixed-verb / first-bootstrap bullets), which creates the `migrator` role inert via migration `118`.
+5. The §6.3 handoff, interactive `psql` as `postgres`, load-bearing order: `ALTER DATABASE … OWNER TO migrator` → `\password migrator` → `ALTER ROLE migrator LOGIN`. Do this alongside the §6.1 (`pfin_etl`) and §6.2 (`pfin_provider_sync`) worker-role handoffs — same two-step credential shape, same deploy pass.
+6. Verify per §6.3's verify block (role attributes, database ownership, no app-role membership) and §6.1/§6.2's own verify blocks; then bring the `migrator` container up.
+
+**Phase C — the CI trigger, makes steady-state live (§6.4)**
+
+7. Generate the `ci_only` keypair (§6.4 step 2).
+8. Set the local `.env`: `CI_MIGRATE_SSH_PUBKEY` + `MIGRATOR_SERVICE_UUID` + `MIGRATOR_TASK_UUID` + `APP_UUID` (§6.4 step 3).
+9. `scripts/provision-vps.sh --apply` (§6.4 step 4) — materializes the `ci-migrate` user, its forced-command key, the orchestration script, and the scoped Coolify token.
+10. Add the GitHub Actions secret `CI_MIGRATE_SSH_PRIVATE_KEY` (§6.4 step 5).
+11. Add the GitHub Actions repository variable `PROD_SSH_HOST` (§6.4 step 6).
+
+**Phase D — integration test**
+
+12. Merge a migration touching `supabase/migrations/**` and watch `.github/workflows/migrator-trigger.yml` fire end-to-end (§6's "steady-state" bullet; §6.4 step 7's verify). Green confirms the trigger path is live.
+
+---
+
 ## 7. Workers
 
 Scope: deploy the background-worker containers. Per ARCH Lock 13, the V1 runtime is a **hybrid 3-container topology** on Coolify: (1) V1 web-app, (2) `pfin_back_etl` ETL, (3) Node PDF worker — plus the Phase-6/V1.5 cron + scheduled-poll additions.
