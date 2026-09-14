@@ -754,7 +754,7 @@ Scope: apply the repo's `supabase/migrations/` against the fresh Postgres 17 ins
       exec -T migrator sh -c '
         IFS= read -r PGPW
         supabase db push \
-          --db-url "postgres://postgres:${PGPW}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}" \
+          --db-url "postgres://postgres:${PGPW}@db:5432/postgres" \
           --workdir /workspace'
     ```
     Acceptance criterion: **no host-side process argv and no shell-history line may contain the superuser plaintext.** `POSTGRES_HOST`/`POSTGRES_PORT`/`POSTGRES_DB` are the same non-secret defaults already in the stack's env store (`db` / `5432` / `postgres`). This is the **same verb, same tracking table** as the container's own steady-state invocation — only the identity in the URL differs, and only for this one supervised pass.
