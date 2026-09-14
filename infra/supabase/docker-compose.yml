@@ -319,7 +319,32 @@ services:
       db:
         condition: service_healthy
     environment:
-      PROD_DB_URL: postgres://${MIGRATOR_DB_USER}:${MIGRATOR_DB_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      # Transport: plaintext, deliberately and explicitly (Sec ruling,
+      # §7.36 item 26, 2026-09-14). `db` is `expose:`-only and never
+      # host-published (§4 (1d), CI-fenced by RT-32), so every Postgres
+      # connection in this stack stays on the internal Docker project
+      # network. `sslmode=disable` is stated rather than left to libpq's
+      # `prefer` default so the posture is visible in the file instead of
+      # inferred from a library. THIS IS VOID the moment `db` or
+      # `supavisor` becomes reachable off-host -- if any RT-32 vector is
+      # ever opened, TLS on this hop becomes required, not optional.
+      PROD_DB_URL: postgres://${MIGRATOR_DB_USER}:${MIGRATOR_DB_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable
+      # PGSSLMODE=disable is required, not optional -- measured (§7.36 item
+      # 26 follow-up, 2026-09-14). The URL's ?sslmode=disable DID reach the
+      # CLI (the bootstrap's password-elided DSN echo showed the tail on
+      # the string it received) and was NOT honoured on the `db push` path.
+      # At v2.107.0 the `supabase` binary is a shim forwarding DB-affecting
+      # subcommands to the co-located `supabase-go` (the same architecture
+      # as the PR #753 companion-binary defect); the Go side resolves TLS
+      # from libpq environment variables, which is why PGSSLMODE takes
+      # effect and the query parameter does not. The cause is NOT shell
+      # quoting -- do not drop this var believing the URL param alone is
+      # load-bearing once "fixed"; it is the only mechanism measured to
+      # work. Forward consequence: this drop is direction-blind -- a
+      # silently-ignored sslmode=verify-full would be a silent TLS
+      # downgrade with no error, so any future TLS-on-`db` work MUST use
+      # PGSSLMODE/PGSSLROOTCERT as the mechanism of record, never the URL.
+      PGSSLMODE: disable
 
   # Update the DATABASE_URL if you are using an external Postgres database
   # (not applicable here).
