@@ -279,6 +279,22 @@ Runbook line 322 carried `studio` as **OUT by default, "unless F/CTO names a con
 
 **Migrations have NOT been applied to production.** Nothing has run `supabase db push` against `188.245.166.206`.
 
+### §5h — 2026-09-14 retrospective: what did the unquoted-heredoc bug drop from the `ANON_KEY`/`SERVICE_ROLE_KEY` mint?
+
+Booked by BACKLOG.md §7.36 item 23 (Sec's execution gate on `mint-supabase-jwt-keys.sh`, PR #754 at `6c5128b0`/`bc8fc661`): identify the exact committed sha that produced the live production `ANON_KEY`/`SERVICE_ROLE_KEY`, and what — if anything — the unquoted-heredoc bug (the same mechanism as #754's item 19, present in this script's ~:395 heredoc since it was authored) dropped from that run.
+
+**Finding: no recorded live `--apply` execution of `mint-supabase-jwt-keys.sh` exists in this repo. Nothing to have dropped anything from — measured, not assumed.**
+
+- This section's own line above (`Secrets. 8 minted...`) and the table above it record only `provision-supabase-stack.sh`'s initial mint — deliberately inert `secrets.token_hex(32)` placeholder hex for `ANON_KEY`/`SERVICE_ROLE_KEY`, landed at `main` `af2c1696`, 2026-09-10. That is a different script and a different (unaffected) heredoc.
+- PR #731 (merged `c73cfdbd`, 2026-09-10T22:35:59Z, added `mint-supabase-jwt-keys.sh`): its own body states "Prep only — this PR does not touch prod" and lists the live SSH/Coolify-API mint path, the `tinker`-based decrypt assertion, and `--verify-live` as explicitly **not tested** ("no live box").
+- PR #734 (merged `aa051afd`, 2026-09-11T00:12:11Z, fixed the uuid-by-name resolution + argv-token leak): test plan explicitly checks "Not run: `--apply` against the real box/prod (prod is mid-rebuild ... prep-only ... for team-lead/Sec to run once approved)."
+- PR #736 (merged `91c63a18`, fixed the `--verify-live` stdin-drain bug and added the redeploy-after-mint step): ran the **read-only verify probes** live against `188.245.166.206` (uuid `nz7mbexygw9lesjlazcxeltn`) and read back both keys via the tinker decrypt path (never printed) to confirm they were already JWT-shaped at that point — but its own "Validation performed" section states **"Not run: the live `--apply` / `--apply --verify-live` acceptance pass against prod — blocked by the agent tool boundary,"** and explicitly hands that one step to F/CTO ("please run the live `--apply --verify-live` acceptance pass ... that's the only step this PR could not itself execute").
+- No later PR, and no other section of this file, records that F/CTO acceptance run happening, its result, or which committed sha was live at the time. `grep`-checked: `mint-supabase-jwt-keys`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `verify-live`, `JWT-shaped`, and `VERIFIED` appear nowhere else in this file.
+
+**Reading this correctly:** PR #736's own verify-probe run found the keys *already* JWT-shaped and passing all four gateway probes before that PR's `--apply` fix even existed — meaning *some* mint had already succeeded by then (consistent with a manual F/CTO `--apply` run per PR #731/#734's hand-off, just not logged here). The retrospective cannot identify that run's exact sha because it left no record in this repo — only that it must have been at or before `main`'s state when PR #736's live probes ran. Whether the unquoted-heredoc bug corrupted anything in that specific unlogged run is **unknowable from repo evidence** — not "nothing dropped," but "no measurement exists to check." The one thing this retrospective CAN state with confidence: nothing in this repo's own history shows the heredoc bug's backtick-deletion mechanism (item 23) ever silently dropping a `chmod`/`umask`/overwrite line from a *documented* run, because no documented `--apply` run exists to have dropped it from.
+
+**Action taken:** the fix (this PR) closes the bug going forward regardless of whether the gap above is ever resolved. Separately flagged for F/CTO: whichever `--apply` run actually produced the live keys should be logged here after the fact if it's still reconstructable (Coolify's own audit log / deployment history for `nz7mbexygw9lesjlazcxeltn`, if retained) — this is an operator-log gap, not a code defect, and outside this PR's scope to fix.
+
 ---
 
 ## Step 6 — Apply migrations (migrator bring-up)
