@@ -1,0 +1,18 @@
+---
+name: unquoted-heredoc-deletes-text-from-the-remote-body
+description: An unquoted heredoc delimiter around a remote script silently DELETES backtick spans from the body that runs; and grading the un-escaping requires measuring the heredoc rule, not reasoning about it
+metadata:
+  type: feedback
+---
+
+From the PR #754 review (items 15/19). Three rules about `ssh ... bash -s <<DELIM` remote-script patterns.
+
+**1. The defect is DELETION, not a stderr line.** `sshx_in <<REMOTE` (unquoted) makes the LOCAL shell run parameter expansion AND command substitution over the whole body before it is sent. A Markdown-style `` `word` `` in a *comment* inside the body is a command-substitution request: the local shell runs `word`, prints `command not found`, and **replaces the span with the failed command's empty stdout** — so the script that runs on the box is missing text. A dropped `umask`, `chmod 600`, or overwrite-vs-append line in a secret-minting body is an integrity defect that leaves no trace in the success output.
+
+**Why:** the visible symptom (`command not found` on stderr) reads as cosmetic and gets booked as console noise. It is not — the rendered remote body differs from the source. **How to apply:** when you see this symptom in a secret-handling script, ask for a **before/after rendered-body diff** (secrets elided, dummy values), not a fix description. And ask it RETROSPECTIVELY: if the defective script already ran against production, the same diff is what establishes what was dropped from the run that produced the live secrets.
+
+**2. Grading the un-escaping needs a MEASUREMENT, and the measurement must be isolated.** When the delimiter is quoted, every `\$` in the body that existed only to survive the old local pass must be stripped — but you cannot verify that by rendering the real body, because rendering it EXECUTES the defect. Measure the rule with a minimal heredoc containing no command substitution: unquoted `<<EOF` renders `\$` → `$`; quoted `<<'EOF'` renders `\$` → `\$`. Then reason about the real body from the measured rule. ⚠ Escapes that serve a DIFFERENT layer (here `\$app` inside a `--execute="..."` argument parsed by the REMOTE bash) are load-bearing and must stay.
+
+**3. ⚠ MY OWN ERROR: I drafted a blocking finding against a COUNTERFACTUAL.** The fix comment said a literal `\$` reaching grep *"would have matched a literal `$` character"* — explaining why the backslash **had** to go once the delimiter was quoted. I read "would have" as a claim that the old code was broken and nearly forwarded "you fixed a bug that did not exist." The Sec-Lock cross-check — read the cited text verbatim before forwarding — caught it. Had it shipped, the repair would have re-introduced a real anchor bug. **How to apply:** before calling a stated rationale false, re-read the sentence for a counterfactual mood (`would have`, `had it`, `if`). A correct counterfactual and a false claim about the past are one word apart. See [[sound-quote-false-gloss-drift]] and [[a-hazard-has-two-falsifiable-halves-mechanism-reachability]].
+
+**4. Values moved onto the ssh argv are `ps`-visible ON THE BOX.** Replacing inline interpolation with `env VAR="$V" bash -s` is the right fix shape, but grade each value: a UUID, a filesystem PATH, and a list of key NAMES are fine; a value would not be. ⚠ Also grade PROVENANCE — one of the three was the box's own `artisan tinker` output, i.e. remote data crossing back onto the box's argv, not "our own script's data" as its comment claimed. No escalation when the operator is already root there, but do not let the comment say otherwise.

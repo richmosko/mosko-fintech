@@ -1,0 +1,41 @@
+---
+name: a-selfcheck-that-cannot-observe-its-own-property
+description: A build-time self-check can pass while the capability it vouches for is broken; and a published checksum manifest may cover only the VERSIONED asset name, not the unversioned alias a Dockerfile actually downloads
+metadata:
+  type: feedback
+---
+
+From the PR #753 migrator-image review. Three linked rules about build-time verification of a downloaded binary.
+
+**1. `<tool> --version` is not a check that `<tool> <subcommand>` works.** The pinned Supabase CLI tarball ships TWO binaries — `supabase` (a shim) and `supabase-go` (the Go CLI the shim forwards DB-affecting subcommands to). The Dockerfile extracted only the first; the build-time `supabase --version` passed because that subcommand does not forward; `supabase db push` then failed at the 🔒 bootstrap step in production.
+
+**Why:** the self-check was chosen for being cheap to run, not for observing the property it vouched for. That is [[the-instrument-cannot-observe-the-property]] in a Dockerfile.
+
+**How to apply:** ask which code path the check exercises versus which path production uses. ⚠ **Before ORDERING a replacement check, prove it bites** — rebuild with the companion deliberately removed and confirm RED. A second vacuous self-check is worse than none, because it carries the authority the first one falsely carried. And note where the fix already fenced the instance: `tar -xzf … a b && chmod +x /path/a /path/b` in one `&&` chain IS the presence assertion — a following `test -x` re-asserts what `chmod` proved and is decoration ([[a-check-chained-to-its-action-is-decoration]]). Fence the CLASS (a future third binary), not the instance.
+
+**2. Naming archive members explicitly fails CLOSED; extracting everything fails OPEN.** `tar -xzf … supabase supabase-go` errors if a member vanishes in a version bump; a bare extract silently absorbs whatever the archive holds. Prefer the explicit form and say so in review — it reads like pedantry and is actually the safer shape.
+
+**3. ⚠ A publisher's `checksums.txt` may cover only the VERSIONED filenames.** Measured on `supabase/cli` v2.107.0: `checksums.txt` lists `supabase_2.107.0_linux_arm64.tar.gz` but **not** the unversioned alias `supabase_linux_arm64.tar.gz` — which is exactly what the Dockerfile downloaded. So "they publish checksums" did not mean "this artifact has a published integrity reference." Grade the asset NAME, not the presence of a manifest. Fix shape: switch the download to the versioned asset, then verify a pinned digest.
+
+**How to apply:** for any `curl … | tar` of a binary that will hold a production credential, list the release assets (`gh api repos/<o>/<r>/releases/tags/<tag> --jq '.assets[].name'`), fetch the manifest, and grep it for the exact filename being downloaded. ⚠ Booking rather than requiring a checksum fix is defensible when the replacement asset's CONTENTS have not been verified to match — do not order an unverified swap into a path that just broke; make it its own PR with its own build check. See [[supply-chain-minimalism]].
+
+**5. THE ROOT CAUSE OF A REPEATED PACKAGING DEFECT IS USUALLY "THE IMAGE IS BUILT NOWHERE IN CI" — measure that before prescribing a better self-check.**
+Three consecutive migrator-image defects (missing build-context path, missing companion binary, missing `supabase/templates/` that the CLI validates from `config.toml` even though the verb never reads them) were each found only on the production box. Measured: `grep -rn 'docker build' .github/workflows/` returned exactly ONE hit — the web app's `docker build api/`. The migrator image had no CI build at all, so the box was the only place it was ever built.
+
+**Why:** I kept prescribing a better *build-time self-check* inside the Dockerfile, which is the wrong layer — a self-check only runs where the build runs. **How to apply:** when a defect class recurs in an image, first grep the workflows for whether that image is built in CI at all, and cite the count. Then ask for a job that BUILDS it (catches missing-COPY-source classes) and EXERCISES it.
+
+**Specify the exercise by DISCRIMINATING PREDICATE, not by flag name** — especially when you cannot verify the tool's flag surface (my fetch of the CLI source 404'd, so I did not name `--dry-run`). The shape that caught all three: run the real verb against a deliberately unreachable `--db-url` and assert the failure is a **CONNECTION** failure. PASS = a dial/connect token in stderr; FAIL = `Invalid config` or `Could not find the …` or binary-absent. Config validation provably precedes connection, so one invocation discriminates every packaging class at once. ⚠ A bare `rc != 0` assertion is VACUOUS here — it passes on the connection failure itself.
+
+**6. ⚠ MY REVIEW INSTRUMENT IS BLIND TO THE SAME CLASS THE SELF-CHECK IS.** I GREENed that image three times. Reading a Dockerfile diff cannot observe whether the resulting image RUNS. When that is the situation, say it — the remedy is a CI job, not a more careful reviewer — and **convert your own earlier booking into a condition** rather than asking the builder to try harder. A booking that has been overtaken by a third instance is a falsified disposition ([[falsified-sec-disposition-is-part-of-the-change]]), and the honest move is to escalate your own call, not theirs.
+
+**7. A dev `config.toml` value is not a production value — and this class has multiple instances.** Production GoTrue sets no `GOTRUE_MAILER_TEMPLATES_*` and mounts no templates, so the reviewed custom auth-email templates are NOT what production sends; production `PGRST_DB_SCHEMAS` omits `pfin` while dev `config.toml` includes it. Same shape twice. **How to apply:** whenever `supabase/config.toml` is cited as evidence for a production property, grep the production compose/env for the corresponding `GOTRUE_*` / `PGRST_*` var and state which one governs. Rule the divergences together as one class, not one ticket at a time.
+
+**8. ⚠⚠ TWICE NOW: I read a source CORRECTLY and asked it a question that could not falsify the claim. Establishing WHICH PATH RUNS is a separate question.**
+- **Instance 1** — Coolify `parseDockerComposeFile` builds each service's env from its own declared `environment:`. True. But the injection happened via `env_file:` in Coolify's *rendered persistent* compose, a path I never asked about. I concluded "confinement holds" and carried it into three PR verdicts.
+- **Instance 2** — supabase CLI `legacy-db-config.parse.ts` resolves `sslmode` as `url ?? svc ?? PGSSLMODE`. True of that file. But `db push` at v2.107.0 **forwards to `supabase-go`** and never takes the legacy TypeScript path, so the URL parameter was accepted syntactically and silently ignored; `PGSSLMODE` worked because the Go side reads libpq env natively. I ruled the request's premise "contradicted by the source" — the premise was right and my citation was off-path.
+
+**Why:** in both cases the file answered *its own* behaviour honestly. The unasked question was **"is this file on the path that actually executes?"** A directory named `legacy/`, or a shim architecture already known to forward subcommands, is the tell — and in instance 2 I had *already documented* the shim forwarding (the #753 `supabase-go` defect) and still cited the TS path.
+
+**How to apply:** before citing a source file as governing a behaviour, answer three things in order — **(a) does this file's behaviour match?** (b) **is this file reachable from the entry point in question?** (c) **what else could produce the observed result?** Cite only after (b). ⚠ And when a measurement contradicts your source read, **the measurement wins and the citation is the thing to re-examine** — do not tell the operator their premise is wrong. Prefer a **behavioural discriminator** you can state without naming a code path: "run it and assert which error class comes back."
+
+**Direction-blindness corollary, worth more than the incident:** a parameter accepted syntactically and silently ignored is **direction-blind**. Ours dropped `sslmode=disable` (benign — we wanted less TLS). The same drop ignores `sslmode=verify-full` with no error — a **silent TLS downgrade**. When you find a silently-ignored security parameter, always state the consequence in the *hardening* direction, not just the one you hit.

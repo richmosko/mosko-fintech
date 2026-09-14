@@ -6,6 +6,8 @@
 
 - [Run the measurements a ruling needs](feedback_run_the_measurements_a_ruling_needs.md) — read-only measurement is REVIEW work, not the builder's.
 - [Measure the fence regex, not its comment](feedback_measure_the_fence_regex_not_its_comment.md) — grep the real predicate over an evasion list; NULL is the silent pass.
+- **[⚠ TWICE: right source, wrong PATH — ask "does this file run?"](feedback_a_selfcheck_that_cannot_observe_its_own_property.md)** — Coolify `env_file:` and the supabase-go shim; when a measurement contradicts my source read, the MEASUREMENT wins. A silently-ignored security param is DIRECTION-BLIND.
+- **[⚠ A source read is not evidence about live state](project_coolify_compose_env_is_interpolation_only.md)** — I carried "C7 confinement HOLDS" into 3 verdicts off a parser read; measure the ARTIFACT the claim is about, and re-measure any "refactor PRESERVES it" assertion on the REFACTORED artifact.
 - [Sec-Lock cross-check catches my own misreads](feedback_sec_lock_cross_check_catches_my_own_misreads.md) — read the source the text CITES; my own ROLE BRIEF's gloss can scope a surface OUT.
 - [Catalog comments carry live-state tallies](feedback_catalog_comments_carry_live_state_tallies.md) — a count FANS OUT; AUTHORED ≠ SERVED.
 - [Zero-value sentinels flip meaning when a predicate changes](feedback_zero_value_sentinel_flips_meaning.md) — `GREATEST`/`LEAST` ignore NULLs, so the guard mints the zero.
@@ -56,6 +58,7 @@
 - [APPLIED ≠ DEMONSTRATED when discharging a booking](feedback_applied_vs_demonstrated_discharge.md) — a same-recipe diff proves no-drift, never parity.
 - [Backup rotation prunes its own recovery points](feedback_backup_rotation_prunes_its_own_recovery_points.md) — run the DEFENDED event through the retention policy.
 - [A signature change needs a DROP, not a runbook](feedback_signature_change_needs_a_drop_not_a_runbook.md) — a changed param list ADDS an overload with its grant.
+- [A self-check that cannot observe its own property](feedback_a_selfcheck_that_cannot_observe_its_own_property.md) — `--version` ≠ the subcommand; a `checksums.txt` may cover only the VERSIONED asset name, not the alias you download.
 - [A probe asserting only `rc != 0` goes vacuous](feedback_probe_that_only_asserts_failure_goes_vacuous.md) — "nothing changed" needs a POSITIVE CONTROL.
 - [A period-named figure may carry no period bound](feedback_a_period_named_figure_may_carry_no_period_bound.md) — then ask what DRAINS the accumulator.
 - [Walk the UN-SET path of a reversible flag](feedback_walk_the_unset_path_of_a_reversible_flag.md) — the recommended un-set PROCEDURE is where the defect re-enters.
@@ -69,7 +72,9 @@
 - [A rework leaves residue that names what it dropped](feedback_a_rework_leaves_residue_that_names_what_it_dropped.md) — an unused `\set` is a DROPPED LEG; `comment on` is invisible to every `prosrc` leg.
 - [A DEFINER grant hands back the channel](feedback_a_definer_grant_hands_back_the_channel.md) — reachability · shape-vs-truth · repairability, in that order.
 - [Guarded region is the control, not the constant](feedback_guarded_region_is_the_control_not_the_constant.md) — a "mirrors <sibling>" claim is about what the block ENCLOSES.
+- [A credential in a HOST-side argv, and the named vehicle](feedback_credential_in_host_argv_and_the_named_vehicle.md) — B10 is a CLASS not a letter; `-e KEY=VALUE` lands in argv too; grep the Dockerfile before accepting `exec <svc> <bin>`. ⚠ MY OWN: single-quoting `sh -c` to defer the SECRET defers every other `${VAR}` too — compose `${VAR}` interpolation is NOT container env.
 - [Exception logging leaks the credential in the URL](feedback_exception_logging_leaks_the_credential_in_the_url.md) — `logger.exception` on a `requests` failure writes the webhook URL; check where logs GO.
+- [An unquoted heredoc DELETES text from the remote body](feedback_unquoted_heredoc_deletes_text_from_the_remote_body.md) — not a stderr line; ask for a rendered-body diff, retrospectively too. ⚠ MY OWN: I nearly blocked on a COUNTERFACTUAL — re-read for "would have".
 - [Interactive tinker echoes the transcript](feedback_interactive_tinker_echoes_transcript.md) — `docker exec -i ... tinker` (no `--execute`) replays input+return values to stdout; fence bans tinker-without-`--execute`; RT-32.
 - [dblink in a test is a privilege boundary](feedback_dblink_in_a_test_is_a_privilege_boundary.md) — `dblink_connect_u` and role elevation are veto-shaped.
 - [A gate measured against `main` expires when `main` moves](feedback_a_gate_measured_against_main_expires_when_main_moves.md) — name the sha; use `git merge-tree`, not a two-way diff.
@@ -84,6 +89,7 @@
 
 ## Standing constraints on future work
 
+- [Stack transport posture: explicit `sslmode=disable` in-network](project_stack_transport_posture_plaintext_in_network.md) — `workers/etl` defaults to `require` and is a LATENT connect-failure; the ruling is load-bearing on RT-32 and VOID if `db` goes off-host.
 - [DB clock is UTC; repo clock is PDT](project_db_clock_is_utc_repo_clock_is_pdt.md) — ask WHICH clock before grading any date claim.
 - [CPI positivity CHECK must be additive](project_cpi_positivity_check_must_be_additive.md) — `NaN > 0` is TRUE in Postgres.
 - [`z.coerce.number()` on FK-shaped ID fields is permissive](project_zod_coerce_number_on_fk_id_fields.md) — accepts `true` / `[5]` / `"0x10"` / `"5e2"`; standing item, never a per-branch condition.
