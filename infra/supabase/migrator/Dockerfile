@@ -41,19 +41,31 @@ FROM debian:bookworm-slim
 # Bump both together.
 ARG SUPABASE_CLI_VERSION=2.107.0
 # Populated automatically by buildx (amd64 / arm64) — production (Hetzner
-# cax21) is amd64; TARGETARCH keeps this Dockerfile buildable+verifiable
-# (`supabase --version` actually EXECUTES below, not just downloaded) on an
-# arm64 dev machine too, rather than hardcoding the one prod needs and
-# leaving the RUN step unable to self-verify anywhere else.
+# cax21) is arm64 (CORRECTED 2026-09-14, standup step 6 Phase B: measured
+# live on the box, `uname -m` = aarch64; the prior "amd64" claim here was
+# stale/wrong and did not affect the build, which is arch-driven by
+# TARGETARCH regardless of what this comment said); TARGETARCH keeps this
+# Dockerfile buildable+verifiable (`supabase --version` actually EXECUTES
+# below, not just downloaded) on either architecture, rather than
+# hardcoding one and leaving the RUN step unable to self-verify elsewhere.
 ARG TARGETARCH
 
+# CORRECTED 2026-09-14 (standup step 6 Phase B) — measured live against the
+# production box: `supabase_linux_${TARGETARCH}.tar.gz` ships TWO binaries,
+# `supabase` and `supabase-go`. The prior extraction (`tar -xzf ... -C
+# /usr/local/bin supabase`) took only `supabase` and dropped `supabase-go`.
+# `supabase --version` still worked (build-time RUN step below, and it
+# passed) because that subcommand doesn't need the companion binary, but
+# `supabase db push` failed at runtime: "Could not find the `supabase-go`
+# binary" — the CLI at this pinned version ships as a shim that forwards
+# DB-affecting subcommands to a co-located Go binary. Extract both.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl tar \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL -o /tmp/supabase-cli.tar.gz \
        "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_linux_${TARGETARCH}.tar.gz" \
-    && tar -xzf /tmp/supabase-cli.tar.gz -C /usr/local/bin supabase \
-    && chmod +x /usr/local/bin/supabase \
+    && tar -xzf /tmp/supabase-cli.tar.gz -C /usr/local/bin supabase supabase-go \
+    && chmod +x /usr/local/bin/supabase /usr/local/bin/supabase-go \
     && rm /tmp/supabase-cli.tar.gz \
     && supabase --version
 
