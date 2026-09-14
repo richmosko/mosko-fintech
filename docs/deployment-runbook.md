@@ -1006,7 +1006,96 @@ Scope: deploy the background-worker containers. Per ARCH Lock 13, the V1 runtime
   - **Options considered, so nobody re-opens a closed one:** **γ (this)** chosen — the only shape that catches post-deploy drift. **β** (container healthcheck) **HELD, not rejected**: it fails closed to an *outage* on a live single-user app, buying detection γ already provides — easy to add later if γ's latency proves too loose. **δ** (leave it a human step) rejected: it is the posture that failed. **α** below.
   - **⚠ α's PREMISE IS STILL UNVERIFIED, AND TESTING IT IS *NOT* GATED ON CUTOVER.** α was a Coolify **post-deploy command**; it rests on whether a **non-zero exit from one actually FAILS the deployment** rather than merely logging. That is a question about **Coolify's behaviour, not about V1's box** — the F/CTO already runs Coolify on cax21 with Discord notifications working, so it is answerable today. **If it merely logs, α is worth ~nothing.** Everything else in this bullet waits for Phase 7; this one does not, and it is the item most likely to be wrongly assumed blocked because everything around it is.
 
-> **STUB —** Fill in per container: Coolify service config (Base Directory, build pack = Dockerfile, ports/networking), env-var wiring (→ §5), the cron schedule expressions for `monthly_report` + Plaid poll (the `provider-sync` daily-poll Scheduled Task is captured above), and resource limits. Note the web-app container (the 3rd of the 3) is owned at `api/` — its deploy config slots in here once the SvelteKit scaffold lands in Phase 6.
+### 7.1 Per-container Coolify deploy config
+
+**De-stubbed 2026-09-13.** ⚠ **This is the deploy RECIPE, not a "deploy now" instruction** — Phase 6 is still building toward V1.final; every block below is executable once the app is V1-ship-ready and §6 (migrations + role handoffs) has run, per §6.5's Phase A step 1 (which points back here for the Coolify-resource-creation detail it was missing). **State correction carried in from the prior STUB:** that marker said the web-app config waits "until the SvelteKit scaffold lands" — stale. Verified on `main` at authoring time: `api/` carries a `Dockerfile` + `package.json` + `vite.config.ts` and 126 route files under `src/routes/`; all three workers carry a `Dockerfile` **and** a committed `docker-compose.yaml`. The four blocks below are grounded in those real artifacts, §3's already-ratified topology table, §5's secret-injection mechanics, and §6's role-provisioning ordering — not invented.
+
+**⚠ Build-pack correction against this section's own originating brief.** §3's topology table (already on `main`, unchanged by this PR) documents **all three workers as Coolify build pack = Compose**, not Dockerfile: `pdf-render` moved off the plain-Dockerfile pack at SELF-348 A4 item 4c / Sec N-4 (superseding what it shipped with at Phase 5), and `etl` has carried two Compose-defined Coolify units (nightly-ingest + monthly-report) since its own docker-compose header was authored. Only `app` stays on the plain Dockerfile+Base-Directory pack — it is the **one** fleet service still on it. The blocks below follow §3's table and the compose files actually on disk, not a Dockerfile-build-pack assumption for `etl`/`pdf-render` — flagged in the hand-off below as a correction, not silently reconciled.
+
+---
+
+**1. `app` — V1 web-app**
+
+| Field | Value | Grounding |
+|---|---|---|
+| Base Directory | `api/` | §3 topology table |
+| Build pack | Dockerfile — [`api/Dockerfile`](../api/Dockerfile) | §3 table; the one fleet service still on plain Dockerfile+Base-Directory |
+| Container port | `3000` (`EXPOSE 3000`, `CMD ["node","build"]` — adapter-node default) | `api/Dockerfile` lines 35–36 |
+| Domain | `pfindash.com` (+ `www.pfindash.com` alias) — the **only** public-Domain resource in the project | §2 "Subdomain split: app only"; §3 topology table |
+| Domain assignment status | **Blocked on §2's DNS cutover** — not yet assignable | §3 "Status (2026-09-09)" line |
+| Networking / CA-4 | **MUST** be created in the **same Coolify project** as `provider-sync` — `app`'s only internal-network dependency is reaching `http://provider-sync:8081` for the SELF-212 admission handshake | §7 provider-sync CA-4 bullet; §10 CA-2/CA-4 |
+| Health check | No `/healthz`-shaped route exists under `api/src/routes/` (checked: none found). Until Backend adds one, configure Coolify's HTTP health check against `/` (root) — SvelteKit adapter-node answers 200 there once the app boots. **Flagged to Backend**, not invented here. | `find api/src/routes -iname '*health*'` → empty |
+| Resource limits | No repo-side precedent exists for any container's CPU/mem ceiling. See "Resource limits — genuinely open" below rather than a per-container number here. | — |
+
+**Env-var wiring (→ §5; values never re-enumerated here):**
+
+- **Non-secret plain Coolify env** (NOT in `secrets-manifest.yml` — §5's non-secret runtime-config carve-out): `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`.
+- **Secrets** (`production_only`, injected by [`scripts/push-production-secrets.sh`](../scripts/push-production-secrets.sh)'s `SECRET_RESOURCE_MAP → app`): `SUPABASE_SERVICE_ROLE_KEY` (RT-26 §4.1 allowlist — `app` is the sole holder in the fleet), `PDF_WORKER_SIGNING_KEY` (SD-20 — **same value** as the PDF worker, ≥32 chars, verify before `pdf-render`'s first deploy per the existing PDF-worker bullet above), `WORKER_ADMISSION_SHARED_SECRET` (**same value** as `provider-sync` — §5's ratified deviation: pushed as an ordinary per-application env var to both, never a Coolify "shared variable"; rotation only via re-running the script, never a hand-edit to one side), `DISCORD_WEBHOOK_URL`.
+- **Real JWT mint** — [`scripts/mint-supabase-jwt-keys.sh --apply --app-name <app-resource-name> --verify-live`](../scripts/mint-supabase-jwt-keys.sh) mints the stack's real `ANON_KEY`/`SERVICE_ROLE_KEY` (HS256, derived from the deployed `JWT_SECRET`) and, when `--app-name` resolves an existing `app` resource, propagates them onto `app` as `PUBLIC_SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` — the script's own step name is "overwriting the placeholders" (its line ~387), so it is built to run **after** any placeholder value is already in place, not before.
+- ⚠ **Flagged, not resolved here:** `push-production-secrets.sh`'s own `SECRET_RESOURCE_MAP` (§5) also maps `SUPABASE_SERVICE_ROLE_KEY → app`, sourced from the operator's local `.env` — a second writer of the same variable `mint-supabase-jwt-keys.sh --app-name` also writes. Nothing in §5 or §6 states which one is authoritative or what ordering is required between them beyond the "overwriting the placeholders" phrasing above. Sec joint-review: confirm the intended sequencing (or that one of the two should stop writing this var) rather than this section asserting one.
+- **A redeploy is required after either injection** — Coolify only applies env at container-recreate time (§5).
+
+---
+
+**2. `etl` — `pfin_back_etl`**
+
+| Field | Value | Grounding |
+|---|---|---|
+| Base Directory | `workers/etl/` | §3 topology table |
+| Build pack | **Compose** — [`workers/etl/docker-compose.yaml`](../workers/etl/docker-compose.yaml), **two Coolify units** sharing one image/build: `pfin-back-etl` (nightly ingest, resident) and `pfin-back-etl-monthly-report` | §3 table; compose file itself |
+| Container port / Domain | None — no `expose:`/`ports:` on either service in the compose file; pure batch workers that connect **out** (Postgres, Discord), accept no inbound connections | `workers/etl/docker-compose.yaml` header comment |
+| Cannot start until | §6.1's `pfin_etl` role provisioning (two-step `\password`/`LOGIN` handoff) has run — starting first fails at connect (loud, safe, not an exposure) | §6.1; existing ETL bullet above |
+| Health check | No HTTP endpoint (batch worker) — Coolify's container-running check is the only mechanism available; correctness is asserted by the Scheduled Task's own exit-code semantics (§6's "fail-closed lives in the Scheduled Task's own exit status" framing), not a health probe | `workers/etl/Dockerfile` (`CMD ["tail","-f","/dev/null"]`) |
+| Resource limits | Open — see below | — |
+
+**Scheduled Tasks (Pattern A — resident container + `docker exec`, per the existing Pattern-A bullet above):**
+
+- **`pfin-back-etl-monthly-report` unit** — cron **`0 6 1 * *`** (06:00 UTC, 1st of the month), command **`python run_monthly_report.py`**. Both the expression and the command are already committed as comments in `workers/etl/docker-compose.yaml` (lines 36–42) — not invented here, just surfaced into the deploy config. Known residual: UTC-pinned boundary fires ~7h early relative to a Pacific-timezone user's local month-end (BACKLOG §7.34 item 3, owner unnamed).
+- **`pfin-back-etl` unit (nightly ingest) — ⚠ GAP, flagged rather than fabricated.** No cron expression for a nightly NAV/CPI/FMP ingest is ratified anywhere in this tree. [`workers/etl/run_nav_daily.py`](../workers/etl/run_nav_daily.py)'s own docstring states: *"Phase-7 Coolify cron scheduling is DEFERRED (F/CTO-ratified) — this file is the worker entry point the scheduler will eventually invoke, not the schedule."* Compounding this: the `pfin-back-etl` service block in the compose file declares **no** `PFIN_DB_*` / `FMP_API_KEY` / `BLS_API_KEY` environment references at all (only `PYTHONUNBUFFERED=1`) — per the migrator-role provisioning note elsewhere in this runbook, *"Coolify runs plain, interpolation-only `docker compose`, so a shared-store var reaches only the service whose block references `${VAR}`"* — meaning as currently committed, this service has **no wired access** to the credentials a nightly ingest would need, regardless of what cron expression is later chosen. **This blocks the nightly-ingest Scheduled Task from being creatable, not just its schedule from being decided.** Flagged to F/CTO (cadence ratify) + Backend (which script(s) — `run_nav_daily.py` alone, or also `run_cpi_backfill.py`/`run_nav_backfill.py`'s non-backfill siblings — the nightly entrypoint actually runs, and the missing `environment:` block).
+
+**Env-var wiring (→ §5 + §6.1):** `PFIN_DB_USER=pfin_etl` (non-secret) + `PFIN_DB_PASSWORD` (the `pfin_etl` credential, `production_only`, set by §6.1's handoff — **not** `push-production-secrets.sh`, which explicitly excludes `PFIN_DB_PASSWORD`) + `FMP_API_KEY` / `BLS_API_KEY` (`production_only`, pushed by `push-production-secrets.sh`) — once the missing `environment:` block above is added. `DISCORD_WEBHOOK_URL` is already wired (compose file, monthly-report unit) and documented as a fourth consumer in §5's mapping table.
+
+---
+
+**3. `provider-sync`**
+
+| Field | Value | Grounding |
+|---|---|---|
+| Base Directory | `workers/provider-sync/` | §3 topology table |
+| Build pack | **Compose** — [`workers/provider-sync/docker-compose.yaml`](../workers/provider-sync/docker-compose.yaml) (SELF-212 Option C b-i; not the bare Dockerfile pack) | §7 existing bullet; §3 table |
+| Admission port | `8081`, **`expose:`-only — NO published `ports:`, NO Coolify Domain / Traefik `Host()` label (RT-27)** | compose file `expose: ["8081"]`; RT-27 fence |
+| Networking / CA-4 | **MUST** be created in the **same Coolify project** as `app` — internal DNS `http://provider-sync:8081` is per-project only | compose file header; §7 CA-4 bullet; §10 CA-2 |
+| Deploy-time check | CA-1 — dump the admission container's actual env and confirm the limb-(a) public-route regex would match Coolify's real injected FQDN/URL var names for the running Coolify version (existing CA-1 bullet) | §7 existing CA-1 bullet |
+| Health check | `GET /healthz` on `:8081` — unauthenticated liveness, `{status:'ok'}`, internal-only (same port the admission surface is on; not published) | `workers/provider-sync/src/http/admissionServer.ts` line 337, 375 |
+| Cannot cut over until | §6.2's `pfin_provider_sync` role handoff (same deploy pass as §6.1) | §6.2 |
+| Resource limits | Open — see below | — |
+
+**Scheduled Task:** `@daily`, command **`node dist/cli/poll.js`** — already fully specified in the existing "provider-sync daily poll" bullet above (cadence, exit-code semantics, required env subset). Not re-derived here; this block only adds the Base-Directory/build-pack/networking/health-check facts the STUB was missing.
+
+**Env-var wiring (→ §5 + §6.2):** `PFIN_DB_USER` (`authenticator` pre-cutover → `pfin_provider_sync` post-§6.2-cutover, non-secret) + `PFIN_DB_PASSWORD` (`production_only`, per-role value, §6.2) + `PLAID_CLIENT_ID`/`PLAID_SECRET`/`PLAID_ENV` (`production_only`, sole holder per ADR-011 D17/Lock 13 amendment) + `WORKER_ADMISSION_SHARED_SECRET` (same value as `app`, per §5's ratified deviation) + optional `SIMPLEFIN_TOKEN` + optional `DISCORD_WEBHOOK_URL` (worker's own direct dispatch — not required for the Coolify→Discord Scheduled-Task-failure path, per the existing poll-env bullet). All pushed by `push-production-secrets.sh`'s `SECRET_RESOURCE_MAP → provider-sync`, except `PFIN_DB_PASSWORD` (§6.2, excluded from that script).
+
+---
+
+**4. `pdf-render` — Node PDF worker**
+
+| Field | Value | Grounding |
+|---|---|---|
+| Base Directory | `workers/pdf-render/` | §3 topology table |
+| Build pack | **Compose** — [`workers/pdf-render/docker-compose.yaml`](../workers/pdf-render/docker-compose.yaml), adopted at SELF-348 A4 item 4c / Sec N-4, **superseding** the plain-Dockerfile pack this container shipped with at Phase 5 | §3 table; compose file header |
+| Render port | `8080`, `expose:`-only (compose file; matches `EXPOSE 8080` in the Dockerfile and `server.js`'s `PORT` default) — never `ports:`, never a Domain | compose file lines 87–88 |
+| Dockerfile status | Not a placeholder any more — [`workers/pdf-render/Dockerfile`](../workers/pdf-render/Dockerfile) is Puppeteer + system Chromium + app code (SELF-348 A4, real render pipeline). The prior "placeholder until Wave-6 Puppeteer" framing in the existing bullet above is stale as of this de-stub; not rewritten there per this PR's instruction to fill the STUB, not rewrite existing prose — flagged here instead. | `workers/pdf-render/Dockerfile` (Chromium install, `npm ci`, `CMD ["node","src/server.js"]`) |
+| DB reach | **Zero, by design** (Lock 13 mod #2) — no `SUPABASE_*` env, no Postgres client; enforced by RT-22 + RT-22-manifest on every PR | existing bullet; Dockerfile comments |
+| Health check | `GET /healthz` on `:8080` | `workers/pdf-render/src/server.js` line 110 |
+| Container hardening | `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]` (Sec F-17) — already in the compose file, not something this de-stub adds | compose file lines 93–96 |
+| Resource limits | Open — see below. Headless Chromium is the fleet's most memory-hungry process; flagged explicitly rather than left implicit in the general "open" note. | — |
+
+**Env-var wiring (→ §5):** exactly one — `PDF_WORKER_SIGNING_KEY` (`production_only`, **same value** as `app`, ≥32 chars — see the existing SD-20 length-precondition bullet above, verify **before** this worker's first deploy). Pushed by `push-production-secrets.sh`'s `SECRET_RESOURCE_MAP → app, pdf-render`.
+
+---
+
+### Resource limits — genuinely open, not fabricated
+
+No CPU/memory ceiling for any Coolify service appears anywhere in this repo — this runbook, ARCH, or any script. CAX21 is 4 vCPU / 8 GB RAM total, shared across the self-hosted Supabase stack (multiple containers), Coolify's own 6 control-plane containers, the `migrator` sibling service, and all four units above — real contention risk on an 8 GB box that this section cannot resolve by assertion. **Flagged to F/CTO** (capacity/cost is an escalation item per DevOps's own remit, not a DevOps unilateral call) rather than shipping invented numbers. If a starting point is wanted before real usage is measured: `pdf-render` (headless Chromium) is the one unit worth ring-fencing first, since an unbounded worker there can starve the Supabase stack on the same box — measure actual RSS after first deploy and set ceilings from that, not from a guess.
 
 ---
 
