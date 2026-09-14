@@ -269,10 +269,16 @@ sshx 'grep -q "^JWT_SECRET=" /root/.pfin/supabase.env 2>/dev/null' \
 # this replaces.
 
 step "Resolving Coolify application uuid for '$STACK_APP_NAME'"
-STACK_APP_UUID="$(sshx_in <<REMOTE
+# Sec-gated fix (BACKLOG.md §7.36 item 23, sibling to #754's item 19): every
+# sshx_in <<REMOTE below in this file used an unquoted delimiter, so the
+# LOCAL shell substituted on the whole body before it reached SSH. Quoted
+# (<<'REMOTE') below; the one host-side value this block needs
+# ($STACK_APP_NAME, a Coolify resource name -- not a secret) crosses via
+# `env` on the ssh argv instead of inline heredoc interpolation.
+STACK_APP_UUID="$(sshx "env STACK_APP_NAME=\"$STACK_APP_NAME\" bash -s" <<'REMOTE'
 set -e
-TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-python3 - "\$TOKEN" "$STACK_APP_NAME" <<'PYEOF'
+TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "$TOKEN" "$STACK_APP_NAME" <<'PYEOF'
 import json, subprocess, sys
 
 token, stack_name = sys.argv[1], sys.argv[2]
@@ -304,10 +310,10 @@ REMOTE
 ok "resolved '$STACK_APP_NAME' -> $STACK_APP_UUID"
 
 step "Preflight -- current key shape on $STACK_APP_UUID (structure only, never a value)"
-sshx_in <<REMOTE
+sshx "env STACK_APP_UUID=\"$STACK_APP_UUID\" bash -s" <<'REMOTE'
 set -e
-TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-python3 - "\$TOKEN" "$STACK_APP_UUID" <<'PYEOF'
+TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "$TOKEN" "$STACK_APP_UUID" <<'PYEOF'
 import json, subprocess, sys
 
 token, app_uuid = sys.argv[1], sys.argv[2]
@@ -341,10 +347,10 @@ REMOTE
 
 if [[ -n "$APP_NAME" ]]; then
   step "Preflight -- looking up app resource '$APP_NAME'"
-  APP_RESOURCE_UUID="$(sshx_in <<REMOTE
+  APP_RESOURCE_UUID="$(sshx "env APP_NAME=\"$APP_NAME\" bash -s" <<'REMOTE'
 set -e
-TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-python3 - "\$TOKEN" "$APP_NAME" <<'PYEOF'
+TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "$TOKEN" "$APP_NAME" <<'PYEOF'
 import json, subprocess, sys
 
 token, app_name = sys.argv[1], sys.argv[2]
@@ -392,15 +398,24 @@ step "Minting real HS256 JWTs from the deployed JWT_SECRET and overwriting the p
 # envs/bulk (unconditional -- that is this script's entire purpose), and
 # rewrites (not appends) the corresponding lines in supabase.env. Prints
 # claim shapes and true/false verification results ONLY -- never a value.
-sshx_in <<REMOTE
+# Sec-gated fix (item 23): same unquoted-delimiter mechanism as #754's item
+# 19 -- this heredoc mints ANON_KEY/SERVICE_ROLE_KEY and its body carries a
+# backtick-quoted comment cluster ("A `docker restart` is NOT equivalent...
+# poll-to-`finished` idiom... `--apply` is a coherent mint") that the OLD
+# unquoted delimiter fed to LOCAL command substitution -- `docker restart`
+# with no arguments would invoke the real local docker binary if present
+# (not merely a "command not found" symptom like item 19's `migrator`).
+# STACK_APP_UUID / APP_RESOURCE_UUID are both Coolify resource UUIDs, not
+# secrets -- moved to `env` on the ssh argv. Nothing secret crosses via
+# argv: JWT_SECRET and the Coolify API TOKEN are still read FROM THE BOX,
+# inside the remote script, never passed from here.
+sshx "env STACK_APP_UUID=\"$STACK_APP_UUID\" APP_RESOURCE_UUID=\"${APP_RESOURCE_UUID:-}\" bash -s" <<'REMOTE'
 set -e
 umask 077
-TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-JWT_SECRET="\$(grep -m1 '^JWT_SECRET=' /root/.pfin/supabase.env | cut -d= -f2-)"
-STACK_APP_UUID="$STACK_APP_UUID"
-APP_RESOURCE_UUID="${APP_RESOURCE_UUID:-}"
+TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+JWT_SECRET="$(grep -m1 '^JWT_SECRET=' /root/.pfin/supabase.env | cut -d= -f2-)"
 
-python3 - "\$TOKEN" "\$JWT_SECRET" "\$STACK_APP_UUID" "\$APP_RESOURCE_UUID" <<'PYEOF'
+python3 - "$TOKEN" "$JWT_SECRET" "$STACK_APP_UUID" "$APP_RESOURCE_UUID" <<'PYEOF'
 import base64, hashlib, hmac, json, subprocess, sys, time
 
 token, jwt_secret, stack_uuid, app_uuid = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
@@ -518,12 +533,12 @@ chmod 600 /root/.pfin/supabase.env 2>/dev/null || true
 # length, never the value) -- same pattern as provision-supabase-stack.sh's
 # tinker --execute assertion step.
 docker exec coolify php artisan tinker --execute="
-\\\$app = \\App\\Models\\Application::where('uuid','$STACK_APP_UUID')->firstOrFail();
-foreach (['ANON_KEY','SERVICE_ROLE_KEY'] as \\\$key) {
-  \\\$env = \\\$app->environment_variables()->where('key', \\\$key)->first();
-  \\\$val = \\\$env ? (string) \\\$env->value : '';
-  \\\$shape = (substr_count(\\\$val, '.') === 2) ? 'JWT-shaped' : 'NOT-JWT-shaped';
-  echo \\\$key . ': ' . (\\\$val !== '' ? \\\$shape : 'EMPTY') . PHP_EOL;
+\$app = \App\Models\Application::where('uuid','$STACK_APP_UUID')->firstOrFail();
+foreach (['ANON_KEY','SERVICE_ROLE_KEY'] as \$key) {
+  \$env = \$app->environment_variables()->where('key', \$key)->first();
+  \$val = \$env ? (string) \$env->value : '';
+  \$shape = (substr_count(\$val, '.') === 2) ? 'JWT-shaped' : 'NOT-JWT-shaped';
+  echo \$key . ': ' . (\$val !== '' ? \$shape : 'EMPTY') . PHP_EOL;
 }
 "
 REMOTE
@@ -595,53 +610,58 @@ elif [[ $VERIFY_LIVE -eq 1 ]]; then
   # Both keys are read back on the box via the same tinker decrypt path
   # already used above -- neither is ever echoed to this script's own
   # stdout, only the HTTP status codes are.
-  sshx_in <<REMOTE2
+  # Sec-gated fix (item 23): same unquoted-delimiter mechanism, quoted
+  # below. $STACK_APP_UUID (non-secret Coolify resource UUID) crosses via
+  # `env`. ANON_KEY/SERVICE_ROLE_KEY are read back and used entirely on the
+  # box -- never echoed, never crossing this ssh channel back to here (only
+  # the HTTP status codes do) -- so nothing secret is added to the ssh argv.
+  sshx "env STACK_APP_UUID=\"$STACK_APP_UUID\" bash -s" <<'REMOTE2'
 set -e
-ANON_KEY="\$(docker exec coolify php artisan tinker --execute="
-\\\$app = \\App\\Models\\Application::where('uuid','$STACK_APP_UUID')->firstOrFail();
-echo (string) \\\$app->environment_variables()->where('key','ANON_KEY')->first()->value;
+ANON_KEY="$(docker exec coolify php artisan tinker --execute="
+\$app = \App\Models\Application::where('uuid','$STACK_APP_UUID')->firstOrFail();
+echo (string) \$app->environment_variables()->where('key','ANON_KEY')->first()->value;
 " 2>/dev/null | tail -1)"
-SERVICE_ROLE_KEY="\$(docker exec coolify php artisan tinker --execute="
-\\\$app = \\App\\Models\\Application::where('uuid','$STACK_APP_UUID')->firstOrFail();
-echo (string) \\\$app->environment_variables()->where('key','SERVICE_ROLE_KEY')->first()->value;
+SERVICE_ROLE_KEY="$(docker exec coolify php artisan tinker --execute="
+\$app = \App\Models\Application::where('uuid','$STACK_APP_UUID')->firstOrFail();
+echo (string) \$app->environment_variables()->where('key','SERVICE_ROLE_KEY')->first()->value;
 " 2>/dev/null | tail -1)"
-[[ -n "\$ANON_KEY" && -n "\$SERVICE_ROLE_KEY" ]] || { echo "NOT VERIFIED: ANON_KEY or SERVICE_ROLE_KEY read back empty -- cannot probe"; exit 1; }
+[[ -n "$ANON_KEY" && -n "$SERVICE_ROLE_KEY" ]] || { echo "NOT VERIFIED: ANON_KEY or SERVICE_ROLE_KEY read back empty -- cannot probe"; exit 1; }
 
 PROBE_TABLE="_pfin_nonexistent_probe_table"
 
 probe() { # probe <apikey-or-empty> <path>
-  local key="\$1" path="\$2"
-  if [[ -n "\$key" ]]; then
-    docker compose --project-name $STACK_APP_UUID exec -T supavisor \\
-      curl -s -o /dev/null -w '%{http_code}' \\
-      -H "apikey: \$key" -H "Authorization: Bearer \$key" \\
-      "http://api-gw:8000\$path" </dev/null
+  local key="$1" path="$2"
+  if [[ -n "$key" ]]; then
+    docker compose --project-name $STACK_APP_UUID exec -T supavisor \
+      curl -s -o /dev/null -w '%{http_code}' \
+      -H "apikey: $key" -H "Authorization: Bearer $key" \
+      "http://api-gw:8000$path" </dev/null
   else
-    docker compose --project-name $STACK_APP_UUID exec -T supavisor \\
-      curl -s -o /dev/null -w '%{http_code}' \\
-      "http://api-gw:8000\$path" </dev/null
+    docker compose --project-name $STACK_APP_UUID exec -T supavisor \
+      curl -s -o /dev/null -w '%{http_code}' \
+      "http://api-gw:8000$path" </dev/null
   fi
 }
 
 set +e
-SVC_ROOT="\$(probe "\$SERVICE_ROLE_KEY" "/rest/v1/")"
-ANON_TBL="\$(probe "\$ANON_KEY" "/rest/v1/\$PROBE_TABLE")"
-NOKEY_TBL="\$(probe "" "/rest/v1/\$PROBE_TABLE")"
-ANON_AUTH="\$(probe "\$ANON_KEY" "/auth/v1/health")"
+SVC_ROOT="$(probe "$SERVICE_ROLE_KEY" "/rest/v1/")"
+ANON_TBL="$(probe "$ANON_KEY" "/rest/v1/$PROBE_TABLE")"
+NOKEY_TBL="$(probe "" "/rest/v1/$PROBE_TABLE")"
+ANON_AUTH="$(probe "$ANON_KEY" "/auth/v1/health")"
 set -e
 
-echo "service_role -> GET /rest/v1/                    -> HTTP \$SVC_ROOT   (PASS iff 200)"
-echo "anon         -> GET /rest/v1/<nonexistent-table> -> HTTP \$ANON_TBL   (PASS iff NOT 401)"
-echo "no-key       -> GET /rest/v1/<nonexistent-table> -> HTTP \$NOKEY_TBL  (PASS iff 401)"
-echo "anon         -> GET /auth/v1/health              -> HTTP \$ANON_AUTH  (PASS iff 200)"
+echo "service_role -> GET /rest/v1/                    -> HTTP $SVC_ROOT   (PASS iff 200)"
+echo "anon         -> GET /rest/v1/<nonexistent-table> -> HTTP $ANON_TBL   (PASS iff NOT 401)"
+echo "no-key       -> GET /rest/v1/<nonexistent-table> -> HTTP $NOKEY_TBL  (PASS iff 401)"
+echo "anon         -> GET /auth/v1/health              -> HTTP $ANON_AUTH  (PASS iff 200)"
 
 PASS=1
-[[ "\$SVC_ROOT" == "200" ]] || PASS=0
-[[ "\$ANON_TBL" != "401" ]] || PASS=0
-[[ "\$NOKEY_TBL" == "401" ]] || PASS=0
-[[ "\$ANON_AUTH" == "200" ]] || PASS=0
+[[ "$SVC_ROOT" == "200" ]] || PASS=0
+[[ "$ANON_TBL" != "401" ]] || PASS=0
+[[ "$NOKEY_TBL" == "401" ]] || PASS=0
+[[ "$ANON_AUTH" == "200" ]] || PASS=0
 
-if [[ \$PASS -eq 1 ]]; then
+if [[ $PASS -eq 1 ]]; then
   echo "VERIFIED: all four probes matched their expected verdict"
 else
   echo "NOT VERIFIED: at least one probe did not match its expected verdict -- see codes above"

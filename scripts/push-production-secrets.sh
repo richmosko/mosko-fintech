@@ -553,12 +553,19 @@ print(r['resources']['$resource']['seed_path'])" "$PLAN_JSON_FILE")"
   # a command-line arg on either side.
   sshx "umask 077; mkdir -p /root/.pfin; cat > $box_seed" < "$seed_path"
 
-  sshx_in <<REMOTE
+  # Sec-gated fix (BACKLOG.md §7.36 item 23, sibling to #754's item 19):
+  # same unquoted-delimiter mechanism -- quoted below (<<'REMOTE'), so the
+  # local shell performs zero substitution on the body. $uuid (a Coolify
+  # resource UUID) and $box_seed (an on-box file path, itself just a
+  # filename this script generated -- never the secret content, which
+  # crosses separately over the sshx piped-stdin call above) both cross
+  # via `env` on the ssh argv -- neither is a secret value.
+  sshx "env box_seed=\"$box_seed\" uuid=\"$uuid\" bash -s" <<'REMOTE'
 set -e
 umask 077
 trap 'shred -u "$box_seed" 2>/dev/null || rm -f "$box_seed"' EXIT
-TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-python3 - "\$TOKEN" "$uuid" "$box_seed" <<'PYEOF'
+TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "$TOKEN" "$uuid" "$box_seed" <<'PYEOF'
 import json, subprocess, sys
 
 token, app_uuid, seed_file = sys.argv[1], sys.argv[2], sys.argv[3]
