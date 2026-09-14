@@ -300,8 +300,20 @@ services:
   migrator:
     container_name: supabase-migrator
     build:
-      context: .
-      dockerfile: migrator/Dockerfile
+      # Build context MUST be the repo root, not this compose file's own
+      # directory (infra/supabase/). The Dockerfile's `COPY supabase/
+      # config.toml` / `COPY supabase/migrations/` steps read the repo's
+      # TOP-LEVEL supabase/ directory (migrations authored by Architect),
+      # which lives two levels up from here -- NOT infra/supabase/supabase/
+      # (does not exist). CORRECTED 2026-09-14 (standup step 6, Phase A.3):
+      # measured live against Coolify -- `context: .` (this compose file's
+      # own directory) failed the build with `failed to calculate checksum
+      # ... "/supabase/migrations": not found`, because Coolify clones the
+      # FULL repo and runs `docker compose --project-directory
+      # <clone>/infra/supabase`, so a bare `.` context resolves to
+      # infra/supabase/, which has no supabase/ subdirectory of its own.
+      context: ../..
+      dockerfile: infra/supabase/migrator/Dockerfile
     restart: unless-stopped
     depends_on:
       db:
