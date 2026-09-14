@@ -477,31 +477,50 @@ return null;
 REMOTE
 )"
 
-sshx_in <<REMOTE
+# Item 19 fix (Sec-gated, booked BACKLOG.md §7.36 #19): this heredoc used
+# to be `sshx_in <<REMOTE` (unquoted delimiter), which made the LOCAL shell
+# perform command AND variable substitution on the ENTIRE body before it
+# ever reached SSH -- including on lines that only look like they belong
+# to the REMOTE bash -s script. Three plain documentation comments below
+# contain backtick-quoted `migrator` (Markdown-style code-format, not
+# executable anywhere on the remote side); to the local unquoted heredoc
+# reader, backtick...backtick IS a command-substitution request, so it ran
+# `migrator` as a local command three times ("migrator: command not
+# found") before the mint step's real output ever printed. Not exploitable
+# (the minted values are hex from openssl rand -hex, nothing
+# shell-meaningful), but the mechanism generalizes badly to any future
+# bareword in this body. Fixed by quoting the delimiter (<<'REMOTE') so
+# the local shell performs ZERO substitution on the body -- it is sent to
+# the box byte-for-byte. Sec's forward note: this heredoc still needs
+# THREE host-side values (APP_UUID / NEED_MINT / SMTP_SEED_FILE) that a
+# quoted delimiter can no longer interpolate inline -- those now cross via
+# `env VAR="value"` on the ssh command line instead (same trust model as
+# every other sshx() call in this file: values are our own script's UUID/
+# key-list/path, not attacker input, so no extra %q-quoting beyond the
+# existing double-quote convention). bash -s then sees them as ordinary
+# already-exported variables, same names, same values, as before.
+sshx "env APP_UUID=\"$APP_UUID\" NEED_MINT=\"$NEED_MINT\" SMTP_SEED_FILE=\"$SMTP_SEED_FILE\" bash -s" <<'REMOTE'
 set -e
 umask 077
 mkdir -p /root/.pfin
-TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-APP_UUID="$APP_UUID"
-NEED_MINT="$NEED_MINT"
-SMTP_SEED_FILE="$SMTP_SEED_FILE"
+TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
 
 # Sec-flagged hardening (pre-prod review follow-up, 2026-09-11): the manual
 # cleanup this used to rely on sat AFTER the python step, inside this same
-# \`set -e\` script -- if python (or an earlier line) failed, \`set -e\`
+# `set -e` script -- if python (or an earlier line) failed, `set -e`
 # aborted BEFORE cleanup ran, leaving the mode-600 root-owned seed file
 # behind in /root/.pfin (accumulates across failed runs; on-box, root-only,
 # holds a key already destined for Coolify -- not an off-box exposure, but
 # untidy and worth closing cheaply). A trap runs on ANY exit from this
-# point on -- success, \`set -e\` abort, or signal -- so cleanup can no
-# longer be skipped by a failure partway through. \$SMTP_SEED_FILE is
+# point on -- success, `set -e` abort, or signal -- so cleanup can no
+# longer be skipped by a failure partway through. $SMTP_SEED_FILE is
 # resolved when the trap FIRES, not when it's registered (single-quoted
 # trap body), so it correctly sees whatever this script's variable holds
 # at exit time, including if it's still empty (no seed was ever pushed --
 # the guard below is then a no-op).
-trap 'if [ -n "\$SMTP_SEED_FILE" ]; then shred -u "\$SMTP_SEED_FILE" 2>/dev/null || rm -f "\$SMTP_SEED_FILE"; fi' EXIT
+trap 'if [ -n "$SMTP_SEED_FILE" ]; then shred -u "$SMTP_SEED_FILE" 2>/dev/null || rm -f "$SMTP_SEED_FILE"; fi' EXIT
 
-python3 - "\$TOKEN" "\$APP_UUID" "\$NEED_MINT" "\$SMTP_SEED_FILE" <<'PYEOF'
+python3 - "$TOKEN" "$APP_UUID" "$NEED_MINT" "$SMTP_SEED_FILE" <<'PYEOF'
 import json, subprocess, sys, secrets as pysecrets
 
 token, app_uuid, need_mint_raw, smtp_seed_file = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
@@ -706,7 +725,7 @@ else:
     print("MINTED: none -- all required keys already non-empty")
 PYEOF
 chmod 600 /root/.pfin/supabase.env 2>/dev/null || true
-# Seed file cleanup now happens via the \`trap ... EXIT\` registered above --
+# Seed file cleanup now happens via the `trap ... EXIT` registered above --
 # fires here on normal completion same as it would on an earlier failure.
 # No separate manual cleanup call needed at this specific point anymore.
 
@@ -726,23 +745,36 @@ chmod 600 /root/.pfin/supabase.env 2>/dev/null || true
 #       hits this -- but "doesn't happen today" is not fail-closed. Capture
 #       the output, then die on any line ending ": MISSING" before the
 #       poisoned-volume check / deploy step that follows.
-ASSERT_OUT="\$(docker exec coolify php artisan tinker --execute="
+#
+# Escaping note (item 19 fix): this block is a genuinely nested
+# double-quoted string -- the `--execute="..."` argument is parsed by the
+# REMOTE bash itself (the only remaining quoting layer now that the outer
+# heredoc delimiter is quoted). So `\$app`-style single-backslash escapes
+# below are load-bearing (they stop REMOTE bash from expanding $app as
+# its own variable, leaving literal "$app" for PHP) and are UNCHANGED from
+# before. What changed: the top-level `$(...)`, `$ASSERT_OUT`, and the
+# grep pattern's end-of-line `$` anchor are no longer inside the old local
+# heredoc's substitution pass, so their escaping is removed -- they were
+# only ever escaped to survive that pass, and a literal `\$` reaching grep
+# as `MISSING\$` would have matched a literal "$" character, never the
+# end-of-line anchor the FATAL check actually needs.
+ASSERT_OUT="$(docker exec coolify php artisan tinker --execute="
 (function () {
-\\\$app = \\App\\Models\\Application::where('uuid','$APP_UUID')->firstOrFail();
-\\\$required = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','MIGRATOR_DB_USER','MIGRATOR_DB_PASSWORD','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
-foreach (\\\$required as \\\$key) {
-  \\\$env = \\\$app->environment_variables()->where('key', \\\$key)->first();
-  \\\$nonEmpty = \\\$env && strlen((string) \\\$env->value) > 0;
-  echo \\\$key . ': ' . (\\\$nonEmpty ? 'OK' : 'MISSING') . PHP_EOL;
+\$app = \App\Models\Application::where('uuid','$APP_UUID')->firstOrFail();
+\$required = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','MIGRATOR_DB_USER','MIGRATOR_DB_PASSWORD','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
+foreach (\$required as \$key) {
+  \$env = \$app->environment_variables()->where('key', \$key)->first();
+  \$nonEmpty = \$env && strlen((string) \$env->value) > 0;
+  echo \$key . ': ' . (\$nonEmpty ? 'OK' : 'MISSING') . PHP_EOL;
 }
 return null;
 })();
 ")"
-echo "\$ASSERT_OUT"
-if echo "\$ASSERT_OUT" | grep -q ': MISSING\$'; then
+echo "$ASSERT_OUT"
+if echo "$ASSERT_OUT" | grep -q ': MISSING$'; then
   echo "" >&2
   echo "FATAL: required secret(s)/config var(s) still empty after mint -- refusing to deploy:" >&2
-  echo "\$ASSERT_OUT" | grep ': MISSING\$' >&2
+  echo "$ASSERT_OUT" | grep ': MISSING$' >&2
   exit 1
 fi
 REMOTE
