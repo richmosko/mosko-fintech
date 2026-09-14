@@ -75,11 +75,27 @@ WORKDIR /workspace
 # (run with --workdir /workspace, or from this WORKDIR) reads
 # supabase/config.toml + supabase/migrations/**  from here — the SAME
 # migration set this commit's CI already ran against a local stack.
-# templates/ and tests/ are NOT copied: db push never reads either, and
-# templates/ in particular can carry local-only interpolation this
-# container must never see (keep the baked surface to what the apply verb
-# actually consumes).
+# tests/ is NOT copied: db push never reads it.
+#
+# CORRECTED 2026-09-14 (standup step 6 Phase B.4) — measured live: `supabase
+# db push` FAILS if `supabase/templates/**` is absent, even though the verb
+# never functionally uses email templates. The CLI validates config.toml's
+# FULL path set (incl. `[auth.email.template.*].content_path`) before
+# running any command, not just the paths the invoked verb touches:
+#   Invalid config for auth.email.template.magic_link.content_path:
+#   open supabase/templates/magic_link.html: no such file or directory
+# The prior comment here said templates/ "can carry local-only
+# interpolation this container must never see" — reviewed at fix time:
+# supabase/templates/{confirmation,recovery,magic_link}.html are static,
+# system-authored HTML (SELF-290/Auth-1) using only GoTrue's own template
+# vars (`{{ .ConfirmationURL }}`, `{{ .Token }}`) — no secrets, no
+# environment-specific values, no user-supplied content. Baking them in is
+# safe; the prior caution was a defensive assumption that did not survive
+# contact with these three files' actual contents. If a future template
+# ever needs real interpolation (a real domain, a real signing value), that
+# changes this call and needs its own review before landing here.
 COPY supabase/config.toml supabase/config.toml
+COPY supabase/templates/ supabase/templates/
 COPY supabase/migrations/ supabase/migrations/
 
 # Resident Pattern-A keepalive — the Coolify Scheduled Task execs the real
