@@ -32,7 +32,7 @@
 | 4 | DNS / domain decision + records | F/CTO + DevOps | 🟡 Domain RULED (`pfindash.com` reuse) — records not yet cut over |
 | 5 | Stand up self-hosted Supabase; apply migrations | DevOps | 🟡 **Stack LIVE 2026-09-10** — 5 services healthy, verified. Migrations NOT applied (that is step 6 / runbook §6) |
 | 5a | Production signup OFF (`GOTRUE_DISABLE_SIGNUP=true`) | DevOps | ✅ **DONE 2026-09-10** — hardcoded in the compose, verified on the running `auth` container |
-| 6 | Deploy the four services from one `main` sha | DevOps | ✅ **Phase A + Phase B DONE 2026-09-14.** Sec ruled on TLS (§7.36 item 26) — `sslmode=disable` + `PGSSLMODE=disable` — bootstrap apply completed clean: 118/118 migrations, `pfin` schema, `rest` healthy. **Phase B step 5 (F/CTO-executed)** — `pfin_etl`/`pfin_provider_sync` LOGIN as `postgres`; `migrator`'s OWNER flip required `supabase_admin` (`postgres` is not superuser on this image, measured live). All verify blocks pass; db owner = `migrator`. ⚠ New finding: `migrator` lacks `USAGE` on `supabase_migrations` schema (booked, item 32) — untested for the write path. |
+| 6 | Deploy the four services from one `main` sha | DevOps | ✅ **DONE 2026-09-14/15 — Phase A, Phase B (steps 4 + 5 incl. §6.3 step 4) all complete.** Sec ruled on TLS (item 26) and the `supabase_migrations` ownership fix (item 32) — both F/CTO-executed and confirmed: `supabase db push` reports "Remote database is up to date" with no permission error, migrator's own credential, no override. Full confidence in the unsupervised steady-state still waits on Phase D's first real migration, watched. |
 | 7 | ~~Register 9 existing Plaid Items~~ | — | ❌ Struck 2026-09-08 — Items orphaned, tokens lost |
 | 7′ | Historical categorized-transaction backfill walk | Backend + F/CTO | ⛔ SELF-388 / SELF-389 not started |
 | 8 | Attach-a-provider-account-at-Link-time build | Backend + Sec | ⛔ SELF-390 not started |
@@ -525,3 +525,27 @@ No sequences, no functions in the schema. Index ownership follows table ownershi
 ALTER SCHEMA supabase_migrations OWNER TO migrator;
 ALTER TABLE supabase_migrations.schema_migrations OWNER TO migrator;
 ```
+
+### Phase B.5 step 4 — F/CTO ran both ALTERs, 2026-09-14/15 — proof taken
+
+**F/CTO executed §6.3's step 4** (`ALTER SCHEMA supabase_migrations OWNER TO migrator;` then `ALTER TABLE supabase_migrations.schema_migrations OWNER TO migrator;`, both printed as expected, as `supabase_admin`, in the same supervised pass as the other §6.3 statements).
+
+**(a) Ownership re-measured, read-only as `supabase_admin`:**
+```
+\dn+ supabase_migrations → owner: migrator
+schema_migrations      | table | owner: migrator
+schema_migrations_pkey | index | owner: migrator
+```
+**No statement exists for the pkey index specifically, and none is needed** — `ALTER TABLE … OWNER TO` cascades index ownership automatically; the index's owner flipped to `migrator` in the same statement as its table.
+
+**(b) Write-verb proof — the verb that actually matters, per Sec's condition.** From inside the `migrator` container, using its own credential with no override:
+```
+supabase db push --db-url "$PROD_DB_URL"
+```
+```
+Connecting to remote database...
+Remote database is up to date.
+```
+**No permission error.** This confirms the ownership transfer is correctly shaped for the write path `migration list` alone could not exercise. **This is still not the full write proof** — `db push` against an already-current remote never exercises the actual `INSERT`-into-`schema_migrations` path a real new migration would. **The true write proof is Phase D's first real migration (119), applied unsupervised as `migrator` through the Scheduled Task, and watched** — this record does not claim that has happened.
+
+**BACKLOG §7.36 item 32: RESOLVED pending Phase D proof.** The ownership fix is verified working for `db push`'s own up-to-date check; full confidence in the unsupervised steady-state waits on a real migration.

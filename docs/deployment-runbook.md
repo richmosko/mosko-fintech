@@ -965,7 +965,7 @@ ALTER TABLE supabase_migrations.schema_migrations OWNER TO migrator;  -- step 4 
 
 **Generate the password with `openssl rand -hex 32`** (256-bit) — the residual is an offline attack bounded by the secret's entropy, so a high-entropy generated value is what makes it acceptable. In production the value is **minted on-box by `provision-supabase-stack.sh`'s `MINT_SECRETS`** as `MIGRATOR_DB_PASSWORD` (a new `production_only` name, distinct from `POSTGRES_PASSWORD` and `PFIN_DB_PASSWORD`), because the migrator is a sibling service in the Supabase-stack compose — **not** pushed by `push-production-secrets.sh` (ADR-072 Amendment 1).
 
-**Operator privilege:** all three statements require true superuser. **On this image that is `supabase_admin`, not `postgres`** (measured 2026-09-14 — `postgres` holds `rolcreaterole`/`rolcreatedb` but `rolsuper=f`, and fails the `ALTER DATABASE … OWNER` statement specifically: `ERROR: must be able to SET ROLE "migrator"`). `ALTER DATABASE … OWNER` needs superuser-or-`CREATEDB`+membership; `\password` is `ALTER USER` underneath.
+**Operator privilege:** all five statements require true superuser. **On this image that is `supabase_admin`, not `postgres`** (measured 2026-09-14 — `postgres` holds `rolcreaterole`/`rolcreatedb` but `rolsuper=f`, and fails the `ALTER DATABASE … OWNER` statement specifically: `ERROR: must be able to SET ROLE "migrator"`). `ALTER DATABASE … OWNER` and the step-4 `ALTER SCHEMA`/`ALTER TABLE … OWNER` statements need superuser-or-`CREATEDB`+membership; `\password` is `ALTER USER` underneath.
 
 **Verify before relying on the migrator service** (read-only; run as `supabase_admin`):
 
