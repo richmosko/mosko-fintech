@@ -458,6 +458,24 @@ fi
 # preflight run that exits early during Phase 2's SSH-reachability wait.
 echo "BOX_IP=$BOX_IP"
 
+# Record BOX_IP into the repo-root .env, idempotently -- BACKLOG.md §7.36
+# item 33 ("the runbook must serve a stranger"): every §6 interactive
+# vehicle asks for <box-ip> with no sentence saying where it comes from.
+# Update-in-place if the key already exists (never duplicate it, never
+# touch any other line); append if absent. Names-only in any printed
+# confirmation -- the IP itself is non-secret (already handed to the
+# operator above), but the update mechanism is the same one used for
+# secret-bearing keys elsewhere in this script family, so it stays
+# name-only by habit, not because this particular value needs it.
+if [[ $APPLY -eq 1 && -f "$REPO_ROOT/.env" ]]; then
+  if grep -q '^BOX_IP=' "$REPO_ROOT/.env"; then
+    sed -i.bak "s|^BOX_IP=.*|BOX_IP=$BOX_IP|" "$REPO_ROOT/.env" && rm -f "$REPO_ROOT/.env.bak"
+  else
+    printf 'BOX_IP=%s\n' "$BOX_IP" >> "$REPO_ROOT/.env"
+  fi
+  ok "BOX_IP recorded in .env"
+fi
+
 if [[ $APPLY -eq 1 ]]; then
 # The IPv6 primary IP is created FOR you by Hetzner at server-creation time,
 # with auto_delete=TRUE — so unlike the IPv4 one it dies with the server and a
