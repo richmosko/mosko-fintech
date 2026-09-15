@@ -111,19 +111,28 @@ if [[ $APPLY -eq 0 ]]; then
   exit 0
 fi
 
-[[ -f "$REPO_ROOT/.env" ]] || : > "$REPO_ROOT/.env"
+[[ -f "$REPO_ROOT/.env" ]] || (umask 077; : > "$REPO_ROOT/.env")
 
 # record_kv <KEY> <VALUE> -- update-in-place if the key exists, append if
 # not; never touch any other line. Skips silently if VALUE is empty (a
 # resource that doesn't exist yet shouldn't blank out a prior good value).
+# File-mode discipline matches provision-supabase-stack.sh's own convention
+# (umask 077 on create, chmod 600 after write) -- .env is the same
+# gitignored file that holds local development secrets, so it should never
+# be left world-readable, even though the three values THIS script writes
+# are themselves non-secret. `sed -i ''` (BSD/macOS sed, this script
+# family's target platform) edits in place with no separate backup file --
+# unlike `sed -i.bak`, there is no transient world-readable copy to clean
+# up.
 record_kv() {
   local key="$1" value="$2"
   [[ -n "$value" ]] || return 0
   if grep -q "^$key=" "$REPO_ROOT/.env"; then
-    sed -i.bak "s|^$key=.*|$key=$value|" "$REPO_ROOT/.env" && rm -f "$REPO_ROOT/.env.bak"
+    sed -i '' "s|^$key=.*|$key=$value|" "$REPO_ROOT/.env"
   else
     printf '%s=%s\n' "$key" "$value" >> "$REPO_ROOT/.env"
   fi
+  chmod 600 "$REPO_ROOT/.env" 2>/dev/null || true
   ok "recorded $key"
 }
 

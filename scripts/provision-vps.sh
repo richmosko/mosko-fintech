@@ -469,10 +469,11 @@ echo "BOX_IP=$BOX_IP"
 # name-only by habit, not because this particular value needs it.
 if [[ $APPLY -eq 1 && -f "$REPO_ROOT/.env" ]]; then
   if grep -q '^BOX_IP=' "$REPO_ROOT/.env"; then
-    sed -i.bak "s|^BOX_IP=.*|BOX_IP=$BOX_IP|" "$REPO_ROOT/.env" && rm -f "$REPO_ROOT/.env.bak"
+    sed -i '' "s|^BOX_IP=.*|BOX_IP=$BOX_IP|" "$REPO_ROOT/.env"
   else
     printf 'BOX_IP=%s\n' "$BOX_IP" >> "$REPO_ROOT/.env"
   fi
+  chmod 600 "$REPO_ROOT/.env" 2>/dev/null || true
   ok "BOX_IP recorded in .env"
 fi
 
