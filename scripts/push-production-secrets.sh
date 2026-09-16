@@ -60,21 +60,26 @@
 #   no notion of "which Coolify resource," only "which store."
 #
 # KNOT 2 -- per-resource mapping, and what's EXCLUDED and why.
-#   Not all 19 production_only names are this script's job:
-#     EXCLUDED_SUPABASE_STACK (9): POSTGRES_PASSWORD, JWT_SECRET,
+#   Not all 20 production_only names are this script's job:
+#     EXCLUDED_SUPABASE_STACK (10): POSTGRES_PASSWORD, JWT_SECRET,
 #       SECRET_KEY_BASE, VAULT_ENC_KEY, SERVICE_ROLE_KEY, ANON_KEY,
-#       DASHBOARD_PASSWORD, PG_META_CRYPTO_KEY, SMTP_PASS -- ALREADY
-#       minted/overwritten by provision-supabase-stack.sh (mint-if-absent
-#       + the SMTP_PASS operator-override path) and, for the JWT pair,
-#       re-minted for real by mint-supabase-jwt-keys.sh. This script must
-#       NEVER touch these -- double-handling them here would race the
-#       mint-if-absent logic those scripts already own and could silently
-#       overwrite a freshly-minted JWT_SECRET with a stale/absent .env
-#       value. Cross-checked against provision-supabase-stack.sh's own
+#       DASHBOARD_PASSWORD, PG_META_CRYPTO_KEY, SMTP_PASS,
+#       MIGRATOR_DB_PASSWORD -- ALREADY minted/overwritten by
+#       provision-supabase-stack.sh (mint-if-absent + the SMTP_PASS
+#       operator-override path) and, for the JWT pair, re-minted for real
+#       by mint-supabase-jwt-keys.sh. This script must NEVER touch these --
+#       double-handling them here would race the mint-if-absent logic
+#       those scripts already own and could silently overwrite a
+#       freshly-minted JWT_SECRET with a stale/absent .env value.
+#       Cross-checked against provision-supabase-stack.sh's own
 #       MINT_SECRETS dict + its SMTP_PASS block, not just copied from the
-#       runbook prose -- see EXCLUDED_SUPABASE_STACK below.
+#       runbook prose -- see EXCLUDED_SUPABASE_STACK below. MIGRATOR_DB_PASSWORD
+#       added 2026-09-16 (ADR-072 Amendment 1 -- minted on-box, must never
+#       transit the operator's .env; its prior absence from both exclusion
+#       sets and SECRET_RESOURCE_MAP made this script fail closed on every
+#       invocation, preflight included).
 #     EXCLUDED_DEFERRED (1): PFIN_DB_PASSWORD -- see KNOT 3.
-#   The remaining 8 map to specific resources (SECRET_RESOURCE_MAP below),
+#   The remaining 9 map to specific resources (SECRET_RESOURCE_MAP below),
 #   cross-checked against each target's own .env.example (the enumeration
 #   IS the confinement property -- this script must not push a name to a
 #   resource whose own .env.example doesn't declare it). Sec review of this
@@ -374,12 +379,21 @@ manifest_names = set(production_only)
 # pair, mint-supabase-jwt-keys.sh. Cross-checked against that script's own
 # MINT_SECRETS dict (POSTGRES_PASSWORD/JWT_SECRET/SECRET_KEY_BASE/
 # VAULT_ENC_KEY/SERVICE_ROLE_KEY/ANON_KEY/DASHBOARD_PASSWORD/
-# PG_META_CRYPTO_KEY) plus its separate SMTP_PASS block -- 9 names, not
-# copied from runbook prose alone.
+# PG_META_CRYPTO_KEY/MIGRATOR_DB_PASSWORD) plus its separate SMTP_PASS
+# block -- 10 names, not copied from runbook prose alone. MIGRATOR_DB_PASSWORD
+# added 2026-09-16 (Architect-surfaced live defect, PR #769 bubble-up 3):
+# it is production_only in secrets-manifest.yml (ADR-072 Amendment 1) and
+# minted on-box by provision-supabase-stack.sh's own MINT_SECRETS -- same
+# class as the other nine, and must NEVER transit the operator's .env, so
+# it belongs in this exclusion set, not SECRET_RESOURCE_MAP. Its absence
+# here (present in the manifest, absent from both this set and
+# SECRET_RESOURCE_MAP) made this script fail closed on every invocation,
+# preflight included -- the unmapped-name guard below exited 2 before
+# resolving any resource.
 EXCLUDED_SUPABASE_STACK = {
     "POSTGRES_PASSWORD", "JWT_SECRET", "SECRET_KEY_BASE", "VAULT_ENC_KEY",
     "SERVICE_ROLE_KEY", "ANON_KEY", "DASHBOARD_PASSWORD", "PG_META_CRYPTO_KEY",
-    "SMTP_PASS",
+    "SMTP_PASS", "MIGRATOR_DB_PASSWORD",
 }
 # KNOT 3 -- different value per container, generated after migrations at
 # the interactive §6.1/§6.2 role handoff. Never pushed by this script.
