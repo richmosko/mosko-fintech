@@ -596,6 +596,65 @@ jobs:
           fi
           echo "OK: live leak-check pattern ('$PATTERN') still matches the golden Sanctum-shaped token sample."
 
+  fence-no-source-credential-files:
+    name: box-side config-file read-mechanism fence (unlabeled — F/CTO assigns any RT-NN, per ADR-011 D4)
+    runs-on: ubuntu-latest
+    # Sec spec, PR #778 C-1 + the 2026-09-16 token-file incident ruling.
+    # Incident: migrator-orchestrate.sh `source`d /etc/pfin/migrator-
+    # coolify-token.env; the box's actual file held a bare token value with
+    # no NAME= prefix (a stale write predating the current mint format),
+    # so bash tried to run the token as a command and its OWN error message
+    # echoed the value to F/CTO's terminal and the team-lead transcript --
+    # not an echo/printf in the script. Fixed in the same incident's PR
+    # (#778): both config files are read via grep -m1 '^NAME=' | cut -d= -f2-,
+    # never sourced. This job is the mechanical guarantee that fix doesn't
+    # rot and that no third instance lands unnoticed. Deliberately
+    # unlabeled: minting an RT-NN id is an F/CTO ADR-011 Decision-4 ratify
+    # act, not something DevOps or Sec assigns.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: no-source-credential-files production-mode (scripts/)
+        run: bash scripts/ci/fence-no-source-credential-files.sh scripts/
+
+      - name: no-source-credential-files inversion-mode (golden fixture; expects violation)
+        run: |
+          set +e
+          bash scripts/ci/fence-no-source-credential-files.sh tests/fixtures/ci/source-credential-violation/
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: inversion expected exit 1 (violation caught) but got exit $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the golden fixture's source-of-credential-file line (exit $rc)."
+
+      - name: no-source-credential-files pin-drift (mutated allowlist copy; expects exit exactly 2)
+        # Sec condition C-b′ (PR #780 re-review): the two steps above never
+        # exercise the pin itself -- a local run is not a watcher. Copies
+        # scripts/ci/ to a scratch dir, appends a line to ONLY the copy's
+        # allowlist (never the pin), and runs the COPIED fence -- its
+        # SELF_DIR resolves next to the mutated allowlist, so the pin check
+        # fires before any scope is scanned. Asserts exit EXACTLY 2, not
+        # merely non-zero: 1 (violation) and 2 (environment/config) are
+        # different claims, and conflating them would let a broken scope
+        # path read as a caught pin drift. Hermetic -- a fresh mktemp copy,
+        # no reliance on repo state outside this checkout, no mutation of
+        # the real allowlist or pin.
+        run: |
+          set +e
+          WORKDIR="$(mktemp -d)"
+          cp -R scripts/ci "$WORKDIR/ci"
+          echo "# CI pin-drift test line -- appended to a scratch copy only" >> "$WORKDIR/ci/fence-no-source-allowlist.txt"
+          bash "$WORKDIR/ci/fence-no-source-credential-files.sh" scripts/
+          rc=$?
+          set -e
+          if [ $rc -ne 2 ]; then
+            echo "FATAL: pin-drift expected exit EXACTLY 2 (pin mismatch) but got exit $rc — the pin check is broken or unreachable; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the allowlist/pin mismatch on a mutated copy (exit $rc)."
+
   scanner-npm-audit:
     name: Dep scan — npm audit (high+critical)
     runs-on: ubuntu-latest

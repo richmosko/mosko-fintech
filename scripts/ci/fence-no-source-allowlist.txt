@@ -1,0 +1,14 @@
+# Empty on purpose -- no source/./eval exemption exists yet. Add an
+# entry as 'path/to/file.sh:LINE:...' (exact grep -n output line)
+# with a comment above it naming why the sourced file cannot hold a
+# credential. See fence-no-source-credential-files.sh's own header.
+#
+# REQUIRES SEC SIGN-OFF (Sec condition, PR #780 C-a). Any addition to this
+# file needs Sec joint-review naming why the sourced file cannot hold a
+# credential -- same standard as every other Sec-gated surface in this
+# repo. This file alone does not enforce that (no CODEOWNERS exists in
+# this repo to make it a hard GitHub gate); the enforcement mechanism is
+# fence-no-source-allowlist.sha256, a pinned content hash the fence checks
+# on every run -- a change here without also regenerating that pin fails
+# CI closed. Regenerating the pin is a visible, separate diff a reviewer
+# cannot miss; it does not cryptographically require Sec specifically.
