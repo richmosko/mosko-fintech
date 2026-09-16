@@ -1,0 +1,91 @@
+# .github/workflows/migrator-build-connect.yml
+#
+# BACKLOG §7.36 item 21 — Sec-escalated CONDITION (Sec joint-review of PR #755
+# at 9a08a7ff): "this is now a CONDITION on the next PR touching
+# infra/supabase/migrator/**, not a standalone booking." The migrator image
+# was built nowhere in CI before this workflow — only on the production box —
+# and three packaging defects (PR #752 build context, PR #753 missing
+# supabase-go, PR #755 missing supabase/templates/**) shipped undetected
+# through that gap. The Dockerfile's own build-time `supabase --version`
+# self-check cannot observe any of them: `--version` never crosses the
+# shim -> supabase-go forward.
+#
+# This workflow builds the REAL migrator image (repo-root context,
+# infra/supabase/migrator/Dockerfile — matching infra/supabase/docker-
+# compose.yml's declared build context) and forces `supabase db push` to walk
+# its full startup path against a deliberately UNREACHABLE --db-url, so a
+# packaging defect anywhere upstream of the TCP dial surfaces as a named,
+# asserted token rather than a silently-passing self-check. See
+# scripts/ci/fence-migrator-build-connect.sh's header for the full catch
+# criterion, the two BAD tokens (`Invalid config`, `Could not find the`), the
+# CONNECT token asserted on, and why a bare `rc != 0` check would be vacuous
+# here (the connection failure is itself non-zero).
+#
+# Strike-proven per Sec's standing "prove it by strike" condition: the
+# inversion-mode jobs below generate (at test time, via sed into a temp
+# Dockerfile — never committed) two broken variants reproducing PR #753's and
+# PR #755's exact defect shapes, and assert the fence's own logic goes RED on
+# each. All three modes must pass for this workflow to report green.
+#
+# Path-filtered (matches web-tests.yml's precedent for docker-build jobs, NOT
+# db-tests.yml's run-always fences): the migrator image only changes when
+# these paths change, and a path-filtered job cannot be a branch-protection
+# required check without deadlocking PRs that don't touch this surface (see
+# .github/required-contexts.tsv's header). Gates in practice the same way
+# web-tests.yml's docker build does — by running on every PR that touches the
+# migrator's inputs, and team-lead observing green before merge. Whether to
+# promote this job to a required context is an F/CTO act (repo-admin scope;
+# see required-contexts.tsv's promotion procedure) — flagged as a follow-up,
+# not done here.
+
+name: Migrator build + connect fence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infra/supabase/migrator/**'
+      - 'infra/supabase/docker-compose.yml'
+      - 'supabase/config.toml'
+      - 'supabase/templates/**'
+      - 'supabase/migrations/**'
+      - 'scripts/ci/fence-migrator-build-connect.sh'
+      - '.github/workflows/migrator-build-connect.yml'
+  push:
+    branches: [main]  # also on main to catch direct-push regressions if branch protection ever lapses
+    paths:
+      - 'infra/supabase/migrator/**'
+      - 'infra/supabase/docker-compose.yml'
+      - 'supabase/config.toml'
+      - 'supabase/templates/**'
+      - 'supabase/migrations/**'
+      - 'scripts/ci/fence-migrator-build-connect.sh'
+      - '.github/workflows/migrator-build-connect.yml'
+
+jobs:
+  build-and-connect:
+    name: Migrator image — build + connect-only-failure fence (production mode)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build real image + assert connect-only failure (supabase-go present, templates present, db push fails on the connection, not before it)
+        run: bash scripts/ci/fence-migrator-build-connect.sh
+
+  strike-missing-supabase-go:
+    name: Migrator image — inversion fence (PR #753 class — missing supabase-go binary)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build broken variant (supabase-go dropped) + assert the fence goes RED on it
+        run: bash scripts/ci/fence-migrator-build-connect.sh --inversion=supabase-go
+
+  strike-missing-templates:
+    name: Migrator image — inversion fence (PR #755 class — missing supabase/templates/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build broken variant (templates COPY dropped) + assert the fence goes RED on it
+        run: bash scripts/ci/fence-migrator-build-connect.sh --inversion=templates
