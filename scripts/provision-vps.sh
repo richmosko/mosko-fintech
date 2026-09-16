@@ -1176,7 +1176,26 @@ case "$SUDO_CHECK_CLASS" in
     die "sudo -ln -U ci-migrate reports ci-migrate HAS sudo rights -- C1 requires NONE. Output: $SUDO_CHECK_OUT"
     ;;
   NO_SUDO)
-    ok "C1 verified: sudo -ln -U ci-migrate confirms no sudo rights (text-parsed, not the exit status -- covers sudoers.d, the main sudoers file, and any group membership regardless of group name)"
+    # Sec FLAG 1 (PR #771 joint-review): `sudo -ln -U` reports SUDOERS-GRANTED
+    # rights only -- it does not see non-sudo root-equivalent group
+    # membership, and on a Docker host the `docker` group IS root-equivalent
+    # (`docker run -v /:/host` is a root shell). A ci-migrate added to
+    # `docker` would have zero sudoers rights and this check would still say
+    # "C1 verified" -- satisfying C1's literal text while missing its
+    # intent. Sibling assertion, same fail-closed classify-the-output shape:
+    # `id -nG` must contain none of sudo/wheel/adm/docker.
+    GROUP_CHECK_OUT="$(sshx "id -nG ci-migrate" 2>&1)"
+    DISALLOWED_GROUP=""
+    for g in sudo wheel adm docker; do
+      if echo "$GROUP_CHECK_OUT" | tr ' ' '\n' | grep -qx "$g"; then
+        DISALLOWED_GROUP="$g"
+        break
+      fi
+    done
+    if [[ -n "$DISALLOWED_GROUP" ]]; then
+      die "ci-migrate is a member of group '$DISALLOWED_GROUP' -- C1's intent (a non-privileged box user holding a CI-reachable key) requires none of sudo/wheel/adm/docker, regardless of sudoers-granted rights ('docker' named explicitly: it is root-equivalent on a Docker host, not merely sudo-adjacent). id -nG output: $GROUP_CHECK_OUT"
+    fi
+    ok "C1 verified: sudo -ln -U ci-migrate confirms no sudoers-granted rights (text-parsed, not the exit status -- covers sudoers.d, the main sudoers file, and any group membership granted through sudoers, regardless of group name), and id -nG ci-migrate confirms no sudo/wheel/adm/docker group membership"
     ;;
   UNKNOWN_USER)
     if [[ "$CI_MIGRATE_STATE" == "ABSENT" ]]; then
