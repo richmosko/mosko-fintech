@@ -79,10 +79,45 @@ fi
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ALLOWLIST="$SELF_DIR/fence-no-source-allowlist.txt"
+ALLOWLIST_PIN="$SELF_DIR/fence-no-source-allowlist.sha256"
 [ -f "$ALLOWLIST" ] || {
   echo "FATAL: allowlist file missing: $ALLOWLIST -- this fence requires an explicit (even if empty) allowlist file to distinguish 'no exemptions' from 'exemption file not created'. Failing closed." >&2
   exit 2
 }
+
+# Sec condition (PR #780 C-a): the allowlist is this fence's ENTIRE escape
+# hatch -- one line added there permanently exempts a `source`. Nothing
+# about the allowlist file itself forces a reviewer to look at a change to
+# it, so pin its content hash in a SEPARATE file and fail closed on any
+# drift. This is a VISIBILITY control, not an access-control one, and that
+# losing side is stated here on purpose: anyone with repo write access can
+# edit both files in the same PR, so this does not cryptographically
+# require Sec's sign-off -- it makes an allowlist change impossible to
+# land silently (a diff to fence-no-source-allowlist.sha256 is now always
+# present alongside it, so a reviewer scanning the PR's file list cannot
+# miss it), and the header below states the review requirement in words.
+# A stronger mechanism (CODEOWNERS + branch-protection required review)
+# would need an F/CTO repo-settings action -- this repo has no CODEOWNERS
+# file today (checked); that is out of scope for a fence script to grant
+# itself.
+[ -f "$ALLOWLIST_PIN" ] || {
+  echo "FATAL: pinned hash file missing: $ALLOWLIST_PIN -- required so a change to $ALLOWLIST cannot land without also touching this file. Failing closed." >&2
+  exit 2
+}
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL_HASH="$(sha256sum "$ALLOWLIST" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  ACTUAL_HASH="$(shasum -a 256 "$ALLOWLIST" | awk '{print $1}')"
+else
+  echo "FATAL: neither sha256sum nor shasum is available -- cannot verify the allowlist pin. Failing closed." >&2
+  exit 2
+fi
+PINNED_HASH="$(awk '{print $1}' "$ALLOWLIST_PIN")"
+if [ "$ACTUAL_HASH" != "$PINNED_HASH" ]; then
+  echo "FATAL: $ALLOWLIST does not match the pinned hash in $ALLOWLIST_PIN (got $ACTUAL_HASH, expected $PINNED_HASH)." >&2
+  echo "The allowlist changed without its pin being updated -- an unreviewed exemption is the exact escape hatch this check exists to surface. If this change is a genuine, reviewed exemption (Sec sign-off naming why the sourced file cannot hold a credential), regenerate the pin: sha256sum $ALLOWLIST > $ALLOWLIST_PIN" >&2
+  exit 2
+fi
 
 # `|| true` so an empty grep result (the pass case) doesn't trip -e.
 SOURCE_HITS=$(grep -rnE '^[[:space:]]*(source|\.)[[:space:]]+\S' "$SCOPE" --include='*.sh' 2>/dev/null || true)

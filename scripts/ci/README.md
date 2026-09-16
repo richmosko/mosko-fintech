@@ -47,6 +47,13 @@ three classes of security-load-bearing regressions:
   Coolify token when a stale box file with no `NAME=` prefix was `source`d and
   bash's own interpreter echoed the value it tried to run as a command. Deliberately
   unlabeled — minting an `RT-NN` id is an F/CTO ADR-011 Decision-4 ratify act.
+  **Its allowlist (`fence-no-source-allowlist.txt`) requires Sec sign-off for any
+  addition** (Sec condition, PR #780 C-a) — enforced by a pinned content hash
+  (`fence-no-source-allowlist.sha256`) the fence checks every run; a change to the
+  allowlist without regenerating the pin fails CI closed. This is a visibility
+  control, not access control: it does not cryptographically require Sec
+  specifically (no `CODEOWNERS` exists in this repo), it makes the change
+  impossible to land unnoticed.
 
 The fences are invoked from `.github/workflows/security-scan.yml`. Each fence ships
 with a paired golden-test fixture under `tests/fixtures/ci/` and a CI inversion-mode
