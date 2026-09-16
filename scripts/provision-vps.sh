@@ -1366,6 +1366,16 @@ if [[ "$MIGRATOR_TOKEN_STATE" == "EXISTS" ]]; then
 elif [[ $APPLY -eq 0 ]]; then
   info "migrator-trigger token missing -- would mint one (abilities: read, write, deploy) and write it to /etc/pfin/migrator-coolify-token.env (ci-migrate:ci-migrate, 0600), printing nothing secret"
 else
+  # MIGRATOR_TOKEN_VAR_NAME must match TOKEN_VAR_NAME in
+  # scripts/migrator-orchestrate.sh -- one name, asserted in both files.
+  # The heredoc below writes it as a literal (a quoted <<'REMOTE'
+  # heredoc cannot interpolate a local shell variable, deliberately --
+  # that quoting is what keeps remote-executed content free of local
+  # expansion), so this constant's job is the read-back assertion after
+  # the write, not the write itself; the two are kept in sync by the
+  # cross-reference comment in both files and by grepping this repo for
+  # the literal string before ever renaming either one.
+  MIGRATOR_TOKEN_VAR_NAME="COOLIFY_API_TOKEN"
   MIGRATOR_TOKEN_LOG="$(mktemp)"
   chmod 600 "$MIGRATOR_TOKEN_LOG"
   MIGRATOR_TOKEN_LEAK_DONE=0
@@ -1434,6 +1444,13 @@ docker cp coolify:/tmp/.pfin_migrator_token /root/.pfin/_migrator_token.tmp
 docker exec coolify rm -f /tmp/.pfin_migrator_token
 umask 077
 mkdir -p /etc/pfin && chmod 0755 /etc/pfin
+# The literal name here (COOLIFY_API_TOKEN) MUST match TOKEN_VAR_NAME in
+# scripts/migrator-orchestrate.sh (its reader) and MIGRATOR_TOKEN_VAR_NAME
+# in this file (asserted by name, read-only, right after this heredoc
+# returns) -- 2026-09-16 incident: a stale box file with no NAME= prefix
+# at all made the reader's `source` execute the token value as a command,
+# disclosing it to the operator's terminal. This writer/reader contract
+# was never exercised until that first live fire.
 printf 'COOLIFY_API_TOKEN=%s\n' "$(cat /root/.pfin/_migrator_token.tmp)" > /etc/pfin/migrator-coolify-token.env
 chown ci-migrate:ci-migrate /etc/pfin/migrator-coolify-token.env
 chmod 0600 /etc/pfin/migrator-coolify-token.env
@@ -1474,6 +1491,15 @@ REMOTE
     exit 1
   fi
   ok "migrator-trigger token abilities confirmed (read back non-interactively, names only): read, write, deploy -- not root"
+
+  # Read the written file back BY NAME and assert non-empty -- names only,
+  # never the value. This is the writer/reader contract check: had this
+  # existed before the 2026-09-16 incident, a malformed file would have
+  # been caught here, at mint time, instead of at the first live fire.
+  MIGRATOR_TOKEN_FILE_HAS_NAME="$(sshx "grep -qE \"^${MIGRATOR_TOKEN_VAR_NAME}=.\" /etc/pfin/migrator-coolify-token.env && echo PRESENT || echo MISSING" 2>/dev/null | tail -1)"
+  [[ "$MIGRATOR_TOKEN_FILE_HAS_NAME" == "PRESENT" ]] \
+    || die "wrote /etc/pfin/migrator-coolify-token.env but reading it back by name found no non-empty $MIGRATOR_TOKEN_VAR_NAME= line -- the writer/reader contract broke at write time. Not left in place; delete the DB row and re-mint (--rotate-migrator-token)."
+  ok "migrator-trigger token file verified by name: $MIGRATOR_TOKEN_VAR_NAME= present and non-empty (value never read locally)"
 
   migrator_token_leak_check
   trap - EXIT
