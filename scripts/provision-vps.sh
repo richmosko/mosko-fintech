@@ -99,6 +99,11 @@ CI_MIGRATE_SSH_PUBKEY="${CI_MIGRATE_SSH_PUBKEY:-$HOME/.ssh/id_ed25519_ci_migrate
 MIGRATOR_SERVICE_UUID="${MIGRATOR_SERVICE_UUID:-}"
 MIGRATOR_TASK_UUID="${MIGRATOR_TASK_UUID:-}"
 APP_UUID="${APP_UUID:-}"
+# DEPLOY_ON_SUCCESS gate (Sec-ruled, Phase D deploy-gate consult) -- default
+# 0 (withhold the app deploy on a successful migration apply); flip to 1 at
+# runbook §7 step 7, once the migrate leg has been proven live and the
+# deploy leg is deliberately being exercised for the first time.
+DEPLOY_ON_SUCCESS="${DEPLOY_ON_SUCCESS:-0}"
 # Escape hatch: allow an all-passphrase key set. Only for a box a human will
 # ever touch by hand. Nothing scripted will be able to reach it.
 ALLOW_NO_AUTOMATION_KEY="${ALLOW_NO_AUTOMATION_KEY:-0}"
@@ -1177,7 +1182,8 @@ step "migrator-trigger box-resident config (non-secret UUIDs; scripts/migrator-o
 [[ -n "$MIGRATOR_SERVICE_UUID" && -n "$MIGRATOR_TASK_UUID" && -n "$APP_UUID" ]] || die "MIGRATOR_SERVICE_UUID / MIGRATOR_TASK_UUID / APP_UUID must all be set (in .env or the environment) before provisioning the ci-migrate trigger -- these are the Coolify resource UUIDs from chunk 1's Scheduled Task and the V1 web app resource (see scripts/migrator-scheduled-task.md for where the Scheduled Task's UUID comes from)."
 DESIRED_TRIGGER_CONF="MIGRATOR_SERVICE_UUID=$MIGRATOR_SERVICE_UUID
 MIGRATOR_TASK_UUID=$MIGRATOR_TASK_UUID
-APP_UUID=$APP_UUID"
+APP_UUID=$APP_UUID
+DEPLOY_ON_SUCCESS=$DEPLOY_ON_SUCCESS"
 CURRENT_TRIGGER_CONF="$(sshx 'cat /etc/pfin/migrator-trigger.conf 2>/dev/null' || true)"
 if [[ "$CURRENT_TRIGGER_CONF" == "$DESIRED_TRIGGER_CONF" ]]; then
   ok "/etc/pfin/migrator-trigger.conf already matches"
