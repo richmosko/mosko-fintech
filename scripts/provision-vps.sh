@@ -1486,8 +1486,6 @@ REMOTE
 fi
 
 step "Phase 2 verification"
-
-step "Phase 2 verification"
 HEALTHY="$(sshx "docker ps --filter 'name=coolify' --filter 'health=healthy' --format '{{.Names}}'" | wc -l | tr -d ' ')"
 info "$HEALTHY of 6 coolify-* containers healthy"
 [[ "$HEALTHY" == "6" ]] || die "expected 6 healthy coolify-* containers, got $HEALTHY -- check 'docker ps -a' on the box"
@@ -1521,7 +1519,9 @@ cat <<NEXT
         -- nothing to copy here.
 
       ADR-072 (Option E) chunk 2 -- ci-migrate CI trigger (operator step, NOT
-      run by this script): put the ci_only keypair's PRIVATE half into this
+      run by this script): IF NOT ALREADY SET (check first --
+      'gh secret list' / 'gh variable list' -- this script never checks or
+      sets either), put the ci_only keypair's PRIVATE half into this
       repo's GitHub Actions secrets as CI_MIGRATE_SSH_PRIVATE_KEY (Settings ->
       Secrets and variables -> Actions -> New repository secret), and set a
       PROD_SSH_HOST repository VARIABLE (not a secret -- an SSH destination
