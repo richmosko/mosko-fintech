@@ -132,7 +132,31 @@
 #
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# REPO_ROOT resolution -- .env lives at the MAIN checkout root, never inside
+# an agent worktree. 2026-09-16 incident: `dirname "$0"/..` resolved to the
+# worktree itself under .claude/worktrees/<name>/, so record-coolify-uuids.sh
+# and provision-vps.sh's BOX_IP writer silently wrote MIGRATOR_SERVICE_UUID /
+# APP_UUID / MIGRATOR_TASK_UUID / BOX_IP / CI_MIGRATE_SSH_PUBKEY into a
+# throwaway per-worktree .env -- discarded when that worktree was removed at
+# merge, leaving the real repo-root .env (what F/CTO's own --apply run reads)
+# never updated. Refuse by default when invoked from inside
+# .claude/worktrees/ rather than silently redirecting into the main
+# checkout's .env; set REPO_ROOT explicitly to override.
+if [[ -n "${REPO_ROOT:-}" ]]; then
+  :
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ "$SCRIPT_DIR" == *"/.claude/worktrees/"* ]]; then
+    printf '\n\033[31mFAIL\033[0m  running from an agent worktree (%s) -- .env lives at the main checkout root and would be silently discarded when this worktree is removed. Set REPO_ROOT=<main checkout path> to override, or run this script from the main checkout.\n' "$SCRIPT_DIR" >&2
+    exit 1
+  fi
+  GIT_COMMON_DIR="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || GIT_COMMON_DIR=""
+  if [[ -z "$GIT_COMMON_DIR" ]]; then
+    printf '\n\033[31mFAIL\033[0m  could not resolve the repo root via git rev-parse --git-common-dir from %s (not inside a git checkout?). Set REPO_ROOT explicitly.\n' "$SCRIPT_DIR" >&2
+    exit 1
+  fi
+  REPO_ROOT="$(cd "$(dirname "$GIT_COMMON_DIR")" && pwd)"
+fi
 BOX_IP="${BOX_IP:-}"
 AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
 PROJECT_NAME="${PROJECT_NAME:-pfin-supabase}"

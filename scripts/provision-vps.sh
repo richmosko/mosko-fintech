@@ -99,6 +99,11 @@ CI_MIGRATE_SSH_PUBKEY="${CI_MIGRATE_SSH_PUBKEY:-$HOME/.ssh/id_ed25519_ci_migrate
 MIGRATOR_SERVICE_UUID="${MIGRATOR_SERVICE_UUID:-}"
 MIGRATOR_TASK_UUID="${MIGRATOR_TASK_UUID:-}"
 APP_UUID="${APP_UUID:-}"
+# DEPLOY_ON_SUCCESS gate (Sec-ruled, Phase D deploy-gate consult) -- default
+# 0 (withhold the app deploy on a successful migration apply); flip to 1 at
+# runbook §7 step 7, once the migrate leg has been proven live and the
+# deploy leg is deliberately being exercised for the first time.
+DEPLOY_ON_SUCCESS="${DEPLOY_ON_SUCCESS:-0}"
 # Escape hatch: allow an all-passphrase key set. Only for a box a human will
 # ever touch by hand. Nothing scripted will be able to reach it.
 ALLOW_NO_AUTOMATION_KEY="${ALLOW_NO_AUTOMATION_KEY:-0}"
@@ -126,7 +131,31 @@ PRIMARY_IP_NAME="${PRIMARY_IP_NAME:-pfin-prod-ipv4}"
 # Coolify's own first-run admin setup works through the tunnel.
 
 API="https://api.hetzner.cloud/v1"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# REPO_ROOT resolution -- .env lives at the MAIN checkout root, never inside
+# an agent worktree. 2026-09-16 incident: `dirname "$0"/..` resolved to the
+# worktree itself under .claude/worktrees/<name>/, so record-coolify-uuids.sh
+# and provision-vps.sh's BOX_IP writer silently wrote MIGRATOR_SERVICE_UUID /
+# APP_UUID / MIGRATOR_TASK_UUID / BOX_IP / CI_MIGRATE_SSH_PUBKEY into a
+# throwaway per-worktree .env -- discarded when that worktree was removed at
+# merge, leaving the real repo-root .env (what F/CTO's own --apply run reads)
+# never updated. Refuse by default when invoked from inside
+# .claude/worktrees/ rather than silently redirecting into the main
+# checkout's .env; set REPO_ROOT explicitly to override.
+if [[ -n "${REPO_ROOT:-}" ]]; then
+  :
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ "$SCRIPT_DIR" == *"/.claude/worktrees/"* ]]; then
+    printf '\n\033[31mFAIL\033[0m  running from an agent worktree (%s) -- .env lives at the main checkout root and would be silently discarded when this worktree is removed. Set REPO_ROOT=<main checkout path> to override, or run this script from the main checkout.\n' "$SCRIPT_DIR" >&2
+    exit 1
+  fi
+  GIT_COMMON_DIR="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || GIT_COMMON_DIR=""
+  if [[ -z "$GIT_COMMON_DIR" ]]; then
+    printf '\n\033[31mFAIL\033[0m  could not resolve the repo root via git rev-parse --git-common-dir from %s (not inside a git checkout?). Set REPO_ROOT explicitly.\n' "$SCRIPT_DIR" >&2
+    exit 1
+  fi
+  REPO_ROOT="$(cd "$(dirname "$GIT_COMMON_DIR")" && pwd)"
+fi
 APPLY=0; REBUILD=0; RESET_ADMIN_PASSWORD=0
 for arg in "$@"; do
   case "$arg" in
@@ -1153,7 +1182,8 @@ step "migrator-trigger box-resident config (non-secret UUIDs; scripts/migrator-o
 [[ -n "$MIGRATOR_SERVICE_UUID" && -n "$MIGRATOR_TASK_UUID" && -n "$APP_UUID" ]] || die "MIGRATOR_SERVICE_UUID / MIGRATOR_TASK_UUID / APP_UUID must all be set (in .env or the environment) before provisioning the ci-migrate trigger -- these are the Coolify resource UUIDs from chunk 1's Scheduled Task and the V1 web app resource (see scripts/migrator-scheduled-task.md for where the Scheduled Task's UUID comes from)."
 DESIRED_TRIGGER_CONF="MIGRATOR_SERVICE_UUID=$MIGRATOR_SERVICE_UUID
 MIGRATOR_TASK_UUID=$MIGRATOR_TASK_UUID
-APP_UUID=$APP_UUID"
+APP_UUID=$APP_UUID
+DEPLOY_ON_SUCCESS=$DEPLOY_ON_SUCCESS"
 CURRENT_TRIGGER_CONF="$(sshx 'cat /etc/pfin/migrator-trigger.conf 2>/dev/null' || true)"
 if [[ "$CURRENT_TRIGGER_CONF" == "$DESIRED_TRIGGER_CONF" ]]; then
   ok "/etc/pfin/migrator-trigger.conf already matches"
