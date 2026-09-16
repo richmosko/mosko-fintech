@@ -1140,27 +1140,55 @@ fi
 # surface. `-n` (non-interactive) refuses to prompt for a password rather
 # than hang the run.
 #
-# Exit-code contract (sudo's own list-mode semantics): exit 0 means the
-# target has at least one matching rule -- i.e. HAS sudo of some kind --
-# and is the fail-closed die case. A non-zero exit covers both "not
-# allowed to run sudo" (the expected safe case) and "unknown user"
-# (ci-migrate not created yet); both are confirmed here by matching sudo's
-# own message text, so a non-zero exit that names NEITHER string (a stale
-# SSH pipe, a sudo/PAM config error) dies instead of being silently read
-# as safe -- a check that only asserted "non-zero" would conflate "sudo
-# says no" with "the check itself broke."
+# PARSE THE OUTPUT, NOT THE EXIT STATUS. 2026-09-16 defect (F/CTO's live
+# --apply run): this box's sudo build/config returned exit 0 for a user
+# with NO sudo rights, whose own message text correctly said "is not
+# allowed to run sudo" -- the exit-code contract the prior version of this
+# check relied on ("0 means HAS sudo") is not trustworthy here, and it
+# fired die() on the exit code before ever reading that text. Worse: the
+# preflight run BEFORE ci-migrate existed printed "ok C1 verified" --
+# vacuous on that path, because "unknown user" also happened to satisfy
+# the old non-zero-exit branch without the user or its policy having been
+# checked at all. Fixed: classify by TEXT only, in priority order (a grant
+# phrase wins over the negative phrase, so a hypothetical message
+# containing both never mis-reads as safe), and distinguish "user does not
+# exist yet" (expected on a preflight run before creation -- not an "ok")
+# from every other unrecognized shape (fail closed).
+classify_sudo_check_output() { # classify_sudo_check_output <captured-output>
+  local out="$1"
+  if echo "$out" | grep -qiE "may run the following|\(ALL[^)]*\)|NOPASSWD"; then
+    echo HAS_SUDO
+  elif echo "$out" | grep -qiE "is not allowed to run sudo"; then
+    echo NO_SUDO
+  elif echo "$out" | grep -qiE "unknown user"; then
+    echo UNKNOWN_USER
+  else
+    echo INDETERMINATE
+  fi
+}
 set +e
 SUDO_CHECK_OUT="$(sshx "sudo -ln -U ci-migrate" 2>&1)"
 SUDO_CHECK_RC=$?
 set -e
-if [[ $SUDO_CHECK_RC -eq 0 ]]; then
-  die "sudo -ln -U ci-migrate reports ci-migrate HAS sudo rights -- C1 requires NONE. Output: $SUDO_CHECK_OUT"
-fi
-if echo "$SUDO_CHECK_OUT" | grep -qiE "not allowed to run sudo|unknown user"; then
-  ok "C1 verified: sudo -ln -U ci-migrate confirms no sudo rights (definitive policy check -- covers sudoers.d, the main sudoers file, and any group membership regardless of group name)"
-else
-  die "sudo -ln -U ci-migrate exited non-zero ($SUDO_CHECK_RC) with unrecognized output -- cannot confirm C1 either way. Output: $SUDO_CHECK_OUT. Failing closed."
-fi
+SUDO_CHECK_CLASS="$(classify_sudo_check_output "$SUDO_CHECK_OUT")"
+case "$SUDO_CHECK_CLASS" in
+  HAS_SUDO)
+    die "sudo -ln -U ci-migrate reports ci-migrate HAS sudo rights -- C1 requires NONE. Output: $SUDO_CHECK_OUT"
+    ;;
+  NO_SUDO)
+    ok "C1 verified: sudo -ln -U ci-migrate confirms no sudo rights (text-parsed, not the exit status -- covers sudoers.d, the main sudoers file, and any group membership regardless of group name)"
+    ;;
+  UNKNOWN_USER)
+    if [[ "$CI_MIGRATE_STATE" == "ABSENT" ]]; then
+      info "ci-migrate user does not exist yet -- C1 will be verified after creation, not on this preflight run"
+    else
+      die "sudo -ln -U ci-migrate reports unknown user, but ci-migrate was just confirmed present above -- inconsistent state, failing closed. Output: $SUDO_CHECK_OUT"
+    fi
+    ;;
+  *)
+    die "sudo -ln -U ci-migrate (exit $SUDO_CHECK_RC) produced output this check does not recognize -- cannot confirm C1 either way. Output: $SUDO_CHECK_OUT. Failing closed."
+    ;;
+esac
 
 step "orchestration script (ADR-072 C2/C4/C5 -- absolute path, root-owned, 0755, NOT writable by ci-migrate)"
 ORCH_SCRIPT_PATH="/usr/local/sbin/migrator-orchestrate.sh"
