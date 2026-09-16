@@ -35,7 +35,7 @@
 
 begin;
 
-select plan(7);
+select plan(8);
 
 -- ---------------------------------------------------------------------
 -- (c0) DEPENDENCY GUARD — must come first and must be LEGIBLE.
@@ -106,6 +106,19 @@ select ok(
   (select position('ALTER SCHEMA supabase_migrations OWNER TO migrator' in shobj_description(oid, 'pg_authid')) > 0
      from pg_authid where rolname = 'migrator'),
   '(c6) fourth supervised statement: the comment carries the supabase_migrations owner transfer (BACKLOG §7.36 item 32). Owning the DATABASE does not extend to owning the migration-ledger SCHEMA, which the bootstrap created before this role existed; without this statement `supabase db push` fails 42501 under the migrator''s own credential. RED means the catalog still describes a three-statement handoff that leaves the unsupervised apply path broken'
+);
+
+-- ---------------------------------------------------------------------
+-- (c7) POSITIVE: the ADMIN-option limit is framed as an INSTANCE of the
+--      general object-ownership gap, not a property of role comments.
+--      Sec's one condition on PR #775. Without this clause a reader
+--      concludes role comments are the only affected class and
+--      rediscovers the gap at the first ALTER TABLE.
+-- ---------------------------------------------------------------------
+select ok(
+  (select position('INSTANCE OF A GENERAL GAP' in shobj_description(oid, 'pg_authid')) > 0
+     from pg_authid where rolname = 'migrator'),
+  '(c7) generality of the gap: the comment states that owning the DATABASE confers no ownership of any object inside it, so ALTER / COMMENT / DROP fail for `migrator` on tables, views, sequences, types and functions exactly as they do on this role comment — role comments are only where the gap was met first. RED means the catalog presents the ADMIN-option refusal as a special case, which is how the next reader rediscovers the whole gap at the first ALTER TABLE'
 );
 
 select * from finish();
