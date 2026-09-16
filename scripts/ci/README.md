@@ -40,6 +40,21 @@ three classes of security-load-bearing regressions:
   [entity-grep — HTML-entity-obscured §/# fence](#entity-grep--html-entity-obscured--fence)
   below.
 
+- **no-source-credential-files** — box-side config-file read-mechanism fence over
+  `scripts/**/*.sh` (Sec spec, PR #778 C-1 + the 2026-09-16 token-file incident
+  ruling). Bans `source`/`.` of any file and `eval` of file content piped straight
+  in, anywhere in the tree — the read mechanism that disclosed the migrator-trigger
+  Coolify token when a stale box file with no `NAME=` prefix was `source`d and
+  bash's own interpreter echoed the value it tried to run as a command. Deliberately
+  unlabeled — minting an `RT-NN` id is an F/CTO ADR-011 Decision-4 ratify act.
+  **Its allowlist (`fence-no-source-allowlist.txt`) requires Sec sign-off for any
+  addition** (Sec condition, PR #780 C-a) — enforced by a pinned content hash
+  (`fence-no-source-allowlist.sha256`) the fence checks every run; a change to the
+  allowlist without regenerating the pin fails CI closed. This is a visibility
+  control, not access control: it does not cryptographically require Sec
+  specifically (no `CODEOWNERS` exists in this repo), it makes the change
+  impossible to land unnoticed.
+
 The fences are invoked from `.github/workflows/security-scan.yml`. Each fence ships
 with a paired golden-test fixture under `tests/fixtures/ci/` and a CI inversion-mode
 check — the fence MUST report violation against the fixture; if the fence reports
