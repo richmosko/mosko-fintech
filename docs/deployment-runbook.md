@@ -788,6 +788,8 @@ Scope: apply the repo's `supabase/migrations/` against the fresh Postgres 17 ins
 
 **Added 2026-09-14, after F/CTO executed Phase B step 5 live and this section did not match what happened.** Two corrections, both load-bearing:
 
+**`.env` is the main checkout's; agent worktrees have their own and it is discarded.** 2026-09-16 incident: `record-coolify-uuids.sh` and `provision-vps.sh`'s `BOX_IP` writer resolved "repo root" as `dirname "$0"/..`, which inside an agent worktree (`.claude/worktrees/<name>/`) IS the worktree — five names (`BOX_IP`, `MIGRATOR_SERVICE_UUID`, `APP_UUID`, `MIGRATOR_TASK_UUID`, `CI_MIGRATE_SSH_PUBKEY`) were written to the worktree's own throwaway `.env`, not the repo-root one F/CTO's own runs read, and vanished when the worktree was removed at merge. Fixed: these scripts now resolve `REPO_ROOT` via `git rev-parse --git-common-dir` (shared across every worktree of a repo) and refuse outright when invoked from inside `.claude/worktrees/` unless `REPO_ROOT` is set explicitly — no more silent wrong-file writes.
+
 **Step 0 — generate/look up all three passwords BEFORE opening any `psql` session**, so the interactive handoffs below are typed straight through with no context-switching:
 
 1. **`pfin_etl` and `pfin_provider_sync` — generate two fresh values, kept for §5's secrets push as the ETL and provider-sync DB passwords:**
@@ -1036,7 +1038,7 @@ select pg_catalog.pg_has_role('migrator','service_role','MEMBER') as in_service_
 **Phase C — the CI trigger, makes steady-state live (§6.4)**
 
 7. Generate the `ci_only` keypair (§6.4 step 2).
-8. Set the local `.env`: `CI_MIGRATE_SSH_PUBKEY` + `MIGRATOR_SERVICE_UUID` + `MIGRATOR_TASK_UUID` + `APP_UUID` (§6.4 step 3).
+8. Set the local `.env`: `CI_MIGRATE_SSH_PUBKEY` + `MIGRATOR_SERVICE_UUID` + `MIGRATOR_TASK_UUID` + `APP_UUID` (§6.4 step 3). **`.env` is the main checkout's; agent worktrees have their own and it is discarded when the worktree is removed** (2026-09-16 incident — see §6.0).
 9. `scripts/provision-vps.sh --apply` (§6.4 step 4) — materializes the `ci-migrate` user, its forced-command key, the orchestration script, and the scoped Coolify token.
 10. Add the GitHub Actions secret `CI_MIGRATE_SSH_PRIVATE_KEY` (§6.4 step 5).
 11. Add the GitHub Actions repository variable `PROD_SSH_HOST` (§6.4 step 6).
