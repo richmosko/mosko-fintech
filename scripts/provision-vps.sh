@@ -1448,7 +1448,17 @@ REMOTE
     exit 1
   fi
 
-  grep -vE '^MIGRATOR_TOKEN_WRITTEN$' "$MIGRATOR_TOKEN_LOG" | sed 's/^/      /' || true
+  # Sec C-1 (PR #772 joint-review): CAPTURE the diagnostic content here
+  # (assigned to a variable, nothing printed) but do NOT display it yet --
+  # the #741 property this must preserve is "the leak-check runs before
+  # the operator ever sees the filtered log." Displaying it here, ahead of
+  # migrator_token_leak_check below, would print an unexamined log to the
+  # terminal on the one path (success) where nothing has looked at it yet.
+  # `|| true` for the same reason as the original defect: grep -v alone
+  # exits 1 when it selects zero lines (a fully clean marker-only log), and
+  # this is a bare assignment, not a conditional -- set -e would otherwise
+  # kill the script silently right here.
+  MIGRATOR_TOKEN_DIAG="$(grep -vE '^MIGRATOR_TOKEN_WRITTEN$' "$MIGRATOR_TOKEN_LOG" 2>/dev/null)" || true
   if ! grep -q MIGRATOR_TOKEN_WRITTEN "$MIGRATOR_TOKEN_LOG"; then
     echo "FAIL  migrator-trigger token mint did not report success -- see output above; log preserved at $MIGRATOR_TOKEN_LOG" >&2
     exit 1
@@ -1467,6 +1477,11 @@ REMOTE
 
   migrator_token_leak_check
   trap - EXIT
+  # Only reached once the leak-check above has returned OK (a non-zero
+  # return there kills the script via set -e before this line, and the
+  # FAIL/WARN paths inside it print their own message instead) -- nothing
+  # from the captured log reaches stdout before that verdict.
+  [[ -n "$MIGRATOR_TOKEN_DIAG" ]] && printf '%s\n' "$MIGRATOR_TOKEN_DIAG" | sed 's/^/      /'
   ok "migrator-trigger token minted (read+write+deploy, NOT root) -- value never left the box, never printed, never even returned to this script"
 fi
 
