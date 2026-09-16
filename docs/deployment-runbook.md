@@ -980,7 +980,7 @@ ALTER ROLE migrator LOGIN;
   | `pfin_provider_sync` (`116`) | `postgres` | `authenticated`, `service_role` | `postgres` | yes (measured: `t`) |
   | `migrator` (`118`) | `postgres` (pre-step, this rewrite) | none | — | yes (measured: `t`) |
 
-  Measured live 2026-09-16 (`pg_auth_members` joined to `pg_roles`, as `supabase_admin`, read-only). None of this is touched by the schema-level `drop schema pfin/supabase_migrations cascade` wipe — `DROP SCHEMA … CASCADE` does not drop roles or role memberships, matching §6.3's "roles and their passwords survive untouched" claim. **This table is informational for this PR** — the `055`/`116` `grant service_role to <role>` statements stay exactly where they are (unchanged by this PR); ADR-072 Decision A (Sec ruling, 2026-09-16) governs whether/how role creation and `service_role` grants relocate under the `pfin_owner` design (A2), which this PR does **not** implement — see the SUPERSEDED note below.
+  Measured live 2026-09-16 (`pg_auth_members` joined to `pg_roles`, as `supabase_admin`, read-only). None of this is touched by the schema-level `drop schema pfin/supabase_migrations cascade` wipe — `DROP SCHEMA … CASCADE` does not drop roles or role memberships, matching §6.3's "roles and their passwords survive untouched" claim. **This table is informational for this PR** — the `055`/`116` `grant service_role to <role>` statements stay exactly where they are (unchanged by this PR); ADR-072 Decision A (Sec ruling, 2026-09-16) governs whether/how role creation and `service_role` grants relocate under the `pfin_owner` design (A2), which this PR does **not** implement — see the SUPERSEDED note above (§6.3's own header).
 
 **If all three gates hold, wipe:**
 
@@ -1076,6 +1076,8 @@ Then confirm `rest` reports `healthy` (`docker inspect .State.Health.Status`) no
 1. Create the V1 web-app Coolify resource; note its `APP_UUID`. **Gap:** §7 is still a STUB for this step — it names the web-app as the 3rd fleet container but does not yet carry concrete Coolify resource-creation instructions. Until §7 is filled in, this step has no home to point at beyond the Coolify dashboard itself.
 2. Create the migrator Coolify Scheduled Task (`scripts/migrator-scheduled-task.md` — task fields, resource attachment, the fail-closed `status` semantics); note the `MIGRATOR_SERVICE_UUID` (the Supabase-stack resource) and `MIGRATOR_TASK_UUID` (the task itself).
 3. Redeploy the Supabase stack so the `migrator` sibling service comes up and `provision-supabase-stack.sh`'s `MINT_SECRETS` mints `MIGRATOR_DB_PASSWORD` (§6's credential bullet; §5).
+
+**⚠ SUPERSEDED IN DRAFT — pending Amendment 5. Do NOT execute the steps below.** Sec's ADR-072 Decision A ruling (2026-09-16) vetoes moving `055`/`116`'s role creation into the `migrator`-run apply — an applier that creates `pfin_etl`/`pfin_provider_sync` auto-inherits ADMIN OPTION on them and can reach `service_role` transitively, exactly what C8 bounds. §6.3 (this Phase's own detail section) carries the full notice; repeated here because **this is the stranger's actual entry point** — do not read past this line as a live instruction until Architect's Amendment 5 (`pfin_owner`, role creation relocated to the supervised pre-step) lands and this Phase is rewritten again.
 
 **Phase B — supervised first bootstrap, ownership by construction (rewritten 2026-09-16 — §6.3 as `supabase_admin` runs the pre-step; `migrator` runs the apply)**
 
