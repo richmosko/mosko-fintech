@@ -137,10 +137,33 @@ done
 
 case "$STATUS" in
   success)
-    log "migration apply SUCCEEDED — triggering app deploy (uuid $APP_UUID)"
-    api GET "/deploy?uuid=$APP_UUID" >/dev/null \
-      || fail "migration succeeded but the app-deploy call itself failed — check the token's deploy ability. THE DB IS MIGRATED; the app was NOT redeployed. Investigate and redeploy manually before assuming this is a full failure."
-    log "app deploy triggered"
+    # DEPLOY_ON_SUCCESS gate (Sec-ruled, Phase D deploy-gate consult): the
+    # first live exercise of this externally-reachable path (ci-migrate's
+    # forced command, reachable from GitHub Actions, holding a
+    # [read,write,deploy] token) should do the smallest thing it is capable
+    # of — apply the migration and stop, not also fire a real production
+    # deploy the first time this trigger is ever pulled for real. Read from
+    # $CONF_FILE ONLY, never from $SSH_ORIGINAL_COMMAND or any argument (C2
+    # — this key sits on the trusted side of that line: $CONF_FILE is
+    # already root:ci-migrate 0640, ci-migrate-unwritable, sourced wholesale
+    # as fully-trusted box-resident input; this is one more key in that same
+    # file, not a new control, and needs no fence or watcher of its own.
+    # Fail-closed by POSITIVE test (deliberately NOT the ":?" abort pattern
+    # the other keys above use) — unset, unreadable, "0", or any other value
+    # withholds the deploy rather than aborting a migration that already
+    # succeeded.
+    if [[ "${DEPLOY_ON_SUCCESS:-0}" == "1" ]]; then
+      log "migration apply SUCCEEDED — triggering app deploy (uuid $APP_UUID)"
+      api GET "/deploy?uuid=$APP_UUID" >/dev/null \
+        || fail "migration succeeded but the app-deploy call itself failed — check the token's deploy ability. THE DB IS MIGRATED; the app was NOT redeployed. Investigate and redeploy manually before assuming this is a full failure."
+      log "app deploy triggered"
+    else
+      # A suppressed deploy is a SUCCESS, not a failure — exit 0 so the
+      # GitHub Actions job is green. Exiting non-zero here would invert
+      # ADR-072 Decision 3's meaning: a red job would then mean "worked as
+      # configured", exactly the signal-degradation D3 exists to prevent.
+      log "migration apply SUCCEEDED — app deploy SUPPRESSED (DEPLOY_ON_SUCCESS!=1)"
+    fi
     ;;
   failed)
     fail "migration apply FAILED (Scheduled Task execution status=failed) — app deploy NOT triggered. Coolify->Discord Scheduled-Task-failure routing already fired; check the execution log in the Coolify dashboard for the migration error."
