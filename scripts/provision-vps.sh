@@ -86,7 +86,7 @@ SSH_KEY_PREFIX="${SSH_KEY_PREFIX:-mosko-fintech}"
 # way this repo can see — same "provisioning-time input, never generated
 # here" shape as SSH_PUBKEYS above, distinct KEY from every key in that
 # list (ci-migrate's authorized_keys holds ONLY this one line, C1).
-CI_MIGRATE_SSH_PUBKEY="${CI_MIGRATE_SSH_PUBKEY:-$HOME/.ssh/id_ed25519_ci_migrate.pub}"
+CI_MIGRATE_SSH_PUBKEY="${CI_MIGRATE_SSH_PUBKEY:-}"
 # Non-secret Coolify resource identifiers the orchestration script needs
 # (scripts/migrator-orchestrate.sh) — written into the box-resident
 # /etc/pfin/migrator-trigger.conf this script materializes below. These are
@@ -103,7 +103,7 @@ APP_UUID="${APP_UUID:-}"
 # 0 (withhold the app deploy on a successful migration apply); flip to 1 at
 # runbook §7 step 7, once the migrate leg has been proven live and the
 # deploy leg is deliberately being exercised for the first time.
-DEPLOY_ON_SUCCESS="${DEPLOY_ON_SUCCESS:-0}"
+DEPLOY_ON_SUCCESS="${DEPLOY_ON_SUCCESS:-}"
 # Escape hatch: allow an all-passphrase key set. Only for a box a human will
 # ever touch by hand. Nothing scripted will be able to reach it.
 ALLOW_NO_AUTOMATION_KEY="${ALLOW_NO_AUTOMATION_KEY:-0}"
@@ -156,6 +156,35 @@ else
   fi
   REPO_ROOT="$(cd "$(dirname "$GIT_COMMON_DIR")" && pwd)"
 fi
+
+# 2026-09-16 defect: the FAIL message at the ci-migrate-trigger step below
+# promises these values may come "in .env or the environment," but the
+# declarations above (MIGRATOR_SERVICE_UUID / MIGRATOR_TASK_UUID / APP_UUID
+# / CI_MIGRATE_SSH_PUBKEY / DEPLOY_ON_SUCCESS) only ever read the
+# environment -- .env was never consulted, so a `.env`-only operator (the
+# normal case; nothing exports these into the shell) always failed that
+# check even with all five present and non-empty in .env. Fixed here, after
+# REPO_ROOT resolves: environment wins if set; else read from
+# $REPO_ROOT/.env with the same `grep -m1 '^KEY=' | cut -d= -f2-` shape
+# HETZNER_API_TOKEN already uses below -- never `source .env`, which would
+# export every secret in it into this script's own shell.
+env_or_dotenv() { # env_or_dotenv <VAR_NAME> -- VAR_NAME already holds
+                   # "${VAR_NAME:-}"; falls back to .env if still empty.
+  local __name="$1" __cur
+  eval "__cur=\"\${$__name:-}\""
+  if [[ -z "$__cur" ]]; then
+    __cur="$(grep -m1 "^$__name=" "$REPO_ROOT/.env" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' \r\n' || true)"
+    eval "$__name=\"\$__cur\""
+  fi
+}
+env_or_dotenv MIGRATOR_SERVICE_UUID
+env_or_dotenv MIGRATOR_TASK_UUID
+env_or_dotenv APP_UUID
+env_or_dotenv CI_MIGRATE_SSH_PUBKEY
+[[ -n "$CI_MIGRATE_SSH_PUBKEY" ]] || CI_MIGRATE_SSH_PUBKEY="$HOME/.ssh/id_ed25519_ci_migrate.pub"
+env_or_dotenv DEPLOY_ON_SUCCESS
+[[ -n "$DEPLOY_ON_SUCCESS" ]] || DEPLOY_ON_SUCCESS=0
+
 APPLY=0; REBUILD=0; RESET_ADMIN_PASSWORD=0
 for arg in "$@"; do
   case "$arg" in
@@ -1111,27 +1140,78 @@ fi
 # surface. `-n` (non-interactive) refuses to prompt for a password rather
 # than hang the run.
 #
-# Exit-code contract (sudo's own list-mode semantics): exit 0 means the
-# target has at least one matching rule -- i.e. HAS sudo of some kind --
-# and is the fail-closed die case. A non-zero exit covers both "not
-# allowed to run sudo" (the expected safe case) and "unknown user"
-# (ci-migrate not created yet); both are confirmed here by matching sudo's
-# own message text, so a non-zero exit that names NEITHER string (a stale
-# SSH pipe, a sudo/PAM config error) dies instead of being silently read
-# as safe -- a check that only asserted "non-zero" would conflate "sudo
-# says no" with "the check itself broke."
+# PARSE THE OUTPUT, NOT THE EXIT STATUS. 2026-09-16 defect (F/CTO's live
+# --apply run): this box's sudo build/config returned exit 0 for a user
+# with NO sudo rights, whose own message text correctly said "is not
+# allowed to run sudo" -- the exit-code contract the prior version of this
+# check relied on ("0 means HAS sudo") is not trustworthy here, and it
+# fired die() on the exit code before ever reading that text. Worse: the
+# preflight run BEFORE ci-migrate existed printed "ok C1 verified" --
+# vacuous on that path, because "unknown user" also happened to satisfy
+# the old non-zero-exit branch without the user or its policy having been
+# checked at all. Fixed: classify by TEXT only, in priority order (a grant
+# phrase wins over the negative phrase, so a hypothetical message
+# containing both never mis-reads as safe), and distinguish "user does not
+# exist yet" (expected on a preflight run before creation -- not an "ok")
+# from every other unrecognized shape (fail closed).
+classify_sudo_check_output() { # classify_sudo_check_output <captured-output>
+  local out="$1"
+  if echo "$out" | grep -qiE "may run the following|\(ALL[^)]*\)|NOPASSWD"; then
+    echo HAS_SUDO
+  elif echo "$out" | grep -qiE "is not allowed to run sudo"; then
+    echo NO_SUDO
+  elif echo "$out" | grep -qiE "unknown user"; then
+    echo UNKNOWN_USER
+  else
+    echo INDETERMINATE
+  fi
+}
 set +e
 SUDO_CHECK_OUT="$(sshx "sudo -ln -U ci-migrate" 2>&1)"
 SUDO_CHECK_RC=$?
 set -e
-if [[ $SUDO_CHECK_RC -eq 0 ]]; then
-  die "sudo -ln -U ci-migrate reports ci-migrate HAS sudo rights -- C1 requires NONE. Output: $SUDO_CHECK_OUT"
-fi
-if echo "$SUDO_CHECK_OUT" | grep -qiE "not allowed to run sudo|unknown user"; then
-  ok "C1 verified: sudo -ln -U ci-migrate confirms no sudo rights (definitive policy check -- covers sudoers.d, the main sudoers file, and any group membership regardless of group name)"
-else
-  die "sudo -ln -U ci-migrate exited non-zero ($SUDO_CHECK_RC) with unrecognized output -- cannot confirm C1 either way. Output: $SUDO_CHECK_OUT. Failing closed."
-fi
+SUDO_CHECK_CLASS="$(classify_sudo_check_output "$SUDO_CHECK_OUT")"
+case "$SUDO_CHECK_CLASS" in
+  HAS_SUDO)
+    die "sudo -ln -U ci-migrate reports ci-migrate HAS sudo rights -- C1 requires NONE. Output: $SUDO_CHECK_OUT"
+    ;;
+  NO_SUDO)
+    # Sec FLAG 1 (PR #771 joint-review): `sudo -ln -U` reports SUDOERS-GRANTED
+    # rights only -- it does not see non-sudo root-equivalent group
+    # membership, and on a Docker host the `docker` group IS root-equivalent
+    # (`docker run -v /:/host` is a root shell). A ci-migrate added to
+    # `docker` would have zero sudoers rights and this check would still say
+    # "C1 verified" -- satisfying C1's literal text while missing its
+    # intent. Sibling assertion, same fail-closed classify-the-output shape:
+    # `id -nG` must contain none of sudo/wheel/adm/docker/staff/disk.
+    # `staff` added (Sec, follow-up fold): Debian grants `staff` write access
+    # to /usr/local -- where /usr/local/sbin/migrator-orchestrate.sh (the C5
+    # artifact) lives -- so membership defeats C5 with no sudo and no
+    # docker. `disk` added: raw block-device access.
+    GROUP_CHECK_OUT="$(sshx "id -nG ci-migrate" 2>&1)"
+    DISALLOWED_GROUP=""
+    for g in sudo wheel adm docker staff disk; do
+      if echo "$GROUP_CHECK_OUT" | tr ' ' '\n' | grep -qx "$g"; then
+        DISALLOWED_GROUP="$g"
+        break
+      fi
+    done
+    if [[ -n "$DISALLOWED_GROUP" ]]; then
+      die "ci-migrate is a member of group '$DISALLOWED_GROUP' -- C1's intent (a non-privileged box user holding a CI-reachable key) requires none of sudo/wheel/adm/docker/staff/disk, regardless of sudoers-granted rights ('docker' named explicitly: it is root-equivalent on a Docker host, not merely sudo-adjacent; 'staff' grants write access to /usr/local, where the C5 orchestration script lives; 'disk' grants raw block-device access). id -nG output: $GROUP_CHECK_OUT"
+    fi
+    ok "C1 verified: sudo -ln -U ci-migrate confirms no sudoers-granted rights (text-parsed, not the exit status -- covers sudoers.d, the main sudoers file, and any group membership granted through sudoers, regardless of group name), and id -nG ci-migrate confirms no sudo/wheel/adm/docker/staff/disk group membership"
+    ;;
+  UNKNOWN_USER)
+    if [[ "$CI_MIGRATE_STATE" == "ABSENT" ]]; then
+      info "ci-migrate user does not exist yet -- C1 will be verified after creation, not on this preflight run"
+    else
+      die "sudo -ln -U ci-migrate reports unknown user, but ci-migrate was just confirmed present above -- inconsistent state, failing closed. Output: $SUDO_CHECK_OUT"
+    fi
+    ;;
+  *)
+    die "sudo -ln -U ci-migrate (exit $SUDO_CHECK_RC) produced output this check does not recognize -- cannot confirm C1 either way. Output: $SUDO_CHECK_OUT. Failing closed."
+    ;;
+esac
 
 step "orchestration script (ADR-072 C2/C4/C5 -- absolute path, root-owned, 0755, NOT writable by ci-migrate)"
 ORCH_SCRIPT_PATH="/usr/local/sbin/migrator-orchestrate.sh"
