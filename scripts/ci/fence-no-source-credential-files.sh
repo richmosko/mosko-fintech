@@ -47,6 +47,26 @@
 # legitimate exemption yet) — an empty file, not an absent one, so the
 # fence can tell "no allowlist" from "allowlist not yet created."
 #
+# ⚠ WHAT THE PIN CONTROLS, STATED PRECISELY (Sec condition C-a′, PR #780
+# re-review). `fence-no-source-allowlist.sha256` pins the allowlist's
+# content hash; a change to the allowlist without regenerating the pin
+# fails CI closed (exit 2). **This is ADVERTISEMENT-PLUS-PR-REVIEW, NOT
+# MECHANICAL REQUIRED-REVIEWER ENFORCEMENT.** A committer can add an
+# exemption AND regenerate the pin in the same commit, and the fence goes
+# green with no reviewer in the loop at all -- the pin cannot tell a
+# reviewed change from an unreviewed one, only a REGENERATED one from a
+# STALE one. What it genuinely buys: a one-line edit to a `.txt` file
+# nobody re-reads becomes a second file whose only purpose is to change
+# when an exemption changes -- real diff-visibility, not access control.
+# This repo has NO `CODEOWNERS` file (checked: `.github/`, root, `docs/` —
+# none) — Sec is not requiring one be introduced on this PR. **What WOULD
+# upgrade this to mechanical enforcement: a `CODEOWNERS` rule naming Sec
+# (or the Sec role) as required reviewer on
+# `scripts/ci/fence-no-source-allowlist.*`, combined with GitHub branch
+# protection's "Require review from Code Owners."** Until that exists,
+# treat every allowlist entry as requiring Sec sign-off BY CONVENTION,
+# not by anything this repo will refuse to merge without it.
+#
 # ⚠ BLUNT, LINE-LEVEL, GREP-BASED — DELIBERATELY, matching this repo's
 # existing fence convention (fence-tinker-no-echo.sh's own header makes the
 # same choice for the same reason). A comment describing the OLD `source`
