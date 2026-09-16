@@ -1,0 +1,4 @@
+# Empty on purpose -- no source/./eval exemption exists yet. Add an
+# entry as 'path/to/file.sh:LINE:...' (exact grep -n output line)
+# with a comment above it naming why the sourced file cannot hold a
+# credential. See fence-no-source-credential-files.sh's own header.
