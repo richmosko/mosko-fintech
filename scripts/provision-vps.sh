@@ -86,7 +86,7 @@ SSH_KEY_PREFIX="${SSH_KEY_PREFIX:-mosko-fintech}"
 # way this repo can see — same "provisioning-time input, never generated
 # here" shape as SSH_PUBKEYS above, distinct KEY from every key in that
 # list (ci-migrate's authorized_keys holds ONLY this one line, C1).
-CI_MIGRATE_SSH_PUBKEY="${CI_MIGRATE_SSH_PUBKEY:-$HOME/.ssh/id_ed25519_ci_migrate.pub}"
+CI_MIGRATE_SSH_PUBKEY="${CI_MIGRATE_SSH_PUBKEY:-}"
 # Non-secret Coolify resource identifiers the orchestration script needs
 # (scripts/migrator-orchestrate.sh) — written into the box-resident
 # /etc/pfin/migrator-trigger.conf this script materializes below. These are
@@ -103,7 +103,7 @@ APP_UUID="${APP_UUID:-}"
 # 0 (withhold the app deploy on a successful migration apply); flip to 1 at
 # runbook §7 step 7, once the migrate leg has been proven live and the
 # deploy leg is deliberately being exercised for the first time.
-DEPLOY_ON_SUCCESS="${DEPLOY_ON_SUCCESS:-0}"
+DEPLOY_ON_SUCCESS="${DEPLOY_ON_SUCCESS:-}"
 # Escape hatch: allow an all-passphrase key set. Only for a box a human will
 # ever touch by hand. Nothing scripted will be able to reach it.
 ALLOW_NO_AUTOMATION_KEY="${ALLOW_NO_AUTOMATION_KEY:-0}"
@@ -156,6 +156,35 @@ else
   fi
   REPO_ROOT="$(cd "$(dirname "$GIT_COMMON_DIR")" && pwd)"
 fi
+
+# 2026-09-16 defect: the FAIL message at the ci-migrate-trigger step below
+# promises these values may come "in .env or the environment," but the
+# declarations above (MIGRATOR_SERVICE_UUID / MIGRATOR_TASK_UUID / APP_UUID
+# / CI_MIGRATE_SSH_PUBKEY / DEPLOY_ON_SUCCESS) only ever read the
+# environment -- .env was never consulted, so a `.env`-only operator (the
+# normal case; nothing exports these into the shell) always failed that
+# check even with all five present and non-empty in .env. Fixed here, after
+# REPO_ROOT resolves: environment wins if set; else read from
+# $REPO_ROOT/.env with the same `grep -m1 '^KEY=' | cut -d= -f2-` shape
+# HETZNER_API_TOKEN already uses below -- never `source .env`, which would
+# export every secret in it into this script's own shell.
+env_or_dotenv() { # env_or_dotenv <VAR_NAME> -- VAR_NAME already holds
+                   # "${VAR_NAME:-}"; falls back to .env if still empty.
+  local __name="$1" __cur
+  eval "__cur=\"\${$__name:-}\""
+  if [[ -z "$__cur" ]]; then
+    __cur="$(grep -m1 "^$__name=" "$REPO_ROOT/.env" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' \r\n' || true)"
+    eval "$__name=\"\$__cur\""
+  fi
+}
+env_or_dotenv MIGRATOR_SERVICE_UUID
+env_or_dotenv MIGRATOR_TASK_UUID
+env_or_dotenv APP_UUID
+env_or_dotenv CI_MIGRATE_SSH_PUBKEY
+[[ -n "$CI_MIGRATE_SSH_PUBKEY" ]] || CI_MIGRATE_SSH_PUBKEY="$HOME/.ssh/id_ed25519_ci_migrate.pub"
+env_or_dotenv DEPLOY_ON_SUCCESS
+[[ -n "$DEPLOY_ON_SUCCESS" ]] || DEPLOY_ON_SUCCESS=0
+
 APPLY=0; REBUILD=0; RESET_ADMIN_PASSWORD=0
 for arg in "$@"; do
   case "$arg" in
