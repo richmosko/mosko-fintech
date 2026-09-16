@@ -73,6 +73,9 @@ set -euo pipefail
 
 CONF_FILE="/etc/pfin/migrator-trigger.conf"
 TOKEN_FILE="/etc/pfin/migrator-coolify-token.env"
+# TOKEN_VAR_NAME must match MIGRATOR_TOKEN_VAR_NAME in scripts/provision-vps.sh
+# -- one name, asserted in both files, not two copies that can drift.
+TOKEN_VAR_NAME="COOLIFY_API_TOKEN"
 COOLIFY_BASE="http://localhost:8000/api/v1"
 POLL_INTERVAL_S=5
 POLL_MAX_ATTEMPTS=120   # 120 * 5s = 10 minutes ceiling on the migration apply
@@ -83,22 +86,28 @@ fail() { log "FAIL: $*"; exit 1; }
 [[ -r "$CONF_FILE" ]] || fail "missing or unreadable $CONF_FILE — provision-vps.sh must materialize this before the trigger is usable"
 [[ -r "$TOKEN_FILE" ]] || fail "missing or unreadable $TOKEN_FILE — provision-vps.sh must mint the scoped migrator-trigger Coolify token before the trigger is usable"
 
-# `set -a` so both files' KEY=value lines become exported vars for the rest
-# of this script without a second parsing pass; both are box-resident,
-# root-authored, never client input, so a plain source is safe here in a way
-# it would NOT be for anything derived from $SSH_ORIGINAL_COMMAND (see the
-# C2 note above — this is exactly the boundary that note draws).
-set -a
-# shellcheck source=/etc/pfin/migrator-trigger.conf
-source "$CONF_FILE"
-# shellcheck source=/etc/pfin/migrator-coolify-token.env
-source "$TOKEN_FILE"
-set +a
+# 2026-09-16 incident: this used to `source` both files under `set -a`.
+# $TOKEN_FILE on the box held the bare token VALUE with no `NAME=` prefix
+# (a stale write from before the writer's current format) -- `source`
+# executed that value as a shell command, printing it to F/CTO's terminal.
+# Never execute box-resident file content as commands, even root-authored,
+# never-client-input content: read each expected NAME by grep, not by
+# sourcing. A malformed file (missing prefix, garbage, anything) then
+# yields an EMPTY variable, not an executed line -- caught by the `:?`
+# guards below, never by bash's command dispatcher.
+read_kv() { # read_kv <file> <name>
+  grep -m1 "^$2=" "$1" 2>/dev/null | cut -d= -f2- || true
+}
+MIGRATOR_SERVICE_UUID="$(read_kv "$CONF_FILE" MIGRATOR_SERVICE_UUID)"
+MIGRATOR_TASK_UUID="$(read_kv "$CONF_FILE" MIGRATOR_TASK_UUID)"
+APP_UUID="$(read_kv "$CONF_FILE" APP_UUID)"
+DEPLOY_ON_SUCCESS="$(read_kv "$CONF_FILE" DEPLOY_ON_SUCCESS)"
+COOLIFY_API_TOKEN="$(read_kv "$TOKEN_FILE" "$TOKEN_VAR_NAME")"
 
 : "${MIGRATOR_SERVICE_UUID:?$CONF_FILE must set MIGRATOR_SERVICE_UUID}"
 : "${MIGRATOR_TASK_UUID:?$CONF_FILE must set MIGRATOR_TASK_UUID}"
 : "${APP_UUID:?$CONF_FILE must set APP_UUID}"
-: "${COOLIFY_API_TOKEN:?$TOKEN_FILE must set COOLIFY_API_TOKEN}"
+: "${COOLIFY_API_TOKEN:?$TOKEN_FILE must set $TOKEN_VAR_NAME}"
 
 api() { # api <METHOD> <PATH>
   curl -fsS -X "$1" -H "Authorization: Bearer $COOLIFY_API_TOKEN" "$COOLIFY_BASE$2"
