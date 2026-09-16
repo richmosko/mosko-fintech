@@ -1066,7 +1066,12 @@ REMOTE
     die "a secret value (or a token-shaped string) appeared in the admin-bootstrap step's own captured output. PRESERVED for diagnosis (mode 600; may contain a real secret -- handle with care) at: $BOOTSTRAP_LOG -- read it, find the exact matching line, fix the leak at its source, then 'shred -u $BOOTSTRAP_LOG' yourself once done. Do not re-run until fixed. Treat any token/password this run touched as exposed until you've confirmed otherwise -- revoke and re-mint (the orphan-clear logic above handles the re-mint)."
   fi
 
-  grep -vE '^(ADMIN_CREATED|ADMIN_CREATE_FAILED|RESET_OK|TOKEN_WRITTEN)$' "$BOOTSTRAP_LOG" | sed 's/^/      /'
+  # Same silent-exit class fixed in the migrator-trigger token step below
+  # (`|| true` there has the full explanation): a clean run whose only
+  # captured line matches this exclusion set leaves `grep -v` with zero
+  # lines to select, which exits 1 and, under `set -euo pipefail` on a bare
+  # (non-conditional) pipeline, kills the script here with no message.
+  grep -vE '^(ADMIN_CREATED|ADMIN_CREATE_FAILED|RESET_OK|TOKEN_WRITTEN)$' "$BOOTSTRAP_LOG" | sed 's/^/      /' || true
   grep -q ADMIN_CREATED "$BOOTSTRAP_LOG" && ok "admin user created (email/name from .env or prompt; password human-chosen, never printed)"
   grep -q RESET_OK "$BOOTSTRAP_LOG" && ok "admin password reset (value never printed by this script or tinker)"
   grep -q TOKEN_WRITTEN "$BOOTSTRAP_LOG" && ok "automation token minted on the box (value never left it, never printed, never even returned to this script)"
@@ -1371,7 +1376,19 @@ REMOTE
   if grep -qE '[0-9]+\|[A-Za-z0-9]{20,}' "$MIGRATOR_TOKEN_LOG"; then
     die "a token-shaped string appeared in the migrator-trigger mint step's own captured output. PRESERVED for diagnosis (mode 600) at: $MIGRATOR_TOKEN_LOG -- read it, fix the leak at its source, then 'shred -u $MIGRATOR_TOKEN_LOG' yourself once done. Treat the token as exposed until confirmed otherwise -- delete the DB row (tinker, as in the orphan-clear branch above) and re-mint."
   fi
-  grep -vE '^MIGRATOR_TOKEN_WRITTEN$' "$MIGRATOR_TOKEN_LOG" | sed 's/^/      /'
+  # `|| true` is load-bearing, not decoration. Under `set -euo pipefail`, a
+  # CLEAN successful mint (the remote script's only stdout line is the
+  # final "MIGRATOR_TOKEN_WRITTEN" marker -- no diagnostic output at all)
+  # means `grep -v` here excludes that one line, selects ZERO lines, and
+  # exits 1 -- `pipefail` propagates that 1 as the whole pipeline's exit
+  # status, and because this bare pipeline sits outside any `if`/`||`,
+  # `set -e` kills the script right here, silently: no die(), no message,
+  # no "ok ... MINTED" line -- exactly what F/CTO saw. The bug only fires
+  # on the SUCCESS path (a dirty/diagnostic log has other lines for grep -v
+  # to select, so it exits 0 there) -- reproduced locally against
+  # synthetic clean/dirty logs, see the PR body. `|| true` neutralizes
+  # grep's exit status without changing what gets printed either way.
+  grep -vE '^MIGRATOR_TOKEN_WRITTEN$' "$MIGRATOR_TOKEN_LOG" | sed 's/^/      /' || true
   grep -q MIGRATOR_TOKEN_WRITTEN "$MIGRATOR_TOKEN_LOG" || die "migrator-trigger token mint did not report success -- see output above; log preserved at $MIGRATOR_TOKEN_LOG"
   ok "migrator-trigger token minted (read+write+deploy, NOT root) -- value never left the box, never printed, never even returned to this script"
   rm -f "$MIGRATOR_TOKEN_LOG"
