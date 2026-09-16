@@ -1183,19 +1183,23 @@ case "$SUDO_CHECK_CLASS" in
     # `docker` would have zero sudoers rights and this check would still say
     # "C1 verified" -- satisfying C1's literal text while missing its
     # intent. Sibling assertion, same fail-closed classify-the-output shape:
-    # `id -nG` must contain none of sudo/wheel/adm/docker.
+    # `id -nG` must contain none of sudo/wheel/adm/docker/staff/disk.
+    # `staff` added (Sec, follow-up fold): Debian grants `staff` write access
+    # to /usr/local -- where /usr/local/sbin/migrator-orchestrate.sh (the C5
+    # artifact) lives -- so membership defeats C5 with no sudo and no
+    # docker. `disk` added: raw block-device access.
     GROUP_CHECK_OUT="$(sshx "id -nG ci-migrate" 2>&1)"
     DISALLOWED_GROUP=""
-    for g in sudo wheel adm docker; do
+    for g in sudo wheel adm docker staff disk; do
       if echo "$GROUP_CHECK_OUT" | tr ' ' '\n' | grep -qx "$g"; then
         DISALLOWED_GROUP="$g"
         break
       fi
     done
     if [[ -n "$DISALLOWED_GROUP" ]]; then
-      die "ci-migrate is a member of group '$DISALLOWED_GROUP' -- C1's intent (a non-privileged box user holding a CI-reachable key) requires none of sudo/wheel/adm/docker, regardless of sudoers-granted rights ('docker' named explicitly: it is root-equivalent on a Docker host, not merely sudo-adjacent). id -nG output: $GROUP_CHECK_OUT"
+      die "ci-migrate is a member of group '$DISALLOWED_GROUP' -- C1's intent (a non-privileged box user holding a CI-reachable key) requires none of sudo/wheel/adm/docker/staff/disk, regardless of sudoers-granted rights ('docker' named explicitly: it is root-equivalent on a Docker host, not merely sudo-adjacent; 'staff' grants write access to /usr/local, where the C5 orchestration script lives; 'disk' grants raw block-device access). id -nG output: $GROUP_CHECK_OUT"
     fi
-    ok "C1 verified: sudo -ln -U ci-migrate confirms no sudoers-granted rights (text-parsed, not the exit status -- covers sudoers.d, the main sudoers file, and any group membership granted through sudoers, regardless of group name), and id -nG ci-migrate confirms no sudo/wheel/adm/docker group membership"
+    ok "C1 verified: sudo -ln -U ci-migrate confirms no sudoers-granted rights (text-parsed, not the exit status -- covers sudoers.d, the main sudoers file, and any group membership granted through sudoers, regardless of group name), and id -nG ci-migrate confirms no sudo/wheel/adm/docker/staff/disk group membership"
     ;;
   UNKNOWN_USER)
     if [[ "$CI_MIGRATE_STATE" == "ABSENT" ]]; then
