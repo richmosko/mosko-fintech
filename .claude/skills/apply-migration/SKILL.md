@@ -120,6 +120,17 @@ Durable rewrites — prefer either:
 
 ⚠ **Extends to nothing else. Editing an applied migration's SQL is out under every framing — including "it was wrong and never worked."**
 
+> ### ⚠ DATED ONE-TIME EXCEPTION — OPEN 2026-09-16. READ THE EXPIRY BEFORE CITING IT.
+>
+> **This is an EXCEPTION, not a precedent, and it is recorded here because this is where a reader of the RULE meets it** — a reader who only sees the PRs would read the edits as licence.
+>
+> - **Window opened:** F/CTO's ruling of **2026-09-16** that the current `001`–`118` apply is **DISPOSABLE** — never deployed, no data, the box is wiped and re-bootstrapped ([ADR-072](../../../DECISIONS.md#adr-072) Amendment 5). **Rule (A)/(B) above rests on the premise "already applied"; that premise is false for this window and true again the moment it closes.**
+> - **Scope:** migrations `001`–`118` only, and only the edits named in ADR-072 Amendment 5 — the guard-visibility branch (**PR #781**), the `comment on role` / `create role` statement dispositions (**PR #775** and Amendment 5 Decision G4), the `set role pfin_owner;` / `reset role;` sweep (Amendment 5 Decision G3), and `118`'s `rolcanlogin` header reword ([BACKLOG](../../../BACKLOG.md) §7.36 item 39 — which is an ordinary **(B)**-class in-place edit and does **not** need this exception).
+> - **⚠ EXPIRES** when the re-bootstrap lands and a deployment survives. **After that, Step 1.6 governs again unamended and this block is history, not authority.**
+> - **It does NOT cover:** any migration numbered `119`+, any edit outside ADR-072 Amendment 5's named list, or any future "it was wrong and never worked" argument. **Those remain out under every framing.**
+> - **Requires F/CTO's explicit ratify** — being requested at PRs #775 / #781; not assumed by either.
+> - ⚠ **Unlike a (B)-class correction, edits under this exception may add EXECUTABLE lines** (PR #781 adds a `raise warning` branch). **That is exactly why the exception is needed rather than (B), and why it must not be reviewed as comment-only.**
+
 **Sec joint-review whenever the file is Sec-load-bearing** (`055` is).
 
 While a migration is still **unmerged**, edit in place freely — the merged-history guard applies to neither case.

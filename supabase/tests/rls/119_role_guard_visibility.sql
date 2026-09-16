@@ -22,6 +22,18 @@
 --   superuser it is silent). That is evidence in the PR, not a standing check —
 --   stated plainly so nobody reads these legs as covering more than they do.
 --
+--   ⚠ SPECIFICATION FOR ANY FUTURE SENTINEL WATCHER — the naive form is VACUOUS,
+--   and this is Sec's condition on PR #781, recorded where the next author will
+--   look. The sentinel must be counted over COMMENT-STRIPPED source, expecting
+--   EXACTLY ONE occurrence per file:
+--       grep -v '^[[:space:]]*--' <file> | grep -c '<sentinel>'   -> must equal 1
+--   A raw `grep -c` counted TWO per file when this fix was written — the `raise`
+--   and a comment describing it — so a watcher asserting `>= 1` would have stayed
+--   GREEN with the `raise` deleted. The migrations were then reworded to DESCRIBE
+--   the token rather than quote it, so raw and stripped counts now agree at 1;
+--   ⚠ use the stripped form ANYWAY, because that agreement is a property of
+--   today's prose and the next person to explain the branch will break it.
+--
 --   Decision 3 family unchanged (+0); §10 catalogued ledger unchanged; no RLS
 --   surface, no policy, no function.
 --   FAIL-CLOSED: every leg reads a catalog function that returns a boolean for a

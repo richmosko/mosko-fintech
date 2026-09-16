@@ -571,8 +571,11 @@ begin
 
     -- ⚠ The LOGIN-with-no-password fence below CANNOT EVALUATE when the password
     -- state is unreadable. Say so, loudly and distinctly, rather than passing in
-    -- silence: the sentinel GUARD-UNVERIFIED is the token a test and a log scan
-    -- match on, and the two branches are mutually exclusive by construction
+    -- silence. The warning opens with a distinct sentinel token that a log scan
+    -- and a CI fence match on. ⚠ THE TOKEN IS DESCRIBED HERE, NOT QUOTED: a
+    -- watcher that counts occurrences would otherwise count this comment too and
+    -- stay green with the `raise` deleted. Read the literal off the `raise`
+    -- below. The two branches are mutually exclusive by construction
     -- (v_haspass cannot be 'NO' when the read was refused).
     if v_canlogin and v_pwstate_unreadable then
       raise warning 'GUARD-UNVERIFIED: cannot verify password state for pfin_etl as %; pg_authid is not readable by this role, so the LOGIN-with-no-password check DID NOT RUN. This is NOT a pass — pfin_etl is LOGIN and may or may not carry a password. Verify supervised per docs/deployment-runbook.md §6.3, as the image''s true superuser. Do NOT remediate by granting this role pg_authid or pg_read_all_data (Sec VETO: that exposes every SCRAM verifier in the cluster to a standing credential).', current_user;
