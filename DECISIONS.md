@@ -336,6 +336,8 @@ Sec ruled `pfin_owner` *"not needed yet"* behind a dated gate (required before t
 
 **Database ownership: `pfin_owner`, not `migrator`** (Sec condition 6, answered). `061`'s `alter database … set` is the only DB-owner driver, and under this shape it runs inside the same paired `set role pfin_owner;` / `reset role;` as every other statement — **one rule, no exception**. Measured: `alter database … set timezone` succeeds as `pfin_owner` when `pfin_owner` owns the database. A side benefit worth naming: `migrator`'s **standing** attribute set shrinks — it reaches database ownership only by `SET ROLE`, never ambiently (NOINHERIT). ⚠ **The runbook §6.3 verify block currently expects `owner = migrator` and must change** — DevOps, named here, authored there.
 
+⚠ **THE ROLE HALF OF THE PRE-STEP IS ALSO A COMMITTED FILE: [`supabase/roles.sql`](supabase/roles.sql)** — steps 1 through 7 below are ITS CONTENT and are shown here for reading, not for retyping. **The Supabase CLI sources that file automatically on every local/CI bring-up**, and the runbook runs the same file by path, so CI and a stranger execute identical bytes. ⚠ **This was a DEFECT until 2026-09-16:** the paired convention landed in 114 files and every CI lane then died at the first opener with `role "pfin_owner" does not exist` — the convention was taught to the files and never to the harness that applies them. The fix is deliberately **not** a CI-only role stub, which would let CI and the runbook drift apart silently. ⚠ **What stays OUT of that file, and it is ordering rather than preference: the schema-scoped backstop (`revoke create on schema pfin from migrator`) cannot run there** — schema `pfin` does not exist until `001` creates it — so it remains an operator step, with battery leg `(o7)` asserting the resulting property rather than the statement.
+
 **The pre-step, as a stranger runs it.** Interactive `psql` as `supabase_admin` (the image's true superuser; `postgres` measures `rolsuper = f`), against the app database, once:
 
 ```
@@ -487,116 +489,11 @@ Steps 1–7 precede 8 so the credential lands last, on a role whose reach is alr
 
 **The ordering gate, and why the window is not an exposure.** Sec's explicit non-objection: a view that does not exist **discloses nothing**, and a `service_role` path reaching for it fails closed — an outage, never a leak. ⚠ **The risk is human:** the operator best placed to fix "decrypt view missing" fastest is exactly the one who will hand-create it with the default owner or without `security_invoker`, re-introducing the defect. So the §7 bring-up must not proceed until the post-step's assertion has passed.
 
-**THE POST-STEP, canonical text. DevOps carries it into the runbook; this is its source.**
+⚠ **THE POST-STEP IS A COMMITTED FILE, NOT A BLOCK QUOTED HERE: [`supabase/post-step-vault-view.sql`](supabase/post-step-vault-view.sql).** An earlier revision of this amendment embedded the SQL inline and told DevOps to copy it into the runbook. **That is the two-texts-drift shape this amendment refuses everywhere else**, and it was corrected the moment CI proved the same defect for the ROLE half (see below): the runbook now references the file by path, CI applies the same file, and a stranger runs exactly what CI runs. **Do not restate its SQL in any other artifact.**
 
-```sql
--- ============================================================================
--- ADR-072 Amendment 5 — (iv‴) SUPERVISED POST-STEP. Run ONCE, as the image's true
--- superuser (`supabase_admin`), AFTER the main `supabase db push` completes and
--- BEFORE the §7 container bring-up. It is safe to re-run.
--- WHY A POST-STEP AND NOT A PRE-STEP: the view reads pfin.linked_source, which the
--- MAIN PASS creates. A pre-step cannot create this view; it does not yet have a
--- table to read (measured).
--- ============================================================================
+What it does, in order: **(0)** an ordering gate refusing to run unless migration `118` is in the ledger and `pfin.linked_source` exists; **(1)** the view UNIT — create + comment + three revokes + grant, whole or nothing; **(2)** `alter view … owner to pfin_owner`; **(3)** an assertion block that **fails the step** unless there is exactly one decrypt view, named `decrypted_source_credential`, owned by `pfin_owner`, with `security_invoker = true`. Idempotent — verified by re-running it.
 
--- ----------------------------------------------------------------------------
--- (0) ORDERING GATE — refuse to run before the main pass finished, so nobody
---     hand-creates the view with the wrong owner mid-outage.
--- ⚠ Asserted as "migration 118 is present", NOT as "the ledger has 118 rows".
---     Sec's condition named a row COUNT; a count rots the moment 120+ land and
---     would then refuse a correct box. "118 is present" answers the same
---     question and stays true forever. Flagged to Sec as a refinement, not
---     taken silently.
--- ----------------------------------------------------------------------------
-do $gate$
-begin
-  if not exists (select 1 from supabase_migrations.schema_migrations where version = '118') then
-    raise exception using errcode = '55000',
-      message = 'ADR-072 (iv‴) post-step REFUSED: migration 118 is not in the ledger, so the main pass has not completed.',
-      detail  = 'Creating the decrypt view before the main pass risks landing it with the wrong owner or without security_invoker — the exact defect this shape exists to prevent, arriving during an outage when it is most tempting.',
-      hint    = 'Run the main `supabase db push` to completion first, then re-run this post-step.';
-  end if;
-  if to_regclass('pfin.linked_source') is null then
-    raise exception using errcode = '42P01',
-      message = 'ADR-072 (iv‴) post-step REFUSED: pfin.linked_source does not exist.',
-      hint    = 'The main pass must create the base table before this view can read it.';
-  end if;
-end
-$gate$;
-
--- ----------------------------------------------------------------------------
--- (1) THE VIEW UNIT — create + comment + revokes + grant, exactly as migration
---     015 carries it. Create-through-grant or nothing: a view that lands without
---     its REVOKEs exists under a default ACL, the RT-02 hazard 015's header names.
--- ----------------------------------------------------------------------------
-create or replace view pfin.decrypted_source_credential
-  with (security_invoker = true) as
-  select
-    ls.source_id,
-    ls.users_id,
-    ls.provider,
-    ls.external_connection_id,
-    ds.decrypted_secret as decrypted_credential
-  from pfin.linked_source ls
-  join vault.decrypted_secrets ds on ds.id = ls.credential_secret_id;
-
-comment on view pfin.decrypted_source_credential is
-  'SD-03 decrypt view (ADR-011 Decision 8 / Lock 4 mod #1). security_invoker = true: runs as the CALLER, so its vault-less owner pfin_owner is not the identity that resolves the vault join (ADR-072 Amendment 5 (iv‴)). Created by the supervised post-step because its base table is created by the main pass. service_role is the only grantee and already holds SELECT on vault.decrypted_secrets in the image ACL.';
-
-revoke all on pfin.decrypted_source_credential from public;
-revoke all on pfin.decrypted_source_credential from anon;
-revoke all on pfin.decrypted_source_credential from authenticated;
-grant select on pfin.decrypted_source_credential to service_role;
-
--- ----------------------------------------------------------------------------
--- (2) OWNERSHIP TRANSFER. ALTER VIEW ... OWNER TO does not re-validate the body
---     (measured), so this succeeds even though pfin_owner holds no vault reach.
---     security_invoker = true above is what keeps the view WORKING afterwards.
--- ----------------------------------------------------------------------------
-alter view pfin.decrypted_source_credential owner to pfin_owner;
-
--- ----------------------------------------------------------------------------
--- (3) ⛔ THE ASSERTION THAT FAILS THE STEP — Sec's condition. This is the ONLY
---     watcher that observes the PRODUCTION database at the moment it can be
---     wrong. The runbook verify is a human double-check; the pgTAP leg is a
---     regression watcher on the DEFINITION in CI. Neither is a production
---     observer, and they must not be counted as one.
--- ----------------------------------------------------------------------------
-do $verify$
-declare
-  v_n     integer;
-  v_owner text;
-  v_inv   text;
-begin
-  select count(*) into v_n
-    from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace
-   where n.nspname = 'pfin' and c.relkind = 'v' and c.relname like 'decrypted%';
-  if v_n <> 1 then
-    raise exception using errcode = '55000',
-      message = format('ADR-072 (iv‴) post-step FAILED: expected exactly ONE pfin decrypt view, found %s.', v_n),
-      detail  = 'The final database carries exactly one: pfin.decrypted_source_credential. 015 drops 007''s. A second one means a stale 007 view survived a mixed history — which is the case this leg exists to catch.';
-  end if;
-
-  select pg_catalog.pg_get_userbyid(c.relowner),
-         (select option_value from pg_catalog.pg_options_to_table(c.reloptions) where option_name = 'security_invoker')
-    into v_owner, v_inv
-    from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace
-   where n.nspname = 'pfin' and c.relname = 'decrypted_source_credential';
-
-  if v_owner is distinct from 'pfin_owner' then
-    raise exception using errcode = '55000',
-      message = format('ADR-072 (iv‴) post-step FAILED: pfin.decrypted_source_credential is owned by %s, expected pfin_owner.', coalesce(v_owner,'(absent)'));
-  end if;
-  if v_inv is distinct from 'true' then
-    raise exception using errcode = '55000',
-      message = format('ADR-072 (iv‴) post-step FAILED: pfin.decrypted_source_credential has security_invoker = %s, expected true.', coalesce(v_inv,'(unset)')),
-      detail  = 'Without it the view executes as its vault-less owner pfin_owner and is broken — measured.';
-  end if;
-
-  raise notice 'ADR-072 (iv‴) post-step OK: exactly one decrypt view, named decrypted_source_credential, owned by pfin_owner, security_invoker = true.';
-end
-$verify$;
-```
+⚠ **AND CI APPLIES IT TOO, for a reason that was measured rather than assumed.** Every swept migration executes under `set role pfin_owner`, so the vault guards in `007`/`015` evaluate `current_user` as **`pfin_owner`** — which holds no vault privilege by design — and take the **skip branch in EVERY lane**, including CI, *even though the CI applier itself does hold the vault read*. **The privileged branch is unreachable from inside a swept file, by construction.** So the decrypt view does not exist after a plain apply, and the standing battery's `(o3)`/`(o4)` legs would be permanently RED **on a correct database** — the "leg that fails on correct input is disabled on first contact" failure, again. Applying the same committed artifact in CI is what makes the definition-lane watcher observe the end state a production box reaches.
 
 ---
 

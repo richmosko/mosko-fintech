@@ -135,6 +135,23 @@ jobs:
           || { echo "FATAL: auth.uid() not resolvable in db-only stack — RLS predicates would break. Failing closed."; exit 1; }
           echo "OK: auth.uid() present in db-only stack."
 
+      - name: Apply the (iv‴) supervised post-step (ADR-072 Am. 5 Decision I)
+        # ⚠ NOT a migration, and deliberately not under supabase/migrations/: its base
+        # table is created BY the main pass, so it cannot run before one, and it needs a
+        # privileged identity. The CLI therefore never applies it.
+        # ⚠ WHY CI MUST RUN IT, measured: every swept migration executes under
+        # `set role pfin_owner`, so the vault guards in 007/015 evaluate `current_user`
+        # as pfin_owner — which holds no vault privilege BY DESIGN — and take the skip
+        # branch in EVERY lane, including this one, even though the workflow's own
+        # postgres role does hold the vault read. The decrypt view therefore does not
+        # exist after `supabase start` alone, and the standing battery legs (o3)/(o4)
+        # would be permanently RED for a correct database. Applying the same committed
+        # artifact a production box runs is what makes the definition-lane watcher
+        # observe the same end state. One file, both lanes — the roles.sql principle.
+        run: |
+          PGPASSWORD=postgres psql -X -h 127.0.0.1 -p 54322 -U postgres -d postgres \
+            -v ON_ERROR_STOP=1 -f supabase/post-step-vault-view.sql
+
       - name: Run pgTAP battery (directory-mode; verbs excluded by non-test extension)  ⟦WIRE-VALIDATE #1⟧
         # `supabase test db` (no args) defaults to the supabase/tests directory and binds the WHOLE
         # dir into the pg_prove container (a directory arg is mounted as-is), so the
