@@ -28,10 +28,18 @@
 #   2. Poll that task's own execution status to a terminal state — NEVER
 #      Coolify's deployment status (that swallows a post-deploy-command
 #      failure; this is the exact D-shaped trap ADR-072 Decision 3 records).
-#   3. On SUCCESS: trigger the app deploy. On FAILURE or a poll timeout:
-#      exit non-zero and do NOT deploy — the existing Coolify->Discord
-#      Scheduled-Task-failure routing fires on its own, no action needed
-#      here.
+#   3. On SUCCESS: assert DELIVERY, not just status (ADR-072 Amendment 6) —
+#      compare supabase_migrations.schema_migrations's top row against the
+#      newest migration file present in the running migrator container,
+#      both read via a direct `docker compose exec` (no Coolify API, no
+#      credential — `db`'s local socket auth). A mismatch exits non-zero
+#      (distinct code) and does NOT deploy, even though the Scheduled Task
+#      itself reported success. Only once delivery is confirmed: trigger
+#      the app deploy. On FAILURE, a poll timeout, or a failed delivery
+#      assertion: exit non-zero and do NOT deploy — the existing
+#      Coolify->Discord Scheduled-Task-failure routing fires on its own for
+#      the first two; the delivery assertion's own message is the record
+#      for the third.
 #
 #   The calling GitHub Actions workflow gates on THIS script's own SSH exit
 #   code — GHA's native step-sequencing is the fail-closed gate (ADR-072
@@ -70,6 +78,31 @@
 #   (docs/deployment-runbook.md §3's explicit-deploy pattern) — this script
 #   is that same curl, invoked by CI instead of by a human.
 set -euo pipefail
+
+# ⚠ ADR-072 Amendment 6 -- SINGLE-INVOCATION LOCK (Sec finding on PR #796,
+# 2026-09-17): this script previously held no lock at all. GitHub Actions'
+# own concurrency group (migrator-trigger.yml's `concurrency:` block)
+# serializes push vs `workflow_dispatch` triggers -- but the manual `ssh
+# ci-migrate@box` emergency-fire path (§6.7's own recipe; an operator
+# during an incident) is OUTSIDE Actions entirely and that group does not
+# reach it. Two concurrent `supabase db push` runs against the SAME
+# production database is a schema-integrity risk this script must refuse
+# by construction, not rely on every caller to avoid.
+# FAIL-FAST, never wait: a second invocation that BLOCKED on the lock
+# would, once it finally acquired it, assert its own MIGRATOR_EXPECT_SHA
+# against a container state that may have changed while it waited (the
+# first run may have triggered a rebuild/redeploy) -- waiting produces a
+# stale check, not a safe queue. Refuse immediately instead, with a
+# distinct exit code the caller can tell apart from every other failure
+# mode this script has. This also bounds BACKLOG §7.36 item 49's blocked-
+# exec window: a second fire while one is stuck is refused immediately,
+# not queued behind it.
+LOCK_FILE="/var/lock/pfin-migrator-orchestrate.lock"
+exec 200>"$LOCK_FILE" || { printf '[migrator-orchestrate] FAIL (exit 7): could not open %s for locking\n' "$LOCK_FILE" >&2; exit 7; }
+if ! flock -n 200; then
+  printf '[migrator-orchestrate] FAIL (exit 7): another migrator-orchestrate.sh invocation already holds the lock (%s) -- refusing to run concurrently against production. Fail-fast by design (Sec, ADR-072 Amendment 6): a queued second run would assert against a container state that can change while it waits, not a safe serialization. Wait for the other invocation to finish (or fail) and re-fire.\n' "$LOCK_FILE" >&2
+  exit 7
+fi
 
 CONF_FILE="/etc/pfin/migrator-trigger.conf"
 TOKEN_FILE="/etc/pfin/migrator-coolify-token.env"
@@ -229,6 +262,47 @@ done
 
 case "$STATUS" in
   success)
+    # ⚠ ADR-072 Amendment 6 -- POST-RUN DELIVERY ASSERTION (Sec finding,
+    # 2026-09-17: this control was never built -- the sha-check above and
+    # this Scheduled Task's own "success" status both describe the RUN,
+    # neither confirms the DATABASE actually advanced). "Success" here
+    # means the Scheduled Task's `docker exec ... supabase db push`
+    # process exited 0 -- it does NOT by itself prove a migration
+    # actually applied. The devops-dbpush-prompt.md measurement
+    # (2026-09-17) found the CLI's own non-TTY confirmation-prompt
+    # behavior defaults to applying, not skipping, so this is not
+    # expected to trip today -- but this assertion is what makes that a
+    # MEASURED property instead of an assumption this script depends on
+    # forever. Reads the ledger's top row and the newest migration file
+    # PRESENT IN THE RUNNING CONTAINER RIGHT NOW -- both through the same
+    # direct `docker compose exec` trust path this script already uses
+    # for the sha-check above (ci-migrate already has this access; no
+    # Coolify API call, no credential -- `db`'s local Unix-socket auth
+    # trusts the connecting role by name with no password, the same
+    # property the runbook's own operator-facing verify commands rely
+    # on). A mismatch here means the run reported "success" but the
+    # ledger did not actually advance to what this box's own migrations
+    # directory says it should have -- exactly the outcome-vs-status gap
+    # Amendment 6 exists to close, one level further down than the
+    # sha-check (which only proves the IMAGE was fresh, not that the
+    # APPLY inside it actually landed).
+    log "verifying delivery -- comparing the ledger's top row to the newest migration file in the running container"
+    LEDGER_TOP="$(docker compose --project-name "$MIGRATOR_SERVICE_UUID" exec -T db psql -U supabase_admin -d postgres -tAc "select max(version) from supabase_migrations.schema_migrations" 2>/dev/null | tr -d '[:space:]' || true)"
+    NEWEST_FILE_VERSION="$(docker compose --project-name "$MIGRATOR_SERVICE_UUID" exec -T migrator sh -c "ls /workspace/supabase/migrations | sed -nE 's/^([0-9]+)_.*/\1/p' | sort -V | tail -1" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ -z "$LEDGER_TOP" ]]; then
+      log "FAIL (exit 6): could not read supabase_migrations.schema_migrations's top row from the db container. Refusing to trust a 'success' status with no readable ledger to confirm it against. Deploy NOT triggered."
+      exit 6
+    fi
+    if [[ -z "$NEWEST_FILE_VERSION" ]]; then
+      log "FAIL (exit 6): could not read the migrator container's own /workspace/supabase/migrations directory to find the newest migration file. Refusing to trust a 'success' status with nothing to compare the ledger against. Deploy NOT triggered."
+      exit 6
+    fi
+    if [[ "$LEDGER_TOP" != "$NEWEST_FILE_VERSION" ]]; then
+      log "FAIL (exit 6): the Scheduled Task reported success, but the ledger's top row ($LEDGER_TOP) does not match the newest migration file present in the running container ($NEWEST_FILE_VERSION). The apply did not actually deliver what this box's own image says it should have -- this is the outcome-vs-status gap ADR-072 Amendment 6 exists to close. Deploy NOT triggered. Investigate before re-firing -- do not assume this is transient."
+      exit 6
+    fi
+    log "delivery verified: ledger top row ($LEDGER_TOP) matches the newest migration file present in the container"
+
     # DEPLOY_ON_SUCCESS gate (Sec-ruled, Phase D deploy-gate consult): the
     # first live exercise of this externally-reachable path (ci-migrate's
     # forced command, reachable from GitHub Actions, holding a
