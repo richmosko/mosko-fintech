@@ -204,6 +204,25 @@
 --     composes every fence per-row and aborts the whole batch on any hard error.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
+--     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
+--     that looks correct and silently no-ops. The tokens are deliberately NOT
+--     spelled out in this comment, so a fence counting them over source stays
+--     exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 -- ----------------------------------------------------------------------------
@@ -483,3 +502,11 @@ grant execute on function pfin.fn_ingest_transactions(jsonb) to authenticated;
 
 comment on function pfin.fn_ingest_transactions(jsonb) is
   'SECURITY INVOKER bulk-ingest RPC (ADR-027 / R-15 + OWD-D). Atomically inserts a jsonb array of transaction rows into pfin.account_trans under the caller''s RLS (account_trans_insert wr_access-JOIN, 006), RETURNING (inserted, skipped). ALL-OR-NOTHING: set-based insert…select from jsonb_to_recordset with ON CONFLICT (source_provider, provider_txn_id) WHERE provider_txn_id IS NOT NULL DO NOTHING (the provider-dedup index); a hard error (NaN / the security_id global-OR-owned fence / the quantity_requires_security CHECK / matched-account) aborts the WHOLE batch — fix the mapper and re-run (R-7). inserted = rows actually landed; skipped = rows deduped by ON CONFLICT. Cash rows → quantity=0/security_id NULL; security rows → quantity=±shares/security_id set. NOT service_role (R-15 — this is the txn-row ingest path only; provider credential writes stay service_role on linked_source); NOT a DEFINER allowlist entry (INVOKER) → allowlist stays 3. set search_path = '''' injection fence; all refs schema-qualified. EXECUTE revoked from PUBLIC, granted to authenticated (anon denied). Signature is an API contract (PostgREST /rpc; pfin is [api]-exposed per ADR-023). NOTE: rows with provider_txn_id IS NULL are not deduped by ON CONFLICT — import_hash (KEPT) is their hard-unique guard (aborts on dup, per all-or-nothing).';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

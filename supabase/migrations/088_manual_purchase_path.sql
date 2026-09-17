@@ -475,6 +475,25 @@
 --   Signature is an API contract (PostgREST /rpc; pfin is [api]-exposed per ADR-023).
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
+--     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
+--     that looks correct and silently no-ops. The tokens are deliberately NOT
+--     spelled out in this comment, so a fence counting them over source stays
+--     exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 create or replace function pfin.fn_create_manual_purchase(
@@ -761,3 +780,11 @@ comment on function pfin.fn_create_manual_purchase(bigint, date, numeric, numeri
   'Lock 14 numeric posture: quoted, locale-formatted and currency-formatted values are rejected at PARAMETER COERCION before this body runs (these are typed numeric parameters — unlike 087, where the same inputs arrive inside jsonb and a hand-written type check is their sole observer); a NaN or Infinity passed directly as numeric is rejected by named disjuncts, kept separate because ''NaN''::numeric > 0 is TRUE; zero and negatives by an explicit guard; finite-but-huge magnitudes by numeric column coercion (017) rather than by this body. The defect class that matters is the RATIO, where no single variable is extreme. '
   'ADR-011 Decision 1 does NOT apply here and this function neither satisfies nor is subject to its clause (d): D1 governs writes ingressing under no JWT and executing under service_role, and this is a JWT-bearing INVOKER call with no elevation. The same-transaction audit-log remains DEFERRED (A2; forward-hook in body; SELF-201 Task #7). '
   'NOT a SECURITY DEFINER allowlist entry — needs no elevation; this file states no allowlist count, read ADR-011 Decision 9 live. Needs NO service_role. set search_path = '''' injection fence; every reference schema-qualified. EXECUTE revoked from PUBLIC, granted to authenticated only (anon denied). Adds NO column of any kind, FK-shaped or otherwise, and no INTEGER[] — ADR-011 Decision 3 family unchanged, no label taken; read Decision 3 live. Signature is an API contract (PostgREST /rpc; pfin is [api]-exposed per ADR-023).';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

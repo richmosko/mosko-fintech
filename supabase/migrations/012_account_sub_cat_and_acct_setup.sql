@@ -127,6 +127,25 @@
 --     RLS composition + the immutable-table permanence of transaction_type.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
+--     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
+--     that looks correct and silently no-ops. The tokens are deliberately NOT
+--     spelled out in this comment, so a fence counting them over source stays
+--     exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 -- ----------------------------------------------------------------------------
@@ -194,3 +213,11 @@ alter table pfin.account_trans
 
 comment on column pfin.account_trans.transaction_type is
   'Event-class discriminator (Option B, F/CTO-ratified one-way-door; ADR-025; SELF-201 AC#2). text NOT NULL DEFAULT ''standard'' CHECK IN (''standard'',''acct_setup''). ''acct_setup'' flags the single bootstrap opening-balance row a manual account creates (transaction_date = user bootstrap-date, amount = initial value). PERMANENT per-row: account_trans is immutable (004), so the value cannot be edited post-INSERT and the vocabulary is load-bearing for the deferred 004 event-detail expansion. Expansion = one-line CHECK alter (ADR-022 code-coupled→CHECK rule); promote-to-registry path via ADR-024 if a value ever needs per-value metadata (none today). Orthogonal to is_reverse (reversal is a modifier, not an event class).';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

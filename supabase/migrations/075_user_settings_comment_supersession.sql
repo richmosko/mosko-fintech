@@ -73,5 +73,32 @@
 --     alters no behaviour of any kind.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
+--     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
+--     that looks correct and silently no-ops. The tokens are deliberately NOT
+--     spelled out in this comment, so a fence counting them over source stays
+--     exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 comment on table pfin.user_settings is
 'Per-user own-row settings substrate (SELF-286 / Auth-3, MFA substrate only; F/CTO-ratified 2026-07-21 Option B split). ONE row per user (PK = users_id, the tenant anchor itself). Carries the per-user mfa_policy MFA choice; the SELF-232 settings-home claim that stood here is SUPERSEDED 2026-08-16 (ADR-056): the %Target half of SELF-232 is a per-Sub-Cat VECTOR and lands at 074 as pfin.planning_target (one row per (users_id, sub_cat_id)), NOT as additive columns here — this table''s grain and every policy and grant created at 024 are unchanged by that supersession. This table also fulfills SELF-285 AC#5''s deferred profile row. LIVE write path (contrast 009 user_taxonomy write-dormant): authenticated holds SELECT+INSERT+UPDATE; the app lazily upserts the row under the user''s own JWT (insert ... on conflict (users_id) do nothing) — NO on-signup DEFINER trigger (ratified D3; DEFINER allowlist stays 3). No DELETE policy/grant (settings rows are not user-deletable; lifecycle tied to auth.users ON DELETE CASCADE). anon zero-grant (pfin schema-usage denial); service_role ungranted (no server-role writer — the app writes as the user). ISOLATION INVARIANT (AC#6): tenant isolation = universal RLS users_id = auth.uid(), independent of MFA; mfa_policy bounds only the user''s OWN step-up/impersonation risk and can never weaken another tenant''s fence. The real DB-enforced aal2 step-up backstop is Auth-3b (SELF-291), NOT here.';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

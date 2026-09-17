@@ -554,6 +554,25 @@
 --   local test data. Verify non-destructively (apply-in-txn + rollback).
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
+--     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
+--     that looks correct and silently no-ops. The tokens are deliberately NOT
+--     spelled out in this comment, so a fence counting them over source stays
+--     exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 -- ----------------------------------------------------------------------------
@@ -775,3 +794,11 @@ comment on function pfin.fn_nav_series(text, date, date) is
   'table, column, or FK-shaped reference). EXECUTE revoked from PUBLIC, granted to authenticated. '
   'Sec joint-review-mandatory (financial calculation + multi-tenant read path + SD-24 sequence exposure — this is the first surface '
   'returning a tenant''s entire per-day net-worth sequence in one call); RLS verification → SELF-219 two-tenant battery.';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

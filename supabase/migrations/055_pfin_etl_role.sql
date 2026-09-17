@@ -551,11 +551,56 @@ $$;
 
 -- Privileged writes: `SET LOCAL ROLE service_role` (ADR-023 write role-of-record).
 -- Table privileges themselves stay decided in 008 / per-table grants — NOT here.
-grant service_role to pfin_etl;
+do $rg$
+declare
+  v_can     boolean;
+  v_missing text[] := array[]::text[];
+  v_app     text;
+begin
+  -- ⚠ ROLE-GRAPH GUARD — ADR-072 Amendment 5 G4 dispositions, widened to the four
+  -- `grant <app_role> to <worker_role>` statements after a measured full apply showed
+  -- them failing the unsupervised pass exactly as `119`'s comment did:
+  --     ERROR: permission denied to grant role "service_role" (42501)
+  -- PG 16+ requires ADMIN OPTION on the role being GRANTED. The image creates
+  -- service_role/authenticated, so no bounded applier can ever hold it — and giving it
+  -- one is Sec's standing VETO, because ADMIN OPTION is self-grantable and would let the
+  -- holder grant itself the app roles. These statements belong to the SUPERVISED lane;
+  -- 055 is on the pre-step file list, which is what makes degrading legitimate here.
+  -- ⚠ SKIP IS VERIFIED, NEVER ASSUMED (Sec's condition, the same one placed on `119`):
+  -- being on the list only helps if the pre-step actually ran, so the skip branch READS
+  -- pg_auth_members and RAISES when a membership is missing. A silently skipped grant
+  -- would surface as pfin_etl failing in production, which is the worst place to find it.
+  select coalesce((select r.rolsuper from pg_catalog.pg_roles r
+                    where r.rolname = current_user), false)
+      or (    pg_catalog.pg_has_role(current_user, 'service_role',  'USAGE')
+          and pg_catalog.pg_has_role(current_user, 'authenticated', 'USAGE'))
+    into v_can;
 
--- W-1 session-impersonation read path: `SET LOCAL ROLE authenticated` + a synthetic
--- request.jwt.claims, reusing the locked INVOKER fn_compute_nav under RLS (Lock 11).
-grant authenticated to pfin_etl;
+  if v_can then
+    grant service_role  to pfin_etl;
+    grant authenticated to pfin_etl;
+    raise notice 'pfin_etl: app-role memberships granted by %.', current_user;
+  else
+    foreach v_app in array array['service_role','authenticated'] loop
+      if not exists (select 1 from pg_catalog.pg_auth_members m
+                       join pg_catalog.pg_roles g on g.oid = m.roleid
+                       join pg_catalog.pg_roles u on u.oid = m.member
+                      where g.rolname = v_app and u.rolname = 'pfin_etl') then
+        v_missing := array_append(v_missing, v_app);
+      end if;
+    end loop;
+
+    if array_length(v_missing, 1) is not null then
+      raise exception using errcode = '42501',
+        message = pg_catalog.format('pfin_etl is MISSING app-role membership(s) %s and % cannot grant them.', array_to_string(v_missing, ', '), current_user),
+        detail  = 'Granting a role requires ADMIN OPTION on the role being granted; the image owns service_role/authenticated, so no bounded applier holds it, and giving one that option is a Sec veto (it is self-grantable). The supervised pre-step must have run these grants — and it did not.',
+        hint    = 'Run the pre-step grants for pfin_etl as the image''s true superuser (docs/deployment-runbook.md §6.3), then re-run the apply. Do NOT grant the applier ADMIN OPTION on an app role to get past this.';
+    end if;
+
+    raise warning 'ROLEGRANT-SKIP: app-role memberships for pfin_etl NOT re-granted by % — it holds no ADMIN OPTION on the app roles and must not. SKIP IS VERIFIED, NOT ASSUMED: pg_auth_members was read and both memberships are present, so the supervised pre-step demonstrably ran.', current_user;
+  end if;
+end
+$rg$;
 
 -- ----------------------------------------------------------------------------
 -- Self-documenting comment (the role analogue of `comment on function`).

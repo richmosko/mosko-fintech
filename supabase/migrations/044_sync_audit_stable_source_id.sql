@@ -133,6 +133,25 @@
 --     is the join key (provider, external_connection_id) -> source_id = linked_source_id.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
+--     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
+--     that looks correct and silently no-ops. The tokens are deliberately NOT
+--     spelled out in this comment, so a fence counting them over source stays
+--     exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 -- (1) Stable source key on the immutable sync-audit table (plain bigint; no declared FK).
@@ -218,3 +237,11 @@ grant select on pfin.linked_source_sync_history to authenticated;
 
 comment on view pfin.linked_source_sync_history is
   'OWNER-SEMANTICS security_barrier view (security_invoker=false): the base linked_source_sync_audit is service_role-only; this is the sole authenticated read path. Per-connection sync history (ADR-034; SELF-204). Projection UNCHANGED (Sec-verified allowlist: linked_source_id, provider, source, created_at, transactions_inserted, transactions_skipped — never detail / detail->result / event_type / external_connection_id / provider_event_id / errlist / error / ok / syncedAt). Owner-scope UNCHANGED: both-sides users_id = auth.uid() (fail-closed, cannot widen; INNER join excludes an unresolvable connection). CHANGE (044): the audit->source join is now on the STABLE linked_source_id, NOT the mutable (provider, external_connection_id) digest — so a SimpleFIN reauth (new Access URL -> new digest) no longer orphans pre-reauth history; a removed-source (NULL linked_source_id) row is excluded, same as before. Consumed by SELF-204 SyncHistoryTable + the 043 connection-state view''s last_successful_sync_at.';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

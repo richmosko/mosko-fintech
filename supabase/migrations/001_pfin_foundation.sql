@@ -62,6 +62,25 @@
 --   - Security-load-bearing edge: `set search_path = ''` (the DEFINER privesc fence).
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
+--     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
+--     that looks correct and silently no-ops. The tokens are deliberately NOT
+--     spelled out in this comment, so a fence counting them over source stays
+--     exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 create or replace function pfin.fn_refresh_updated_at()
@@ -78,3 +97,11 @@ $$;
 
 comment on function pfin.fn_refresh_updated_at() is
   'BEFORE UPDATE updated_at trigger helper (ADR-011 Decision 9 — 1 of the 2 V1 SECURITY DEFINER allowlist entries; the other is the audit-log insert helper). Sets NEW.updated_at := now() and returns NEW; attach as BEFORE UPDATE FOR EACH ROW on any pfin table carrying an updated_at column (e.g. Lock 14 settings tables, mod #9). SECURITY DEFINER + set search_path = '''' is the locked posture: DEFINER pins execution context across invoking roles; search_path = '''' is the privesc fence (body touches no tables — only NEW + pg_catalog now()). Posture LOCKED at Decision 9 — Sec confirms, does not relitigate.';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

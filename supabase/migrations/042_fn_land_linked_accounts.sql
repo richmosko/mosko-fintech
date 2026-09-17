@@ -200,6 +200,25 @@
 --     deferred (A2-lite; forward-hook in body).
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
+--     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
+--     that looks correct and silently no-ops. The tokens are deliberately NOT
+--     spelled out in this comment, so a fence counting them over source stays
+--     exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 create or replace function pfin.fn_land_linked_accounts(
@@ -277,3 +296,11 @@ grant execute on function pfin.fn_land_linked_accounts(bigint, jsonb) to authent
 
 comment on function pfin.fn_land_linked_accounts(bigint, jsonb) is
   'SECURITY INVOKER write-composition RPC (SELF-199 §2.4.1.d; ADR-037; A2 F/CTO-ratified). Atomically lands one pfin.account row per SELECTED provider account from the adapter''s AccountRef[] (passed as p_accounts jsonb array of {provider_account_id,name,scope,tax_treatment,account_type}), each carrying linked_source_id = p_linked_source_id, in ONE transaction under the caller''s RLS, RETURNING (account_id, provider_account_id) per landed account. Multi-row provider-linked analogue of 013 fn_create_manual_account (ADR-026 pattern). users_id is NOT a parameter (defaults to auth.uid() per 003 — un-forgeable). All fences evaluate as the caller: account_insert WITH CHECK, the same-txn fn_grant_creator_access creator-grant per row (003 DEFINER trigger), fn_account_matched_linked_source (015, Decision-3 #6 — cross-tenant p_linked_source_id fails closed), and the inherited 025 aal2 step-up clause on both account and linked_source (on the linked path an aal1 caller fails closed at the #6 fence FIRST — linked_source is aal2-invisible so the NOT EXISTS raises — with account_insert WITH CHECK as backstop). ON CONFLICT (linked_source_id, provider_account_id) WHERE linked_source_id IS NOT NULL DO UPDATE SET is_active = true reuses the 021 dedup arbiter: a re-land reactivates the canonical row, never a 2nd row, and does not overwrite stored attributes. provider_account_id guarded non-null (dedup key). Malformed input fails closed (NOT NULL + CHECK constraints abort the txn; non-array p_accounts raises). NOT a DEFINER allowlist entry — needs no elevation; allowlist stays 4. Needs NO service_role (anon-key client + RLS + INVOKER). set search_path = '''' injection fence. EXECUTE revoked from PUBLIC, granted to authenticated only (anon denied). Same-transaction audit-log DEFERRED (A2-lite; forward-hook in body; SELF-201 Task #7). Adds no FK-shaped column — Decision-3 family unchanged (exercises #6); §10 ledger unchanged at 3. Signature + p_accounts object keys are an API contract (PostgREST /rpc; pfin is [api]-exposed).';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

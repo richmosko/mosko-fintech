@@ -156,6 +156,25 @@
 --   trusted; regenerating yields one whose correctness can be SHOWN.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
+--     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
+--     that looks correct and silently no-ops. The tokens are deliberately NOT
+--     spelled out in this comment, so a fence counting them over source stays
+--     exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 -- ----------------------------------------------------------------------------
@@ -770,3 +789,11 @@ end $$;
 
 comment on column pfin.account.closed_at is
   'THE ONLY representation of open/closed (ADR-042). The boolean flag was retired at 059: it answered "open NOW" where closed_at answers "open AS OF a date" — strictly more information, and the two coexisting was the three-way overloading ADR-042 exists to remove. Readers use (closed_at is null or closed_at::date > p_as_of). ⚠ THE `::date` IS REQUIRED, NOT INCIDENTAL — this column is timestamptz and every as-of parameter in the schema is a date, so a bare `closed_at > p_as_of` promotes the date to MIDNIGHT and an account closed at any time after 00:00 on p_as_of stays INCLUDED for the rest of that day. Since fn_close_account defaults p_closed_at to now(), that is EVERY app-closed account, and it means a just-closed account remains in the §2.1.1 headline until midnight — reading as "the close did not work". NAV VALUE is identical either way (the gate proved zero as of that date), so the defect is invisible to value assertions and shows up only in ROW SETS and COUNTS. Cast to date, matching fn_holdings_as_of / fn_account_cash_as_of / transaction_date / as_of_date and the close gate''s own legs. ⚠ THE CAST IS EVALUATED IN THE SESSION TimeZone, AND THAT IS SAFE ONLY BY A DEPENDENCY OUTSIDE THIS COLUMN — stated per the symmetric rule, since a fence whose sufficiency comes from elsewhere must say so. MEASURED: a user in UTC−5 closing at 20:00 local on Mar 1 records the instant 2026-03-02 01:00Z; under session TimeZone UTC that is closed_at::date = Mar 2 and the account is INCLUDED at p_as_of = Mar 1, while under session −05 it is Mar 1 and EXCLUDED. Same row, same predicate, opposite answers — an off-by-one-DAY for any closure near local midnight. WHAT HOLDS IT TODAY: p_as_of is SERVER-DERIVED (Lock 15 mod #2, server-derived-only; V1 consumers pass CURRENT_DATE), which is evaluated on the same clock in the same session, so the two sides always agree and a just-closed account excludes immediately regardless of the session zone. ⚠ THAT DEPENDENCY IS NARROWING, NOT STABLE: 059 STRUCK the ADR-039 sound-only-at-current_date constraint and thereby LEGALISED past as-of dates, so a §2.1.2 trajectory passing a USER-CHOSEN date is now a sanctioned path — and the first caller that supplies p_as_of from a user''s calendar rather than the server''s breaks the agreement, silently, in the user''s favour or against it depending on which side of midnight they closed. Whoever makes p_as_of user-supplied owns resolving the zone explicitly (store or thread the tenant''s zone; do not let the session default decide), and should find this sentence before they do. NEVER a bare `closed_at is null` in an as-of context, and never a LEFT-JOINed `closed_at is null` without an accompanying `account_id is not null`, which fails OPEN by asserting "not closed" from no information.';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

@@ -123,6 +123,25 @@
 --   Not a vacuous green — the fixture must populate two tenants + active/inactive + mixed status.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
+--     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
+--     that looks correct and silently no-ops. The tokens are deliberately NOT
+--     spelled out in this comment, so a fence counting them over source stays
+--     exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 create or replace function pfin.fn_aggregation_has_stale_constituent()
@@ -165,3 +184,11 @@ $$;
 
 comment on function pfin.fn_aggregation_has_stale_constituent() is
   'SECURITY INVOKER staleness-detection primitive (SELF-208 §2.4.4.c; ADR-013 D1 non-silent staleness framework; RT-13). Returns ONE aggregate row (is_stale boolean, stale_items jsonb) for the calling user: is_stale = TRUE iff the caller owns >=1 ACTIVE linked_source whose connection_status <> ''healthy''; stale_items = jsonb array of {linked_source_id, institution_name, provider, connection_status, status_class} for those sources (''[]'' when none). Composes over the 043 pfin.linked_source_connection_state INVOKER view (Lock 11 read-composition) — owner isolation + the 025 aal2 gate are INHERITED via linked_source RLS (auth.uid() scope; RT-13 requesting-tenant-scoped credential-state resolution satisfied structurally). Scopes to is_active=TRUE to match the NAV constituent contract (netWorth.ts is_active filter) — an inactive/suspended source feeds nothing into the number so flagging it would be a false positive (NOT a D1 violation: D1 governs the honesty of the number the user sees). D1-FORWARD: the §2.4.4 surface list is illustrative-not-exhaustive; this framework applies to every aggregation consuming Plaid-sourced data — V1.0 wires NAV (§2.1.1), ramp at V1.1+ (§2.1.2/§2.1.5/§2.2.2/§2.3.2/§2.3.4/§2.6). Per-status affordance (Frontend): key on connection_status — Re-authenticate for IN (login_required,revoked,disconnected), informational for institution_down (marked-but-not-reauth); provider dispatches reauth() per adapter; status_class is context not driver. Authors no function with DEFINER (allowlist stays 4), no FK column (Decision-3 unchanged 15/13), no service_role (RT-26 stays 4), no catalogued §10 instance (stays 3).';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

@@ -45,6 +45,25 @@
 
 -- Drop the inline-unnamed CHECK from `015` (Postgres auto-named it `<table>_<column>_check`),
 -- then re-add it NAMED + widened. `drop constraint if exists` keeps this idempotent on re-apply.
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
+--     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
+--     that looks correct and silently no-ops. The tokens are deliberately NOT
+--     spelled out in this comment, so a fence counting them over source stays
+--     exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 alter table pfin.linked_source_sync_audit
   drop constraint if exists linked_source_sync_audit_source_check;
 
@@ -59,3 +78,11 @@ comment on constraint linked_source_sync_audit_source_check on pfin.linked_sourc
 -- now three-valued (webhook/scheduled_poll/manual).
 comment on table pfin.linked_source_sync_audit is
   'Append-only multi-provider sync audit (ADR-011 Decision 8 / Lock 4 mod #3 + Decision 17 / Lock 13 mod #8, generalized plaid_sync_audit → linked_source per the R-14 fold A.5). Cross-language schema-as-contract for the webhook + scheduled-poll + manual write paths, discriminated by (provider, source). provider_event_id UNIQUE is the idempotency gate (generalizes plaid_webhook_id) — the webhook handler INSERTs ON CONFLICT (provider_event_id) DO NOTHING under SERIALIZABLE; poll + manual rows carry NULL (UNIQUE treats NULLs as distinct). source (webhook/scheduled_poll/manual) spans all providers: poll-only providers use scheduled_poll; Plaid uses both; manual = a user-initiated on-demand sync (SELF-317, ADR-037 amendment) via /admission/manual-sync. users_id records the code-resolved tenant per Decision 1 clause (d). service_role-ONLY: NOT granted to authenticated (audit of privileged writes; RLS enabled → default-deny for authenticated). Immutable audit-class (Decision 2): UPDATE + DELETE + TRUNCATE fenced for ALL roles. external_connection_id is TEXT external id, NOT a pfin FK → NOT a Decision-3 instance. C6 exposure-gated (ADR-023).';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;
