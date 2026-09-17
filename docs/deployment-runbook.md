@@ -1172,6 +1172,13 @@ select has_table_privilege('pfin_owner', 'vault.decrypted_secrets', 'SELECT');
 1. Create the V1 web-app Coolify resource; note its `APP_UUID`. **Gap:** §7 is still a STUB for this step — it names the web-app as the 3rd fleet container but does not yet carry concrete Coolify resource-creation instructions. Until §7 is filled in, this step has no home to point at beyond the Coolify dashboard itself.
 2. Create the migrator Coolify Scheduled Task (`scripts/migrator-scheduled-task.md` — task fields, resource attachment, the fail-closed `status` semantics); note the `MIGRATOR_SERVICE_UUID` (the Supabase-stack resource) and `MIGRATOR_TASK_UUID` (the task itself).
 3. Redeploy the Supabase stack so the `migrator` sibling service comes up and `provision-supabase-stack.sh`'s `MINT_SECRETS` mints `MIGRATOR_DB_PASSWORD` (§6's credential bullet; §5).
+3a. **Verify line, added 2026-09-17 (ADR-072 Amendment 6, PR #791) — confirm which build-arg name Coolify 4.3.18 actually injects.** `infra/supabase/migrator/Dockerfile` accepts BOTH `GIT_SHA` and `SOURCE_COMMIT` because this was never confirmed live (no network egress in the session that wrote it) — this step is where that gets resolved on evidence instead of staying open forever:
+    ```
+    docker compose --project-name <MIGRATOR_SERVICE_UUID> exec -T migrator cat /workspace/.build-sha-source
+    # or, equivalently, no exec needed:
+    docker inspect --format '{{index .Config.Labels "org.mosko.migrator.git-sha-source"}}' <migrator container/image>
+    ```
+    Expect either `GIT_SHA` or `SOURCE_COMMIT` printed — whichever name this build actually received a non-empty value under. **Once confirmed, this is a follow-up (not blocking, and not this PR's scope): collapse the Dockerfile's dual-path ARG-acceptance down to the one real name**, so the mechanism stops silently tolerating a name nobody uses. Leaving both accepted indefinitely defeats the point of asking the question.
 
 **Phase B — supervised first bootstrap, `pfin_owner` by construction (rewritten 2026-09-16, ADR-072 [Amendment 5](../DECISIONS.md#adr-072) — §6.3 as `supabase_admin` runs the pre-step and creates `pfin_owner`; `migrator` runs the apply, entering `pfin_owner` per-file)**
 

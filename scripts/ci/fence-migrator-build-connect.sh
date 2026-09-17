@@ -53,6 +53,27 @@
 #                            db-push probe comes back with the
 #                            `Invalid config` token (never the CONNECT
 #                            token).
+#   --inversion=no-sha      Strike leg for ADR-072 Amendment 6's fail-closed
+#                            sha assertion (PR #791; added 2026-09-17 after
+#                            this fence's OWN three builds red'd the
+#                            production/supabase-go/templates legs — the
+#                            Dockerfile's `RUN test ... || (echo FATAL ...)`
+#                            was working correctly against a harness that
+#                            predated it and never passed --build-arg
+#                            GIT_SHA/SOURCE_COMMIT at all). Builds the REAL,
+#                            unmodified Dockerfile WITH NO build-arg
+#                            supplied and asserts the build FAILS, AND that
+#                            it fails with the Dockerfile's OWN specific
+#                            "GIT_SHA/SOURCE_COMMIT build-arg is empty"
+#                            message -- never this harness's generic "FATAL:
+#                            docker build failed for ..." string (two FATAL
+#                            strings are in play; matching the wrong one
+#                            would pass on a build that failed for an
+#                            unrelated reason and make this leg vacuous,
+#                            Sec's condition). This is the fail-closed
+#                            property the whole Amendment 6 mechanism relies
+#                            on -- it must have its own dedicated RED, same
+#                            as the other two defect classes above.
 #
 # Both inversion legs must observe the DEFECT-CLASS token (not the CONNECT
 # token) to pass. If a strike leg instead observes the CONNECT token, the
@@ -78,14 +99,34 @@ UNREACHABLE_DB_URL="postgres://x:x@127.0.0.1:1/postgres?sslmode=disable"
 CONNECT_TOKEN="dial error (dial tcp"
 BAD_TOKEN_INVALID_CONFIG="Invalid config"
 BAD_TOKEN_MISSING_BINARY="Could not find the"
+# The Dockerfile's OWN fail-closed message (infra/supabase/migrator/Dockerfile,
+# the `RUN set -eu; if [ -z "$GIT_SHA" ]; then echo "FATAL: ..."` step) --
+# kept as an exact substring of that message, distinct from this harness's
+# own "FATAL: docker build failed for ..." string at build_image() below.
+# Matching the wrong one would make the --inversion=no-sha leg vacuous
+# (Sec's condition on this fence fix, PR #791).
+DOCKERFILE_SHA_FATAL_TOKEN="GIT_SHA/SOURCE_COMMIT build-arg is empty"
+
+# ADR-072 Amendment 6 (ratified, c2b20cc2): every build below now supplies
+# the sha the Dockerfile's GIT_SHA/SOURCE_COMMIT ARGs require, sourced from
+# the same place a real CI run would have it (GITHUB_SHA), falling back to
+# the local git HEAD for a developer running this fence outside Actions.
+# The one deliberate exception is the --inversion=no-sha leg, which must
+# NOT pass this -- that omission is the entire point of that leg.
+FENCE_SHA="${GITHUB_SHA:-$(cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null || true)}"
+if [ -z "$FENCE_SHA" ]; then
+  echo "FATAL: could not resolve a sha to pass as --build-arg GIT_SHA (GITHUB_SHA unset and 'git rev-parse HEAD' failed) -- cannot exercise the production/inversion-supabase-go/inversion-templates legs, which now require a real sha to get past the Amendment 6 fail-closed check. Failing closed rather than silently building without it." >&2
+  exit 2
+fi
 
 MODE="production"
 for arg in "$@"; do
   case "$arg" in
     --inversion=supabase-go) MODE="inversion-supabase-go" ;;
     --inversion=templates) MODE="inversion-templates" ;;
+    --inversion=no-sha) MODE="inversion-no-sha" ;;
     *)
-      echo "FATAL: unrecognized argument '$arg' (expected --inversion=supabase-go or --inversion=templates)" >&2
+      echo "FATAL: unrecognized argument '$arg' (expected --inversion=supabase-go, --inversion=templates, or --inversion=no-sha)" >&2
       exit 2
       ;;
   esac
@@ -104,9 +145,16 @@ cleanup() {
 trap cleanup EXIT
 
 build_image() {
+  # $1 = dockerfile, $2 = tag, $3.. = extra `docker build` args (e.g.
+  # --build-arg GIT_SHA=...). Extra args are OPTIONAL so this function
+  # still serves inversion-no-sha's "build with nothing" case if ever
+  # called that way, though that leg currently calls docker build directly
+  # (see below) since it must assert on FAILURE, which this function
+  # treats as the error case it reports and returns 1 for.
   local dockerfile="$1" tag="$2"
-  echo "--- building ${tag} from ${dockerfile}" >&2
-  if ! docker build -f "$dockerfile" -t "$tag" "$REPO_ROOT" >/tmp/fence-migrator-build.log 2>&1; then
+  shift 2
+  echo "--- building ${tag} from ${dockerfile} (extra args: $*)" >&2
+  if ! docker build -f "$dockerfile" -t "$tag" "$@" "$REPO_ROOT" >/tmp/fence-migrator-build.log 2>&1; then
     echo "FATAL: docker build failed for ${tag} (dockerfile: ${dockerfile})" >&2
     tail -n 60 /tmp/fence-migrator-build.log >&2
     return 1
@@ -134,7 +182,7 @@ assert_leg_present() {
 case "$MODE" in
   production)
     IMAGE_TAG="migrator-fence-production:$$"
-    build_image "$DOCKERFILE" "$IMAGE_TAG" || exit 1
+    build_image "$DOCKERFILE" "$IMAGE_TAG" --build-arg "GIT_SHA=$FENCE_SHA" || exit 1
 
     fail=0
 
@@ -193,7 +241,7 @@ case "$MODE" in
       exit 2
     fi
     IMAGE_TAG="migrator-fence-inversion-nogo:$$"
-    build_image "$TMP_DOCKERFILE" "$IMAGE_TAG" || {
+    build_image "$TMP_DOCKERFILE" "$IMAGE_TAG" --build-arg "GIT_SHA=$FENCE_SHA" || {
       echo "FATAL: the no-supabase-go inversion variant failed to BUILD — PR #753's defect shape was that this build succeeds while silently dropping the binary. A build failure here means the fixture no longer reproduces that historical defect shape; the strike is inconclusive, failing closed." >&2
       exit 1
     }
@@ -221,7 +269,7 @@ case "$MODE" in
       exit 2
     fi
     IMAGE_TAG="migrator-fence-inversion-notpl:$$"
-    build_image "$TMP_DOCKERFILE" "$IMAGE_TAG" || {
+    build_image "$TMP_DOCKERFILE" "$IMAGE_TAG" --build-arg "GIT_SHA=$FENCE_SHA" || {
       echo "FATAL: the no-templates inversion variant failed to BUILD — PR #755's defect shape was that this build succeeds while silently omitting supabase/templates/. A build failure here means the fixture no longer reproduces that historical defect shape; the strike is inconclusive, failing closed." >&2
       exit 1
     }
@@ -237,6 +285,34 @@ case "$MODE" in
       exit 0
     else
       echo "FATAL: STRIKE INCONCLUSIVE — broken variant's output matched neither the connect token nor the expected '${BAD_TOKEN_INVALID_CONFIG}' token; cannot confirm the fence catches this defect class. Failing closed." >&2
+      exit 1
+    fi
+    ;;
+
+  inversion-no-sha)
+    # Strike leg for ADR-072 Amendment 6's fail-closed sha assertion. Unlike
+    # the other two inversion legs, this one does NOT sed-modify the
+    # Dockerfile -- it builds the REAL, committed Dockerfile, and the
+    # "defect" under test is simply withholding --build-arg entirely. The
+    # expected outcome is a build FAILURE, so this does not use
+    # build_image() (which treats any build failure as the harness's own
+    # error and returns 1 -- exactly backwards for what this leg needs).
+    IMAGE_TAG="migrator-fence-inversion-no-sha:$$"
+    echo "--- building ${IMAGE_TAG} from ${DOCKERFILE} WITH NO build-arg (expect FAILURE, and specifically the Dockerfile's own sha-empty FATAL message)" >&2
+    if docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" "$REPO_ROOT" >/tmp/fence-migrator-build-no-sha.log 2>&1; then
+      echo "FATAL: STRIKE FAILED — the real Dockerfile built SUCCESSFULLY with neither GIT_SHA nor SOURCE_COMMIT supplied. Amendment 6's fail-closed property (a build with no sha marker must FATAL, not silently succeed) is not holding." >&2
+      tail -n 60 /tmp/fence-migrator-build-no-sha.log >&2
+      exit 1
+    fi
+    # No image exists on this path (the build failed) -- IMAGE_TAG is left
+    # set only so cleanup()'s `docker rmi ... || true` is a harmless no-op;
+    # nothing to remove either way.
+    if grep -qF "$DOCKERFILE_SHA_FATAL_TOKEN" /tmp/fence-migrator-build-no-sha.log; then
+      echo "OK: STRIKE PASSED — build correctly failed with the Dockerfile's own '${DOCKERFILE_SHA_FATAL_TOKEN}' message when no build-arg was supplied. This is a distinct string from this harness's own \"FATAL: docker build failed for ...\" -- matching THAT one instead would have made this leg vacuous (any build failure, for any reason, would pass)." >&2
+      exit 0
+    else
+      echo "FATAL: STRIKE INCONCLUSIVE — the build failed (expected), but NOT with the Dockerfile's expected '${DOCKERFILE_SHA_FATAL_TOKEN}' message. Some other defect is masking the intended fail-closed assertion (e.g. a network/apt failure upstream of the sha check, or the check's own message text drifted from this constant) -- failing closed rather than passing on an unrelated failure." >&2
+      tail -n 60 /tmp/fence-migrator-build-no-sha.log >&2
       exit 1
     fi
     ;;

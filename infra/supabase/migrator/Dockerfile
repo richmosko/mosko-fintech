@@ -37,7 +37,7 @@
 
 FROM debian:bookworm-slim
 
-# ⚠ ADR-072 Amendment 6 (draft) — Sec's "assert the OUTCOME, not the STATUS"
+# ADR-072 Amendment 6 (ratified, c2b20cc2) — Sec's "assert the OUTCOME, not the STATUS"
 # ruling on the 119 fire. Measured, 2026-09-17: this Dockerfile carried NO
 # label, build-arg, or marker identifying the migration set baked into the
 # image — only the plain `COPY supabase/migrations/` below. That gap let
@@ -47,23 +47,33 @@ FROM debian:bookworm-slim
 # valid `db push` outcome. The container never held the migration it was
 # "fired for."
 #
-# GIT_SHA below is meant to be populated FROM Coolify's own build-time git
-# sha at deploy time. ⚠ UNVERIFIED WHICH BUILD-ARG NAME COOLIFY 4.3.18
-# INJECTS — I could not reach Coolify's source or docs live (no network
-# egress in the session that wrote this). `SOURCE_COMMIT` is the name
+# GIT_SHA/SOURCE_COMMIT below are meant to be populated FROM Coolify's own
+# build-time git sha at deploy time. ⚠ UNVERIFIED WHICH BUILD-ARG NAME
+# COOLIFY 4.3.18 INJECTS — no vendored Coolify source or docs exist in this
+# repo to confirm it from, and this session has no network egress either.
+# STATED HONESTLY AS UNCONFIRMED, defaulted to `SOURCE_COMMIT` (the name
 # commonly documented for Coolify's Nixpacks/Dockerfile build-arg
-# injection, and is what this Dockerfile assumes below, but
-# docs/records/v1final/production-standup.md (line 32-34, an EARLIER
-# attempt at this same problem for the four app-tier Dockerfiles) recorded
-# the identical gap and the identical caveat: "Coolify names this
-# COMMIT_SHA or similar depending on version — unconfirmed until read on
-# the real instance." That was never confirmed then either. CONFIRM THE
-# ACTUAL BUILD-ARG NAME AGAINST THE RUNNING COOLIFY 4.3.18 INSTANCE (its
-# own build-log output for a deploy will show every ARG it passes) BEFORE
-# this PR is taken out of Draft — if the name is wrong, GIT_SHA silently
-# builds empty and this whole mechanism is exactly the vacuous-green class
-# it exists to close.
+# injection) with a runbook verify line — docs/records/v1final/production-
+# standup.md (line 32-34, an EARLIER attempt at this same problem for the
+# four app-tier Dockerfiles) recorded the identical gap and the identical
+# caveat, never confirmed then either.
+# BOTH `GIT_SHA` and `SOURCE_COMMIT` are accepted (Sec-approved, ADR-072
+# Amendment 6, PR #791) so the mechanism does not hard-depend on guessing
+# right: `GIT_SHA` wins if supplied, else `SOURCE_COMMIT` is used, and the
+# RUN step below FAILS CLOSED only when NEITHER is set — the dual path is
+# not permanent-by-default, it is meant to be COLLAPSED once the first
+# real Coolify build emits which name it used (see `GIT_SHA_SOURCE` below
+# and the runbook verify line) — confirm on the tree, don't leave this
+# open indefinitely.
+ARG SOURCE_COMMIT=""
 ARG GIT_SHA=""
+# Captures whether `GIT_SHA` itself arrived non-empty, BEFORE the merge
+# line below overwrites it — this is what lets the build emit which of
+# the two names actually supplied the value (Sec condition 2), rather than
+# only ever recording the resolved sha with no record of its source.
+ARG GIT_SHA_SOURCE=${GIT_SHA:+GIT_SHA}
+ARG GIT_SHA=${GIT_SHA:-$SOURCE_COMMIT}
+ARG GIT_SHA_SOURCE=${GIT_SHA_SOURCE:-SOURCE_COMMIT}
 
 # Pinned Supabase CLI release — matches .github/actions/supabase-cli-setup.
 # Bump both together.
@@ -126,27 +136,62 @@ COPY supabase/config.toml supabase/config.toml
 COPY supabase/templates/ supabase/templates/
 COPY supabase/migrations/ supabase/migrations/
 
-# ADR-072 Amendment 6 (draft) — the OUTCOME marker Sec's ruling requires,
-# in TWO forms so both a `docker inspect` (no exec needed, matches how
-# migrator-orchestrate.sh's box-side check reads it) and a `docker exec cat`
-# can confirm what migration set this specific container's filesystem
-# actually carries:
+# ADR-072 Amendment 6 (ratified, c2b20cc2) — the OUTCOME marker Sec's
+# ruling requires, in TWO forms so both a `docker inspect` (no exec
+# needed, matches how migrator-orchestrate.sh's box-side check reads it)
+# and a `docker exec cat` can confirm what migration set this specific
+# container's filesystem actually carries:
 #   (1) an OCI LABEL, readable via `docker inspect --format
 #       '{{index .Config.Labels "org.mosko.migrator.git-sha"}}'` with no
 #       exec into the container at all;
 #   (2) a plain file at /workspace/.build-sha, for a fallback `docker exec`
 #       read and for a human `cat`ting it interactively without needing to
 #       recall the label key.
-# FAILS THE BUILD if GIT_SHA came through empty — a silently-empty marker
+#
+# FAILS THE BUILD (distinct FATAL message, matched by
+# scripts/ci/fence-migrator-build-connect.sh's `--inversion=no-sha` leg —
+# NOT the harness's own generic "FATAL: docker build failed" string, which
+# would make that leg vacuous) if the resolved sha came through empty —
+# neither GIT_SHA nor SOURCE_COMMIT was supplied. A silently-empty marker
 # would make every comparison against it vacuously pass (an empty expected
 # sha "matching" an empty file), which is the exact defect class this
-# mechanism exists to close. Confirm the real Coolify build-arg name (see
-# the GIT_SHA ARG's own comment above) before this leaves Draft — until
-# then, THIS CHECK WILL FAIL EVERY BUILD, deliberately, rather than bake a
-# marker nobody has verified is real.
-RUN test -n "$GIT_SHA" || (echo "FATAL: GIT_SHA build-arg is empty — Coolify's build-arg name is unconfirmed (see the ARG's own comment above). Refusing to bake an empty migration-set marker." >&2 && exit 1)
+# mechanism exists to close. DO NOT weaken this to a non-empty default
+# (e.g. "dev"/"unknown") to make a build succeed — a present-but-wrong
+# marker is worse than a loud failure (Sec, ADR-072 Amendment 6, PR #791).
+#
+# ALSO fails the build (a second, distinct FATAL message) if the resolved
+# value is non-empty but not a well-formed 40-character hex git sha — Sec
+# condition, PR #791: if Coolify ever injects a branch name or a short
+# sha, a bare `test -n` would pass and bake a non-sha marker, and the
+# defect would only surface later, one layer away, when
+# migrator-orchestrate.sh's own 40-hex check (exit 5, defence-in-depth)
+# rejects it on the box. Catching the same malformed-value class HERE, at
+# build time, lands the failure where the cause actually is. Same regex as
+# the orchestrator's check (`^[0-9a-f]{40}$`) — kept in sync deliberately.
+RUN set -eu; \
+    if [ -z "$GIT_SHA" ]; then \
+      echo "FATAL: GIT_SHA/SOURCE_COMMIT build-arg is empty -- neither was supplied. Coolify's actual build-arg name is unconfirmed (see the ARG block's own comment above). Refusing to bake an empty migration-set marker." >&2; \
+      exit 1; \
+    fi; \
+    if ! printf '%s' "$GIT_SHA" | grep -Eq '^[0-9a-f]{40}$'; then \
+      echo "FATAL: resolved sha '$GIT_SHA' (from build-arg $GIT_SHA_SOURCE) is not a well-formed 40-character hex git sha. Refusing to bake a malformed migration-set marker." >&2; \
+      exit 1; \
+    fi
 LABEL org.mosko.migrator.git-sha="$GIT_SHA"
+LABEL org.mosko.migrator.git-sha-source="$GIT_SHA_SOURCE"
+# ⚠ /workspace/.build-sha stays SHA-ONLY, single line, no trailing
+# annotation -- migrator-orchestrate.sh's own check does
+# `RUNNING_SHA="$(docker compose ... exec -T migrator cat
+# /workspace/.build-sha)"` and compares that WHOLE captured value for
+# EQUALITY against MIGRATOR_EXPECT_SHA (a bare 40-hex sha). A second line
+# in this same file would make RUNNING_SHA carry an embedded newline and
+# never equal anything again -- that would silently turn every future
+# fire into a permanent mismatch, which is worse than the problem Sec's
+# condition 2 is trying to solve. The "which build-arg was used" marker
+# therefore lives in the LABEL above (Sec's own stated alternative) AND
+# in a SEPARATE file below, never inside .build-sha itself.
 RUN printf '%s' "$GIT_SHA" > /workspace/.build-sha
+RUN printf '%s\n' "$GIT_SHA_SOURCE" > /workspace/.build-sha-source
 
 # Resident Pattern-A keepalive — the Coolify Scheduled Task execs the real
 # work into this container; it is never this image's own CMD/ENTRYPOINT.
