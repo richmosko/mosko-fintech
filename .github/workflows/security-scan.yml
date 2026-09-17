@@ -1125,6 +1125,109 @@ jobs:
       - name: Production-mode — real compose (expects internal-only; exit 0)
         run: bash scripts/ci/fence-datastore-private-bind.sh infra/supabase/docker-compose.yml
 
+      # ── G3 pfin-lane ownership pair (ADR-072 Amendment 5 G3 / F1-as-corrected-by-J) ──
+      # Sec-mandated at the PR #784 review (B-2). The convention lands on 114 files
+      # in that PR; without this fence nothing stops file 120 omitting the pair.
+      # ⚠ Six legs, not one. The production-mode leg and the `ok` fixture are POSITIVE
+      # controls; the four inversions each assert their OWN token, because a structural
+      # FATAL (missing directory, empty corpus) also exits non-zero and would print
+      # "OK: caught..." having proven nothing — the F-2 lesson, mirrored.
+      - name: Production-mode — real migration set (expects conformant; exit 0)
+        run: bash scripts/ci/fence-g3-paired-role.sh supabase/migrations
+
+      - name: Inversion — g3 negative control (conformant fixture corpus; expects exit 0)
+        run: bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/ok
+
+      - name: "Inversion — g3 golden 1: missing opener (expects violation, exit 1, its own token)"
+        # Leg (a). A file whose opener is dropped creates every object as the applying identity.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/missing-opener 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: g3 fence expected exit 1 on the missing-opener golden but got $rc — a structural FATAL also exits non-zero and would prove nothing. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'EXACTLY ONE opener'; then
+            echo "FATAL: the missing-opener golden exited 1 but its specific token is absent from fence output — the fence may have RED-ed for an unrelated reason. Failing closed."
+            exit 1
+          fi
+          echo "OK: g3 fence caught missing opener via its own token (exit $rc)."
+
+      - name: "Inversion — g3 golden 2: missing closer (expects violation, exit 1, its own token)"
+        # Leg (c). Without the closer the CLI's ledger INSERT runs as pfin_owner and the push fails.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/missing-closer 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: g3 fence expected exit 1 on the missing-closer golden but got $rc — a structural FATAL also exits non-zero and would prove nothing. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'EXACTLY ONE opener'; then
+            echo "FATAL: the missing-closer golden exited 1 but its specific token is absent from fence output — the fence may have RED-ed for an unrelated reason. Failing closed."
+            exit 1
+          fi
+          echo "OK: g3 fence caught missing closer via its own token (exit $rc)."
+
+      - name: "Inversion — g3 golden 3: transaction-scoped variant (expects violation, exit 1, its own token)"
+        # Leg (d), the one that already fooled two reviewers. ⚠ Its RED must carry Decision J's reason — it TAKES EFFECT, it is not a no-op — or the operator fixes the fence instead of the file.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/set-local 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: g3 fence expected exit 1 on the set-local golden but got $rc — a structural FATAL also exits non-zero and would prove nothing. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'transaction-scoped role statement'; then
+            echo "FATAL: the set-local golden exited 1 but its specific token is absent from fence output — the fence may have RED-ed for an unrelated reason. Failing closed."
+            exit 1
+          fi
+          echo "OK: g3 fence caught transaction-scoped variant via its own token (exit $rc)."
+
+      - name: "Inversion — g3 golden 4: statement after the closer (expects violation, exit 1, its own token)"
+        # Leg (c) second half: an appended statement after the closer silently creates a mis-owned object.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/trailing-after-closer 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: g3 fence expected exit 1 on the trailing-after-closer golden but got $rc — a structural FATAL also exits non-zero and would prove nothing. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'is not the LAST statement'; then
+            echo "FATAL: the trailing-after-closer golden exited 1 but its specific token is absent from fence output — the fence may have RED-ed for an unrelated reason. Failing closed."
+            exit 1
+          fi
+          echo "OK: g3 fence caught statement after the closer via its own token (exit $rc)."
+
+      - name: "Inversion — g3 golden 5: supervised-lane file carrying the pair (expects violation, exit 1, its own token)"
+        # Lane partition. pfin_owner has no CREATEROLE, so a role-lane file that enters it fails its own statements.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/supervised-with-pair 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: g3 fence expected exit 1 on the supervised-with-pair golden but got $rc — a structural FATAL also exits non-zero and would prove nothing. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'must carry NEITHER half'; then
+            echo "FATAL: the supervised-with-pair golden exited 1 but its specific token is absent from fence output — the fence may have RED-ed for an unrelated reason. Failing closed."
+            exit 1
+          fi
+          echo "OK: g3 fence caught supervised-lane file carrying the pair via its own token (exit $rc)."
+
       - name: Inversion — negative control fixture (correct config; expects exit 0)
         run: bash scripts/ci/fence-datastore-private-bind.sh tests/fixtures/ci/datastore-bind-private.compose.yaml
 

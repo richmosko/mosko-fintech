@@ -17,7 +17,7 @@
 
 begin;
 
-select plan(6);
+select plan(7);
 
 -- ---------------------------------------------------------------------
 -- (o1) THE SWEEP'S OUTCOME — the property the paired statements exist to
@@ -97,6 +97,22 @@ select ok(
   and not coalesce((select has_schema_privilege('migrator', n.oid, 'USAGE')
                   from pg_catalog.pg_namespace n where n.nspname = 'vault'), false),
   '(o6) SEC VETO WATCHER, direct half: `migrator` itself holds no vault reach either. (o5) covers the SET ROLE route; this covers a direct grant. Both are needed — NOINHERIT means a membership-based reach and a direct grant are different facts'
+);
+
+-- ---------------------------------------------------------------------
+-- (o7) THE ENGINE BACKSTOP — `migrator` holds no CREATE on schema pfin.
+--      ⚠ Sec's B-3: the revoke was BOOKED IN PROSE and executed nowhere, and
+--      the battery had no leg for it. A revoke nobody watches is decoration.
+--      ⚠ Decision J RAISES the stakes here rather than lowering them: the
+--      transaction-scoped role statement is now known to TAKE EFFECT, so a
+--      change in the CLI's batching is the SILENT path — ownership lands wrong
+--      with nothing raised. This backstop is what converts that into a loud
+--      42501 at the first create, which is why it is the PRIMARY control and
+--      the paired convention is only the path.
+-- ---------------------------------------------------------------------
+select ok(
+  not coalesce(has_schema_privilege('migrator', 'pfin', 'CREATE'), true),
+  '(o7) ENGINE BACKSTOP: `migrator` holds NO CREATE on schema pfin, so a migration that loses its ownership pair fails 42501 instead of quietly creating a migrator-owned object. This is the PRIMARY control — the paired `set role`/`reset role` convention is the path, this is what catches the path being lost, including by a silent change in how the CLI batches statements (Decision J). ON RED: REVOKE it; never grant CREATE here to make a migration pass'
 );
 
 select * from finish();

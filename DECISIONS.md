@@ -281,7 +281,7 @@ E rests on three measured facts about **this** Coolify version (4.3.18): the Sch
 | File(s) | What the exception permits | Why it cannot be an ordinary (B)-class header edit |
 |---|---|---|
 | `055`, `116`, `118` | the guard-visibility branch (PR #781) | adds an **executable** `raise warning` branch |
-| `118` | the `comment on role` / `create role` statement dispositions (Decision G4) | changes **statements**, not header prose. ⚠ **`119` was TRIMMED from this row 2026-09-16**: G4 rules `119` needs no edit, so leaving it here would be a standing permission to edit an applied migration that is never used — against this block's own *"does NOT widen the Scope list"* discipline. **If the G4 SUPPLEMENT's shape (c) is ratified, `119` returns to this row with that ruling as its basis.** |
+| `117`, `118`, `119` ⚠ **WIDENING REQUESTED 2026-09-16 — NOT YET ASSENTED** | the `comment on role` / `create role` statement dispositions (Decision G4 + its SUPPLEMENT) | changes **statements**, not header prose. ⚠ **This row named `118` alone. `117` is edited (its `comment on role pfin_etl` takes the same G4 guard — a gap no ruling had named) and `119` is edited again under shape (c), having been deliberately TRIMMED from this row earlier the same day. Row 3's `001`–`118` range does NOT cover either: those are statement-level G4 dispositions, not the sweep, and this block's own words are "only the edits named" and "Nothing outside it is covered." WIDENING THE SCOPE IS F/CTO'S ACT — not Architect's and not Sec's. Drafted here so the request is legible and dated; the edits are already in PR #784 and #775 and are NOT covered until F/CTO assents.** ⚠ **`119` was TRIMMED from this row 2026-09-16**: G4 rules `119` needs no edit, so leaving it here would be a standing permission to edit an applied migration that is never used — against this block's own *"does NOT widen the Scope list"* discipline. **If the G4 SUPPLEMENT's shape (c) is ratified, `119` returns to this row with that ruling as its basis.** |
 | `001`–`118` | the paired `set role pfin_owner;` / `reset role;` sweep (Decision G3) | adds **executable** statements to every file |
 | **`007`, `015`** | **the `security_invoker = true` change under vault disposition (iii), and the two header corrections riding with it** — `015`'s *"owner-semantics required"* mechanism sentence, and **both files' *"never the raw whole-vault surface"* claim, re-graded to enforcement for `anon`/`authenticated` and convention for `service_role`** | the view change is **executable DDL**; the header corrections ride the same edit because separating them would leave a corrected view standing on a falsified rationale |
 
@@ -344,10 +344,18 @@ Sec ruled `pfin_owner` *"not needed yet"* behind a dated gate (required before t
 3. create role pfin_etl …; create role pfin_provider_sync …;  -- role creation is pre-step territory (Sec §2)
 4. grant service_role to pfin_etl;  grant authenticated to pfin_etl;      -- wall (c), relocated (Sec §3)
    grant service_role to pfin_provider_sync;  grant authenticated to pfin_provider_sync;
-5. grant pfin_owner to migrator;                              -- membership; NOINHERIT ⇒ SET ROLE only
+5. grant pfin_owner to migrator with inherit false, set true;  -- explicit; the option is per-membership in PG16+ and survives a later ALTER ROLE migrator INHERIT (Sec G2)
 6. grant usage on schema auth to pfin_owner;
    grant references, select on auth.users to pfin_owner;      -- REFERENCES not vetoed (Sec §1)
 7. alter database <app_db> owner to pfin_owner;
+7b. create schema pfin authorization pfin_owner;
+7c. revoke create on schema pfin from migrator;                -- ⛔ ENGINE BACKSTOP, and it is the PRIMARY control, not belt-and-braces
+7d. revoke create on schema pfin from public;
+    -- ⚠ Decision J makes 7c MORE important, not less. With the transaction-scoped
+    -- variant now known to TAKE EFFECT, a CLI batching change is the SILENT failure
+    -- path — ownership would land wrong with nothing raised. This revoke turns that
+    -- silent path into a loud 42501 at the first create. Asserted by the standing
+    -- battery leg (o7); a revoke nobody watches is decoration.
 8. \password migrator      then      alter role migrator login;          -- order load-bearing
 9. comment on role … for each of pfin_etl / pfin_provider_sync / migrator -- wall (d), supervised
 ```
