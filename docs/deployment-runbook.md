@@ -413,8 +413,10 @@ await supabase.auth.admin.inviteUserByEmail('<founding-tenant-email>')
 Self-hosted Supabase has no "linked Supabase Cloud project" to `supabase link` against — that command binds to Supabase's hosted platform API, not applicable here. Apply with:
 
 ```sh
-supabase db push --db-url "$PROD_DB_URL"
+supabase db push --yes --db-url "$PROD_DB_URL"
 ```
+
+**`--yes` added 2026-09-17 (Sec FLAG 4 on PR #800):** §6's own narrative already claimed this command carries `--yes` (matching the migrator Scheduled Task's fixed verb, ADR-072 Amendment 6/7) — this line had not actually been updated to match. Same rationale as the Scheduled Task's copy: non-TTY confirmation-prompt behavior is measured safe on the pinned CLI without the flag, but this repo should not keep depending on an unversioned upstream default across a future CLI bump.
 
 This pushes every migration in `supabase/migrations/` (currently through `117` — read the directory live; this runbook does not pin the count) in numeric order and records each in `supabase_migrations.schema_migrations` — the same tracking table OPEN-3 gate #10 already reads for `061`'s provenance. Safe to re-run: the CLI compares against that table and skips what's already applied, so a retry after a partial failure does not re-apply anything.
 
@@ -1209,6 +1211,8 @@ select has_table_privilege('pfin_owner', 'vault.decrypted_secrets', 'SELECT');
 ### 6.5 Migrator bring-up — operator execution order
 
 **This is a consolidation index, not a new procedure.** The ADR-072 Option-E migrator (chunks 1–3: #741/#743/#744/#746, plus Amendments 1–2: #742/#745) is code-complete on `main` but **not yet live** — §6 already says so. This section is the single place a stranger reads the whole go-live order; every step below points at the section that owns its commands and detail. **No command or claim here is new** — where a step's detail does not yet exist in a referenced section, that gap is named as a gap, not filled in.
+
+**⚠ STATUS CORRECTION, 2026-09-17 (Sec's #800 review):** ADR-072 Amendment 6's sha assertion (PR #790) and Amendment 6's delivery assertion (PR #798) are **BLOCKED** (inert by failure, since `ci-migrate` has no route to the docker socket at all — measured live, F/CTO's box measurement) — **not passing.** Every `docker` call either check makes has always failed closed with permission denied; the three earlier "successful" fires only ever went through the Coolify API alone. Amendment 7 (draft, `ci/orchestrator-assert-via-executions`) redesigns both checks to read the Scheduled Task's own self-reported output via the executions API instead of `docker exec` — not yet ratified.
 
 **Ordering dependencies (do not reorder across phases):** Phase A before Phase C — the CI trigger step (§6.4) consumes the UUIDs Phase A produces. Phase B before Phase D — the `migrator` role must exist and be switched on (§6.3) before any unsupervised, CI-triggered apply (§6.4) is safe to exercise. Within Phase B, the `\password`/`LOGIN` handoffs stay a supervised, interactive operator action until SELF-395 (client-side SCRAM scripting) ships — see §6.3's own note.
 

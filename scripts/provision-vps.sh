@@ -1312,6 +1312,12 @@ else
 fi
 
 step "orchestrator lock file (ADR-072 Amendment 6, ci-migrate:ci-migrate 0600 -- Sec C-2 on PR #798)"
+# ⚠ LOCK_FILE_PATH here MUST match LOCK_FILE in scripts/migrator-orchestrate.sh
+# -- one path, asserted in both files, not two copies that can drift (the
+# same convention this file already uses for MIGRATOR_TOKEN_VAR_NAME /
+# TOKEN_VAR_NAME below -- Sec FLAG 3 on PR #800: this cross-reference was
+# missing the first time and nothing tied the two literals together).
+#
 # migrator-orchestrate.sh does `exec 200>"$LOCK_FILE"` (flock -n) AS
 # ci-migrate -- that needs WRITE permission on the FILE, not just on the
 # (1777, sticky) directory it lives in. /var/lock's sticky bit only
@@ -1329,6 +1335,27 @@ step "orchestrator lock file (ADR-072 Amendment 6, ci-migrate:ci-migrate 0600 --
 # a string of exit-7 failures.
 LOCK_FILE_PATH="/var/lock/pfin-migrator-orchestrate.lock"
 DESIRED_LOCK_STATE="ci-migrate:ci-migrate 600"
+# ⚠ Sec FLAG 1 on PR #800, measured this session (BSD stat/chmod on
+# darwin -- same POSIX symlink-dereference semantics; one confirmation on
+# the box's GNU coreutils is still worth taking): `/var/lock` is 1777, so
+# a local unprivileged foothold could pre-create this path as a SYMLINK
+# to any target. `stat` WITHOUT `-L` reports the link itself (correctly
+# mismatching DESIRED_LOCK_STATE), but the OLD correction branch's
+# `chown ci-migrate:ci-migrate ... && chmod 0600 ...` DEREFERENCES the
+# symlink -- run as root under --apply, that silently hands ci-migrate
+# ownership of WHATEVER the link points to. The create branch was
+# incidentally safe (fs.protected_symlinks refuses the cross-owner follow
+# a `touch` would need in a sticky world-writable dir before the `&&`
+# chain even reaches chown/chmod); the correction branch was not --
+# nothing about that path requires the same protected-symlink check.
+# Fixed: refuse to touch anything that is not a plain regular file
+# BEFORE either branch runs, and use `chown -h` (never dereferences) as
+# a second, independent layer even if a TOCTOU symlink swap raced past
+# the type check.
+LOCK_FILE_TYPE="$(sshx "stat -c '%F' $LOCK_FILE_PATH 2>/dev/null" || true)"
+if [[ -n "$LOCK_FILE_TYPE" && "$LOCK_FILE_TYPE" != "regular file" && "$LOCK_FILE_TYPE" != "regular empty file" ]]; then
+  die "$LOCK_FILE_PATH exists but is NOT a regular file (stat -c '%F' reports '$LOCK_FILE_TYPE') -- refusing to chown/chmod it (Sec FLAG 1, PR #800: a symlink here would let chown/chmod dereference onto an attacker-chosen target). Remove it by hand and re-run --apply; do not automate past this."
+fi
 LOCK_STATE="$(sshx "stat -c '%U:%G %a' $LOCK_FILE_PATH 2>/dev/null" || true)"
 if [[ "$LOCK_STATE" == "$DESIRED_LOCK_STATE" ]]; then
   ok "$LOCK_FILE_PATH already ci-migrate:ci-migrate 0600"
@@ -1336,7 +1363,7 @@ elif [[ -z "$LOCK_STATE" ]]; then
   if [[ $APPLY -eq 0 ]]; then
     info "$LOCK_FILE_PATH does not exist -- would create it ci-migrate:ci-migrate 0600"
   else
-    sshx "touch $LOCK_FILE_PATH && chown ci-migrate:ci-migrate $LOCK_FILE_PATH && chmod 0600 $LOCK_FILE_PATH"
+    sshx "touch $LOCK_FILE_PATH && chown -h ci-migrate:ci-migrate $LOCK_FILE_PATH && chmod 0600 $LOCK_FILE_PATH"
     ok "$LOCK_FILE_PATH created -- ci-migrate:ci-migrate 0600"
   fi
 else
@@ -1345,14 +1372,36 @@ else
   # preflight leg here (Sec's own catch criterion) rather than silently
   # re-chowning on a bare preflight run: drift this dangerous should be
   # named and fixed deliberately, via --apply, not corrected invisibly on
-  # a run nobody was watching for it.
+  # a run nobody was watching for it. The type check above already ruled
+  # out a symlink reaching this branch; `-h` is defence-in-depth against
+  # a TOCTOU swap between that check and this chown, not the only guard.
   if [[ $APPLY -eq 0 ]]; then
     die "$LOCK_FILE_PATH exists but is '$LOCK_STATE', not '$DESIRED_LOCK_STATE' -- every ci-migrate-invoked migrator-orchestrate.sh run will exit 7 (lock file unopenable) until this is fixed. Re-run with --apply to correct ownership/mode."
   else
-    sshx "chown ci-migrate:ci-migrate $LOCK_FILE_PATH && chmod 0600 $LOCK_FILE_PATH"
+    sshx "chown -h ci-migrate:ci-migrate $LOCK_FILE_PATH && chmod 0600 $LOCK_FILE_PATH"
     ok "$LOCK_FILE_PATH corrected -- was '$LOCK_STATE', now ci-migrate:ci-migrate 0600"
   fi
 fi
+
+# ⚠ Sec FLAG 2 on PR #800 (offered, not yet measured on the box): on a
+# systemd host `/var/lock` is typically a symlink to `/run/lock`, which is
+# TMPFS -- cleared on every reboot. The provisioning above makes this
+# durable WITHIN a boot, but after a reboot the file is simply gone again
+# and the wedge (whoever creates it first owns it) can recur until this
+# script's `--apply` is re-run. Direction is still fail-closed either way
+# (exit 7, distinguishable "could not open" vs "already holds the lock"),
+# so this is not treated as a blocking condition -- but it is NOT
+# currently provisioned durably, and that gap should not be silently
+# assumed closed. MEASURE FIRST (F/CTO, on the box, read-only):
+#   readlink -f /var/lock; findmnt -no FSTYPE /run/lock
+# If that confirms /run/lock is tmpfs, add a systemd-tmpfiles drop-in so
+# the file is recreated correctly-owned at every boot, independent of
+# whichever process happens to touch it first:
+#   printf 'f %s 0600 ci-migrate ci-migrate -\n' "$LOCK_FILE_PATH" > /etc/tmpfiles.d/pfin-migrator-orchestrate.conf
+# Not written by this script yet -- Sec's own framing is "measure, then
+# choose the tmpfiles.d drop-in OR move the lock to a persistent
+# ci-migrate-owned directory," and that choice is worth making with the
+# measurement in hand, not guessed at here.
 
 step "ci-migrate authorized_keys -- forced command (ADR-072 C3 -- 'restrict', not a hand-listed no-* set)"
 [[ -f "$CI_MIGRATE_SSH_PUBKEY" ]] || die "no public key at CI_MIGRATE_SSH_PUBKEY=$CI_MIGRATE_SSH_PUBKEY -- generate the ci_only keypair first (ssh-keygen -t ed25519 -N '' -f <path>), give F/CTO the PRIVATE half for this repo's CI_MIGRATE_SSH_PRIVATE_KEY GitHub Actions secret, and point this var at the PUBLIC half."
