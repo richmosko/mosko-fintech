@@ -1297,8 +1297,8 @@ select set_config('role', 'postgres', true);  -- restore before (d) + finish()
 -- (o1) IDENTITY ANCHOR — pin the tier. Without this, leg (o) could silently fence the wrong role.
 select is(
   (select tableowner from pg_tables where schemaname = 'pfin' and tablename = 'nav_daily'),
-  'postgres',
-  '(o1) owner-tier identity anchor: pfin.nav_daily is owned by `postgres` — an identity DISTINCT from the worker''s under the ratified B1 model (the worker logs in as `pfin_etl`, NOINHERIT, and writes AS `service_role`). This leg fences owner-class sessions (human psql, migration scripts), not the cron. RED if ownership moved, at which point (o2)-(o5) would be fencing some other identity'
+  'pfin_owner',
+  '(o1) owner-tier identity anchor: pfin.nav_daily is owned by `pfin_owner` (ADR-072 Amendment 5 Decision A, the G3 ownership sweep — moved from `postgres`) — an identity DISTINCT from the worker''s under the ratified B1 model (the worker logs in as `pfin_etl`, NOINHERIT, and writes AS `service_role`; neither is `pfin_owner`). This leg fences owner-class sessions (human psql, migration scripts), not the cron. The distinctness is the load-bearing half — RED means either ownership moved AGAIN or the worker identity itself became the owner, at which point (o2)-(o5) would be fencing some other identity'
 );
 
 -- (o2) THE LOAD-BEARING ASSERTION OF THIS BATTERY: the real worker identity cannot rewrite history.

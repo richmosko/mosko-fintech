@@ -589,11 +589,56 @@ $$;
 -- Privileged path: `set local role service_role` (ADR-023 write role-of-record).
 -- Table and function privileges themselves stay decided in 008 and the per-table
 -- grants — NOT here.
-grant service_role to pfin_provider_sync;
+do $rg$
+declare
+  v_can     boolean;
+  v_missing text[] := array[]::text[];
+  v_app     text;
+begin
+  -- ⚠ ROLE-GRAPH GUARD — ADR-072 Amendment 5 G4 dispositions, widened to the four
+  -- `grant <app_role> to <worker_role>` statements after a measured full apply showed
+  -- them failing the unsupervised pass exactly as `119`'s comment did:
+  --     ERROR: permission denied to grant role "service_role" (42501)
+  -- PG 16+ requires ADMIN OPTION on the role being GRANTED. The image creates
+  -- service_role/authenticated, so no bounded applier can ever hold it — and giving it
+  -- one is Sec's standing VETO, because ADMIN OPTION is self-grantable and would let the
+  -- holder grant itself the app roles. These statements belong to the SUPERVISED lane;
+  -- 116 is on the pre-step file list, which is what makes degrading legitimate here.
+  -- ⚠ SKIP IS VERIFIED, NEVER ASSUMED (Sec's condition, the same one placed on `119`):
+  -- being on the list only helps if the pre-step actually ran, so the skip branch READS
+  -- pg_auth_members and RAISES when a membership is missing. A silently skipped grant
+  -- would surface as pfin_provider_sync failing in production, which is the worst place to find it.
+  select coalesce((select r.rolsuper from pg_catalog.pg_roles r
+                    where r.rolname = current_user), false)
+      or (    pg_catalog.pg_has_role(current_user, 'service_role',  'USAGE')
+          and pg_catalog.pg_has_role(current_user, 'authenticated', 'USAGE'))
+    into v_can;
 
--- INVOKER / caller-RLS path: `set local role authenticated` + a synthetic
--- request.jwt.claims binding auth.uid() to the tenant, per Lock 13 mod #3.
-grant authenticated to pfin_provider_sync;
+  if v_can then
+    grant service_role  to pfin_provider_sync;
+    grant authenticated to pfin_provider_sync;
+    raise notice 'pfin_provider_sync: app-role memberships granted by %.', current_user;
+  else
+    foreach v_app in array array['service_role','authenticated'] loop
+      if not exists (select 1 from pg_catalog.pg_auth_members m
+                       join pg_catalog.pg_roles g on g.oid = m.roleid
+                       join pg_catalog.pg_roles u on u.oid = m.member
+                      where g.rolname = v_app and u.rolname = 'pfin_provider_sync') then
+        v_missing := array_append(v_missing, v_app);
+      end if;
+    end loop;
+
+    if array_length(v_missing, 1) is not null then
+      raise exception using errcode = '42501',
+        message = pg_catalog.format('pfin_provider_sync is MISSING app-role membership(s) %s and % cannot grant them.', array_to_string(v_missing, ', '), current_user),
+        detail  = 'Granting a role requires ADMIN OPTION on the role being granted; the image owns service_role/authenticated, so no bounded applier holds it, and giving one that option is a Sec veto (it is self-grantable). The supervised pre-step must have run these grants — and it did not.',
+        hint    = 'Run the pre-step grants for pfin_provider_sync as the image''s true superuser (docs/deployment-runbook.md §6.3), then re-run the apply. Do NOT grant the applier ADMIN OPTION on an app role to get past this.';
+    end if;
+
+    raise warning 'ROLEGRANT-SKIP: app-role memberships for pfin_provider_sync NOT re-granted by % — it holds no ADMIN OPTION on the app roles and must not. SKIP IS VERIFIED, NOT ASSUMED: pg_auth_members was read and both memberships are present, so the supervised pre-step demonstrably ran.', current_user;
+  end if;
+end
+$rg$;
 
 -- ----------------------------------------------------------------------------
 -- Self-documenting comment (the role analogue of `comment on function`).
@@ -602,5 +647,59 @@ grant authenticated to pfin_provider_sync;
 -- be corrected by a further migration, so it states durable properties and
 -- standing requirements rather than facts about today's tree.
 -- ----------------------------------------------------------------------------
-comment on role pfin_provider_sync is
-  'Dedicated login identity for the workers/provider-sync container (BACKLOG §7.6 item S5; realizes ADR-019 Condition C2, renamed by ADR-041 to the pfin_<workers subdirectory> convention and promoted by it from V1.x hardening to a Phase-7 deploy gate; migration 116). Created NOLOGIN + NOINHERIT with NO PASSWORD (inert by construction); NOT superuser, NOT owner, NOT BYPASSRLS, owns nothing, and holds NO direct table, schema, function or sequence privilege. Its entire reach is via explicit SET ROLE to its two memberships: authenticated (the SECURITY INVOKER / caller-RLS path — fn_ingest_transactions under RLS, account and asset resolution, the tenant-scoped linked_source lifecycle) and service_role (the privileged path — cross-tenant poll enumeration, provider snapshot and eod_price writes, the service_role-only credential decrypt view, and Vault credential admission), per the ADR-023 write role-of-record. Membership in anon is deliberately WITHHELD: it is one of the three memberships the shared authenticator carries, and the worker never SET ROLEs to it. NOINHERIT is load-bearing: a forgotten SET ROLE MUST fail 42501 loudly rather than silently run elevated. On PG 16+ three independent settings govern this and all three MUST hold — rolinherit false (future memberships), MEMBER-yes/USAGE-no per existing membership (no implicit privilege today), and per-membership set_option true (SET ROLE actually permitted); a re-grant WITH INHERIT TRUE or WITH SET FALSE defeats the posture while role-level flags still read correctly. Because this role is neither table owner nor superuser it can reach neither owner-only trigger bypass (ALTER TABLE ... DISABLE TRIGGER, session_replication_role), so the trigger-realized matched-tenant and immutability fences its own writes pass through are un-bypassable by the writer. Chosen over continuing to share PostgREST''s authenticator so provider-sync is INDEPENDENTLY REVOCABLE (ALTER ROLE pfin_provider_sync NOLOGIN stops provider-sync and nothing else) and independently rotatable, and so a compromise of the container that holds the Plaid secret and decrypts provider credentials does not yield the identity fronting the entire public Data API. CREATED NOLOGIN WITH NO PASSWORD — a repo-committed credential is prohibited; an operator switches the role on at deploy time with TWO statements IN A LOAD-BEARING ORDER: (1) `\password pfin_provider_sync` (prompts, computes the SCRAM verifier CLIENT-SIDE, sets ONLY the password while the role is still NOLOGIN and therefore inert), then (2) `ALTER ROLE pfin_provider_sync LOGIN` (carries no secret). The single statement `ALTER ROLE ... WITH LOGIN PASSWORD ''<plaintext>''` is PROHIBITED per the Sec B10 ruling of 2026-08-02: statement logging captures it verbatim, writing the credential to the server log in cleartext, and typing it also lands it in ~/.psql_history. Be precise about what \password buys: plaintext never leaves the client, but the resulting ALTER USER carrying a SCRAM-SHA-256 verifier IS still logged — that verifier is not a usable credential (a client proof needs ClientKey, which StoredKey does not yield), leaving only an offline attack bounded by secret entropy and iteration count, which is why the secret MUST be high-entropy and machine-generated. Do NOT claim "the secret isn''t logged". Ordering matters: running (2) without (1) leaves LOGIN-with-no-password, the exact state this role is shaped to avoid, and it is what the re-apply WARNING branch in 116 detects. NOLOGIN rather than LOGIN-without-a-password because rolcanlogin is checked BEFORE any pg_hba auth method: a passwordless LOGIN role is reachable with NO credential under a `trust` line, so the alternative shape would outsource its fail-closed property to a config file outside the repository. Consequence for tests: rolcanlogin is FALSE at migration time and TRUE only in a provisioned environment. ⚠ CREATING THIS ROLE DOES NOT BY ITSELF MOVE provider-sync OFF authenticator, and no catalog read can tell you whether it has moved: the cutover is the container''s PFIN_DB_USER environment variable, and rolcanlogin true here proves only that the deploy step ran. The deploy pass MUST verify the container''s effective PFIN_DB_USER. Revoke with ALTER ROLE pfin_provider_sync NOLOGIN — stops provider-sync and nothing else. This role and pfin_etl (migration 055) are deliberately SEPARATE and MUST NOT be converged: one shared worker role reintroduces the blast radius and the loss of independent revocation that the dedicated-role decision was ratified to remove.';
+do $g4$
+declare
+  v_admin boolean;
+  v_text  text := $lit$Dedicated login identity for the workers/provider-sync container (BACKLOG §7.6 item S5; realizes ADR-019 Condition C2, renamed by ADR-041 to the pfin_<workers subdirectory> convention and promoted by it from V1.x hardening to a Phase-7 deploy gate; migration 116). Created NOLOGIN + NOINHERIT with NO PASSWORD (inert by construction); NOT superuser, NOT owner, NOT BYPASSRLS, owns nothing, and holds NO direct table, schema, function or sequence privilege. Its entire reach is via explicit SET ROLE to its two memberships: authenticated (the SECURITY INVOKER / caller-RLS path — fn_ingest_transactions under RLS, account and asset resolution, the tenant-scoped linked_source lifecycle) and service_role (the privileged path — cross-tenant poll enumeration, provider snapshot and eod_price writes, the service_role-only credential decrypt view, and Vault credential admission), per the ADR-023 write role-of-record. Membership in anon is deliberately WITHHELD: it is one of the three memberships the shared authenticator carries, and the worker never SET ROLEs to it. NOINHERIT is load-bearing: a forgotten SET ROLE MUST fail 42501 loudly rather than silently run elevated. On PG 16+ three independent settings govern this and all three MUST hold — rolinherit false (future memberships), MEMBER-yes/USAGE-no per existing membership (no implicit privilege today), and per-membership set_option true (SET ROLE actually permitted); a re-grant WITH INHERIT TRUE or WITH SET FALSE defeats the posture while role-level flags still read correctly. Because this role is neither table owner nor superuser it can reach neither owner-only trigger bypass (ALTER TABLE ... DISABLE TRIGGER, session_replication_role), so the trigger-realized matched-tenant and immutability fences its own writes pass through are un-bypassable by the writer. Chosen over continuing to share PostgREST's authenticator so provider-sync is INDEPENDENTLY REVOCABLE (ALTER ROLE pfin_provider_sync NOLOGIN stops provider-sync and nothing else) and independently rotatable, and so a compromise of the container that holds the Plaid secret and decrypts provider credentials does not yield the identity fronting the entire public Data API. CREATED NOLOGIN WITH NO PASSWORD — a repo-committed credential is prohibited; an operator switches the role on at deploy time with TWO statements IN A LOAD-BEARING ORDER: (1) `\password pfin_provider_sync` (prompts, computes the SCRAM verifier CLIENT-SIDE, sets ONLY the password while the role is still NOLOGIN and therefore inert), then (2) `ALTER ROLE pfin_provider_sync LOGIN` (carries no secret). The single statement `ALTER ROLE ... WITH LOGIN PASSWORD '<plaintext>'` is PROHIBITED per the Sec B10 ruling of 2026-08-02: statement logging captures it verbatim, writing the credential to the server log in cleartext, and typing it also lands it in ~/.psql_history. Be precise about what \password buys: plaintext never leaves the client, but the resulting ALTER USER carrying a SCRAM-SHA-256 verifier IS still logged — that verifier is not a usable credential (a client proof needs ClientKey, which StoredKey does not yield), leaving only an offline attack bounded by secret entropy and iteration count, which is why the secret MUST be high-entropy and machine-generated. Do NOT claim "the secret isn't logged". Ordering matters: running (2) without (1) leaves LOGIN-with-no-password, the exact state this role is shaped to avoid, and it is what the re-apply WARNING branch in 116 detects. NOLOGIN rather than LOGIN-without-a-password because rolcanlogin is checked BEFORE any pg_hba auth method: a passwordless LOGIN role is reachable with NO credential under a `trust` line, so the alternative shape would outsource its fail-closed property to a config file outside the repository. Consequence for tests: rolcanlogin is FALSE at migration time and TRUE only in a provisioned environment. ⚠ CREATING THIS ROLE DOES NOT BY ITSELF MOVE provider-sync OFF authenticator, and no catalog read can tell you whether it has moved: the cutover is the container's PFIN_DB_USER environment variable, and rolcanlogin true here proves only that the deploy step ran. The deploy pass MUST verify the container's effective PFIN_DB_USER. Revoke with ALTER ROLE pfin_provider_sync NOLOGIN — stops provider-sync and nothing else. This role and pfin_etl (migration 055) are deliberately SEPARATE and MUST NOT be converged: one shared worker role reintroduces the blast radius and the loss of independent revocation that the dedicated-role decision was ratified to remove.$lit$;
+  v_live  text;
+begin
+  -- ⚠ G4 DISPOSITION, WIDENED TO 116 (ADR-072 Amendment 5). 116's ENTIRE effect is one
+  -- `comment on role pfin_provider_sync`, so it fails the unsupervised pass exactly as 119 did:
+  -- COMMENT ON ROLE needs superuser or ADMIN OPTION on the target, and the image's
+  -- pre-step creates pfin_provider_sync, so no bounded applier holds it. 116 therefore joins the
+  -- PRE-STEP FILE LIST alongside 118 and 119 — which is what makes degrading legitimate,
+  -- G4's criterion being a statement about the list and never a prohibition on a file.
+  -- ⚠ SKIP IS VERIFIED, NEVER ASSUMED (Sec's condition, as placed on 119): being on the
+  -- list only helps if the pre-step actually ran, so the skip branch READS the catalog and
+  -- RAISES when the comment is absent or stale. 116 exists precisely to CORRECT a stale
+  -- comment, so silently skipping it would restore the defect it was written to fix.
+  -- ⚠ `USAGE`, not `MEMBER`: under NOINHERIT `USAGE` under-reports, which is FAIL-CLOSED
+  -- for a guard and BLIND for a watcher. The battery's watcher uses MEMBER. Do not unify.
+  -- ⚠ oid read from pg_roles, not pg_authid: the latter is superuser-only, so reading it
+  -- would make this branch unreachable for exactly the applier it exists to serve.
+  select coalesce((select r.rolsuper from pg_catalog.pg_roles r
+                    where r.rolname = current_user), false)
+      or exists (
+           select 1
+             from pg_catalog.pg_auth_members m
+             join pg_catalog.pg_roles tgt     on tgt.oid = m.roleid
+             join pg_catalog.pg_roles grantee on grantee.oid = m.member
+            where tgt.rolname = 'pfin_provider_sync'
+              and m.admin_option
+              and pg_catalog.pg_has_role(current_user, grantee.oid, 'USAGE'))
+    into v_admin;
+
+  if v_admin then
+    execute pg_catalog.format('comment on role pfin_provider_sync is %L', v_text);
+    raise notice '116: comment on role pfin_provider_sync re-issued as %.', current_user;
+    return;
+  end if;
+
+  select pg_catalog.shobj_description(r.oid, 'pg_authid') into v_live
+    from pg_catalog.pg_roles r where r.rolname = 'pfin_provider_sync';
+
+  if v_live is null then
+    raise exception using errcode = '42501',
+      message = pg_catalog.format('migration 116 cannot be applied by %I AND the supervised pre-step did not land the comment: pg_shdescription carries NOTHING for role pfin_provider_sync.', current_user),
+      detail  = 'COMMENT ON ROLE requires superuser or the ADMIN option on the target role, which no bounded applier holds for a role the pre-step created. Skipping here would leave the role undocumented with nothing observing it.',
+      hint    = 'Run the pre-step for 116 (psql -U supabase_admin -f supabase/migrations/116_pfin_provider_sync_role.sql), then re-run the apply. Do NOT widen this role, and do NOT grant it ADMIN OPTION on pfin_provider_sync, to get past this — an unexplained 42501 mid-bootstrap is exactly when the widening repair is most tempting and most wrong.';
+  elsif v_live is distinct from v_text then
+    raise exception using errcode = '42501',
+      message = pg_catalog.format('migration 116 cannot be applied by %I AND the comment on role pfin_provider_sync is STALE — present, but not the text this migration carries.', current_user),
+      detail  = 'A stale catalog comment on a worker login identity is read at \du+ by an operator with no repo in front of them, so it is refused rather than skipped.',
+      hint    = 'Re-run the pre-step with THIS revision of the file, then re-run the apply. Do NOT widen this role to get past this.';
+  end if;
+
+  raise warning 'G4-SKIP: comment on role pfin_provider_sync NOT re-issued by % — it holds neither superuser nor ADMIN OPTION on the role. SKIP IS VERIFIED, NOT ASSUMED: pg_shdescription was read and carries exactly this migration''s text, so the supervised pre-step demonstrably ran.', current_user;
+end
+$g4$;

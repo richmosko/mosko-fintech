@@ -12,6 +12,16 @@
 //   • SC-4 asserts the resolution.ts cusip-first / symbol / ON CONFLICT dedup behaves against
 //     the REAL 016 (symbol) + 020 (cusip) partial-unique indexes on pfin.asset.
 //
+// ── Sec C-c (ADR-072 Amendment 5 harness-identity-at-scale ruling, H2) ──────────────────
+// Any test asserting a PRIVILEGE or RLS property must connect as — or `set local role` to —
+// the role whose property is under test, and NEVER rely on `postgres`'s reach to stand in for
+// it. `postgres` here connects with INHERIT on `pfin_owner` (a CI-only re-grant, named + owned
+// by DevOps — see roles.sql at the grant site) purely so fixture cleanup can DELETE; that reach
+// is a harness convenience, not a fact about any role's own privilege, and asserting a
+// privilege/RLS property while merely connected as `postgres` would be vacuous under it.
+// `withTenant` (`set local role authenticated`) / `withServiceRole` (`set local role
+// service_role`) below are the reference shape for a test that DOES assert such a property.
+//
 // ── DETERMINISM + CI POSTURE (QA discipline: no silent green, no flaky CI) ──────────────
 // These require the local Supabase stack (config.toml Postgres @ 127.0.0.1:54322, ALL migrations
 // applied — not a fixed range, vault extension). They are GATED behind RUN_DB_INTEGRATION=1 so the default
@@ -65,9 +75,44 @@ export function liveConn(): LiveConn {
 	};
 }
 
-/** A raw client for test setup/measurement (runs as the connect user; superuser locally). */
+/**
+ * A raw client for test setup/measurement (runs as the connect user — `postgres` locally).
+ * ⚠ NOT superuser: measured `rolsuper = f`. Its reach into `session_replication_role` (a
+ * `superuser`-context GUC per pg_settings.context) comes from the Supabase image's
+ * privileged-settings extension, keyed to membership in `supabase_privileged_role` — a
+ * capability `has_parameter_privilege()` reports `f` for even though it demonstrably works,
+ * and which appears nowhere in this repository. `pfin_owner` holds no such membership and
+ * cannot be given one from here; that is why `cleanupG2` below sets the GUC as THIS
+ * connection's identity before it `set local role pfin_owner`s into table-owner reach —
+ * reversing the order is refused (measured, ADR-072 Amendment 5 harness-identity ruling).
+ */
 export function rawSql(conn: LiveConn = liveConn()): Sql {
 	return postgres({ ...conn, max: 1, prepare: false, onnotice: () => {} });
+}
+
+/**
+ * Sec C-1 fixture-level assertion (ADR-072 Amendment 5 harness-identity ruling): every test
+ * body that shares a pooled connection with a `session_replication_role = 'replica'` cleanup
+ * MUST prove that GUC did not leak past its owning transaction. `set local` dies at commit —
+ * but a future edit that drops the `local` (or reorders it outside `tx.begin`) would make it
+ * persist for the rest of the connection, silently running every later test body with the
+ * ENTIRE trigger layer inert (immutability fences AND the Decision-3 matched-tenant family)
+ * while the suite stays green. Call this as the FIRST statement of every `it()` that runs
+ * against a `db` connection `cleanupG2` has touched.
+ */
+export async function assertReplicationOrigin(db: Sql): Promise<void> {
+	const r = await db<{ v: string }[]>`select current_setting('session_replication_role') as v`;
+	const got = r[0]?.v;
+	if (got !== 'origin') {
+		throw new Error(
+			`Sec C-1 FENCE: session_replication_role = '${got}' at test-body start, expected ` +
+				`'origin'. A prior cleanup's 'set local session_replication_role' leaked past its ` +
+				`transaction (missing 'local', or set outside tx.begin) — the trigger layer ` +
+				`(immutability fences + Decision-3 matched-tenant family) is INERT for the rest ` +
+				`of this connection and every later assertion in this suite is running against ` +
+				`an unfenced database while reporting green.`
+		);
+	}
 }
 
 /**
@@ -144,11 +189,28 @@ export function makeLiveTenantClient(usersId: string, conn: LiveConn = liveConn(
  * Bulldoze all G2 test rows for a tenant + the ZZTG2 test asset. Append-only tables
  * (account_trans / holdings_checkpoint / account_balance_checkpoint) carry immutability
  * triggers that block DELETE for ALL roles incl. service_role — so the deletes run under
- * `session_replication_role = 'replica'` (superuser-only), which suppresses user + FK/cascade
- * triggers for THIS transaction only. Everything is deleted explicitly in dependency order,
- * so cascade is not relied on. Idempotent: safe to run as both pre-clean (a prior aborted run
- * may have left committed rows) and teardown. Keyed on stable identifiers (users_id + the
- * global ZZTG2 symbol), so it never touches another tenant's data.
+ * `session_replication_role = 'replica'`, which suppresses user + FK/cascade triggers for
+ * THIS transaction only. Everything is deleted explicitly in dependency order, so cascade is
+ * not relied on. Idempotent: safe to run as both pre-clean (a prior aborted run may have left
+ * committed rows) and teardown. Keyed on stable identifiers (users_id + the global ZZTG2
+ * symbol), so it never touches another tenant's data.
+ *
+ * ⚠ IDENTITY, POST ADR-072 AMENDMENT 5 (G3 pfin_owner ownership sweep) — H2, F/CTO-ratified,
+ * SUPERSEDES an earlier `set local role pfin_owner` switch tried here. **`postgres` stays the
+ * harness identity**: CI re-grants it `INHERIT` on `pfin_owner` (DevOps-owned re-grant step;
+ * see `roles.sql`'s comment at the grant site for the production-posture divergence it names),
+ * so no transaction-scoped role switch is needed for DELETE reach. **Why the switch was
+ * reverted, not merely dropped:** a `set local role pfin_owner` window spanned this ENTIRE
+ * transaction, including `delete from auth.users` — a table `pfin_owner` does not own and has
+ * no business reaching, in a *different* schema with a *different* owner. That statement
+ * failed 42501 under the switch. The defect is structural (a transaction-wide role switch
+ * assumes uniform privilege needs across every statement in it, and this transaction spans two
+ * schemas/two owners) — not something a narrower `pfin_owner` grant would fix, which is why H2
+ * removes the switch rather than patching it. Sec C-c: any test asserting a privilege or RLS
+ * property must connect as — or `set role` to — the role whose property is under test; this
+ * harness (INHERIT-based `postgres` reach) is NOT such a test and must not be copied as a
+ * pattern for one — `_liveDb.ts`'s `withTenant`/`withServiceRole` (`set local role
+ * authenticated` / `service_role`) are the reference implementation for that shape.
  */
 export async function cleanupG2(db: Sql, usersId: string, assetSymbols: readonly string[]): Promise<void> {
 	await db.begin(async (tx) => {
@@ -161,6 +223,11 @@ export async function cleanupG2(db: Sql, usersId: string, assetSymbols: readonly
 		await tx`delete from pfin.account_users where users_id = ${usersId}`;
 		await tx`delete from pfin.account where users_id = ${usersId}`;
 		await tx`delete from pfin.linked_source where users_id = ${usersId}`;
+		// Sec C-d: this delete must NEVER sit inside a `pfin_owner` role window. `auth.users` is
+		// a different schema with a different owner — a `pfin_owner` switch has no business
+		// reaching it, and the H2 revert above exists BECAUSE an earlier version of this
+		// function put it inside exactly such a window (42501). There is no role window here
+		// now; keep it that way if H3 (per-statement role switching) is ever revisited.
 		await tx`delete from auth.users where id = ${usersId}`;
 	});
 }

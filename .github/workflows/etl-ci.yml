@@ -314,15 +314,41 @@ jobs:
         uses: ./.github/actions/supabase-cli-setup
 
       - name: Start local stack (db-only; -x drops non-db services incl gotrue/auth)
-        # Same exclusion list as db-tests.yml's rls-battery job. The `auth`
-        # SCHEMA (needed by both test files' `pg_dump --schema=auth` step) is
-        # created at DB init independent of the excluded GoTrue CONTAINER — see
-        # db-tests.yml's own "Smoke — auth.uid() resolves under db-only" step,
-        # which proves this same property. `supabase start` applies
-        # supabase/migrations/** (through the current head) on bring-up.
+        # Composite action -- single source of truth for db-only bring-up +
+        # the ADR-072 Amendment 5 Decision K auth-grants.sql privileged step,
+        # shared by db-tests.yml, security-scan.yml, worker-ci.yml, etl-ci.yml.
+        # See .github/actions/start-local-stack/action.yml for the full recipe
+        # and why it exists (this job's integration battery independently hit
+        # the identical "permission denied for schema auth" failure before
+        # this extraction, from the same roles.sql WARNING). Composite-action
+        # steps do NOT inherit this job's `defaults.run.working-directory`
+        # (workers/etl) — the action's own steps run at `github.workspace`,
+        # which is what supabase/config.toml and supabase/auth-grants.sql
+        # need, with no override required here.
+        uses: ./.github/actions/start-local-stack
+
+      - name: Build the DevOps scratch-DB template (pfin_tmpl) for the fixtures below
+        # test_nav_backfill_write.py / test_nav_component_write.py now clone their
+        # scratch database from `pfin_tmpl` via scripts/db-template-clone.sh
+        # (QA fix, 2026-09-17) instead of applying supabase/migrations/**
+        # raw against a fresh database as `postgres` — the class of bug this whole
+        # ADR-072 Amendment 5 CI-wiring chain has been closing (`postgres` no
+        # longer owns anything; a raw apply with no per-database pre-step dies at
+        # migration 001 with "permission denied"). db-template-clone.sh REFUSES to
+        # clone a stale or missing template rather than silently serving one (see
+        # its own staleness-fence header) — measured (QA, local repro): with no
+        # template built in this job, the clone step fails closed before either
+        # fixture gets a database at all. This step is what security-scan.yml's
+        # C3 lane already runs (`scripts/db-template-build.sh`) to build/refresh
+        # `pfin_tmpl` — same script, same one-artifact principle, now also a
+        # prerequisite of THIS job's fixtures, not just C3's.
+        # `working-directory: .`: this job's `defaults.run.working-directory` is
+        # `workers/etl` (see the top of this file); the script resolves its own
+        # repo root internally regardless of caller cwd, but the invocation path
+        # below (`scripts/db-template-build.sh`) is written relative to the repo
+        # root, so this step needs the override.
         working-directory: .
-        run: |
-          supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+        run: bash scripts/db-template-build.sh
 
       - name: Install uv (provisions Python per workers/etl/.python-version = 3.14)
         uses: astral-sh/setup-uv@v6

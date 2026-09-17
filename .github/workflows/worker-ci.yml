@@ -110,15 +110,18 @@ jobs:
         uses: ./.github/actions/supabase-cli-setup
 
       - name: Start local stack (db-only; -x drops non-db services incl gotrue/auth)
-        # `supabase start` applies supabase/migrations/** (001–021) on bring-up —
-        # incl. 007 (vault: SimpleFINAdapterAdmission G3 needs vault.create_secret) and
-        # 016/020 (symbol/cusip partial-unique indexes: resolution SC-4 dedup). `-x`
-        # excludes the non-db service containers (the harness never uses GoTrue/JWT —
-        # it connects as postgres + SET LOCAL ROLE service_role). Invalid `-x` names
-        # only warn, so this list is safe across CLI versions.
-        working-directory: .
-        run: |
-          supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+        # Composite action -- single source of truth for db-only bring-up +
+        # the ADR-072 Amendment 5 Decision K auth-grants.sql privileged step,
+        # shared by db-tests.yml, security-scan.yml, worker-ci.yml, etl-ci.yml.
+        # See .github/actions/start-local-stack/action.yml for the full recipe
+        # and why it exists (this job's Live-DB integration lane independently
+        # hit the identical "permission denied for schema auth" failure before
+        # this extraction, from the same roles.sql WARNING). Composite-action
+        # steps do NOT inherit this job's `defaults.run.working-directory`
+        # (workers/provider-sync) — the action's own steps run at
+        # `github.workspace`, which is what supabase/config.toml and
+        # supabase/auth-grants.sql need, with no override required here.
+        uses: ./.github/actions/start-local-stack
 
       - uses: actions/setup-node@v4
         with:

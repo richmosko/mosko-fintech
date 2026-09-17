@@ -376,12 +376,21 @@ select throws_like(
 -- apply, so this is the paired assertion for a database where 111 had
 -- ALREADY been applied once); (iii) it takes NO p_trigger_source parameter.
 -- =====================================================================
+-- ⚠ ADR-072 Amendment 5: the implicit-owner grantee is subtracted by the function's ACTUAL
+-- owner (pg_proc.proowner -> rolname), never a hardcoded role name. fn_emit_audit_log is
+-- owned by `pfin_owner` post-sweep (was `postgres`) — its self-grant appears in
+-- routine_privileges once PUBLIC is revoked, same as any owner's does, so a name-literal
+-- subtraction silently breaks the moment ownership moves again. A dynamic subquery does not.
 select is(
   (select array_agg(grantee::text order by grantee) from information_schema.routine_privileges
     where routine_schema = 'pfin' and routine_name = 'fn_emit_audit_log' and privilege_type = 'EXECUTE'
-      and grantee <> 'postgres'),
+      and grantee <> (
+        select r.rolname from pg_proc p
+          join pg_roles r on r.oid = p.proowner
+         where p.pronamespace = 'pfin'::regnamespace and p.proname = 'fn_emit_audit_log'
+      )),
   array['authenticated', 'service_role'],
-  '(7-i) fn_emit_audit_log''s EXECUTE ACL names EXACTLY {authenticated, service_role} beyond the implicit owner — no PUBLIC, no third grantee'
+  '(7-i) fn_emit_audit_log''s EXECUTE ACL names EXACTLY {authenticated, service_role} beyond the implicit owner (subtracted by the function''s ACTUAL owner, not a hardcoded name — ADR-072 Amendment 5) — no PUBLIC, no third grantee'
 );
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace

@@ -16,11 +16,25 @@ Description:
     coordination reply, this deliberately does NOT reuse the `.env`-pointing
     `construct_or_skip`/`nav_worker` fixture shape those tests use — this
     file's tests WRITE rows, which is exactly what a scratch-DB-per-module
-    harness exists to keep off the real stack. Same shape as QA's pgTAP
-    scratch-DB harness (create DB on the local cluster -> mirror auth schema
-    -> apply migrations 001->068 in order -> arm a THROWAWAY login role this
-    fixture creates and drops itself -> run -> drop DB and drop that role),
-    reused here for a Python-level round trip instead of pg_prove.
+    harness exists to keep off the real stack.
+
+    ⚠ ADR-072 Amendment 5 / Sec H2 harness-identity ruling (2026-09-17): this
+    fixture used to build its own scratch DB by hand (create DB -> `pg_dump
+    --schema=auth` mirror -> re-create extensions -> re-apply every
+    `supabase/migrations/*.sql` file in order via raw `docker exec ... psql`)
+    — a SECOND, hand-rolled migration-apply path that diverged from the
+    pgTAP harness's own and from `db-template-build.sh`, and which started
+    failing "permission denied for database" at `001_pfin_foundation.sql`
+    once ADR-072 Amendment 5 changed pfin object ownership: `postgres`
+    reaching the freshly-created scratch DB no longer has the same implicit
+    per-database bootstrap posture the old one-off DB had. Rebuilding that
+    posture by hand here — a THIRD copy of "how a fresh pfin DB gets set
+    up" — is exactly the drift DevOps's `scripts/db-template-clone.sh`
+    exists to close (it already builds/refreshes `pfin_tmpl` via
+    `db-template-build.sh` and stamps + checks a staleness marker so a clone
+    is never silently served against a stale schema). This fixture now
+    SHELLS OUT to that script instead of re-implementing scratch-DB
+    construction: one harness path, not three.
     ⚠ NEVER `pfin_etl` — see the `scratch_db` fixture's own docstring for the
     incident this recipe exists to prevent from recurring.
 
@@ -56,7 +70,6 @@ _CONTAINER = "supabase_db_mosko-fintech"
 _SCRATCH_DB = "qa_scratch_self217_write_int"
 _SCRATCH_LOGIN_ROLE = "qa_scratch_self217_etl_login"  # created+dropped HERE, never pfin_etl
 _SCRATCH_LOGIN_PASSWORD = "qa_scratch_only_not_real"  # scratch-only; owned start to finish by this fixture
-_MIGRATIONS_DIR = None  # resolved in the fixture, relative to this repo checkout
 
 
 def _docker_psql(db, sql=None, sql_file=None, check=True):
@@ -67,6 +80,19 @@ def _docker_psql(db, sql=None, sql_file=None, check=True):
         with open(sql_file, "rb") as f:
             return subprocess.run(cmd, stdin=f, capture_output=True, text=True, check=check)
     cmd += [_CONTAINER, "psql", "-U", "postgres", "-d", db, "-v", "ON_ERROR_STOP=1", "-c", sql]
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+
+
+def _docker_psql_admin(db, sql, check=False):
+    # ⚠ `db-template-clone.sh` creates the clone as `supabase_admin`, NOT
+    # `postgres` (its own header: "once a clone is created as
+    # supabase_admin, $SUPERUSER no longer owns it either" — createdb's
+    # owner is whoever connects to run it). `postgres` therefore cannot
+    # DROP DATABASE on this scratch DB post-clone; teardown must use the
+    # same identity the script used to create it. `check=False` by default:
+    # teardown best-effort, same posture the pre-clone-script version had.
+    cmd = ["docker", "exec", _CONTAINER, "psql", "-U", "supabase_admin", "-d", db,
+           "-v", "ON_ERROR_STOP=1", "-c", sql]
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
 
@@ -82,11 +108,31 @@ def _docker_available():
 
 @pytest.fixture(scope="module")
 def scratch_db():
-    """Session-for-this-module scratch database: fresh DB on the local
-    Postgres cluster, auth schema mirrored, all migrations applied in order,
-    a THROWAWAY login role armed for the write path. Dropped on teardown
-    regardless of test outcome. NEVER touches F/CTO's real local dev DB — a
-    distinct database name on the same cluster, created and dropped here.
+    """Session-for-this-module scratch database: a fast structural CLONE of
+    `pfin_tmpl` (DevOps's `scripts/db-template-clone.sh`), a THROWAWAY login
+    role armed for the write path. Dropped on teardown regardless of test
+    outcome. NEVER touches F/CTO's real local dev DB — a distinct database
+    name on the same cluster, created and dropped here.
+
+    ⚠ ROUTES THROUGH `db-template-clone.sh` RATHER THAN BUILDING THE SCRATCH
+    DB BY HAND — ADR-072 Amendment 5 / Sec H2 harness-identity ruling
+    (2026-09-17). This fixture used to DROP/CREATE DATABASE, mirror `auth`
+    via `pg_dump --schema=auth`, re-create the `extensions`/`vault`
+    extensions, and re-apply every `supabase/migrations/*.sql` file in
+    order — a second, hand-rolled construction path that started failing
+    "permission denied for database" at `001_pfin_foundation.sql` once the
+    ownership sweep landed (the fresh scratch DB no longer inherited the
+    same per-database bootstrap posture `postgres` had before). Rebuilding
+    that logic here — a THIRD copy of "how a pfin DB gets set up," after the
+    pgTAP harness's own and `db-template-build.sh` — is the drift the clone
+    script exists to close: it clones the already-built, already-migrated,
+    already-granted `pfin_tmpl` template (built by `db-template-build.sh`,
+    which this repo's CI wires in ahead of this job — see that script's own
+    header for the staleness fence it enforces) and hands back a scratch DB
+    `postgres` can read/write immediately, no further setup. `auth-schema`
+    privileges and the H2 `pfin_owner` INHERIT grant are baked into
+    `pfin_tmpl` at build time and copied by the clone — this fixture does
+    not re-apply either.
 
     ⚠ USES A ROLE THIS FIXTURE CREATES AND DROPS ITSELF — NEVER `pfin_etl`.
     Incident recorded here so it is not repeated: an earlier version of this
@@ -99,7 +145,8 @@ def scratch_db():
     the QA/team-lead message thread, 2026-08-12. `_SCRATCH_LOGIN_ROLE` below
     is a role this fixture owns end to end — created here, dropped here,
     named distinctly from anything a migration creates — so this class of
-    mistake cannot recur through this file.
+    mistake cannot recur through this file. The clone script does NOT create
+    this role either — that stays this fixture's own step, unchanged.
     """
     if not _docker_available():
         pytest.skip(f"docker container {_CONTAINER!r} not reachable — skipping integration tier")
@@ -107,66 +154,25 @@ def scratch_db():
     import pathlib
     # this file: <repo_root>/workers/etl/tests/test_nav_backfill_write.py
     repo_root = pathlib.Path(__file__).resolve().parents[3]
-    migrations_dir = repo_root / "supabase" / "migrations"
-    if not migrations_dir.is_dir():
-        pytest.skip(f"migrations dir not found at {migrations_dir} — worktree layout unexpected")
+    clone_script = repo_root / "scripts" / "db-template-clone.sh"
+    if not clone_script.is_file():
+        pytest.skip(f"{clone_script} not found — worktree layout unexpected")
 
-    _docker_psql("postgres", sql=f"DROP DATABASE IF EXISTS {_SCRATCH_DB};")
-    _docker_psql("postgres", sql=f"CREATE DATABASE {_SCRATCH_DB};")
-
-    # Mirror auth schema (structure only — see the pgTAP harness's own
-    # permissive-direction lesson: this is fine here because these tests
-    # never assert a DENIAL that depends on auth-schema privilege).
-    dump = subprocess.run(
-        ["docker", "exec", _CONTAINER, "pg_dump", "-U", "postgres", "-d", "postgres",
-         "--schema=auth", "--schema-only", "--no-owner", "--no-privileges"],
-        capture_output=True, text=True, check=True,
+    # Non-zero exit = clone failed (no template, stale template, or a real
+    # DB error) — a hard failure, not a skip: the container IS reachable
+    # (checked above), so a clone failure here is a real problem the script
+    # already reports with a specific cause (see its own die() messages).
+    subprocess.run(
+        ["bash", str(clone_script), _SCRATCH_DB],
+        cwd=repo_root, capture_output=True, text=True, check=True,
     )
-    restore = subprocess.run(
-        ["docker", "exec", "-i", _CONTAINER, "psql", "-U", "postgres", "-d", _SCRATCH_DB,
-         "-v", "ON_ERROR_STOP=1"],
-        input=dump.stdout, capture_output=True, text=True,
-    )
-    assert restore.returncode == 0, f"auth schema restore failed: {restore.stderr}"
-
-    ext_sql = (
-        "create schema if not exists extensions;"
-        "create extension if not exists pg_net schema extensions;"
-        "create extension if not exists pg_stat_statements schema extensions;"
-        "create extension if not exists pgcrypto schema extensions;"
-        "create extension if not exists \"uuid-ossp\" schema extensions;"
-        "create schema if not exists vault;"
-        "create extension if not exists supabase_vault schema vault;"
-    )
-    r = _docker_psql(_SCRATCH_DB, sql=ext_sql)
-    assert r.returncode == 0, f"extensions setup failed: {r.stderr}"
-
-    # ⚠ THE PERMISSIVE-HARNESS LESSON (QA memory, SELF-218): `pg_dump
-    # --no-privileges` drops the real bootstrap's `grant usage on schema
-    # auth` along with its revokes. Unlike the pgTAP batteries (where RLS
-    # policies pre-resolve auth.uid() to a function OID at CREATE POLICY
-    # time and never re-check schema USAGE), this suite calls `select
-    # auth.uid()` as a FRESH top-level statement under `authenticated`
-    # inside impersonate() — that fresh parse DOES need USAGE to resolve the
-    # name. Grant it explicitly rather than let these tests read as broken.
-    r = _docker_psql(
-        _SCRATCH_DB,
-        sql="grant usage on schema auth to authenticated, anon, service_role;",
-    )
-    assert r.returncode == 0, f"auth schema USAGE grant failed: {r.stderr}"
-
-    for f in sorted(migrations_dir.glob("*.sql")):
-        r = subprocess.run(
-            ["docker", "exec", "-i", _CONTAINER, "psql", "-U", "postgres", "-d", _SCRATCH_DB,
-             "-v", "ON_ERROR_STOP=1"],
-            input=f.read_text(), capture_output=True, text=True,
-        )
-        assert r.returncode == 0, f"migration {f.name} failed: {r.stderr}"
 
     # Throwaway login role — NOINHERIT + membership shape mirrors 055's
     # pfin_etl exactly (that shape is what TenantBoundConnection's SET
     # LOCAL ROLE dance depends on), but this identity is owned start to
-    # finish by this fixture, never the shared cluster role.
+    # finish by this fixture, never the shared cluster role. The clone does
+    # NOT create it — that stays this fixture's own step, per DevOps's
+    # interface note.
     _docker_psql("postgres", sql=f"DROP ROLE IF EXISTS {_SCRATCH_LOGIN_ROLE};")
     r = _docker_psql(
         _SCRATCH_DB,
@@ -184,7 +190,7 @@ def scratch_db():
 
     yield {"dbname": _SCRATCH_DB}
 
-    _docker_psql("postgres", sql=f"DROP DATABASE IF EXISTS {_SCRATCH_DB};")
+    _docker_psql_admin("postgres", f"DROP DATABASE IF EXISTS {_SCRATCH_DB};")
     _docker_psql("postgres", sql=f"DROP ROLE IF EXISTS {_SCRATCH_LOGIN_ROLE};")
 
 

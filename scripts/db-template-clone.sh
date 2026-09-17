@@ -176,9 +176,22 @@ fi
 log "staleness check passed (head=$CURRENT_HEAD, sha256=$CURRENT_SHA, image=$CURRENT_IMAGE_ID)."
 
 # --- the fast path: template clone ---
-psql_as postgres -Atqc "select pg_terminate_backend(pid) from pg_stat_activity where datname = '$SCRATCH_NAME' and pid <> pg_backend_pid();" >/dev/null 2>&1 || true
-psql_as postgres -Atqc "drop database if exists \"$SCRATCH_NAME\";" >/dev/null
-createdb -h "$DB_HOST" -p "$DB_PORT" -U "$SUPERUSER" --template="$TEMPLATE_NAME" "$SCRATCH_NAME"
+# ⚠ AS supabase_admin, NOT $SUPERUSER — measured 2026-09-17 (C3 lane): under the
+# ADR-072 Amendment 5 sweep, $TEMPLATE_NAME ($SUPERUSER = postgres) is
+# pfin_owner-owned (db-template-build.sh's own pre-step flips it, matching
+# production). `CREATE DATABASE ... TEMPLATE` requires the connecting role to
+# be either superuser or the template's OWNER — $SUPERUSER holds neither
+# anymore, and CREATEDB alone does not substitute; it failed with
+# "permission denied to copy database". supabase_admin is the image's true
+# superuser (see db-template-build.sh's own psql_admin() for the identical
+# pattern) and bypasses this check unconditionally. The terminate/drop pair
+# for a PRIOR $SCRATCH_NAME must move to the same identity for a consistent
+# reason: once a clone is created as supabase_admin, $SUPERUSER no longer
+# owns it either, and a later `drop database` as $SUPERUSER would fail the
+# same way on the NEXT run.
+psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d postgres -Atqc "select pg_terminate_backend(pid) from pg_stat_activity where datname = '$SCRATCH_NAME' and pid <> pg_backend_pid();" >/dev/null 2>&1 || true
+psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d postgres -Atqc "drop database if exists \"$SCRATCH_NAME\";" >/dev/null
+createdb -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin --template="$TEMPLATE_NAME" "$SCRATCH_NAME"
 log "cloned $TEMPLATE_NAME -> $SCRATCH_NAME."
 
 # --- replay pg_db_role_setting rows keyed to THIS SPECIFIC database OID ---
@@ -201,12 +214,18 @@ if [ -n "$ROWS" ]; then
     [ -z "$kv" ] && continue
     key="${kv%%=*}"
     val="${kv#*=}"
+    # ⚠ AS supabase_admin, NOT $SUPERUSER — same reason as the clone above:
+    # $SCRATCH_NAME is now owned by supabase_admin (whoever ran `createdb`
+    # becomes the new database's owner), and both ALTER DATABASE ... SET and
+    # ALTER ROLE ... IN DATABASE ... SET require ownership or superuser.
+    # Measured: $SUPERUSER (postgres) got "must be owner of database
+    # $SCRATCH_NAME" here once the clone step itself moved to supabase_admin.
     if [ -z "$rolename" ]; then
       log "replaying per-database setting onto clone: $key"
-      psql_as postgres -v ON_ERROR_STOP=1 -c "alter database \"$SCRATCH_NAME\" set \"$key\" = '$val';" >/dev/null
+      psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d postgres -v ON_ERROR_STOP=1 -c "alter database \"$SCRATCH_NAME\" set \"$key\" = '$val';" >/dev/null
     else
       log "replaying per-role-per-database setting onto clone: $rolename / $key"
-      psql_as postgres -v ON_ERROR_STOP=1 -c "alter role \"$rolename\" in database \"$SCRATCH_NAME\" set \"$key\" = '$val';" >/dev/null
+      psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d postgres -v ON_ERROR_STOP=1 -c "alter role \"$rolename\" in database \"$SCRATCH_NAME\" set \"$key\" = '$val';" >/dev/null
     fi
   done <<< "$ROWS"
 else

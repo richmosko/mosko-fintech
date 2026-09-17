@@ -889,13 +889,28 @@ select is(
 );
 
 -- (W5) …but a CLOSED row may NOT be dateless. Asymmetry is the point, and it is a CHECK.
+-- ⚠ ADR-072 Amendment 5 / Sec H2: this is a DIRECT insert into pfin.account_event, which
+-- `fn_account_event_block_direct_insert` (057's origin fence) admits ONLY from the table
+-- OWNER (`pfin_owner` post-sweep, not `postgres` — see 057's own header for the full
+-- reasoning). Without the switch this INSERT is refused at the origin fence with "rejects
+-- direct INSERT", never reaching the effective_date CHECK this leg actually tests — a
+-- throws_like pattern mismatch, not the intended failure. `usage on schema extensions` is
+-- also granted here (test-only, rolled back with this file's own txn) so pgtap's own
+-- functions stay reachable once we are `pfin_owner` — see 057's identical grant for why
+-- `pfin_owner`, a role this sweep introduced, was never given that platform-bootstrap grant.
+-- ⚠ Role must be `postgres` (the `extensions` schema owner) to ISSUE this grant — W4's
+-- `_rls.set_tenant` left the session as `authenticated`, which silently no-ops a grant it
+-- lacks GRANT OPTION for ("no privileges were granted", not an error) — restore FIRST.
 select set_config('role', 'postgres', true);
+grant usage on schema extensions to pfin_owner;
+select set_config('role', 'pfin_owner', true);
 select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
               values (%L, %s, 'closed', 'no_longer_used', 'system:remediation', null) $$, :'ta', :wopen),
   '%account_event_effective_date_required%',
   '(W5) A CLOSED ROW MUST CARRY A DATE: the constraint admits NULL effective_date for `reopened` and refuses it for `closed`. Asserted as the COMPANION to (W4) — without it, "nullable" would read as "optional everywhere" and the closure date, which the whole as-of model depends on, could go unrecorded'
 );
+select set_config('role', 'postgres', true);
 
 -- =====================================================================
 -- BLOCK G — INVERSION (non-vacuity, proved IN FILE)
