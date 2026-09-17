@@ -81,6 +81,7 @@ declare
   v_n     integer;
   v_owner text;
   v_inv   text;
+  v_offend text[];
 begin
   select count(*) into v_n
     from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace
@@ -137,18 +138,31 @@ begin
   --      grant is added and back on rollback. A NULL relacl means default privileges, which
   --      for a view is owner-only and carries no PUBLIC entry, so the empty case is safe
   --      rather than vacuous.
-  if exists (
-       select 1
-         from pg_catalog.pg_class c
-         cross join lateral pg_catalog.aclexplode(c.relacl) x
-        where c.oid = 'pfin.decrypted_source_credential'::regclass
-          and x.grantee = 0
-          and x.privilege_type = 'SELECT')
-     or has_table_privilege('anon', 'pfin.decrypted_source_credential', 'SELECT')
-     or has_table_privilege('authenticated', 'pfin.decrypted_source_credential', 'SELECT') then
+  -- ⚠ COMPUTED AS A SET, NOT OR'd INTO ONE BOOLEAN — a RED must dictate the repair. An
+  --    or-chain says only "something below service_role can read it" and leaves the operator
+  --    to re-derive which identity, during an outage, on a box. This names them.
+  select pg_catalog.array_remove(array[
+           case when exists (
+                  select 1
+                    from pg_catalog.pg_class c
+                    cross join lateral pg_catalog.aclexplode(c.relacl) x
+                   where c.oid = 'pfin.decrypted_source_credential'::regclass
+                     and x.grantee = 0
+                     and x.privilege_type = 'SELECT')
+                then 'PUBLIC'::text end,
+           case when has_table_privilege('anon', 'pfin.decrypted_source_credential', 'SELECT')
+                then 'anon'::text end,
+           case when has_table_privilege('authenticated', 'pfin.decrypted_source_credential', 'SELECT')
+                then 'authenticated'::text end
+         ], null)
+    into v_offend;
+
+  if coalesce(pg_catalog.cardinality(v_offend), 0) > 0 then
     raise exception using errcode = '55000',
-      message = 'ADR-072 (iv‴) post-step FAILED: a tenant-tier identity can SELECT pfin.decrypted_source_credential.',
-      detail  = 'Step (1) revokes from public, anon and authenticated. A revoke issued without authority does not raise — it warns and removes nothing — so RED here means one of those revokes did not take, and the decrypted provider credential is readable below service_role.';
+      message = format('ADR-072 (iv‴) post-step FAILED: %s can SELECT pfin.decrypted_source_credential.',
+                       pg_catalog.array_to_string(v_offend, ', ')),
+      detail  = format('Step (1) revokes from public, anon and authenticated; the revoke for %s did not take. A revoke issued without authority does not raise — it warns and removes nothing — so re-run step (1) as the image superuser and re-run this block. The decrypted provider credential is readable below service_role until it passes.',
+                       pg_catalog.array_to_string(v_offend, ' and '));
   end if;
 
   raise notice 'ADR-072 (iv‴) post-step OK: exactly one decrypt view, named decrypted_source_credential, owned by pfin_owner, security_invoker = true, readable by service_role, and NOT readable by public, anon or authenticated.';
