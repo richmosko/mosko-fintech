@@ -314,6 +314,40 @@ services:
       # infra/supabase/, which has no supabase/ subdirectory of its own.
       context: ../..
       dockerfile: infra/supabase/migrator/Dockerfile
+      # ⚠ ADR-072 Amendment 6 experiment (Option A', 2026-09-17). F/CTO's
+      # own deploy log for this resource showed Coolify's real build
+      # command as `docker compose --env-file /artifacts/build-time.env
+      # ... build --build-arg COOLIFY_FQDN --build-arg
+      # SERVICE_ROLE_KEY_ASYMMETRIC ... --build-arg MIGRATOR_DB_USER
+      # --build-arg COOLIFY_BUILD_SECRETS_HASH=<hash>` -- NEITHER
+      # `GIT_SHA` NOR `SOURCE_COMMIT` was in that list, which is why the
+      # Dockerfile's fail-closed check fired at the first real build
+      # (`FATAL: GIT_SHA/SOURCE_COMMIT build-arg is empty`) -- the control
+      # working correctly against a build that genuinely supplied
+      # neither. Read against Coolify 4.3.18's own source
+      # (`app/Jobs/ApplicationDeploymentJob.php`,
+      # `generate_env_variables()`): `SOURCE_COMMIT` is added to the
+      # build-time env/build-arg set ONLY when
+      # `$this->application->settings->include_source_commit_in_build` is
+      # true for this resource -- an opt-in Coolify application setting,
+      # not a default. This line does not assume that setting is now
+      # enabled; it is the reverse -- it makes the NEXT deploy the
+      # measurement. `${SOURCE_COMMIT:-}` resolves empty (never a compose
+      # interpolation error) whether or not the setting is on;
+      # `--build-arg GIT_SHA=<value>` reaching the Dockerfile only if
+      # Coolify's own build-time.env actually carries a non-empty
+      # `SOURCE_COMMIT` for this build. The Dockerfile's own fail-closed
+      # step (infra/supabase/migrator/Dockerfile) is UNCHANGED and still
+      # catches an empty result -- this line supplies the ONE remaining
+      # candidate name, it does not weaken the check. PASS on the next
+      # deploy -> the setting is on and this is the fix; FAIL with the
+      # same FATAL message -> the setting is off (or the value is
+      # genuinely absent some other way) and the build-arg route is dead
+      # on this Coolify -- Option B (image-tag-based assertion,
+      # ADR-072 Amendment 6 mechanism change, Architect/Sec/F/CTO) is the
+      # only remaining path.
+      args:
+        GIT_SHA: ${SOURCE_COMMIT:-}
     restart: unless-stopped
     depends_on:
       db:
