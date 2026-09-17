@@ -81,6 +81,7 @@ declare
   v_n     integer;
   v_owner text;
   v_inv   text;
+  v_offend text[];
 begin
   select count(*) into v_n
     from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace
@@ -107,6 +108,63 @@ begin
       detail  = 'Without it the view executes as its vault-less owner pfin_owner and is broken — measured.';
   end if;
 
-  raise notice 'ADR-072 (iv‴) post-step OK: exactly one decrypt view, named decrypted_source_credential, owned by pfin_owner, security_invoker = true.';
+  -- ⛔ CONSUMER REACH. The three legs above can ALL pass on a view no consumer can read:
+  --    the grant is issued at step (1), BEFORE the ownership transfer at step (2), and
+  --    nothing afterwards observes that it took. Without this leg the defect surfaces only
+  --    when Plaid sync runs. has_table_privilege (not an ACL scan) because it is the question
+  --    the consumer actually asks and it resolves membership; step (1)'s revoke from PUBLIC
+  --    means the predicate cannot pass by a vacuous route.
+  if not has_table_privilege('service_role', 'pfin.decrypted_source_credential', 'SELECT') then
+    raise exception using errcode = '55000',
+      message = 'ADR-072 (iv‴) post-step FAILED: service_role cannot SELECT pfin.decrypted_source_credential.',
+      detail  = 'The view is correctly owned and correctly security_invoker, so every other leg here passes. ALTER VIEW ... OWNER TO preserves grants, so RED here means the step (1) grant did not take, or something revoked it after.';
+  end if;
+
+  -- ⛔ THE NEGATIVE HALF, AND IT OUTRANKS THE LEG ABOVE — the direction is why. A failed
+  --    GRANT is an outage: fail-closed, loud, and it stops Plaid sync. A failed REVOKE is
+  --    EXPOSURE: fail-open, silent, and it leaves the decrypted provider credential readable
+  --    by a tenant-tier identity. Step (1)'s three revokes were as unobserved as the grant.
+  -- ⚠ NOT defensive boilerplate — it closes a MEASURED, project-specific default. 007's and
+  --    015's headers record "default decrypt perms would defeat RT-02" as a load-bearing
+  --    catch: a permissive default was real here once.
+  -- ⚠ AND THIS IS THE PRODUCTION-LANE INSTANCE OF AN ASSERTION THAT ONLY EXISTS IN CI.
+  --    015's battery already asserts the anon/authenticated half — in CI, against the
+  --    definition. Nothing asserted it on the box until this leg.
+  -- ⚠ TWO PREDICATE FORMS ON PURPOSE, each measured rather than assumed:
+  --    • anon / authenticated → has_table_privilege, because for a NEGATIVE assertion you
+  --      want membership resolution: it catches a grant arriving by ANY valid route, not
+  --      just a literal ACL entry.
+  --    • PUBLIC → ACL inspection on grantee 0, INVERSION-PROVEN false→true when a PUBLIC
+  --      grant is added and back on rollback. A NULL relacl means default privileges, which
+  --      for a view is owner-only and carries no PUBLIC entry, so the empty case is safe
+  --      rather than vacuous.
+  -- ⚠ COMPUTED AS A SET, NOT OR'd INTO ONE BOOLEAN — a RED must dictate the repair. An
+  --    or-chain says only "something below service_role can read it" and leaves the operator
+  --    to re-derive which identity, during an outage, on a box. This names them.
+  select pg_catalog.array_remove(array[
+           case when exists (
+                  select 1
+                    from pg_catalog.pg_class c
+                    cross join lateral pg_catalog.aclexplode(c.relacl) x
+                   where c.oid = 'pfin.decrypted_source_credential'::regclass
+                     and x.grantee = 0
+                     and x.privilege_type = 'SELECT')
+                then 'PUBLIC'::text end,
+           case when has_table_privilege('anon', 'pfin.decrypted_source_credential', 'SELECT')
+                then 'anon'::text end,
+           case when has_table_privilege('authenticated', 'pfin.decrypted_source_credential', 'SELECT')
+                then 'authenticated'::text end
+         ], null)
+    into v_offend;
+
+  if coalesce(pg_catalog.cardinality(v_offend), 0) > 0 then
+    raise exception using errcode = '55000',
+      message = format('ADR-072 (iv‴) post-step FAILED: %s can SELECT pfin.decrypted_source_credential.',
+                       pg_catalog.array_to_string(v_offend, ', ')),
+      detail  = format('Step (1) revokes from public, anon and authenticated; the revoke for %s did not take — a revoke issued without authority does not raise, it warns and removes nothing. The decrypted provider credential is readable below service_role until this passes. REPAIR: re-run this file per docs/deployment-runbook.md §6.3 PHASE 3 (the post-step). The procedure lives there and is deliberately NOT restated here — one source.',
+                       pg_catalog.array_to_string(v_offend, ' and '));
+  end if;
+
+  raise notice 'ADR-072 (iv‴) post-step OK: exactly one decrypt view, named decrypted_source_credential, owned by pfin_owner, security_invoker = true, readable by service_role, and NOT readable by public, anon or authenticated.';
 end
 $verify$;
