@@ -184,12 +184,12 @@ begin
     raise exception using errcode = '42501',
       message = pg_catalog.format('migration 117 cannot be applied by %I AND the supervised pre-step did not land the comment: pg_shdescription carries NOTHING for role pfin_etl.', current_user),
       detail  = 'COMMENT ON ROLE requires superuser or the ADMIN option on the target role, which no bounded applier holds for a role the pre-step created. Skipping here would leave the role undocumented with nothing observing it.',
-      hint    = 'Run the pre-step for 117 (psql -U supabase_admin -f supabase/migrations/117_pfin_etl_role_comment_c1_reattribution.sql), then re-run the apply.';
+      hint    = 'Run the pre-step for 117 (psql -U supabase_admin -f supabase/migrations/117_pfin_etl_role_comment_c1_reattribution.sql), then re-run the apply. Do NOT widen this role, and do NOT grant it ADMIN OPTION on pfin_etl, to get past this — an unexplained 42501 mid-bootstrap is exactly when the widening repair is most tempting and most wrong.';
   elsif v_live is distinct from v_text then
     raise exception using errcode = '42501',
       message = pg_catalog.format('migration 117 cannot be applied by %I AND the comment on role pfin_etl is STALE — present, but not the text this migration carries.', current_user),
       detail  = 'This migration exists to CORRECT a stale comment (the C1 rotation-coupling label re-attribution). Skipping over a stale comment would silently restore the exact defect 117 was written to fix, which is why this is an exception and not a warning.',
-      hint    = 'Re-run the pre-step with THIS revision of the file, then re-run the apply.';
+      hint    = 'Re-run the pre-step with THIS revision of the file, then re-run the apply. Do NOT widen this role to get past this.';
   end if;
 
   raise warning 'G4-SKIP: comment on role pfin_etl NOT re-issued by % — it holds neither superuser nor ADMIN OPTION on the role. SKIP IS VERIFIED, NOT ASSUMED: pg_shdescription was read and carries exactly this migration''s text, so the supervised pre-step demonstrably ran.', current_user;

@@ -134,11 +134,18 @@
 -- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
 -- must be owned by pfin_owner, whichever identity applies the file.
 --   · The transaction-scoped variant of this statement is FORBIDDEN here and is
---     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
---     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
---     that looks correct and silently no-ops. The tokens are deliberately NOT
---     spelled out in this comment, so a fence counting them over source stays
---     exact — read the statement itself, below.
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
 --   · The closing statement at the foot of this file is LOAD-BEARING, not
 --     tidiness: the CLI writes its ledger row on this same session immediately
 --     after the file, and pfin_owner cannot write supabase_migrations — without

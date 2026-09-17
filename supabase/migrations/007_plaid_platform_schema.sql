@@ -88,90 +88,22 @@
 --   the plaid_items migration" forward-pointer open — tracked here.
 --
 -- ----------------------------------------------------------------------------
--- DECISION 8 / LOCK 4 — verbatim anchor + Option-2 AMENDMENT (this PR).
---   Original locked mechanism (ADR-011 Decision 8 / Lock 4, Option C): "Supabase
---     Vault/pgsodium column-level encryption on plaid_items.access_token_encrypted
---     BYTEA + ... append-only plaid_item_state_history table."
---   AMENDMENT (2026-07-03, F/CTO-ratified; ADR-011 Decision 8 amendment authored this
---     PR): the crypto MECHANISM moves from "pgsodium column-level BYTEA + decrypt-view"
---     to "Vault-native secret-per-token (vault.create_secret) + a uuid reference column
---     + a decrypt VIEW that JOINs vault.decrypted_secrets to pfin.plaid_items." WHY:
---     the pinned Supabase stack cannot execute the UUID-keyed pgsodium AEAD for
---     service_role/postgres (Backend measured), and pgsodium is deprecated by Supabase
---     in favor of Vault. This is CAPABILITY-DRIVEN, not a scope change — product
---     behavior (encrypted at-rest token storage, decrypt only under service_role) is
---     IDENTICAL. Still within Lock 4's "Supabase Vault ... " arm; the "/pgsodium"
---     sub-clause + the BYTEA column shape are the amended parts.
---   Sec's 6 mods (mapping under Option 2):
---     mod #1 (V1-SHIP-BLOCK) "decrypt-view permission scoped to service_role only" ->
---       pfin.decrypted_plaid_access_token GRANT SELECT to service_role ONLY (REVOKE
---       from public/anon/authenticated). Tenant-gating baked into the VIEW SHAPE: it
---       joins vault.decrypted_secrets to plaid_items and exposes ONLY the per-Item
---       Plaid token keyed by (item_id, users_id) — never the raw whole-vault
---       vault.decrypted_secrets surface.
---     mod #3 (V1-SHIP-BLOCK) "webhook idempotency via plaid_webhook_id UNIQUE" ->
---       pfin.plaid_sync_audit.plaid_webhook_id UNIQUE (nullable; poll rows NULL).
---     mod #4 (advisory) "4-class credential-error enum per §2.4.4" ->
---       pfin.plaid_item_state_history.plaid_error_code CHECK IN the 4 classes.
---   Decision 1 (§6 privileged-context-write): all writes to these tables + all
---     vault.create_secret admission happen under service_role (no user JWT); tenant
---     correctness derives from code; plaid_sync_audit is the clause-(d) audit of the
---     tenant-resolution chain. Decision 2 (§7 immutable audit-class): state_history +
---     sync_audit are append-only (UPDATE/DELETE/TRUNCATE fenced for ALL roles).
---
--- POSTURE RATIONALE — NO SECURITY DEFINER function authored here.
---   The immutability fences are SECURITY INVOKER (read/write nothing; just raise) —
---   same posture as 004; they do NOT touch the 3-entry DEFINER allowlist (ADR-011
---   Decision 9). Option 2 adds NO function at all for the crypto path: Vault's
---   create_secret + decrypted_secrets are PLATFORM-owned (not our allowlist), and the
---   decrypt VIEW is not a function. The view runs with view-owner (postgres, definer)
---   semantics by PG default — postgres CAN SELECT vault.decrypted_secrets (measured
---   TRUE) so the join resolves; service_role also holds that SELECT directly. The
---   Sec-required retention backstop (fn_plaid_items_cleanup_vault_secret) is also
---   SECURITY INVOKER (+0 allowlist) — see the RETENTION BACKSTOP block for the
---   INVOKER-vs-DEFINER fail-closed tradeoff. DEFINER allowlist UNCHANGED at 3
---   (authored so far = 2).
---
--- CONTRACT
---   pfin.plaid_items — mutable credential-reference store. access_token_secret_id is a
---     Vault secret handle (uuid). ADMISSION (SELF-197 onboarding route, service_role):
---       secret_id := vault.create_secret(<plaid access token>, 'plaid_item_token_'||
---         <plaid_item_id>, <desc>);  then INSERT plaid_items(..., access_token_secret_id
---         = secret_id). authenticated holds column-level SELECT on NON-credential
---       columns only (access_token_secret_id withheld). No authenticated write.
---   pfin.decrypted_plaid_access_token — decrypt view (JOIN vault.decrypted_secrets to
---     plaid_items); columns (item_id, users_id, plaid_item_id, decrypted_access_token);
---     SELECT to service_role ONLY. Consumers filter `WHERE item_id = $1` and bind tenant
---     in code (Decision 1). Named pfin.* not vault.* (postgres lacks CREATE on vault).
---   pfin.plaid_item_state_history — append-only 4-class credential-error audit.
---   pfin.plaid_sync_audit — append-only cross-language sync audit; plaid_webhook_id
---     UNIQUE idempotency gate (ON CONFLICT (plaid_webhook_id) DO NOTHING under
---     SERIALIZABLE); service_role-only.
---   RETENTION (SD-03 bounded-Item-active-only, SECURITY §4.2 + §4.6) — two legs:
---     LOCAL secret hygiene = the AFTER DELETE ON pfin.plaid_items backstop trigger
---       fn_plaid_items_cleanup_vault_secret (007, SECURITY INVOKER, +0 allowlist):
---       deletes the backing vault.secrets row on ANY Item delete; closes the
---       auth.users ON DELETE CASCADE orphan by-construction (Sec AMBER-required). See
---       the RETENTION BACKSTOP block for the INVOKER fail-closed-on-auth-cascade nuance.
---     PLAID-side revoke = HARD-GATE deferred to SELF-197 /item/remove (non-droppable):
---       in one service_role transaction, read the token via
---       pfin.decrypted_plaid_access_token + revoke it at Plaid BEFORE deleting the row
---       (ordering: revoke needs the token) + emit plaid_sync_audit; the trigger then
---       removes the local secret.
---   Security-load-bearing edges: token stored only in vault.secrets (never on the pfin
---     row); decrypt view service_role-only + tenant-keyed by join (mod #1);
---     plaid_webhook_id UNIQUE (mod #3); append-only triple-fence on both audit tables;
---     set search_path = '' on every function.
--- ============================================================================
-
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
 -- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
 -- must be owned by pfin_owner, whichever identity applies the file.
 --   · The transaction-scoped variant of this statement is FORBIDDEN here and is
---     a CI-fence RED: measured, the Supabase CLI runs a migration file OUTSIDE a
---     transaction, so that variant warns 25P01 and does NOTHING. It is the shape
---     that looks correct and silently no-ops. The tokens are deliberately NOT
---     spelled out in this comment, so a fence counting them over source stays
---     exact — read the statement itself, below.
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
 --   · The closing statement at the foot of this file is LOAD-BEARING, not
 --     tidiness: the CLI writes its ledger row on this same session immediately
 --     after the file, and pfin_owner cannot write supabase_migrations — without
@@ -252,7 +184,44 @@ create trigger plaid_items_set_updated_at
 --   (postgres, definer) semantics by PG default; postgres holds SELECT on
 --   vault.decrypted_secrets (measured TRUE) so the join resolves.
 -- ----------------------------------------------------------------------------
-create or replace view pfin.decrypted_plaid_access_token as
+do $vg$
+declare
+  v_can boolean;
+begin
+  -- ⚠ VAULT VIEW UNIT — shape (iv‴). ADR-072 Amendment 5; Sec-approved 2026-09-16.
+  --   ⚠ THE UNIT IS create + comment + REVOKEs + grant, GUARDED TOGETHER. Not a
+  --   convenience: those five statements ARE the ratified SD-03 posture ("the grant"),
+  --   so splitting them from the create splits the posture, not merely the DDL. And a
+  --   `create view` that lands WITHOUT its REVOKEs exists, however briefly, under
+  --   whatever default ACL applies — the "default decrypt perms would defeat RT-02"
+  --   hazard this file's own header records. CREATE-THROUGH-GRANT, OR SKIP THE WHOLE
+  --   UNIT. There is no third option.
+  --   ⚠ WHY A GUARD: a view body is permission-checked at CREATE time regardless of
+  --   `security_invoker` (measured — it moves the RUNTIME identity only), so the
+  --   CREATING role needs the vault read. `pfin_owner` must never hold it, because
+  --   `migrator` reaches `pfin_owner` by SET ROLE and a standing, CI-triggerable DDL
+  --   credential must not reach every provider access token. Sec's veto, not withdrawn.
+  --   ⚠ NO EXISTENCE RAISE HERE. The base tables this view reads are created by THIS
+  --   migration, so a supervised PRE-step cannot have created it and an in-migration
+  --   existence check would fail EVERY CORRECT BOOTSTRAP (measured). The observer is the
+  --   SUPERVISED POST-STEP's own assertion, which runs on the production database at the
+  --   only moment it can be wrong.
+  -- --   ⚠ TRANSIENT UNIT: this view is DROPPED by 015's fold, so it never exists in the
+  --   final database and needs NO post-step. `drop view if exists` on a never-created view
+  --   is a NOTICE (measured). The SURVIVING decrypt view is 015's.
+  -- ⚠ Probe by OID via the catalog, never by name: `has_table_privilege(u,'vault.x',…)`
+  -- and `to_regclass('vault.x')` both need USAGE on schema vault merely to RESOLVE the
+  -- name, so a name-based probe raises 42501 for exactly the applier it exists to test.
+  select coalesce((select has_table_privilege(current_user, c.oid, 'SELECT')
+                     from pg_catalog.pg_class c
+                     join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+                    where n.nspname = 'vault' and c.relname = 'decrypted_secrets'), false)
+     and coalesce((select has_schema_privilege(current_user, n.oid, 'USAGE')
+                     from pg_catalog.pg_namespace n where n.nspname = 'vault'), false)
+    into v_can;
+
+  if v_can then
+    execute $ddl$create or replace view pfin.decrypted_plaid_access_token as
   select
     pi.item_id,
     pi.users_id,
@@ -268,7 +237,13 @@ comment on view pfin.decrypted_plaid_access_token is
 revoke all on pfin.decrypted_plaid_access_token from public;
 revoke all on pfin.decrypted_plaid_access_token from anon;
 revoke all on pfin.decrypted_plaid_access_token from authenticated;
-grant select on pfin.decrypted_plaid_access_token to service_role;
+grant select on pfin.decrypted_plaid_access_token to service_role;$ddl$;
+    raise notice 'pfin.decrypted_plaid_access_token: unit created by % (holds the vault read).', current_user;
+  else
+    raise warning 'VAULT-SKIP: the pfin.decrypted_plaid_access_token UNIT (create + comment + revokes + grant) was NOT applied by % — it holds no SELECT on vault.decrypted_secrets, and it must not (ADR-072 Amendment 5; Sec veto: migrator reaches this role by SET ROLE). No post-step is owed for this view: 015 drops it. Do NOT grant this role a vault privilege to get past this.', current_user;
+  end if;
+end
+$vg$;
 
 -- ----------------------------------------------------------------------------
 -- RETENTION BACKSTOP (SD-03 bounded-Item-active-only) — Sec-required @ AMBER review.

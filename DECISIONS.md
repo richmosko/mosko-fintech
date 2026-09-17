@@ -255,7 +255,7 @@ E rests on three measured facts about **this** Coolify version (4.3.18): the Sch
 **F/CTO is shown a CHOICE. ⚠ One-way door flagged on (A1), and it is VALUE-level, not structural.**
 
 - **(A1) ⛔ VETOED by Sec on two legs (`SELECT on vault.decrypted_secrets` to `migrator`; any ADMIN OPTION on `service_role` for the applier) — Grant `migrator` everything the set needs.** *Why it might be right:* one lane, nothing splits, by-construction is total. *What it costs:* USAGE + REFERENCES/SELECT on `auth`; USAGE + SELECT on `vault.decrypted_secrets` + DELETE on `vault.secrets`; **and ADMIN OPTION on the two app roles**, which is Sec-refused and Architect concurs. ⚠ **ONE-WAY DOOR on the vault half even in isolation:** that credential sits in an env store every service receives (Amendment 3), so once it can read decrypted provider tokens, revoking later does not un-expose what was already readable — it requires provider-side rotation of every linked credential. **RECOMMENDED AGAINST.**
-- **(A2) ✅ RULED — F/CTO chose this shape 2026-09-16; Sec accepted it conditioned (see Decision E) — `pfin_owner` NOW, plus a small SUPERVISED lane no bounded role can ever hold.** A NOLOGIN group role owns every `pfin` object and holds **exactly** the out-of-`pfin` reach the RATIFIED VAULT DISPOSITION requires — ⚠ **which is NOT a fixed list, and stating it as one here would pre-commit the very choice this amendment presents as open.** Under **(iii)** (Architect's lean; both gates measured TRUE at Decision G1) that reach is **`auth` ONLY** — `usage on schema auth` plus **COLUMN-LEVEL** `references (id), select (id) on auth.users` (Decision G2) — and **NO vault grant of any kind**, because invoker-semantics decrypt views leave the owner with no vault dependency at all. ⚠ **RULED (iii), F/CTO 2026-09-16 — so `pfin_owner` holds NO vault grant, and the fallback below NEVER APPLIES.** It is kept, not deleted, so a reader sees what lost: had F/CTO picked (i) or (ii), `pfin_owner` would additionally have needed `vault` USAGE + SELECT on `decrypted_secrets` + DELETE on `secrets` — **that is now dead text, retained as the record of the road not taken.** **Basis, as ratified:** (iii) **removes** the owner's vault dependency rather than relocating it — **Decision A's wall 2 is deleted**, not moved; **nothing new is granted to anyone** — `service_role` already holds **SELECT and DELETE on both `vault` relations in the image's own ACL** (Architect measured, Decision G1(a)); and **Sec's tenant-gating reason is WITHDRAWN** — `service_role` carries `rolbypassrls`, so an RLS policy is not evaluated for it and (iii) is privilege-neutral on tenant-gating rather than a strengthening (Decision G1). **Every apply — bootstrap or later, supervised or unsupervised — opens with `set role pfin_owner;` and closes with `reset role;`** (the PAIRED form ruled at Decision F1; `set local role` is a measured no-op through `db push`), so ownership is right *whichever identity applies*, which is the durable property Sec wanted. **The role-graph statements stay supervised**, because walls 3 and 4 are properties of the image's own role graph. *What it costs:* `pfin_owner` arrives now rather than at a later gate, and the set acquires a small, named supervised lane. *What it makes harder later:* two lanes must stay distinguishable — a fence obligation, not a convention.
+- **(A2) ✅ RULED — F/CTO chose this shape 2026-09-16; Sec accepted it conditioned (see Decision E) — `pfin_owner` NOW, plus a small SUPERVISED lane no bounded role can ever hold.** A NOLOGIN group role owns every `pfin` object and holds **exactly** the out-of-`pfin` reach the RATIFIED VAULT DISPOSITION requires — ⚠ **which is NOT a fixed list, and stating it as one here would pre-commit the very choice this amendment presents as open.** Under **(iii)** (Architect's lean; both gates measured TRUE at Decision G1) that reach is **`auth` ONLY** — `usage on schema auth` plus **COLUMN-LEVEL** `references (id), select (id) on auth.users` (Decision G2) — and **NO vault grant of any kind**, because invoker-semantics decrypt views leave the owner with no vault dependency at all. ⚠ **RULED (iii), F/CTO 2026-09-16 — so `pfin_owner` holds NO vault grant, and the fallback below NEVER APPLIES.** It is kept, not deleted, so a reader sees what lost: had F/CTO picked (i) or (ii), `pfin_owner` would additionally have needed `vault` USAGE + SELECT on `decrypted_secrets` + DELETE on `secrets` — **that is now dead text, retained as the record of the road not taken.** ⚠ **CORRECTED 2026-09-16 — the ratified basis clause was FALSE, and the change survives on a different and better basis.** (iii) was ratified on the ground that `security_invoker = true` *"removes the owner's vault dependency rather than relocating it — wall 2 deleted."* **Measured end-to-end through `supabase db push`: a view body is permission-checked at CREATE time regardless of `security_invoker`, so the creating role still needs vault privilege — wall 2 is NARROWED to CREATE time, not deleted.** The change is nonetheless **load-bearing**: ownership can be transferred to a vault-less `pfin_owner` (`ALTER VIEW … OWNER TO` does not re-validate the body — measured), but under the default `security_invoker = false` the view would then execute as its vault-less owner and be **broken**. **`security_invoker = true` is therefore a COMPONENT of any shape that puts these views under `pfin_owner`, never an alternative to one.** **Every apply — bootstrap or later, supervised or unsupervised — opens with `set role pfin_owner;` and closes with `reset role;`** (the PAIRED form ruled at Decision F1; `set local role` is a measured no-op through `db push`), so ownership is right *whichever identity applies*, which is the durable property Sec wanted. **The role-graph statements stay supervised**, because walls 3 and 4 are properties of the image's own role graph. *What it costs:* `pfin_owner` arrives now rather than at a later gate, and the set acquires a small, named supervised lane. *What it makes harder later:* two lanes must stay distinguishable — a fence obligation, not a convention.
 - **(A3) NOT VETOED, but Sec requires it be explicit and dated, never a silent fallback — Keep `supabase_admin` as the bootstrap applier and fix ownership only.** Bootstrap as today, but every migration carries the paired `set role pfin_owner;` / `reset role;` (Decision F1). *Why it might be right:* smallest change, and **`migrator` gains no new privilege at all.** *What it costs:* it does **not** deliver F/CTO's *"migrator applies all database migrations"* — `migrator` applies `120`+ only, and the from-scratch path keeps a superuser in it. **Presented because F/CTO may weigh "no new reach for the standing credential" above the by-construction goal.**
 
 ⚠ **Architect DIVERGES FROM SEC HERE, in the open.** Sec's (6) ruled `pfin_owner` *"not needed yet"* behind a **dated gate**, with `set local role migrator;` as the cheaper interim control. **Both halves are falsified by the walls above:** `set local role migrator` inherits exactly `migrator`'s privileges and therefore hits walls 1 and 2 immediately; and `pfin_owner` is not a later durability nicety but **the only shape that lets the set apply at all without widening `migrator` onto the app-role graph.** Sec ruled before these measurements existed — this is new evidence, not a disagreement about judgement.
@@ -366,7 +366,7 @@ Steps 1–7 precede 8 so the credential lands last, on a role whose reach is alr
 
 **⛔ The guard degradation — BLOCKING before any non-superuser apply (Sec §4).** `055`/`116`/`118` read `pg_authid`, catch `insufficient_privilege`, and the **LOGIN-with-no-password WARNING then becomes unreachable** — the fence that detects the one dangerous credential ordering stops firing and says nothing. **Fix: when password state is unreadable AND `rolcanlogin` is true, emit a distinct, test-matchable WARNING naming that the check did not run.** QA pairs a leg asserting it fires under a non-superuser applier. ⚠ **Do NOT remediate by granting the applier `pg_authid` or `pg_read_all_data`** — that hands every SCRAM verifier in the cluster to a standing credential, and Sec marks that substitution a VETO. Three files; Architect authors.
 
-**⚠ THE VAULT RESIDUAL — ✅ RULED (iii) BY F/CTO, 2026-09-16. The presentation below is the dated record of the open choice and is kept unedited; read the ruling first.** **Basis, as ratified:** (iii) **removes** the owner's vault dependency rather than relocating it — **Decision A's wall 2 is deleted**, not moved; **nothing new is granted to anyone** — `service_role` already holds **SELECT and DELETE on both `vault` relations in the image's own ACL** (Architect measured, Decision G1(a)); and **Sec's tenant-gating reason is WITHDRAWN** — `service_role` carries `rolbypassrls`, so an RLS policy is not evaluated for it and (iii) is privilege-neutral on tenant-gating rather than a strengthening (Decision G1). **Original framing follows (Sec §6): F/CTO'S CHOICE, PRESENTED AND DELIBERATELY NOT DEFAULTED.** `set role pfin_owner` is a **convenience boundary, not a privilege boundary**: any member with SET can enter it at will, so **whatever `pfin_owner` holds, `PROD_DB_URL` reaches.** If `pfin_owner` owns `007`/`015`'s decrypt views it holds the vault reach, and Sec's §1 veto on `SELECT on vault.decrypted_secrets` is **relocated, not removed.** Two dispositions:
+**⚠ THE VAULT RESIDUAL — ✅ RULED (iii) BY F/CTO, 2026-09-16. The presentation below is the dated record of the open choice and is kept unedited; read the ruling first.** ⚠ **CORRECTED 2026-09-16 — the ratified basis clause was FALSE, and the change survives on a different and better basis.** (iii) was ratified on the ground that `security_invoker = true` *"removes the owner's vault dependency rather than relocating it — wall 2 deleted."* **Measured end-to-end through `supabase db push`: a view body is permission-checked at CREATE time regardless of `security_invoker`, so the creating role still needs vault privilege — wall 2 is NARROWED to CREATE time, not deleted.** The change is nonetheless **load-bearing**: ownership can be transferred to a vault-less `pfin_owner` (`ALTER VIEW … OWNER TO` does not re-validate the body — measured), but under the default `security_invoker = false` the view would then execute as its vault-less owner and be **broken**. **`security_invoker = true` is therefore a COMPONENT of any shape that puts these views under `pfin_owner`, never an alternative to one.** **Original framing follows (Sec §6): F/CTO'S CHOICE, PRESENTED AND DELIBERATELY NOT DEFAULTED.** `set role pfin_owner` is a **convenience boundary, not a privilege boundary**: any member with SET can enter it at will, so **whatever `pfin_owner` holds, `PROD_DB_URL` reaches.** If `pfin_owner` owns `007`/`015`'s decrypt views it holds the vault reach, and Sec's §1 veto on `SELECT on vault.decrypted_secrets` is **relocated, not removed.** Two dispositions:
 
 - **(i) A separate owner for those two views only**, not member-reachable from `migrator`. The decrypt reach leaves the migrator lane entirely; a later re-creation of either view trips the D4 tripwire and forces a supervised pass — **correct behaviour, not friction.** Costs a third owning identity and a second named exception to "every `pfin` object is `pfin_owner`-owned".
 - **(ii) Accept it as a dated residual** on the same gate as items 28/29 (the §2/§9 DNS cutover). Costs nothing today and keeps one owner for everything; **the standing DDL credential can reach every Plaid access token until that gate.**
@@ -381,7 +381,7 @@ Steps 1–7 precede 8 so the credential lands last, on a role whose reach is alr
 
 | Variant | Measured result |
 |---|---|
-| `set local role pfin_owner;` (Sec A5 as written) | ⛔ `WARNING (25P01): SET LOCAL can only be used in transaction blocks` — **`db push` does NOT wrap a migration file in a transaction**, so the line is a **silent no-op** and a fence over it would assert nothing |
+| `set local role pfin_owner;` (Sec A5 as written) | ⚠ **RE-MEASURED 2026-09-16, and F1's original reading was WRONG — see Decision J.** It emits `WARNING (25P01)` **and still takes effect**: the CLI sends the file as one multi-statement query, which Postgres runs in an implicit transaction. It is **not** a silent no-op. Still refused, on the narrower grounds Decision J states. |
 | `set role pfin_owner;` alone | ⛔ the DDL runs correctly, then the role **LEAKS into the CLI's own ledger INSERT** → `permission denied for schema supabase_migrations`; **the push fails** |
 | `PGOPTIONS='-c role=pfin_owner'` (session-level) | ⛔ applies to the whole session **including the ledger write** — same failure, and it contradicts A7's ruling that `migrator` keeps owning the ledger |
 | ⭐ **`set role pfin_owner;` … `reset role;` (PAIRED)** | ✅ objects owned by `pfin_owner`; **ledger row written as `migrator`**; `Finished supabase db push.` |
@@ -464,11 +464,160 @@ Steps 1–7 precede 8 so the credential lands last, on a role whose reach is alr
 
 ---
 
+
+#### Decision I — ✅ (iv‴) RATIFIED (F/CTO, 2026-09-16), SUPERSEDING (iv′). The vault disposition is settled.
+
+**F/CTO ratified (iv‴) at the 2026-09-16 sitting, on Sec's grade: "APPROVED with ONE structural change. Build it."** It supersedes **(iv′)**, which was ruled the same day and then **falsified by measurement before it was built** — its post-condition asserted the view EXISTS at the end of the migration, and the view's base table is created by that same migration, so a supervised PRE-step cannot have created it and the assertion **failed every correct bootstrap**. ⚠ **Sec adopted that correction over its own condition, in its own words: *"a leg that fails on correct input is worse than no leg, because it is disabled on first contact."***
+
+⚠ **THIS IS NOT A REVERSAL OF (iii), AND MUST NOT BE READ AS ONE.** (iii)'s ratified **basis** was false (Decision H1, corrected verbatim above); **(iii)'s CHANGE is a COMPONENT of (iv‴)** — `security_invoker = true` is what keeps the view working once ownership sits with a vault-less `pfin_owner`, because `ALTER VIEW … OWNER TO` succeeds without re-validating the body while the default `security_invoker = false` would then execute the view as that vault-less owner. **Dropping (iii) while adopting (iv‴) would ship a broken view.**
+
+**What (iv‴) is, in four parts.**
+1. **The view UNIT — create + comment + three REVOKEs + grant — is guarded TOGETHER** in `007` and `015`, applied whole or skipped whole. **Not a convenience:** those five statements **are** the ratified SD-03 posture, and (Sec's sharper reason) **a `create view` that lands without its REVOKEs exists, however briefly, under whatever default ACL applies** — the *"default decrypt perms would defeat RT-02"* hazard `007`'s own header records. **Create-through-grant, or skip the whole unit. No third option.**
+2. **`007` gets NO post-step.** `015` drops its view, nothing in `008`–`014` references it (measured: zero executable references), and `drop view if exists` on a never-created view is a NOTICE. ⚠ **The "exactly ONE view" assertion is what makes that safe** — it is the only thing that would catch a stale `007` view surviving a mixed history.
+3. **A SUPERVISED POST-STEP applies `015`'s unit and transfers ownership**, after the main pass and before the §7 container bring-up.
+4. **Three watchers in three lanes, and they must not be counted twice** (Sec): the **post-step's own assertion** is the ONLY one that observes the **production** database at the moment it can be wrong; the **runbook verify** is a human double-check; the **standing pgTAP leg** is a regression watcher on the **definition in CI**. ⚠ Sec records this as the third time in this workstream a watcher was placed in the wrong lane.
+
+**The ordering gate, and why the window is not an exposure.** Sec's explicit non-objection: a view that does not exist **discloses nothing**, and a `service_role` path reaching for it fails closed — an outage, never a leak. ⚠ **The risk is human:** the operator best placed to fix "decrypt view missing" fastest is exactly the one who will hand-create it with the default owner or without `security_invoker`, re-introducing the defect. So the §7 bring-up must not proceed until the post-step's assertion has passed.
+
+**THE POST-STEP, canonical text. DevOps carries it into the runbook; this is its source.**
+
+```sql
+-- ============================================================================
+-- ADR-072 Amendment 5 — (iv‴) SUPERVISED POST-STEP. Run ONCE, as the image's true
+-- superuser (`supabase_admin`), AFTER the main `supabase db push` completes and
+-- BEFORE the §7 container bring-up. It is safe to re-run.
+-- WHY A POST-STEP AND NOT A PRE-STEP: the view reads pfin.linked_source, which the
+-- MAIN PASS creates. A pre-step cannot create this view; it does not yet have a
+-- table to read (measured).
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- (0) ORDERING GATE — refuse to run before the main pass finished, so nobody
+--     hand-creates the view with the wrong owner mid-outage.
+-- ⚠ Asserted as "migration 118 is present", NOT as "the ledger has 118 rows".
+--     Sec's condition named a row COUNT; a count rots the moment 120+ land and
+--     would then refuse a correct box. "118 is present" answers the same
+--     question and stays true forever. Flagged to Sec as a refinement, not
+--     taken silently.
+-- ----------------------------------------------------------------------------
+do $gate$
+begin
+  if not exists (select 1 from supabase_migrations.schema_migrations where version = '118') then
+    raise exception using errcode = '55000',
+      message = 'ADR-072 (iv‴) post-step REFUSED: migration 118 is not in the ledger, so the main pass has not completed.',
+      detail  = 'Creating the decrypt view before the main pass risks landing it with the wrong owner or without security_invoker — the exact defect this shape exists to prevent, arriving during an outage when it is most tempting.',
+      hint    = 'Run the main `supabase db push` to completion first, then re-run this post-step.';
+  end if;
+  if to_regclass('pfin.linked_source') is null then
+    raise exception using errcode = '42P01',
+      message = 'ADR-072 (iv‴) post-step REFUSED: pfin.linked_source does not exist.',
+      hint    = 'The main pass must create the base table before this view can read it.';
+  end if;
+end
+$gate$;
+
+-- ----------------------------------------------------------------------------
+-- (1) THE VIEW UNIT — create + comment + revokes + grant, exactly as migration
+--     015 carries it. Create-through-grant or nothing: a view that lands without
+--     its REVOKEs exists under a default ACL, the RT-02 hazard 015's header names.
+-- ----------------------------------------------------------------------------
+create or replace view pfin.decrypted_source_credential
+  with (security_invoker = true) as
+  select
+    ls.source_id,
+    ls.users_id,
+    ls.provider,
+    ls.external_connection_id,
+    ds.decrypted_secret as decrypted_credential
+  from pfin.linked_source ls
+  join vault.decrypted_secrets ds on ds.id = ls.credential_secret_id;
+
+comment on view pfin.decrypted_source_credential is
+  'SD-03 decrypt view (ADR-011 Decision 8 / Lock 4 mod #1). security_invoker = true: runs as the CALLER, so its vault-less owner pfin_owner is not the identity that resolves the vault join (ADR-072 Amendment 5 (iv‴)). Created by the supervised post-step because its base table is created by the main pass. service_role is the only grantee and already holds SELECT on vault.decrypted_secrets in the image ACL.';
+
+revoke all on pfin.decrypted_source_credential from public;
+revoke all on pfin.decrypted_source_credential from anon;
+revoke all on pfin.decrypted_source_credential from authenticated;
+grant select on pfin.decrypted_source_credential to service_role;
+
+-- ----------------------------------------------------------------------------
+-- (2) OWNERSHIP TRANSFER. ALTER VIEW ... OWNER TO does not re-validate the body
+--     (measured), so this succeeds even though pfin_owner holds no vault reach.
+--     security_invoker = true above is what keeps the view WORKING afterwards.
+-- ----------------------------------------------------------------------------
+alter view pfin.decrypted_source_credential owner to pfin_owner;
+
+-- ----------------------------------------------------------------------------
+-- (3) ⛔ THE ASSERTION THAT FAILS THE STEP — Sec's condition. This is the ONLY
+--     watcher that observes the PRODUCTION database at the moment it can be
+--     wrong. The runbook verify is a human double-check; the pgTAP leg is a
+--     regression watcher on the DEFINITION in CI. Neither is a production
+--     observer, and they must not be counted as one.
+-- ----------------------------------------------------------------------------
+do $verify$
+declare
+  v_n     integer;
+  v_owner text;
+  v_inv   text;
+begin
+  select count(*) into v_n
+    from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'pfin' and c.relkind = 'v' and c.relname like 'decrypted%';
+  if v_n <> 1 then
+    raise exception using errcode = '55000',
+      message = format('ADR-072 (iv‴) post-step FAILED: expected exactly ONE pfin decrypt view, found %s.', v_n),
+      detail  = 'The final database carries exactly one: pfin.decrypted_source_credential. 015 drops 007''s. A second one means a stale 007 view survived a mixed history — which is the case this leg exists to catch.';
+  end if;
+
+  select pg_catalog.pg_get_userbyid(c.relowner),
+         (select option_value from pg_catalog.pg_options_to_table(c.reloptions) where option_name = 'security_invoker')
+    into v_owner, v_inv
+    from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'pfin' and c.relname = 'decrypted_source_credential';
+
+  if v_owner is distinct from 'pfin_owner' then
+    raise exception using errcode = '55000',
+      message = format('ADR-072 (iv‴) post-step FAILED: pfin.decrypted_source_credential is owned by %s, expected pfin_owner.', coalesce(v_owner,'(absent)'));
+  end if;
+  if v_inv is distinct from 'true' then
+    raise exception using errcode = '55000',
+      message = format('ADR-072 (iv‴) post-step FAILED: pfin.decrypted_source_credential has security_invoker = %s, expected true.', coalesce(v_inv,'(unset)')),
+      detail  = 'Without it the view executes as its vault-less owner pfin_owner and is broken — measured.';
+  end if;
+
+  raise notice 'ADR-072 (iv‴) post-step OK: exactly one decrypt view, named decrypted_source_credential, owned by pfin_owner, security_invoker = true.';
+end
+$verify$;
+```
+
+---
+
+
+#### Decision J — F1's central characterisation is CORRECTED. Architect's finding, against Architect's own ruled text.
+
+⚠ **F1 said the transaction-scoped role statement is a "silent no-op" under `supabase db push`. MEASURED AGAIN, THROUGH THE CLI, WRITING `current_user` INTO A TABLE AT THREE POINTS — that is false:**
+
+| statement position | `current_user` observed |
+|---|---|
+| before the role statement | `migrator` |
+| **after `set local role pfin_owner;`** | **`pfin_owner`** |
+| after `reset role;` | `migrator` |
+
+**`WARNING 25P01` fires and the role change TAKES EFFECT**, because the CLI sends a migration file as **one multi-statement simple Query**, which PostgreSQL executes inside an **implicit transaction**. The warning is about the absence of an explicit `BEGIN`, not about the statement being ignored.
+
+**What survives, and what does not.** The **paired `set role` / `reset role` convention is UNCHANGED and remains correct** — it is what this PR builds and what the strike proves end-to-end. **What changes is the REASON the alternative is refused**, and it is now narrower and honest: (i) it **warns on every single apply**, which trains an operator to ignore warnings — the same corrosion this amendment refuses elsewhere; and (ii) **its correctness rests on the CLI's query-batching, an undocumented implementation detail** that a CLI upgrade could flip without notice, at which point ownership would land wrong **silently**. The session-scoped pair depends on nothing but SQL semantics.
+
+⚠ **The fence leg stays RED for that variant**, on these grounds rather than on "it does nothing". ⚠ **And the 114 pfin-lane files' opener comments carried the wrong reason; they are corrected in the same PR** — a comment that gives a false reason is worse than one that gives none, because the next reader tests the wrong thing.
+
+⚠ **Provenance, recorded plainly: this is the FOURTH mechanism-without-reachability correction in this workstream and the SECOND authored by Architect** (after the (iii) basis clause). Both of mine were measured at one layer and ruled at another. **Sec graded and F/CTO ratified F1 on my text.** The rule I am taking from it, and it is the same one Sec took from Hazard 2: *a claim about what a statement DOES must be measured through the instrument that will actually run it, on the observable the claim is about* — I measured the warning and inferred the effect, instead of measuring the effect.
+
+---
+
 **Ledgers — all flat.** This amendment authors no DDL, no FK-shaped column and no function. [ADR-011](#adr-011) Decision 4's §10 catalogued-instance ledger is **unchanged** and no catalogued instance is touched — Decision 4's catalogued list read **verbatim and live at draft time (2026-09-16)**; the three-axis cross-check is clean on all three axes (**instance-numbering**: none added, removed, reordered or renumbered; **layer-attribution**: no layer moves and no surface becomes "four-layer" — a bootstrap ordering decision creates no fence at any layer; **verbatim-vs-paraphrase**: linked, not restated, and no count is carried). The **SECURITY DEFINER allowlist is UNCHANGED** — Decision C rules ownership, not membership, and adds and removes no entry. The **Decision 3** cross-tenant FK-bypass family is untouched (read live; no table, no column). ⚠ The **C9 CI-fenced RT set** is a **DIFFERENT set** from the §10 catalogued ledger and is not reconciled with it here or anywhere; the migrator-lane schema fence proposed under (A2) would be a **CI-fenced-set** addition, shipping **unlabeled** until an F/CTO Decision-4 `RT-NN` ratify, exactly as Amendment 4's sibling fence does. **No `RT-NN` is minted here.**
 
 **What the implementing PRs carry (named here, authored there).** The item-36 outside-`pfin` **catalog census** and the zero-rows gate measurement, **both preconditions on any wipe** (DevOps); a `pfin_owner` migration in the `055`/`116`/`118` family with its grant set and its pgTAP battery incl. an (r12)-equivalent `rolconfig IS NULL` leg (Architect + QA); the **PAIRED `set role pfin_owner;` / `reset role;` convention** (Decision F1) across the `pfin` lane and the **CI fence asserting the PAIR**, strike-proven by a fixture that omits it (DevOps + QA, same PR); the `118`/`119` `comment on role` guard relocation under the dated one-time exception, keep-and-annotate (Architect); `118`'s `rolcanlogin` header reword (item 38, Architect, edit-in-place); `docs/deployment-runbook.md` §6 / §6.3 / §6.5 — the pre-step running the `118` **file** rather than a mirrored psql block, the supervised lane, and the retirement of step 4 — **DevOps, in parallel at `feat/runbook-rebootstrap-as-migrator`**; and an `apply-migration` skill update recording that **the owner-privilege surface is owner-semantics views as well as `prosecdef` functions**, and that a `pfin`-lane migration may not reference a schema outside `pfin`.
 
-**Status.** **Draft.** **F/CTO chose Decision A option (A2) — the group role — on 2026-09-16, and Sec ACCEPTED A2 conditioned at the same sitting, VETOing two legs of (A1) and accepting all three of Architect's divergences.** ✅ **The VAULT RESIDUAL is RULED: F/CTO ratified disposition (iii) — `security_invoker = true` on `007`/`015` — on 2026-09-16.** **Basis, as ratified:** (iii) **removes** the owner's vault dependency rather than relocating it — **Decision A's wall 2 is deleted**, not moved; **nothing new is granted to anyone** — `service_role` already holds **SELECT and DELETE on both `vault` relations in the image's own ACL** (Architect measured, Decision G1(a)); and **Sec's tenant-gating reason is WITHDRAWN** — `service_role` carries `rolbypassrls`, so an RLS policy is not evaluated for it and (iii) is privilege-neutral on tenant-gating rather than a strengthening (Decision G1). ✅ **AND THE DATED ONE-TIME STEP 1.6 EXCEPTION IS ALSO RATIFIED — F/CTO, 2026-09-16, same sitting.** Both ratifies are now in: the vault disposition decided **what** the edit is, and the exception grants **permission** to make it, **at the scope and expiry the exception names and no broader.** *This sentence previously read that Draft was retained because the exception ratify was still owed; kept as the dated record of the order in which the two landed.*
+**Status.** **Draft.** **F/CTO chose Decision A option (A2) — the group role — on 2026-09-16, and Sec ACCEPTED A2 conditioned at the same sitting, VETOing two legs of (A1) and accepting all three of Architect's divergences.** ✅ **The VAULT RESIDUAL is RULED: F/CTO ratified disposition (iii) — `security_invoker = true` on `007`/`015` — on 2026-09-16.** ⚠ **CORRECTED 2026-09-16 — the ratified basis clause was FALSE, and the change survives on a different and better basis.** (iii) was ratified on the ground that `security_invoker = true` *"removes the owner's vault dependency rather than relocating it — wall 2 deleted."* **Measured end-to-end through `supabase db push`: a view body is permission-checked at CREATE time regardless of `security_invoker`, so the creating role still needs vault privilege — wall 2 is NARROWED to CREATE time, not deleted.** The change is nonetheless **load-bearing**: ownership can be transferred to a vault-less `pfin_owner` (`ALTER VIEW … OWNER TO` does not re-validate the body — measured), but under the default `security_invoker = false` the view would then execute as its vault-less owner and be **broken**. **`security_invoker = true` is therefore a COMPONENT of any shape that puts these views under `pfin_owner`, never an alternative to one.** ✅ **AND THE DATED ONE-TIME STEP 1.6 EXCEPTION IS ALSO RATIFIED — F/CTO, 2026-09-16, same sitting.** Both ratifies are now in: the vault disposition decided **what** the edit is, and the exception grants **permission** to make it, **at the scope and expiry the exception names and no broader.** *This sentence previously read that Draft was retained because the exception ratify was still owed; kept as the dated record of the order in which the two landed.*
 
 ⚠ **Status REMAINS Draft, and what is left is now precisely two things, neither of them a ratify:**
 1. **Sec GREEN on the `DECISIONS.md` half.** Sec's last verdict on this amendment was **AMBER at `1fd48b06`** with two live findings; both were folded, and the vault and exception ratifies landed after that verdict. **Sec has not re-reviewed since**, and this amendment does not grade itself.
