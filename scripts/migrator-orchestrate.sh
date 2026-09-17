@@ -158,21 +158,44 @@ jqp() { python3 -c "import json,sys;$1"; }
 # "precondition" in the same comment that names THIS check "success
 # criterion" -- the two roles are different and Sec's ruling is explicit
 # that the distinction will drift if not stated together, every time.
-if [[ -n "${MIGRATOR_EXPECT_SHA:-}" ]]; then
-  log "checking migrator container's baked sha against MIGRATOR_EXPECT_SHA (ADR-072 Amendment 6 draft)"
-  RUNNING_SHA="$(docker compose --project-name "$MIGRATOR_SERVICE_UUID" exec -T migrator cat /workspace/.build-sha 2>/dev/null || true)"
-  if [[ -z "$RUNNING_SHA" ]]; then
-    log "FAIL (exit 3): could not read /workspace/.build-sha from the running migrator container — either the image predates this marker (rebuild needed) or the container is unreachable. Refusing to fire against an unverifiable image."
-    exit 3
-  fi
-  if [[ "$RUNNING_SHA" != "$MIGRATOR_EXPECT_SHA" ]]; then
-    log "FAIL (exit 3): migrator container's baked sha ($RUNNING_SHA) does NOT match the sha this run was triggered for ($MIGRATOR_EXPECT_SHA). The container has NOT been rebuilt since that commit merged -- this is exactly the defect the 2026-09-17 119 fire surfaced. Rebuild and redeploy the migrator image (Amendment 4 / this Amendment 6's Consequence 2) before re-firing. NOT executing the Scheduled Task."
-    exit 3
-  fi
-  log "sha check OK: migrator container carries $RUNNING_SHA, matches the triggering commit"
-else
-  log "⚠ MIGRATOR_EXPECT_SHA not set -- sha check SKIPPED (ADR-072 Amendment 6 draft; expected until provision-vps.sh's sshd_config AcceptEnv change and .github/workflows/migrator-trigger.yml's SetEnv both land and this leaves Draft). This is a KNOWN GAP, not a silent one -- see ADR-072 Amendment 6 (draft) for the ratify status."
+# ⚠ CORRECTED per Sec's re-review of #790 @ 96db622c (sec-790-96db622c.md,
+# 2026-09-17), Condition C-2: this used to SKIP the check when
+# MIGRATOR_EXPECT_SHA was unset, reasoning that the workflow always sets
+# it. Sec's measurement: $GITHUB_SHA IS always set inside the workflow, so
+# the skip branch is UNREACHABLE from .github/workflows/migrator-trigger.yml
+# -- but it IS reachable from a manual `ssh ci-migrate@box` fire with no
+# `-o SetEnv=...` (exactly what §6.7's own recipe, and any operator
+# emergency fire, does). "The fail-open path is the human one, which is the
+# one most likely to be run in an emergency and least likely to be read
+# carefully" (Sec, verbatim). There is NO skip branch any more, on ANY
+# path, including this one: MIGRATOR_EXPECT_SHA is now REQUIRED, always,
+# full stop.
+if [[ -z "${MIGRATOR_EXPECT_SHA:-}" ]]; then
+  log "FAIL (exit 4): MIGRATOR_EXPECT_SHA is not set. This check no longer skips when the variable is absent (Sec correction, 2026-09-17) -- every fire, workflow-triggered or a manual \`ssh ci-migrate@box\`, must supply it. Manual fire: \`ssh -o SetEnv=\"MIGRATOR_EXPECT_SHA=<40-hex-sha>\" ci-migrate@<box>\` (requires provision-vps.sh's AcceptEnv change to have landed). NOT executing the Scheduled Task."
+  exit 4
 fi
+# 40-hex format validation -- DEFENCE-IN-DEPTH, not the primary control.
+# Sec's original C-1 argued this was BLOCKING (an attacker-controlled string
+# reaching a log line); measured on this path, MIGRATOR_EXPECT_SHA is always
+# $GITHUB_SHA (40 hex, workflow_dispatch takes no inputs) so that harm does
+# not exist TODAY -- Sec downgraded C-1 to defence-in-depth accordingly.
+# Kept as a guard against a future workflow input or a mistyped/truncated
+# manual SetEnv value, not because today's path can be attacker-steered.
+if [[ ! "$MIGRATOR_EXPECT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  log "FAIL (exit 5): MIGRATOR_EXPECT_SHA ('$MIGRATOR_EXPECT_SHA') is not a well-formed 40-character hex git sha. Defence-in-depth check (Sec C-1, downgraded from blocking since \$GITHUB_SHA cannot currently be attacker-steered on this path) -- refusing rather than comparing against a malformed value. NOT executing the Scheduled Task."
+  exit 5
+fi
+log "checking migrator container's baked sha against MIGRATOR_EXPECT_SHA (ADR-072 Amendment 6 draft)"
+RUNNING_SHA="$(docker compose --project-name "$MIGRATOR_SERVICE_UUID" exec -T migrator cat /workspace/.build-sha 2>/dev/null || true)"
+if [[ -z "$RUNNING_SHA" ]]; then
+  log "FAIL (exit 3): could not read /workspace/.build-sha from the running migrator container — either the image predates this marker (rebuild needed) or the container is unreachable. Refusing to fire against an unverifiable image."
+  exit 3
+fi
+if [[ "$RUNNING_SHA" != "$MIGRATOR_EXPECT_SHA" ]]; then
+  log "FAIL (exit 3): migrator container's baked sha ($RUNNING_SHA) does NOT match the sha this run was triggered for ($MIGRATOR_EXPECT_SHA). The container has NOT been rebuilt since that commit merged -- this is exactly the defect the 2026-09-17 119 fire surfaced. Rebuild and redeploy the migrator image (Amendment 4 / this Amendment 6's Consequence 2) before re-firing. NOT executing the Scheduled Task."
+  exit 3
+fi
+log "sha check OK: migrator container carries $RUNNING_SHA, matches the triggering commit"
 
 log "executing migrator Scheduled Task ($MIGRATOR_TASK_UUID) on application $MIGRATOR_SERVICE_UUID"
 # Item 15 fix (Sec-gated, booked BACKLOG.md §7.36 #15): the migrator

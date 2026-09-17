@@ -1185,6 +1185,7 @@ select has_table_privilege('pfin_owner', 'vault.decrypted_secrets', 'SELECT');
 9. `scripts/provision-vps.sh --apply` (§6.4 step 4) — materializes the `ci-migrate` user, its forced-command key, the orchestration script, and the scoped Coolify token.
 10. Add the GitHub Actions secret `CI_MIGRATE_SSH_PRIVATE_KEY` (§6.4 step 5).
 11. Add the GitHub Actions repository variable `PROD_SSH_HOST` (§6.4 step 6).
+11a. **F/CTO !-step (ADR-072 Amendment 6 draft, added 2026-09-17 — Sec condition on #790):** create the GitHub Environment `production-migrator` (Settings → Environments → New environment) and add F/CTO as a **required reviewer**. `.github/workflows/migrator-trigger.yml`'s box-touching job now declares `environment: production-migrator` so a `workflow_dispatch` run carries an approval gate equivalent to the push path's PR/branch-protection gate — **but this only holds once the environment exists with that reviewer configured**. Per GitHub's documented (not live-verified this session — no network egress) behavior, a workflow referencing an undefined environment auto-creates it with zero protection rules on first run, i.e. **it does NOT fail closed on its own** — the job simply runs ungated until this step is done by hand. Do this before Phase C's steady-state is considered live, not after.
 
 **Phase D — integration test**
 

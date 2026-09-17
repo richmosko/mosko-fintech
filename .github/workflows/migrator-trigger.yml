@@ -128,6 +128,39 @@ jobs:
     name: Trigger migrator (SSH -> forced command -> apply + deploy)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # ⚠ ADR-072 Amendment 6 (draft) — Sec condition on #790 @ 96db622c
+    # (sec-790-96db622c.md): the push path is gated by branch protection,
+    # a PR, required checks, and Sec joint review on migration PRs; the
+    # workflow_dispatch path added above skips ALL of that -- "it converts
+    # a multi-gate path into a one-click path against production." A
+    # GitHub Environment with a required reviewer restores an approval
+    # step equivalent to the push path's PR gate, for BOTH triggers (this
+    # key applies to the job regardless of which `on:` fired it).
+    #
+    # `production-migrator` MUST be created in this repo's Settings ->
+    # Environments, with F/CTO added as a required reviewer, BEFORE this
+    # workflow is taken out of Draft or exercised for real. THIS IS AN
+    # F/CTO !-STEP -- add to docs/deployment-runbook.md's operator
+    # checklist, same class of action as the CI_MIGRATE_SSH_PRIVATE_KEY /
+    # PROD_SSH_HOST steps in this file's own header comment.
+    #
+    # ⚠ WHAT HAPPENS IF `production-migrator` DOES NOT EXIST YET —
+    # documented GitHub Actions behavior, NOT verified live this session
+    # (zero network egress): referencing an environment name in a
+    # workflow that has no matching entry in Settings -> Environments
+    # causes GitHub to auto-create that environment on the run that first
+    # references it, with ZERO protection rules (no required reviewer)
+    # unless and until one is configured. That means an undefined
+    # environment does **NOT** fail closed -- the job runs immediately,
+    # exactly as if this `environment:` key were absent, until F/CTO
+    # configures the required-reviewer rule by hand. There is no YAML-only
+    # construct in Actions that can assert "this environment has a
+    # required reviewer configured" and refuse to run otherwise -- that
+    # gate lives entirely in repo settings, not in this file. Confirm
+    # against the live GitHub UI/API before relying on this, since this
+    # comment's claim about auto-creation is drawn from documentation, not
+    # a measurement against this repo.
+    environment: production-migrator
     steps:
       - uses: actions/checkout@v4
 
