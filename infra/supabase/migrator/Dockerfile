@@ -37,6 +37,34 @@
 
 FROM debian:bookworm-slim
 
+# ⚠ ADR-072 Amendment 6 (draft) — Sec's "assert the OUTCOME, not the STATUS"
+# ruling on the 119 fire. Measured, 2026-09-17: this Dockerfile carried NO
+# label, build-arg, or marker identifying the migration set baked into the
+# image — only the plain `COPY supabase/migrations/` below. That gap let
+# three Phase D fires run `db push` against a STALE image (the migrator
+# service was never rebuilt/redeployed after the sha that added those
+# migrations merged) and report clean success, because an empty diff is a
+# valid `db push` outcome. The container never held the migration it was
+# "fired for."
+#
+# GIT_SHA below is meant to be populated FROM Coolify's own build-time git
+# sha at deploy time. ⚠ UNVERIFIED WHICH BUILD-ARG NAME COOLIFY 4.3.18
+# INJECTS — I could not reach Coolify's source or docs live (no network
+# egress in the session that wrote this). `SOURCE_COMMIT` is the name
+# commonly documented for Coolify's Nixpacks/Dockerfile build-arg
+# injection, and is what this Dockerfile assumes below, but
+# docs/records/v1final/production-standup.md (line 32-34, an EARLIER
+# attempt at this same problem for the four app-tier Dockerfiles) recorded
+# the identical gap and the identical caveat: "Coolify names this
+# COMMIT_SHA or similar depending on version — unconfirmed until read on
+# the real instance." That was never confirmed then either. CONFIRM THE
+# ACTUAL BUILD-ARG NAME AGAINST THE RUNNING COOLIFY 4.3.18 INSTANCE (its
+# own build-log output for a deploy will show every ARG it passes) BEFORE
+# this PR is taken out of Draft — if the name is wrong, GIT_SHA silently
+# builds empty and this whole mechanism is exactly the vacuous-green class
+# it exists to close.
+ARG GIT_SHA=""
+
 # Pinned Supabase CLI release — matches .github/actions/supabase-cli-setup.
 # Bump both together.
 ARG SUPABASE_CLI_VERSION=2.107.0
@@ -97,6 +125,28 @@ WORKDIR /workspace
 COPY supabase/config.toml supabase/config.toml
 COPY supabase/templates/ supabase/templates/
 COPY supabase/migrations/ supabase/migrations/
+
+# ADR-072 Amendment 6 (draft) — the OUTCOME marker Sec's ruling requires,
+# in TWO forms so both a `docker inspect` (no exec needed, matches how
+# migrator-orchestrate.sh's box-side check reads it) and a `docker exec cat`
+# can confirm what migration set this specific container's filesystem
+# actually carries:
+#   (1) an OCI LABEL, readable via `docker inspect --format
+#       '{{index .Config.Labels "org.mosko.migrator.git-sha"}}'` with no
+#       exec into the container at all;
+#   (2) a plain file at /workspace/.build-sha, for a fallback `docker exec`
+#       read and for a human `cat`ting it interactively without needing to
+#       recall the label key.
+# FAILS THE BUILD if GIT_SHA came through empty — a silently-empty marker
+# would make every comparison against it vacuously pass (an empty expected
+# sha "matching" an empty file), which is the exact defect class this
+# mechanism exists to close. Confirm the real Coolify build-arg name (see
+# the GIT_SHA ARG's own comment above) before this leaves Draft — until
+# then, THIS CHECK WILL FAIL EVERY BUILD, deliberately, rather than bake a
+# marker nobody has verified is real.
+RUN test -n "$GIT_SHA" || (echo "FATAL: GIT_SHA build-arg is empty — Coolify's build-arg name is unconfirmed (see the ARG's own comment above). Refusing to bake an empty migration-set marker." >&2 && exit 1)
+LABEL org.mosko.migrator.git-sha="$GIT_SHA"
+RUN printf '%s' "$GIT_SHA" > /workspace/.build-sha
 
 # Resident Pattern-A keepalive — the Coolify Scheduled Task execs the real
 # work into this container; it is never this image's own CMD/ENTRYPOINT.

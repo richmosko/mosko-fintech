@@ -639,7 +639,21 @@ KbdInteractiveAuthentication no
 # AllowTcpForwarding must stay yes (the default) -- the Coolify dashboard and
 # Supabase Studio tunnels (ssh -L) both depend on it. Stated explicitly so a
 # future hardening pass cannot flip the default without this line objecting.
-AllowTcpForwarding yes'
+AllowTcpForwarding yes
+# ⚠ ADR-072 Amendment 6 (DRAFT, not ratified) -- Sec joint-review MANDATORY
+# on this line before it ships, same as any other change to ci-migrate'"'"'s
+# posture (C1/C3). Accepts exactly ONE named environment variable from the
+# client -- nothing else, no pattern, no wildcard -- so
+# .github/workflows/migrator-trigger.yml'"'"'s ssh invocation can pass the
+# triggering commit sha to migrator-orchestrate.sh'"'"'s sha-check (see that
+# script'"'"'s own comment for why this is a DATA channel, not a widening of
+# C2'"'"'s "never read $SSH_ORIGINAL_COMMAND" rule -- this variable is never
+# eval'"'"'d, never dispatched on, only compared for equality against the
+# container'"'"'s own baked marker). Scoped to ci-migrate'"'"'s forced-command
+# session by the "restrict,command=..." authorized_keys line below, exactly
+# like every other capability ci-migrate has -- this does not grant any
+# OTHER account or session anything.
+AcceptEnv MIGRATOR_EXPECT_SHA'
 CURRENT_SSHD="$(sshx 'cat /etc/ssh/sshd_config.d/99-pfin-hardening.conf 2>/dev/null' || true)"
 if [[ "$CURRENT_SSHD" == "$DESIRED_SSHD" ]]; then
   ok "sshd drop-in already matches"

@@ -1190,6 +1190,51 @@ select has_table_privilege('pfin_owner', 'vault.decrypted_secrets', 'SELECT');
 
 12. Merge a migration touching `supabase/migrations/**` and watch `.github/workflows/migrator-trigger.yml` fire end-to-end (§6's "steady-state" bullet; §6.4 step 7's verify). **With `DEPLOY_ON_SUCCESS=0` (the default), this proves migrate-then-NO-deploy, not the full steady-state**: expect the orchestration script's `"migration apply SUCCEEDED — app deploy SUPPRESSED (DEPLOY_ON_SUCCESS!=1)"` log line and a green (exit 0) job — the suppressed deploy is the PASS condition here, not a failure to chase down. The deploy leg is proven separately at §7 step 7.
 
+**`fail-probe` — the permanent positive control (named 2026-09-17, ADR-072 Amendment 6 draft).** Phase D above (step 12) is a positive-path proof only — it shows a migration that SUCCEEDS reports success. It says nothing about whether a migration that FAILS is reported as failed, and the 119-fire incident (Sec's ruling, `sec-119-fire-gate.md`) showed that gap matters: the transport chain (Coolify Scheduled Task → `docker exec` exit code → SSH forced-command exit code → GitHub Actions job status) must be independently proven to fail closed, not just assumed from the positive case. `fail-probe` is a throwaway Coolify Scheduled Task, UUID `hffv8um6zruwslmndqc5su2l`, deliberately configured to fail (a non-zero-exit command) — it exists for exactly this purpose and should be kept permanently rather than deleted as box-cleanup debris. **`enabled` was verified `True` via a direct Coolify API read-back** (F/CTO measurement, 2026-09-17) despite the Coolify UI's toggle control appearing, at a glance, to say otherwise — API read-back, not the UI's rendered toggle state, is the authoritative check for this field going forward; if the UI is ever consulted for this task's enabled/disabled state, cross-check it against `GET /api/v1/.../scheduled-tasks/{uuid}` before trusting it. See §6.7 below for the exact recipe that exercises `fail-probe` against the real SSH → forced-command → GitHub Actions path (hops (d)/(e) in Sec's five-hop trace) — that recipe is runnable today, independent of ADR-072 Amendment 6's ratify status.
+
+---
+
+### 6.7 `fail-probe` positive-control recipe — hops (d)/(e), runnable today
+
+**Purpose.** Sec's five-hop trace of the migration-trigger transport chain identified hops (d) and (e) — the SSH forced-command's exit-code propagation back through to the GitHub Actions job — as **not gradable from source**: nothing in `migrator-orchestrate.sh` or `.github/workflows/migrator-trigger.yml`'s text proves the exit code of a failing box-side command actually reaches GitHub Actions as a failed step, only that the code is written with that intent. This recipe exercises the real path with `fail-probe` (§6.5's note above) as the deliberately-failing input, so hops (d)/(e) are measured, not inferred. **Not gated on ADR-072 Amendment 6** — the sha-assertion work in that draft is orthogonal; this recipe uses today's trigger path exactly as it exists on `main`.
+
+**Scope discipline — config only, never the credential file.** `/etc/pfin/migrator-trigger.conf` (the `MIGRATOR_TASK_UUID` binding `migrator-orchestrate.sh` reads) is edited. `/etc/pfin/migrator-coolify-token.env` (or wherever the scoped Coolify API token itself lives, per §6.4) is **never touched** by this recipe — swapping the target task UUID does not require, and must not involve, touching the credential.
+
+1. **Read the current conf, keep an exact copy.**
+   ```
+   ssh <box-admin-user>@<box-ip> "sudo cat /etc/pfin/migrator-trigger.conf" > /tmp/migrator-trigger.conf.orig
+   grep -n '^MIGRATOR_TASK_UUID=' /tmp/migrator-trigger.conf.orig
+   ```
+   Note the printed value — this is the value Step 6 below restores.
+
+2. **Swap `MIGRATOR_TASK_UUID` to `fail-probe`'s UUID, on the box, by editing the one line — not by regenerating the file.**
+   ```
+   ssh <box-admin-user>@<box-ip> "sudo sed -i 's/^MIGRATOR_TASK_UUID=.*/MIGRATOR_TASK_UUID=hffv8um6zruwslmndqc5su2l/' /etc/pfin/migrator-trigger.conf"
+   ssh <box-admin-user>@<box-ip> "sudo cat /etc/pfin/migrator-trigger.conf" | grep -n '^MIGRATOR_TASK_UUID='
+   ```
+   Confirm the printed line now shows `hffv8um6zruwslmndqc5su2l` before proceeding — do not proceed on an assumed edit.
+
+3. **Fire via the real forced-command path — the same SSH invocation `.github/workflows/migrator-trigger.yml` uses, not a direct API call.** From a machine holding the `ci_only` private key (§6.4):
+   ```
+   ssh -i <ci_only private key path> -o BatchMode=yes -o StrictHostKeyChecking=accept-new ci-migrate@<box-ip> true
+   echo "exit code: $?"
+   ```
+   Record the exit code directly — this is hop (e), the forced command's own exit status reaching the SSH client.
+
+4. **Assert the WORKFLOW STEP goes red, not just the script.** Trigger this same SSH command from inside a real (or manually-dispatched, if the workflow supports `workflow_dispatch` — if not, a throwaway migration touching `supabase/migrations/**` on a scratch branch merged to `main` is the fallback, reverted immediately after) run of `.github/workflows/migrator-trigger.yml`, and confirm in the Actions UI that the "SSH to ci-migrate" step shows failed (red X), not a misleadingly-green step with a logged error buried in its output. This is hop (d) — the exit code surviving GitHub Actions' own step-result mapping — and is the part Sec's ruling says cannot be graded from source at all; only this live run closes it.
+
+5. **Record the result** (pass/fail on each of steps 3 and 4) in the runbook's operating log or the Linear issue tracking this recipe's execution — whichever this repo's convention for one-off box measurements currently is (§6.0).
+
+6. **Restore the original conf — by name, not by eyeballing.**
+   ```
+   ssh <box-admin-user>@<box-ip> "sudo cp /etc/pfin/migrator-trigger.conf /etc/pfin/migrator-trigger.conf.pre-restore.bak"
+   ssh <box-admin-user>@<box-ip> "sudo sed -i 's/^MIGRATOR_TASK_UUID=.*/MIGRATOR_TASK_UUID=<original value from Step 1>/' /etc/pfin/migrator-trigger.conf"
+   ssh <box-admin-user>@<box-ip> "sudo cat /etc/pfin/migrator-trigger.conf" | grep -c '^MIGRATOR_TASK_UUID=<original value from Step 1>$'
+   ```
+   The final `grep -c` must print `1` — that count, not a visual diff, is the restoration proof. If it prints `0`, STOP and diff the live conf against `/tmp/migrator-trigger.conf.orig` before doing anything else; do not re-run Step 6 blind.
+
+7. **`migrator-coolify-token.env` (or equivalent credential file) was not opened, read, or modified at any point in this recipe** — confirm this by `ls -l` timestamp on that file before Step 2 and after Step 6; the mtime must be unchanged.
+
 ---
 
 ### 6.6 Re-bootstrap execution plan — THIS box, concrete, 2026-09-16

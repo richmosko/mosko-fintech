@@ -48,6 +48,41 @@
 #     enumerate confidential VALUES only — putting a non-secret here would
 #     assert a blast radius that does not exist, the same reasoning that
 #     keeps PUBLIC_SUPABASE_URL out of that file.
+#
+# ⚠ TODO — PENDING ADR-072 AMENDMENT 4 (design only, not built here). The
+# sha-check this workflow now passes to migrator-orchestrate.sh (see the
+# `-o SetEnv=MIGRATOR_EXPECT_SHA=...` line below) FAILS CLOSED on a stale
+# image — it does not by itself REBUILD one. Today the migrator container
+# is baked at build time (COPY supabase/migrations/ into the image,
+# infra/supabase/migrator/Dockerfile) and lives INSIDE the Supabase-stack
+# Coolify resource, so the only way to refresh it is a full stack redeploy
+# — which restarts the database. This workflow cannot trigger that today
+# without accepting a DB restart on every migration merge, which is
+# exactly the operational cost Sec's Amendment 6 note names as the reason
+# to elevate Amendment 4 (splitting the migrator into its own Coolify
+# resource) from hygiene to PRECONDITION.
+#   DESIGNED SHAPE, once Amendment 4 lands and the migrator is its own
+#   resource (rebuildable independently, no DB restart):
+#     1. This job gains an EARLIER step: `GET /applications/<migrator-uuid
+#        (now its OWN app, not the stack's)>/deploy` (or the Coolify
+#        "restart"/"redeploy" endpoint for a standalone resource — confirm
+#        the exact route against routes/api.php at whatever Coolify version
+#        is running then, same discipline as the executions endpoint
+#        correction earlier in this workstream) BEFORE the SSH step below,
+#        so the image is rebuilt from $GITHUB_SHA first.
+#     2. That step must itself POLL to a terminal "deployment finished"
+#        state before the SSH step runs -- but per Sec's Amendment 6
+#        ruling (Consequence 3), THIS POLL IS A PRECONDITION ONLY ("don't
+#        even try to fire until the rebuild is done"), never a success
+#        criterion -- the sha-check inside migrator-orchestrate.sh remains
+#        the only thing that proves the image is actually correct. Naming
+#        both roles in the same comment, per Sec's explicit wording
+#        requirement, so a future edit cannot quietly conflate them.
+#     3. Until Amendment 4 lands, an operator must rebuild/redeploy the
+#        Supabase-stack resource by hand (accepting the DB restart) before
+#        relying on this trigger for a migration that isn't in the image
+#        yet -- see docs/deployment-runbook.md §6.6's own ruling on this
+#        exact ordering question (Step 1.5, ADR-072 Amendment 6 draft).
 
 name: Migrator trigger (ADR-072 Option E)
 
@@ -121,8 +156,22 @@ jobs:
           # itself never reads $SSH_ORIGINAL_COMMAND (C2). This SSH
           # invocation's ONLY jobs are: open the session, and let its exit
           # code become this step's exit code.
+          #
+          # ⚠ ADR-072 Amendment 6 (DRAFT, not ratified) -- `-o
+          # SetEnv=MIGRATOR_EXPECT_SHA=$GITHUB_SHA` passes the commit this
+          # workflow run is FOR to migrator-orchestrate.sh's sha-check (that
+          # script's own comment explains why this is a data channel, never
+          # a command channel, and does not weaken C2). Only takes effect
+          # once provision-vps.sh's sshd_config drop-in adds `AcceptEnv
+          # MIGRATOR_EXPECT_SHA` (see that script's own comment) -- until
+          # then sshd silently drops any env var the client sets that it
+          # hasn't been told to accept, so this is safe to add here even
+          # before the sshd_config change lands (fails open to "no check",
+          # not open to "arbitrary env reaches the box"). $GITHUB_SHA is a
+          # GitHub Actions built-in (the checked-out commit), not a secret.
           ssh -i "$KEY_PATH" \
               -o BatchMode=yes \
               -o StrictHostKeyChecking=accept-new \
               -o ConnectTimeout=10 \
+              -o SetEnv="MIGRATOR_EXPECT_SHA=$GITHUB_SHA" \
               "ci-migrate@$PROD_SSH_HOST" true
