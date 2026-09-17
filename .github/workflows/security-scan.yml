@@ -220,9 +220,54 @@ jobs:
 
       - name: Start local stack (db-only; -x drops non-db services incl gotrue/auth)
         # `supabase start` applies supabase/migrations/** on bring-up. Mirrors
-        # db-tests.yml's db-only bring-up exactly (same -x exclusion list).
+        # db-tests.yml's db-only bring-up exactly (same -x exclusion list) —
+        # including the auth-grants recipe below; identical text, kept as ONE
+        # edit across both files rather than diverging.
+        #
+        # ⚠ THE CLI SEEDS supabase/roles.sql AS A NON-SUPERUSER (measured, ADR-072
+        # Amendment 5 Decision K): rolsuper=f, not a member of supabase_admin,
+        # `set role supabase_admin` refused. supabase/auth-grants.sql needs
+        # supabase_admin (schema auth's owner on this image), so the seeder cannot
+        # apply it — every swept migration would die at the first FK to auth.users
+        # with "permission denied for schema auth". Recipe below (Decision K, read
+        # from CLI source at v2.105.0, not --help):
+        #   1. [db.migrations] enabled=false in a COPY of config.toml, THIS RUN ONLY.
+        #      `internal/migration/apply/apply.go`'s applyMigrationFiles is gated by
+        #      this key and is what both `supabase start` and `supabase db start`
+        #      reach on bring-up (internal/db/start/start.go -> SetupLocalDatabase ->
+        #      apply.MigrateAndSeed) -- there is no CLI flag for this (`--help`
+        #      inventories the flag surface, never the behaviour). NEVER commit false
+        #      -- left false in the real config.toml it makes a production `db push`
+        #      apply nothing and exit clean (this job's own config-toml-enabled fence
+        #      below guards against exactly that).
+        #   2. bring the stack up -- migrations are skipped on bring-up; roles.sql is
+        #      still seeded (that part isn't gated).
+        #   3. apply supabase/auth-grants.sql as supabase_admin via `docker exec` into
+        #      the db container as its postgres OS user, over the unix socket -- this
+        #      image's pg_hba.conf opens with a local/trust rule for supabase_admin,
+        #      so no credential enters this workflow (measured against the running
+        #      container, image public.ecr.aws/supabase/postgres:17.6.1.132).
+        #   4. `supabase migration up` -- does NOT consult the gate
+        #      (internal/migration/up/Run builds its own pending set directly), so
+        #      this applies 001-118+ with pfin_owner now holding its auth reach.
+        #   5. restore config.toml unconditionally (trap on EXIT) so nothing in this
+        #      job — or a later step reusing the checkout — ever sees the gate off.
         run: |
+          cp supabase/config.toml supabase/config.toml.orig
+          trap 'mv supabase/config.toml.orig supabase/config.toml' EXIT
+          awk '
+            /^\[db\.migrations\]/ { insec=1 }
+            /^\[/ && !/^\[db\.migrations\]/ { insec=0 }
+            insec && /^enabled = true/ { print "enabled = false"; next }
+            { print }
+          ' supabase/config.toml.orig > supabase/config.toml
+
           supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+
+          docker exec -i -u postgres supabase_db_mosko-fintech \
+            psql -X -v ON_ERROR_STOP=1 -U supabase_admin -f - < supabase/auth-grants.sql
+
+          supabase migration up
 
       - name: Build the DevOps scratch-DB template from the running stack
         # scripts/db-template-build.sh discovers the running supabase_db_*
@@ -654,6 +699,41 @@ jobs:
             exit 1
           fi
           echo "OK: fence caught the allowlist/pin mismatch on a mutated copy (exit $rc)."
+
+  fence-config-toml-migrations-enabled:
+    name: config.toml migrations-gate fence (unlabeled — F/CTO assigns any RT-NN, per ADR-011 D4)
+    runs-on: ubuntu-latest
+    # ADR-072 Amendment 5 Decision K. CI's "Start local stack" step (db-tests.yml,
+    # this workflow's fence-set-config job) toggles supabase/config.toml's
+    # [db.migrations] enabled key to false for the duration of a single job — a
+    # local, scratch-copy edit, restored on EXIT via trap — because that key is
+    # the only lever that suppresses `supabase start`'s unconditional migration
+    # apply long enough to run supabase/auth-grants.sql as supabase_admin before
+    # the migrations that need it. The SAME function the key gates
+    # (internal/migration/apply/apply.go's applyMigrationFiles) is what
+    # `supabase db push` calls. Left `false` in the COMMITTED config.toml, a
+    # production db push would apply nothing and exit 0 — silent, with no error
+    # to notice it by. This job is the mechanical guarantee that never lands.
+    # This is a CI-FENCED-set addition (DIFFERENT from ADR-011 Decision 4's §10
+    # catalogued ledger, never reconciled with it) — deliberately unlabeled;
+    # minting an RT-NN id is an F/CTO ADR-011 Decision-4 ratify act.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: config-toml-migrations-enabled production-mode (supabase/config.toml)
+        run: bash scripts/ci/fence-config-toml-migrations-enabled.sh supabase/config.toml
+
+      - name: config-toml-migrations-enabled inversion-mode (golden fixture; expects exit 1)
+        run: |
+          set +e
+          bash scripts/ci/fence-config-toml-migrations-enabled.sh tests/fixtures/ci/config-toml-migrations-disabled.toml
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: inversion expected exit 1 (violation caught) but got exit $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the golden fixture's committed enabled = false (exit $rc)."
 
   scanner-npm-audit:
     name: Dep scan — npm audit (high+critical)

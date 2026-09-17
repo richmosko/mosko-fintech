@@ -118,8 +118,51 @@ jobs:
         # `-x` excludes the non-db service containers — db-only per the SQL-seeded-
         # auth battery design. Invalid `-x` names only warn (never fail), so this
         # list is safe across CLI versions.
+        #
+        # ⚠ THE CLI SEEDS supabase/roles.sql AS A NON-SUPERUSER (measured, ADR-072
+        # Amendment 5 Decision K): rolsuper=f, not a member of supabase_admin,
+        # `set role supabase_admin` refused. supabase/auth-grants.sql needs
+        # supabase_admin (schema auth's owner on this image), so the seeder cannot
+        # apply it — every swept migration would die at the first FK to auth.users
+        # with "permission denied for schema auth". Recipe below (Decision K, read
+        # from CLI source at v2.105.0, not --help):
+        #   1. [db.migrations] enabled=false in a COPY of config.toml, THIS RUN ONLY.
+        #      `internal/migration/apply/apply.go`'s applyMigrationFiles is gated by
+        #      this key and is what both `supabase start` and `supabase db start`
+        #      reach on bring-up (internal/db/start/start.go -> SetupLocalDatabase ->
+        #      apply.MigrateAndSeed) -- there is no CLI flag for this (`--help`
+        #      inventories the flag surface, never the behaviour). NEVER commit false
+        #      -- left false in the real config.toml it makes a production `db push`
+        #      apply nothing and exit clean (security-scan.yml's config-toml-enabled
+        #      fence guards against exactly that).
+        #   2. bring the stack up -- migrations are skipped on bring-up; roles.sql is
+        #      still seeded (that part isn't gated).
+        #   3. apply supabase/auth-grants.sql as supabase_admin via `docker exec` into
+        #      the db container as its postgres OS user, over the unix socket -- this
+        #      image's pg_hba.conf opens with a local/trust rule for supabase_admin,
+        #      so no credential enters this workflow (measured against the running
+        #      container, image public.ecr.aws/supabase/postgres:17.6.1.132).
+        #   4. `supabase migration up` -- does NOT consult the gate
+        #      (internal/migration/up/Run builds its own pending set directly), so
+        #      this applies 001-118+ with pfin_owner now holding its auth reach.
+        #   5. restore config.toml unconditionally (trap on EXIT) so nothing in this
+        #      job — or a later step reusing the checkout — ever sees the gate off.
         run: |
+          cp supabase/config.toml supabase/config.toml.orig
+          trap 'mv supabase/config.toml.orig supabase/config.toml' EXIT
+          awk '
+            /^\[db\.migrations\]/ { insec=1 }
+            /^\[/ && !/^\[db\.migrations\]/ { insec=0 }
+            insec && /^enabled = true/ { print "enabled = false"; next }
+            { print }
+          ' supabase/config.toml.orig > supabase/config.toml
+
           supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+
+          docker exec -i -u postgres supabase_db_mosko-fintech \
+            psql -X -v ON_ERROR_STOP=1 -U supabase_admin -f - < supabase/auth-grants.sql
+
+          supabase migration up
 
       - name: Smoke — auth.uid() resolves under db-only  ⟦WIRE-VALIDATE #3⟧
         # Permanent guard: proves the `auth` SCHEMA + `auth.uid()` function exist in
