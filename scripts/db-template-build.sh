@@ -270,11 +270,44 @@ psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERRO
 # never needs direct CREATE on schema pfin.
 log "applying $MIGRATION_COUNT migrations..."
 i=0
+MIG_VERSIONS=()
 while IFS= read -r mig; do
   i=$((i + 1))
   psql -X -h "$DB_HOST" -p "$DB_PORT" -U "$SUPERUSER" -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q -f "$mig"
+  MIG_VERSIONS+=("$(basename "$mig" | grep -oE '^[0-9]+')")
 done < <(find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name '*.sql' | sort)
 log "applied $i migrations clean."
+
+# --- 5a. synthesize the CLI's ledger table, `supabase_migrations.schema_migrations`
+# --- this script applies migrations by hand-rolled psql (never `supabase migration
+# up` / `db push`), so unlike production/CI it never gets the CLI's own ledger.
+# The (iv‴) post-step's ordering gate (supabase/post-step-vault-view.sql line 27)
+# reads that ledger to refuse running before the main pass completes — a real,
+# useful check in production/CI, not something to work around by editing
+# Architect's canonical post-step file (routed, not silently patched, per the
+# same rule DevOps applies to db-tests.yml's post-step step). This script
+# instead supplies the ledger state the gate expects, matching what a real
+# `supabase migration up` run would have left: one row per applied migration,
+# keyed by its numeric prefix. Schema owned by $SUPERUSER, mirroring
+# production/CI's ledger ownership (the CLI's own connecting identity, never
+# pfin_owner — Decision F1/F3, the one deliberate ownership exception).
+log "synthesizing the migration ledger ($i rows) for the post-step's ordering gate"
+psql -X -h "$DB_HOST" -p "$DB_PORT" -U "$SUPERUSER" -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q <<SQL
+create schema if not exists supabase_migrations authorization $SUPERUSER;
+create table if not exists supabase_migrations.schema_migrations (
+  version text primary key,
+  statements text[],
+  name text
+);
+truncate supabase_migrations.schema_migrations;
+SQL
+{
+  printf 'insert into supabase_migrations.schema_migrations (version) values\n'
+  for idx in "${!MIG_VERSIONS[@]}"; do
+    sep=","; [ "$idx" -eq $((${#MIG_VERSIONS[@]} - 1)) ] && sep=";"
+    printf "  ('%s')%s\n" "${MIG_VERSIONS[$idx]}" "$sep"
+  done
+} | psql -X -h "$DB_HOST" -p "$DB_PORT" -U "$SUPERUSER" -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q
 
 # --- 5b. the ADR-072 Amendment 5 (iv‴) supervised post-step, against THIS
 # candidate database --- creates pfin.decrypted_source_credential (015's
