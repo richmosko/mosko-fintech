@@ -86,8 +86,34 @@ $applier$;
 -- ⚠ COLUMN-LEVEL on auth.users, not table-level: `id` is the only column the FK
 -- sites and the seed read need, and table-level would hand every user row —
 -- encrypted_password included — to a role that PROD_DB_URL reaches by SET ROLE.
-grant usage on schema auth to pfin_owner;
-grant references (id), select (id) on auth.users to pfin_owner;
+-- ⚠ ISSUED ONLY IF THE SEEDING IDENTITY HAS AUTHORITY, and it says so loudly when it
+-- does not. `auth` is owned by `supabase_auth_admin`, so a NON-SUPERUSER seeder
+-- (e.g. `postgres` on this image) cannot grant on it and the bare statements abort the
+-- whole seed. Skipping is safe ONLY because the failure is then loud and immediate at
+-- the first FK to auth.users — never silent.
+do $authgrants$
+begin
+  execute 'grant usage on schema auth to pfin_owner';
+  execute 'grant references (id), select (id) on auth.users to pfin_owner';
+exception when insufficient_privilege then
+  raise warning 'roles.sql: could NOT grant pfin_owner its auth reach as % — this seeding identity lacks authority over schema auth (owned by supabase_auth_admin). Every migration declaring a foreign key to auth.users WILL FAIL under the paired convention. Re-seed this file as the image''s true superuser, or run those two grants separately as one.', current_user;
+end
+$authgrants$;
+
+-- The schema itself, owned by pfin_owner FROM CREATION. ⚠ Not cosmetic and not
+-- redundant with `001`'s `create schema if not exists pfin`: the supervised pre-step
+-- runs 117 (and 055/116/118) BEFORE the main pass, and 117 also carries
+-- `create schema if not exists pfin`. Whoever wins that race OWNS the schema — measured,
+-- the supervised identity did, and every later `set role pfin_owner` create then failed
+-- with `permission denied for schema pfin`. Creating it here, authorized to pfin_owner,
+-- makes every later `if not exists` a no-op and removes the race entirely.
+do $pfinschema$
+begin
+  if not exists (select 1 from pg_catalog.pg_namespace where nspname = 'pfin') then
+    execute 'create schema pfin authorization pfin_owner';
+  end if;
+end
+$pfinschema$;
 
 -- ⚠ NO VAULT GRANT OF ANY KIND, AT ANY PHASE. Sec's standing veto: migrator reaches
 -- pfin_owner by SET ROLE, and a standing, CI-triggerable DDL credential must not
@@ -101,29 +127,38 @@ grant references (id), select (id) on auth.users to pfin_owner;
 do $dbgrants$
 declare d text := current_database();
 begin
-  -- ⚠ ORDER IS LOAD-BEARING: THE OWNER FLIP FIRST, EVERY GRANT AFTER IT.
-  -- Measured. `alter database … owner to` REWRITES the owner's ACL entry: the old
-  -- owner's row is dropped and the new owner gets CTc. A `grant create … to postgres`
-  -- issued BEFORE the flip is therefore ERASED BY IT, and the next thing the CLI does
-  -- is create the migration-ledger schema as postgres:
-  --     failed to create migration table: ERROR: permission denied for database postgres
-  -- That failure looks like a missing grant and is actually a grant that was made and
-  -- then silently revoked by a later statement in the same block.
+  -- ⚠ ORDER AND EXECUTING ROLE ARE BOTH LOAD-BEARING. Measured twice, each time by a
+  -- red CI matrix, so both facts are written down rather than left to be re-derived.
   --
-  -- 061's `alter database … set` needs DATABASE OWNERSHIP, and under the paired
-  -- convention it runs as pfin_owner — so ownership sits with pfin_owner, not with the
-  -- applying identity. This is a net REDUCTION in migrator's standing reach: it loses
-  -- `alter database … set` and keeps only CONNECT plus create-on-database.
+  -- (1) THE FLIP FIRST. `alter database … owner to` REWRITES the owner's ACL entry:
+  --     the old owner's row is dropped. A `grant create … to postgres` issued BEFORE
+  --     the flip is therefore ERASED BY IT.
+  -- (2) THE GRANTS AFTER IT, AND ISSUED **AS THE NEW OWNER**. This file is seeded by
+  --     whichever identity the harness runs as — and locally/in CI that is `postgres`,
+  --     which is NOT a superuser on this image. Once it hands ownership to pfin_owner
+  --     it no longer holds grant authority on this database, so a bare
+  --     `grant create on database … to postgres` SILENTLY FAILS TO TAKE, leaving the
+  --     CLI unable to create its own ledger:
+  --         failed to create migration table: ERROR: permission denied for database postgres
+  --     Entering pfin_owner first makes the grants work for EVERY seeding identity —
+  --     `postgres` reaches it by the membership granted above, and `supabase_admin`
+  --     reaches it as superuser. Identity-agnostic by construction, which is the whole
+  --     property this file exists to provide.
+  --
+  -- The flip itself is PRODUCTION BEHAVIOUR, not a harness concession: 061's
+  -- `alter database … set` needs DATABASE OWNERSHIP and runs as pfin_owner under the
+  -- paired convention. It is a net REDUCTION in migrator's standing reach — migrator
+  -- loses `alter database … set` and keeps only CONNECT plus create-on-database.
   execute format('alter database %I owner to pfin_owner', d);
 
-  -- Now the grants, on the post-flip ACL.
-  --   · migrator creates and keeps OWNING the migration ledger schema — it is the
-  --     connecting role the CLI's own INSERT runs as, so the ledger must not move to
-  --     pfin_owner.
-  --   · postgres must be restored EXPLICITLY: the flip above took its implicit owner
-  --     privilege, and CI and local `supabase start` apply as postgres. Explicit is
-  --     auditable; implicit owner privilege is not.
+  set local role pfin_owner;
   execute format('grant create on database %I to migrator', d);
+  -- ⚠ HARNESS-RELEVANT, and named as such: `postgres` is the identity the Supabase CLI
+  -- applies as locally and in CI. In production the appliers are `migrator` (main pass)
+  -- and `supabase_admin` (supervised), neither of which needs this row. It is restored
+  -- EXPLICITLY rather than by declining the flip, because the flip is required and an
+  -- explicit grant is auditable where implicit owner privilege is not.
   execute format('grant create on database %I to postgres', d);
+  reset role;
 end
 $dbgrants$;
