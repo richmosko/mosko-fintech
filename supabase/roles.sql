@@ -118,19 +118,21 @@ $applier$;
 -- ⚠ COLUMN-LEVEL on auth.users, not table-level: `id` is the only column the FK
 -- sites and the seed read need, and table-level would hand every user row —
 -- encrypted_password included — to a role that PROD_DB_URL reaches by SET ROLE.
--- ⚠ ISSUED ONLY IF THE SEEDING IDENTITY HAS AUTHORITY, and it says so loudly when it
--- does not. `auth` is owned by `supabase_auth_admin`, so a NON-SUPERUSER seeder
--- (e.g. `postgres` on this image) cannot grant on it and the bare statements abort the
--- whole seed. Skipping is safe ONLY because the failure is then loud and immediate at
--- the first FK to auth.users — never silent.
-do $authgrants$
+-- ⚠ THE `auth` GRANTS ARE NOT HERE. They live in supabase/auth-grants.sql and MUST be
+-- applied by a role with authority over schema `auth` (`supabase_admin`) — measured in
+-- CI: the CLI seeds THIS file as a non-superuser, and a grant made without authority
+-- does NOT raise. It emits WARNING 01007 and GRANTS NOTHING, so the seed "succeeds"
+-- having established nothing and the apply dies much later at the first foreign key to
+-- auth.users. An exception handler cannot catch that; only reading the outcome back can.
+-- That read-back is below, and it names the file to run.
+do $authcheck$
 begin
-  execute 'grant usage on schema auth to pfin_owner';
-  execute 'grant references (id), select (id) on auth.users to pfin_owner';
-exception when insufficient_privilege then
-  raise warning 'roles.sql: could NOT grant pfin_owner its auth reach as % — this seeding identity lacks authority over schema auth (owned by supabase_auth_admin). Every migration declaring a foreign key to auth.users WILL FAIL under the paired convention. Re-seed this file as the image''s true superuser, or run those two grants separately as one.', current_user;
+  if not has_schema_privilege('pfin_owner', 'auth', 'USAGE')
+     or not has_column_privilege('pfin_owner', 'auth.users', 'id', 'REFERENCES') then
+    raise warning 'roles.sql: pfin_owner does NOT yet hold its auth reach (checked, not assumed). Every migration declaring a foreign key to auth.users WILL FAIL under the paired ownership convention, with an error naming schema auth rather than this cause. APPLY supabase/auth-grants.sql AS supabase_admin before the migrations run. This is expected when this file is seeded by the CLI, which is not a superuser.';
+  end if;
 end
-$authgrants$;
+$authcheck$;
 
 -- The schema itself, owned by pfin_owner FROM CREATION. ⚠ Not cosmetic and not
 -- redundant with `001`'s `create schema if not exists pfin`: the supervised pre-step

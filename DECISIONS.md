@@ -518,6 +518,27 @@ What it does, in order: **(0)** an ordering gate refusing to run unless migratio
 
 ---
 
+
+#### Decision K — the CI seeder is NOT a superuser, so the `auth` grants are a SEPARATE PRIVILEGED STEP in every lane
+
+**Measured in CI (run 35172826387), not inferred from configuration.** The Supabase CLI seeds `supabase/roles.sql` on bring-up as a **non-superuser**:
+
+```
+Seeding globals from roles.sql...
+WARNING (01007): no privileges were granted for "auth"
+WARNING (01007): not all privileges were granted for column "id" of relation "users"
+```
+
+Schema `auth` is owned by `supabase_auth_admin`, so that seeder cannot grant on it — and **no ordering, and no split inside `roles.sql`, changes that**: it is a property of WHO runs the file, not of what the file contains.
+
+⚠⚠ **THE FAILURE MODE IS WHAT MAKES THIS DANGEROUS, AND IT DEFEATS THE OBVIOUS GUARD.** A grant issued without authority **does not raise** — it emits `WARNING 01007` and **grants nothing**. An `exception when insufficient_privilege` handler therefore **never fires**; the seed completes "successfully" having established nothing, and the apply dies far away, at the first foreign key to `auth.users`, with an error naming schema `auth` rather than the cause. ⚠ **An earlier revision of `roles.sql` carried exactly that useless handler.** **The only reliable check is to READ THE OUTCOME BACK** — both files now do, and `roles.sql`'s check names the file to run.
+
+**Shape, in consequence:** the two `auth` grants move to **[`supabase/auth-grants.sql`](supabase/auth-grants.sql)**, applied as `supabase_admin` — by the runbook's supervised §6.3 pre-step in production, and by an explicit privileged step in CI **between the stack coming up and the migrations being applied**. `roles.sql` keeps everything a non-superuser seeder can actually establish and warns, by outcome check, when the privileged half has not run. **One file for the shared statements, both lanes; the split is by AUTHORITY, which is real, not by environment, which would be drift.**
+
+⚠ **THE CI WIRING IS DESIGNED AND NOT YET VERIFIED, and is recorded that way rather than as done.** `supabase start` applies `supabase/migrations/**` in the same step it brings the stack up and **exposes no flag to skip that** (`--help` inspected: only `--exclude`/`-x` for containers). The available lever is **`supabase db start`**, which starts Postgres alone — so the sequence becomes *start DB → apply `auth-grants.sql` as `supabase_admin` → apply migrations*. **Verifying that `supabase db start` does not itself apply migrations requires bringing a stack up, which was explicitly out of scope for the session that measured the rest of this.** Until it is verified, the four lanes stay as they are and remain RED at the first FK: an unverified rewrite of four working bring-up steps is a worse trade than a known-red lane with a named cause.
+
+---
+
 **Ledgers — all flat.** This amendment authors no DDL, no FK-shaped column and no function. [ADR-011](#adr-011) Decision 4's §10 catalogued-instance ledger is **unchanged** and no catalogued instance is touched — Decision 4's catalogued list read **verbatim and live at draft time (2026-09-16)**; the three-axis cross-check is clean on all three axes (**instance-numbering**: none added, removed, reordered or renumbered; **layer-attribution**: no layer moves and no surface becomes "four-layer" — a bootstrap ordering decision creates no fence at any layer; **verbatim-vs-paraphrase**: linked, not restated, and no count is carried). The **SECURITY DEFINER allowlist is UNCHANGED** — Decision C rules ownership, not membership, and adds and removes no entry. The **Decision 3** cross-tenant FK-bypass family is untouched (read live; no table, no column). ⚠ The **C9 CI-fenced RT set** is a **DIFFERENT set** from the §10 catalogued ledger and is not reconciled with it here or anywhere; the migrator-lane schema fence proposed under (A2) would be a **CI-fenced-set** addition, shipping **unlabeled** until an F/CTO Decision-4 `RT-NN` ratify, exactly as Amendment 4's sibling fence does. **No `RT-NN` is minted here.**
 
 **What the implementing PRs carry (named here, authored there).** The item-36 outside-`pfin` **catalog census** and the zero-rows gate measurement, **both preconditions on any wipe** (DevOps); a `pfin_owner` migration in the `055`/`116`/`118` family with its grant set and its pgTAP battery incl. an (r12)-equivalent `rolconfig IS NULL` leg (Architect + QA); the **PAIRED `set role pfin_owner;` / `reset role;` convention** (Decision F1) across the `pfin` lane and the **CI fence asserting the PAIR**, strike-proven by a fixture that omits it (DevOps + QA, same PR); the `118`/`119` `comment on role` guard relocation under the dated one-time exception, keep-and-annotate (Architect); `118`'s `rolcanlogin` header reword (item 38, Architect, edit-in-place); `docs/deployment-runbook.md` §6 / §6.3 / §6.5 — the pre-step running the `118` **file** rather than a mirrored psql block, the supervised lane, and the retirement of step 4 — **DevOps, in parallel at `feat/runbook-rebootstrap-as-migrator`**; and an `apply-migration` skill update recording that **the owner-privilege surface is owner-semantics views as well as `prosecdef` functions**, and that a `pfin`-lane migration may not reference a schema outside `pfin`.
