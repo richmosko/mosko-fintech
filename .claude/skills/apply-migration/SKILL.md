@@ -133,7 +133,7 @@ Durable rewrites — prefer either:
 > - ⚠ **NOT covered, and named so it is not assumed to be:** `118`'s `rolcanlogin` header reword ([BACKLOG](../../../BACKLOG.md) §7.36 **item 38**) — an ordinary **(B)**-class in-place edit that needs no exception. *(This bullet previously cited "item 39"; that number moved when PR #776 landed the same booking independently and Architect's duplicate was dropped at the merge — the referent is unchanged.)*
 > - **⚠ EXPIRES** when the re-bootstrap lands and a deployment survives. **After that, Step 1.6 governs again unamended and this block is history, not authority.**
 > - **It does NOT cover:** any migration numbered `119`+, any edit outside ADR-072 Amendment 5's named list, or any future "it was wrong and never worked" argument. **Those remain out under every framing.**
-> - **Requires F/CTO's explicit ratify** — being requested at PRs #775 / #781; not assumed by either.
+> - ✅ **RATIFIED by F/CTO on 2026-09-16 (this session), scope and expiry exactly as stated above — no broader.** *This bullet previously read: "**Requires F/CTO's explicit ratify** — being requested at PRs #775 / #781; not assumed by either." Kept as the dated record that the permission was sought before it was used, not after.* ⚠ **Ratified means the edits named in Scope may now be authored — it does NOT widen the Scope list, move the expiry, or make this block precedent.**
 > - ⚠ **Unlike a (B)-class correction, edits under this exception may add EXECUTABLE lines** (PR #781 adds a `raise warning` branch). **That is exactly why the exception is needed rather than (B), and why it must not be reviewed as comment-only.**
 
 **Sec joint-review whenever the file is Sec-load-bearing** (`055` is).
