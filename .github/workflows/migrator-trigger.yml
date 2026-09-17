@@ -128,8 +128,9 @@ jobs:
     name: Trigger migrator (SSH -> forced command -> apply + deploy)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # ⚠ ADR-072 Amendment 6 (draft) — Sec condition on #790 @ 96db622c
-    # (sec-790-96db622c.md): the push path is gated by branch protection,
+    # ADR-072 Amendment 6 (ratified, c2b20cc2) — Sec's condition on the
+    # workflow_dispatch addition (joint review, PR #791): the push path is
+    # gated by branch protection,
     # a PR, required checks, and Sec joint review on migration PRs; the
     # workflow_dispatch path added above skips ALL of that -- "it converts
     # a multi-gate path into a one-click path against production." A

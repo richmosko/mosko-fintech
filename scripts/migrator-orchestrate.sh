@@ -158,8 +158,8 @@ jqp() { python3 -c "import json,sys;$1"; }
 # "precondition" in the same comment that names THIS check "success
 # criterion" -- the two roles are different and Sec's ruling is explicit
 # that the distinction will drift if not stated together, every time.
-# ⚠ CORRECTED per Sec's re-review of #790 @ 96db622c (sec-790-96db622c.md,
-# 2026-09-17), Condition C-2: this used to SKIP the check when
+# ⚠ CORRECTED per Sec's re-review (ADR-072 Amendment 6, PR #791, 2026-09-17),
+# Condition C-2: this used to SKIP the check when
 # MIGRATOR_EXPECT_SHA was unset, reasoning that the workflow always sets
 # it. Sec's measurement: $GITHUB_SHA IS always set inside the workflow, so
 # the skip branch is UNREACHABLE from .github/workflows/migrator-trigger.yml

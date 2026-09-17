@@ -651,7 +651,7 @@ AllowTcpForwarding yes
 # $SSH_ORIGINAL_COMMAND" rule -- this variable is never eval'"'"'d, never
 # dispatched on, only compared for equality against the container'"'"'s own
 # baked marker).
-# ⚠ CORRECTED (Sec C-3, sec-790-7d4962f8.md): `AcceptEnv` is a
+# ⚠ CORRECTED (Sec joint-review, ADR-072 Amendment 6, PR #791): `AcceptEnv` is a
 # server-global sshd_config directive -- it is NOT scoped by the
 # "restrict,command=..." authorized_keys line, which governs what a
 # SESSION may run, not what the SERVER accepts from the wire before any
@@ -692,13 +692,51 @@ else
   # ssh.socket for port 22 -- the next connection gets the new config from
   # the drop-in regardless, since socket-activated sshd re-reads config on
   # every spawn.
+  #
+  # ⚠ CORRECTED (Sec hazard finding, ADR-072 Amendment 6, PR #791): the
+  # PRIOR form here was `cat > TARGET && sshd -t && reload` -- a fragment
+  # that FAILS `sshd -t` was already written to TARGET before validation
+  # ran, and only the reload was skipped. Socket-activated sshd re-reads
+  # its config on every new connection (the same property this comment's
+  # neighbor above relies on for a GOOD config to take effect without a
+  # running daemon to reload) -- so a bad fragment left on disk does not
+  # lock anyone out immediately, but defers the lockout to the next
+  # connection attempt rather than preventing it, which is not the same
+  # thing. Fixed: stage the new content OUTSIDE sshd_config.d (a mktemp
+  # path under /root, never sshd-visible), back up whatever TARGET
+  # currently holds (or note there was nothing to back up), copy staged
+  # -> TARGET, THEN run `sshd -t` -- and on failure, restore the backup
+  # (or remove TARGET if none existed) BEFORE returning non-zero, so a
+  # rejected config is never left live even transiently between this
+  # command and the next SSH connection.
   printf '%s\n' "$DESIRED_SSHD" | ssh "${SSH_OPTS[@]}" "root@$BOX_IP" \
-    'cat > /etc/ssh/sshd_config.d/99-pfin-hardening.conf && sshd -t && {
-       UNIT=ssh
-       systemctl list-unit-files --type=service 2>/dev/null | grep -qE "^sshd\.service" && UNIT=sshd
-       systemctl try-reload-or-restart "$UNIT"
-     }'
-  ok "sshd drop-in written and reloaded (unit auto-detected)"
+    'set -eu
+     TARGET=/etc/ssh/sshd_config.d/99-pfin-hardening.conf
+     STAGE="$(mktemp /root/.pfin-sshd-staging.XXXXXX)"
+     trap "rm -f \"$STAGE\"" EXIT
+     cat > "$STAGE"
+     HAD_PREVIOUS=0
+     BACKUP="$(mktemp /root/.pfin-sshd-backup.XXXXXX)"
+     if [ -f "$TARGET" ]; then
+       cp "$TARGET" "$BACKUP"
+       HAD_PREVIOUS=1
+     fi
+     cp "$STAGE" "$TARGET"
+     if ! sshd -t; then
+       echo "sshd -t REJECTED the staged config -- restoring the previous fragment (or removing TARGET if none existed) before returning non-zero" >&2
+       if [ "$HAD_PREVIOUS" = "1" ]; then
+         cp "$BACKUP" "$TARGET"
+       else
+         rm -f "$TARGET"
+       fi
+       rm -f "$BACKUP"
+       exit 1
+     fi
+     rm -f "$BACKUP"
+     UNIT=ssh
+     systemctl list-unit-files --type=service 2>/dev/null | grep -qE "^sshd\.service" && UNIT=sshd
+     systemctl try-reload-or-restart "$UNIT"'
+  ok "sshd drop-in staged, validated, written and reloaded (unit auto-detected)"
 fi
 
 step "Operator user 'deploy' + NOPASSWD sudo (runbook §1 step 3)"
