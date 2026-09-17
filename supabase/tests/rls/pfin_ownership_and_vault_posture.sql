@@ -119,25 +119,27 @@ select ok(
 -- (o8) THE relforcerowsecurity WATCHER — DECISIONS.md ADR-072 Amendment 5
 --      §5.3/§7 condition. NOT a Decision-4 §10 catalogued instance; this
 --      guards the mechanism-equivalence the sweep's D9 co-ownership
---      verification rests on, across THREE consumers, named here because
---      a RED naming only one dictates a repair that leaves the other two
---      silently broken:
---        (i)   the SECURITY DEFINER functions' owner-exemption basis —
---              a DEFINER fn runs as its owner and today reaches rows via
---              `pfin_owner`'s ownership-implied RLS bypass, not a policy;
---        (ii)  the migrations' own seed/backfill DML, which Amendment 5
---              records as bypassing RLS AS TABLE OWNER under the new
---              (post-sweep) ownership shape;
---        (iii) the CI cleanup fixtures under `set local role pfin_owner`
---              (this file's own sibling harness, `_liveDb.ts`'s
---              `cleanupG2` — see ADR-072 Amendment 5 harness-identity
---              ruling) — table-owner RLS exemption stands in for
---              `postgres`'s `rolbypassrls` there.
---      All three are equivalent to today's exemption ONLY while no `pfin`
---      relation sets FORCE ROW LEVEL SECURITY — measured zero across the
---      set at authorship. `FORCE RLS` makes RLS bind even to the table
---      OWNER, which silently breaks all three at once the moment anyone
---      adds it for an unrelated reason.
+--      verification rests on. ⚠ Sec's harness-identity-at-scale ruling
+--      (H2) corrected the count here from three to TWO consumers, and
+--      said why: under H2, `_liveDb.ts`'s CI cleanup connects as
+--      `postgres` (which holds `rolbypassrls = t`, measured) rather than
+--      `set local role pfin_owner` — and a BYPASSRLS role is exempt EVEN
+--      UNDER FORCE RLS (FORCE only removes the table OWNER's own
+--      exemption). So the cleanup is NOT a third consumer today; it is
+--      the OWNER-exemption route that is guarded, via these two:
+--        (i)  the SECURITY DEFINER functions' owner-exemption basis —
+--             a DEFINER fn runs as its owner and reaches rows via
+--             `pfin_owner`'s ownership-implied RLS bypass, not a policy;
+--        (ii) the migrations' own seed/backfill DML, which Amendment 5
+--             records as bypassing RLS AS TABLE OWNER under the
+--             post-sweep ownership shape.
+--      ⚠ THIS COUNT IS CONDITIONAL, not a fixed fact: it holds only
+--      while `postgres` retains `rolbypassrls` — an image property this
+--      repo does not control. If a future image drops it, `postgres`
+--      falls back to inherited `pfin_owner` ownership for the cleanup
+--      too, and the count reverts to three. Both are equivalent to
+--      today's exemption ONLY while no `pfin` relation sets FORCE ROW
+--      LEVEL SECURITY — measured zero across the set at authorship.
 -- ---------------------------------------------------------------------
 select is(
   (select count(*)::int
@@ -145,7 +147,7 @@ select is(
      join pg_catalog.pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'pfin' and c.relkind = 'r' and c.relforcerowsecurity),
   0,
-  '(o8) relforcerowsecurity WATCHER: NO pfin table sets FORCE ROW LEVEL SECURITY. RED means one now does, and it silently breaks THREE consumers of table-owner RLS exemption at once — (i) the SECURITY DEFINER functions'' owner-exemption basis, (ii) the migrations'' own seed/backfill DML (which runs as table owner post-sweep), and (iii) the CI cleanup fixtures'' `set local role pfin_owner` (ADR-072 Amendment 5 harness-identity ruling). Fixing only the consumer you were looking at leaves the other two broken — check all three before adding FORCE RLS anywhere in pfin'
+  '(o8) relforcerowsecurity WATCHER: NO pfin table sets FORCE ROW LEVEL SECURITY. RED means one now does, and it silently breaks the TWO consumers of table-OWNER RLS exemption that rest on this today — (i) the SECURITY DEFINER functions'' owner-exemption basis and (ii) the migrations'' own seed/backfill DML (which runs as table owner post-sweep). This count is CONDITIONAL on `postgres` retaining `rolbypassrls` (an image property, not ours to fix) — the CI cleanup fixtures connect as `postgres`, exempt via BYPASSRLS rather than ownership, EXCEPT that if a future image drops that attribute the cleanup falls back to inherited pfin_owner ownership and becomes a THIRD consumer of this same watcher (ADR-072 Amendment 5 harness-identity-at-scale ruling, H2). Fixing only the consumer you were looking at leaves the other broken — check both, and re-check this count''s own precondition, before adding FORCE RLS anywhere in pfin'
 );
 
 select * from finish();
