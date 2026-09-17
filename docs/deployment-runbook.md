@@ -1009,6 +1009,31 @@ select has_schema_privilege('pfin_owner','auth','USAGE') as auth_usage,
 --     (o7) asserts the RESULT, not this statement.
 revoke create on schema pfin from migrator;
 revoke create on schema pfin from public;
+```
+
+**⚠ Branch added 2026-09-17 (Sec condition on PR #793's re-bootstrap fixes) — check whether `migrator` already has a working credential on THIS box before touching it.** `supabase/roles.sql` only creates `migrator` if absent — on a box that has bootstrapped before, `migrator` already exists with `LOGIN` and a password that matches the running `migrator` container's own `PROD_DB_URL`. Re-running `\password`/`ALTER ROLE … LOGIN` there is not a safe no-op: a single mistyped character at the interactive `\password` prompt silently breaks the container's own credential, on a step that was never needed. **Verify both halves — `LOGIN` is set AND a password actually exists — as `supabase_admin`:**
+
+```sql
+-- rolcanlogin from pg_roles is fine to read (it is a real attribute, not
+-- the redacted column) -- but "a password is set" must be read from
+-- pg_authid, never pg_roles.rolpassword. pg_roles.rolpassword is the
+-- LITERAL CONSTANT '********' for every role (see this file's own
+-- pfin_etl caveat above) -- `rolpassword is not null` against pg_roles is
+-- ALWAYS true and proves nothing. 118's guard exists specifically to
+-- catch LOGIN-with-no-password, so this check must be able to see that
+-- state too, which only pg_authid (superuser-only) can show.
+select r.rolcanlogin, a.rolpassword is not null as password_set
+  from pg_catalog.pg_roles r
+  join pg_catalog.pg_authid a on a.rolname = r.rolname
+  where r.rolname = 'migrator';
+```
+
+- **If this reads `f | *` (LOGIN not set) or `t | f` (LOGIN set, NO password — the one dangerous ordering §6.1/§6.2 name for their own roles) or the row is absent (role never created):** this is a fresh box for this role — use the FULL form below (interactive `\password` + `alter role … login`).
+- **If this reads `t | t` (LOGIN set, password present):** **SKIP `\password migrator` and `alter role migrator login;` entirely.** This query is the verify for this branch; nothing further to run here.
+
+**Full form (fresh-box branch only, per the check above):**
+
+```sql
 -- (3) order load-bearing: credential lands LAST, on a role whose reach is
 --     already fixed. Prompts; verifier computed CLIENT-SIDE.
 \password migrator
@@ -1331,6 +1356,16 @@ select has_table_privilege('pfin_owner', 'vault.decrypted_secrets', 'SELECT');
 ```
 
 **Pass:** every row in the first two queries reads `pfin_owner`; the third reads `1 | pfin_owner | true`; the fourth reads `f`. **Fail:** any `postgres`/`migrator` row, a view count other than 1, `security_invoker` not `true`, or the vault-privilege check reading `t` — stop before Phase C/D, do not hand-patch with a manual `ALTER … OWNER TO` (§6.3's own instruction: that is the emergency-transfer shape this design replaced). A stranger reading only this section has the full box-specific order; every command's *why* lives in §6.3.
+
+**Step 5 — added 2026-09-17, added on Sec's condition (PR #793): re-materialize `provision-vps.sh` before any real Phase D fire, not after.** This box's `ci-migrate` forced-command script and sshd drop-in were last materialized before ADR-072 Amendment 6 (PR #790) and its Sec joint-review (PR #791) landed on `main`. Those PRs changed `scripts/migrator-orchestrate.sh` (the sha-assertion check, now required on every path with no skip) and `scripts/provision-vps.sh`'s sshd_config fragment (`AcceptEnv MIGRATOR_EXPECT_SHA` now scoped inside `Match User ci-migrate` / `Match all`) — **neither change reaches this box until `--apply` is re-run here.** Firing the real trigger (§6.7 below, or a real migration push) before this step exercises the box's OLD script, not the one that was reviewed.
+
+```sh
+BOX_IP=<box-ip> scripts/provision-vps.sh --apply
+```
+
+**Expect:** idempotent re-materialization — rewrites `scripts/migrator-orchestrate.sh` on the box (root-owned, `0755`) and the sshd drop-in, reloading sshd via the stage/validate/restore-on-failure sequence (§6.4's own script; the sequence itself is unchanged by this step, only its target content is newer).
+
+**STOP condition:** any `sshd -t` rejection reported by the script, or a non-zero exit → **STOP.** Do not proceed to §6.7's exercise, or to a real Phase D fire, with a half-applied box. Once this passes, §6.7's hops-(d)/(e) recipe (or a real migration push) is exercising the current, reviewed box-side mechanism.
 
 ---
 
