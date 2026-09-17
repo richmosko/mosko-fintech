@@ -902,6 +902,18 @@ select is(
 -- `_rls.set_tenant` left the session as `authenticated`, which silently no-ops a grant it
 -- lacks GRANT OPTION for ("no privileges were granted", not an error) — restore FIRST.
 select set_config('role', 'postgres', true);
+-- ⚠ TEST-SCOPED, AND IT MUST NEVER BE PROMOTED TO supabase/roles.sql. Here it dies with
+--    this file's own transaction; a roles.sql grant is permanent and production-wide.
+-- ⚠ THE HAZARD IS THE OPEN SET, NOT TODAY'S CONTENTS. `usage on schema` is not a grant of
+--    the things installed there now — it is a STANDING KEY to whatever is installed there
+--    LATER, held by a role that a standing DDL credential reaches by SET ROLE. Nothing about
+--    this grant re-opens for review when the schema gains an extension.
+-- ⚠ Today's reach, measured 2026-09-16 and deliberately NOT the argument: pgcrypto's crypto
+--    primitives, uuid-ossp and pg_stat_statements — and NOT pg_net, whose HTTP functions live
+--    in schema `net`, which this does not touch. ⚠ Check by FUNCTION schema, never by
+--    extension registration: pg_net's extension RECORD is registered to `extensions` while
+--    its callable surface is elsewhere, and reasoning from the catalog row is what makes
+--    "outbound HTTP" look included. That inventory will rot; the open-set property will not.
 grant usage on schema extensions to pfin_owner;
 select set_config('role', 'pfin_owner', true);
 select throws_like(
