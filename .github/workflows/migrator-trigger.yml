@@ -91,6 +91,25 @@ on:
     branches: [main]
     paths:
       - 'supabase/migrations/**'
+  # Added per F/CTO instruction (2026-09-17), for docs/deployment-runbook.md
+  # §6.7 step 4 -- that recipe needs a way to fire THIS WORKFLOW on demand
+  # (not just via a real migration push) so it can assert the "SSH to
+  # ci-migrate" STEP itself goes red against the fail-probe target, not
+  # just the script's own exit code. No inputs -- same job, same forced-
+  # command invocation as the push trigger; the `paths` filter stays
+  # scoped to the push trigger only (workflow_dispatch has no path
+  # filtering to apply it to, and none is needed -- a manual dispatch is
+  # an explicit human action, not something a stray push should gate).
+  # ⚠ Widens WHO/WHEN can fire this: any principal with Actions
+  # write/trigger permission on this repo can now invoke the real SSH ->
+  # forced-command -> migrator-apply path on demand, not only via a
+  # migrations-touching push to `main`. `permissions: contents: read`
+  # below is unchanged by this addition and does not gate who may
+  # dispatch a workflow_dispatch run (that's a repo/branch-permission
+  # setting, not a workflow-file setting) -- flagging this explicitly so
+  # Sec can judge it as its own item, not fold it into the pre-existing
+  # push-trigger threat model.
+  workflow_dispatch: {}
 
 # One in flight at a time, and never cancel one that's already running: a
 # cancelled mid-migration SSH session is not necessarily a cancelled
