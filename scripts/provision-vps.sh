@@ -1311,6 +1311,49 @@ else
   ok "$ORCH_SCRIPT_PATH written -- root:root, 0755 (ci-migrate can execute it via the forced command; cannot write it)"
 fi
 
+step "orchestrator lock file (ADR-072 Amendment 6, ci-migrate:ci-migrate 0600 -- Sec C-2 on PR #798)"
+# migrator-orchestrate.sh does `exec 200>"$LOCK_FILE"` (flock -n) AS
+# ci-migrate -- that needs WRITE permission on the FILE, not just on the
+# (1777, sticky) directory it lives in. /var/lock's sticky bit only
+# governs who may delete/rename another user's file there, not who may
+# open an EXISTING file for writing -- so whichever identity happens to
+# create this file first (an operator debugging as root, say) leaves it
+# owned by THAT identity, and every later ci-migrate-invoked run then
+# fails to open it and exits 7 (lock-unopenable) PERMANENTLY. Sec C-2,
+# measured: nothing previously provisioned this file at all, so its
+# first creator's identity was pure chance. Provisioned here,
+# ci-migrate:ci-migrate 0600 (only ci-migrate needs to read/write its own
+# lock), and re-checked on EVERY run, not just at creation, so a stray
+# root-owned recreation is caught and named immediately rather than
+# silently wedging every subsequent automated fire until someone notices
+# a string of exit-7 failures.
+LOCK_FILE_PATH="/var/lock/pfin-migrator-orchestrate.lock"
+DESIRED_LOCK_STATE="ci-migrate:ci-migrate 600"
+LOCK_STATE="$(sshx "stat -c '%U:%G %a' $LOCK_FILE_PATH 2>/dev/null" || true)"
+if [[ "$LOCK_STATE" == "$DESIRED_LOCK_STATE" ]]; then
+  ok "$LOCK_FILE_PATH already ci-migrate:ci-migrate 0600"
+elif [[ -z "$LOCK_STATE" ]]; then
+  if [[ $APPLY -eq 0 ]]; then
+    info "$LOCK_FILE_PATH does not exist -- would create it ci-migrate:ci-migrate 0600"
+  else
+    sshx "touch $LOCK_FILE_PATH && chown ci-migrate:ci-migrate $LOCK_FILE_PATH && chmod 0600 $LOCK_FILE_PATH"
+    ok "$LOCK_FILE_PATH created -- ci-migrate:ci-migrate 0600"
+  fi
+else
+  # Exists but wrong owner/mode -- e.g. an operator's own root-run left it
+  # root:root 0644 (Sec C-2's exact named failure mode). FAIL the
+  # preflight leg here (Sec's own catch criterion) rather than silently
+  # re-chowning on a bare preflight run: drift this dangerous should be
+  # named and fixed deliberately, via --apply, not corrected invisibly on
+  # a run nobody was watching for it.
+  if [[ $APPLY -eq 0 ]]; then
+    die "$LOCK_FILE_PATH exists but is '$LOCK_STATE', not '$DESIRED_LOCK_STATE' -- every ci-migrate-invoked migrator-orchestrate.sh run will exit 7 (lock file unopenable) until this is fixed. Re-run with --apply to correct ownership/mode."
+  else
+    sshx "chown ci-migrate:ci-migrate $LOCK_FILE_PATH && chmod 0600 $LOCK_FILE_PATH"
+    ok "$LOCK_FILE_PATH corrected -- was '$LOCK_STATE', now ci-migrate:ci-migrate 0600"
+  fi
+fi
+
 step "ci-migrate authorized_keys -- forced command (ADR-072 C3 -- 'restrict', not a hand-listed no-* set)"
 [[ -f "$CI_MIGRATE_SSH_PUBKEY" ]] || die "no public key at CI_MIGRATE_SSH_PUBKEY=$CI_MIGRATE_SSH_PUBKEY -- generate the ci_only keypair first (ssh-keygen -t ed25519 -N '' -f <path>), give F/CTO the PRIVATE half for this repo's CI_MIGRATE_SSH_PRIVATE_KEY GitHub Actions secret, and point this var at the PUBLIC half."
 CI_MIGRATE_PUBVAL="$(tr -d '\r\n' < "$CI_MIGRATE_SSH_PUBKEY")"
