@@ -493,6 +493,38 @@
 --     pg_roles.rolpassword is the literal '********' for every role and is
 --     useless for this check; the read degrades gracefully if pg_authid is not
 --     visible to the applying role.)
+--
+-- ----------------------------------------------------------------------------
+-- ⚠ AMENDED IN PLACE 2026-09-16 — GUARD-VISIBILITY FIX, UNDER A DATED ONE-TIME
+--   EXCEPTION TO `apply-migration` Step 1.6. That rule puts editing an applied
+--   migration out of bounds "under every framing", and its PREMISE is "already
+--   applied". F/CTO ruled the current `001`–`118` apply DISPOSABLE (never
+--   deployed, no data; the box is re-bootstrapped), which voids that premise FOR
+--   THIS WINDOW ONLY. The exception is DATED, ONE-TIME and does not generalise;
+--   once a deployment survives, Step 1.6 governs again unamended.
+--
+--   WHAT CHANGED, and nothing else did: the creation guard below reads
+--   `pg_authid` to report password state and catches `insufficient_privilege`.
+--   Under a NON-SUPERUSER applier that catch fires (measured: `permission denied
+--   for table pg_authid`), `v_haspass` becomes 'unreadable', and the
+--   LOGIN-with-no-password WARNING — the fence that detects the one dangerous
+--   credential ordering — then **could not fire at all and said nothing**. A
+--   guard that stops guarding without announcing it is indistinguishable, in a
+--   log, from a guard that passed. This adds the branch that announces it.
+--   ⚠ THE CHECK IS NOT RESTORED — it CANNOT be from a non-superuser session, and
+--   the two routes that look like restorations are both refused: `pg_roles`
+--   exposes `rolpassword` as the constant '********' for EVERY role including
+--   passwordless ones (measured — it carries zero information and is a metric
+--   that reads like a check), and `pg_shadow` is superuser-only. Granting the
+--   applier `pg_authid` or `pg_read_all_data` would hand every SCRAM verifier in
+--   the cluster to a standing credential and is a Sec VETO. What this fix buys
+--   is VISIBILITY of the gap, not closure of it.
+--   Sec ruling 2026-09-16 (ADR-072 Decision A, §A6): blocking before the first
+--   non-superuser apply; the supervised pre-step runs as superuser, where the
+--   read succeeds and the original guard still works.
+--   No role attribute, membership, grant, privilege, function, table, policy or
+--   catalog comment is created, altered or dropped by this amendment.
+-- ----------------------------------------------------------------------------
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -505,6 +537,7 @@ declare
   v_canlogin  boolean;
   v_inherit   boolean;
   v_haspass   text;
+  v_pwstate_unreadable boolean := false;   -- set when the pg_authid read is refused
 begin
   if not exists (select 1 from pg_catalog.pg_roles where rolname = 'pfin_provider_sync') then
     create role pfin_provider_sync with nologin noinherit;
@@ -517,11 +550,23 @@ begin
         from pg_catalog.pg_authid a where a.rolname = 'pfin_provider_sync';
     exception when insufficient_privilege then
       v_haspass := 'unreadable (pg_authid not visible to the applying role)';
+      v_pwstate_unreadable := true;
     end;
     raise notice 'pfin_provider_sync already exists — creation SKIPPED; attributes NOT re-applied (deliberate: a deployed role is legitimately LOGIN, and resetting it would take provider-sync down). Found: rolcanlogin=% / rolinherit=% / password set=%.',
       v_canlogin, v_inherit, v_haspass;
     if v_inherit then
       raise warning 'pfin_provider_sync exists but is INHERIT — this DEFEATS the 116 posture (privileges would be held without an explicit SET ROLE, so a forgotten SET ROLE runs elevated instead of failing 42501). Investigate before deploying; fix with: ALTER ROLE pfin_provider_sync NOINHERIT;';
+    end if;
+    -- ⚠ The LOGIN-with-no-password fence below CANNOT EVALUATE when the password
+    -- state is unreadable. Say so, loudly and distinctly, rather than passing in
+    -- silence. The warning opens with a distinct sentinel token that a log scan
+    -- and a CI fence match on. ⚠ THE TOKEN IS DESCRIBED HERE, NOT QUOTED: a
+    -- watcher that counts occurrences would otherwise count this comment too and
+    -- stay green with the `raise` deleted. Read the literal off the `raise`
+    -- below. The two branches are mutually exclusive by construction
+    -- (v_haspass cannot be 'NO' when the read was refused).
+    if v_canlogin and v_pwstate_unreadable then
+      raise warning 'GUARD-UNVERIFIED: cannot verify password state for pfin_provider_sync as %; pg_authid is not readable by this role, so the LOGIN-with-no-password check DID NOT RUN. This is NOT a pass — pfin_provider_sync is LOGIN and may or may not carry a password. Verify supervised per docs/deployment-runbook.md §6.3, as the image''s true superuser. Do NOT remediate by granting this role pg_authid or pg_read_all_data (Sec VETO: that exposes every SCRAM verifier in the cluster to a standing credential).', current_user;
     end if;
     if v_canlogin and v_haspass = 'NO' then
       raise warning 'pfin_provider_sync exists as LOGIN with NO PASSWORD — reachable with NO CREDENTIAL under any pg_hba `trust` line (local/CI). This is the exact state 116 is shaped to avoid, and it is what running deploy step (2) without step (1) leaves behind. Either complete the deploy step (\password pfin_provider_sync) or disable it (ALTER ROLE pfin_provider_sync NOLOGIN).';
