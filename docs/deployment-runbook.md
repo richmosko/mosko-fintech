@@ -947,7 +947,7 @@ select rolcanlogin, rolinherit, rolsuper, rolbypassrls
 
 **F/CTO ratified (iv‴) on Sec's grade ("APPROVED with ONE structural change. Build it."), 2026-09-16 — this is what the pre-step and post-step below implement.** Four parts: (1) the `007`/`015` view **unit** — create + comment + three `REVOKE`s + `GRANT` — is guarded and applied **whole or skipped whole**, never partial (a view landing without its revokes exists briefly under a default ACL — the RT-02 hazard `007`'s own header names); (2) `007` gets **no** post-step — `015` drops `007`'s view (measured: zero executable references to it in `008`–`014`), so a stale `007` view surviving is exactly what the "exactly ONE view" assertion below exists to catch; (3) a **supervised POST-step** applies `015`'s unit and transfers ownership, **after** the main `migrator` pass (once `pfin.linked_source` exists) and **before** §7 container bring-up; (4) three watchers in three lanes, not double-counted: the post-step's own assertion is the only one observing the **production** database at the moment it can be wrong, the runbook verify below is a human double-check, and a standing pgTAP leg is a CI regression watcher on the **definition**. `security_invoker = true` on the view is a **component** of (iv‴), not a leftover of (iii) — `ALTER VIEW … OWNER TO` does not re-validate the body (measured), so ownership transfers to a vault-less `pfin_owner` fine, but without `security_invoker = true` the view would then execute AS that vault-less owner and be broken. **Neither `migrator` nor `pfin_owner` ever holds any `vault` privilege, at any point.**
 
-**⚠ Dependencies this section cites but does not author — TWO in-flight PRs, not one.** (1) Architect's `feat/migrations-pfin-owner-sweep` (BACKLOG §7.36 item 39; head `a57f09ef` as of this writing) adds `pfin_owner` to the `055`/`116`/`118` family, the (iv‴) view-unit guards in `007`/`015`, and the G3 paired-sweep across `001`–`118` — **in flight, not yet on `main`.** (2) A **separate** PR, `feat/migration-119-migrator-comment-recitation` (PR #775, head `fe7ab122`), carries `119_migrator_role_comment_amendment3_recitation.sql` — **also in flight, not yet on `main`, and not part of the sweep branch.** This runbook cites both by role, not by a landed migration number, until they merge.
+**⚠ Dependencies this section cites but does not author — TWO in-flight PRs, not one.** (1) Architect's `feat/migrations-pfin-owner-sweep` (PR #784; BACKLOG §7.36 item 39; head `b58eec5c` as of this writing — moved from an earlier `a57f09ef`, re-check before relying on the sha) adds `pfin_owner` to the `055`/`116`/`118` family, the (iv‴) view-unit guards in `007`/`015`, the G3 paired-sweep across `001`–`118`, and the CI fence for the engine backstop (a standing battery leg strike-proven by granting `CREATE` back and watching it go red — the definition-lane half of the same predicate Phase 2's query (4) below checks in the production lane) — **in flight, not yet on `main`.** (2) A **separate** PR, `feat/migration-119-migrator-comment-recitation` (PR #775, head `fe7ab122`), carries `119_migrator_role_comment_amendment3_recitation.sql` — **also in flight, not yet on `main`, and not part of the sweep branch.** This runbook cites both by role, not by a landed migration number, until they merge. **Canonical source for the Phase 1 pre-step: `DECISIONS.md` ADR-072 Amendment 5 Decision E — re-read it live if this runbook and the ADR ever disagree.**
 
 **Ordering — do not reorder:**
 
@@ -978,7 +978,13 @@ alter database <app_db> owner to pfin_owner;
 create schema pfin authorization pfin_owner;
 -- (5) the ENGINE BACKSTOP -- the primary control (Sec G2), not
 --     belt-and-braces: a file that loses its ownership pair fails 42501
---     instead of silently creating a migrator-owned object.
+--     instead of silently creating a migrator-owned object. MATTERS MORE
+--     after Decision J, not less: the paired set role/reset role form now
+--     measures as TAKING EFFECT via the CLI's implicit-transaction file
+--     batching, an undocumented detail a future CLI change could flip
+--     SILENTLY -- this REVOKE converts that failure mode into a loud
+--     42501 at the first create, instead of ownership landing wrong with
+--     nothing raised.
 revoke create on schema pfin from migrator;
 revoke create on schema pfin from public;
 -- (6) order load-bearing: credential lands LAST, on a role whose reach is
@@ -1029,9 +1035,13 @@ select pg_get_userbyid(roleid) as granted_role, admin_option, inherit_option
 select d.datname, pg_catalog.pg_get_userbyid(d.datdba) as owner
   from pg_catalog.pg_database d where d.datname = current_database();
 -- expect owner = pfin_owner
--- (4) engine backstop still in place
-select has_schema_privilege('migrator', 'pfin', 'CREATE');
--- expect: f
+-- (4) engine backstop still in place -- the PRODUCTION-lane half; a standing
+--     CI battery leg (o7, Architect's sweep PR) checks the same predicate
+--     in the DEFINITION lane, strike-proven by granting CREATE back and
+--     watching it go red. Same division as the decrypt-view assertions.
+select has_schema_privilege('migrator', 'pfin', 'CREATE') as backstop_create;
+-- expect: f -- a t here means someone granted CREATE to make a migration
+-- pass; revoke it, do not keep it
 -- (5) no app-role membership (defense; the role-creation files also hard-assert this)
 select pg_catalog.pg_has_role('migrator','service_role','MEMBER') as in_service_role,
        pg_catalog.pg_has_role('migrator','authenticated','MEMBER') as in_authenticated;
