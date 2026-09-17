@@ -1280,6 +1280,19 @@ docker compose --project-name <MIGRATOR_SERVICE_UUID> exec -T migrator \
 
 **Step 1 — the wipe.** §6.3's `drop schema pfin cascade; drop schema supabase_migrations cascade;`, as `supabase_admin`. Roles and passwords survive; `auth`/`public`/`storage`/`vault`/`extensions` are untouched.
 
+**Step 1.5 — redeploy the Supabase stack, rebuilding the migrator image, before Step 2 (added 2026-09-17, devops ruling accepted by F/CTO).** The migrator image is baked at build time (`infra/supabase/migrator/Dockerfile`) and this box's own container was measured ending at `118` — the fourth Step-0 gate above catches that when it's true, but a redeploy here is what actually MAKES it true, not merely something the gate checks for. Redeploying the Supabase-stack Coolify resource restarts Postgres — **acceptable here, specifically, only because Step 1 already wiped the DB**: `DROP SCHEMA` is durable/committed, so a restart immediately after the wipe loses nothing the wipe didn't already give up. This is NOT acceptable after Step 2 (a redeploy there restarts the DB mid-or-post-migration for no reason — exactly the operational cost that elevated Amendment 4 to a precondition). Do not skip this step on an assumption that the existing image is "probably fine" — that assumption is the 119-fire's own root cause, reached again here via the manual bring-up path instead of the CI-trigger path.
+
+Redeploy, then **re-run the same two predicates as the Step 0 gate above, now expected to pass because the redeploy is what makes them true**:
+
+```
+docker exec <migrator container> cat /workspace/.build-sha
+# expect: exactly the merged sha this bring-up is for
+docker exec <migrator container> grep -c 'set role pfin_owner' /workspace/supabase/migrations/001_pfin_foundation.sql
+# expect: non-zero
+```
+
+**If either check fails after the redeploy: STOP** — the redeploy did not rebuild from the expected sha (check Coolify's build source/branch config) or the merged sha itself predates Architect's `pfin_owner` sweep (Amendment 5) on `main`. Do not proceed to Step 2 until both pass.
+
 **Step 2 — the fresh Phase B run.** §6.5 steps 4–6, in order: **Phase 1** (role creation, grants, engine backstop, credential, the `055`/`116`/`117`/`118`/`119` file-runs), **Phase 2** (the `migrator`-run main pass, with its own verify block), **Phase 3** (the supervised post-step that creates `pfin.decrypted_source_credential` and transfers it to `pfin_owner`) — **Phase 3 must complete and pass before proceeding to Step 3 below.**
 
 **Step 3 — Phase D's suppressed fire.** §6.5 step 12, box-side pre-check per §6's Phase D preparation record (`DEPLOY_ON_SUCCESS=0` by default — expect the orchestration script's `"migration apply SUCCEEDED — app deploy SUPPRESSED"` line and exit 0). This box's vehicle is the smallest real `comment on` fixing a stale `pfin` comment (Sec's ruling, §6.5 step 6's own note) — not a no-op — once one is identified; not this PR's scope to name.
