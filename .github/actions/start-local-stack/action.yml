@@ -62,6 +62,15 @@
 #   5. restore config.toml unconditionally (trap on EXIT) so nothing in the
 #      calling job -- or a later step in it -- ever sees the gate off.
 #
+# ⚠ ADDED 2026-09-17, Sec H2 ruling (AMBER, four conditions) — a NAMED step
+# between (2) and (3) above: `grant pfin_owner to postgres with inherit true,
+# set true;`, as supabase_admin over the same credential-free channel. This
+# is a CI-ONLY divergence from the committed `supabase/roles.sql` (which
+# grants `inherit false, set true` — non-ambient, production posture,
+# unchanged). See that step's own comment for the full ruling and Sec's
+# named cost (C-b condition: named/reviewable, never buried; a CI fence
+# elsewhere asserts the COMMITTED FILE still carries `inherit false`).
+#
 # Db-only: `-x` excludes the non-db service containers (identical list across
 # all four callers; invalid `-x` names only warn, never fail, so this list is
 # safe across CLI versions). Composite-action steps do NOT inherit the
@@ -77,13 +86,12 @@ description: 'supabase start (db-only, -x excludes non-db services) + the ADR-07
 runs:
   using: 'composite'
   steps:
-    - name: Start local stack (db-only) and apply auth-grants.sql as supabase_admin
+    - name: Toggle migrations gate and start local stack (db-only; roles.sql seeded)
       shell: bash
       run: |
         set -euo pipefail
 
         cp supabase/config.toml supabase/config.toml.orig
-        trap 'mv supabase/config.toml.orig supabase/config.toml' EXIT
         awk '
           /^\[db\.migrations\]/ { insec=1 }
           /^\[/ && !/^\[db\.migrations\]/ { insec=0 }
@@ -92,6 +100,54 @@ runs:
         ' supabase/config.toml.orig > supabase/config.toml
 
         supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+
+    - name: "Grant pfin_owner to postgres WITH INHERIT (C-b, harness-only divergence — ADR-072 Amendment 5, Sec H2 AMBER)"
+      # ⚠ DIVERGES FROM PRODUCTION, NAMED as its own step per Sec's C-b condition
+      # so the divergence cannot become permanent by being unread. The committed
+      # `supabase/roles.sql` grants `pfin_owner to postgres WITH INHERIT FALSE,
+      # SET TRUE` — non-ambient, an explicit `SET ROLE` is required for every
+      # reach into pfin_owner. THIS step re-grants the SAME membership WITH
+      # INHERIT TRUE instead, so `postgres` reaches pfin_owner's privileges
+      # AMBIENTLY, with no `SET ROLE` needed, in this CI container only.
+      #
+      # WHY: harness owner-implicit reach. Sec H2 ruling (2026-09-16, AMBER,
+      # four conditions) — every harness entry point that connects as `postgres`
+      # for generic setup/cleanup against pfin.* tables (pgTAP's own battery
+      # runner, worker-ci's _liveDb.ts cleanup path, the ETL scratch-db
+      # fixtures) previously relied on `postgres` OWNING those objects; under
+      # the (iv‴) sweep `pfin_owner` owns them instead, and rewiring every
+      # harness to `SET ROLE`/mint its own login role for every touch (H1/H3)
+      # was REJECTED — H1 on a security ground (widens RT-31 leg (i)'s
+      # BYPASSRLS-capable role set), H3 on correctness (inherits a
+      # transaction-span defect across 107 files). H2 is the one Sec approved:
+      # a single INHERIT bit, visible at this one re-grant, touching only an
+      # ephemeral CI container that cannot reach production — never committed
+      # to `supabase/roles.sql` itself (see the CI-fenced leg that asserts the
+      # COMMITTED FILE still carries INHERIT FALSE).
+      #
+      # ⚠ Sec's real cost, on the record: INHERIT TRUE re-hides the "relies on
+      # owner-implicit reach" class for any NEW test written after this step
+      # exists — Sec's C-c condition is the mitigation (any test asserting a
+      # privilege/RLS property must connect as, or SET ROLE to, the role whose
+      # property is asserted, never bare `postgres`; `_liveDb.ts` is Sec's
+      # reference implementation). That review discipline is QA's to hold, not
+      # this step's to enforce mechanically.
+      #
+      # Credential-free path, same as the auth-grants.sql step below: docker
+      # exec into the db container as its postgres OS user, over the unix
+      # socket's local/trust rule for supabase_admin.
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker exec -i -u postgres supabase_db_mosko-fintech \
+          psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres \
+          -c "grant pfin_owner to postgres with inherit true, set true;"
+
+    - name: Apply auth-grants.sql as supabase_admin, then apply migrations
+      shell: bash
+      run: |
+        set -euo pipefail
+        trap 'mv supabase/config.toml.orig supabase/config.toml' EXIT
 
         docker exec -i -u postgres supabase_db_mosko-fintech \
           psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres -f - < supabase/auth-grants.sql

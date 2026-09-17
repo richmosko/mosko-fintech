@@ -261,6 +261,25 @@ SQL
 # yet hold at this point in the build.
 log "running the ADR-072 Amendment 5 pre-step (roles.sql + auth-grants.sql) against $CANDIDATE"
 psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q -f supabase/roles.sql
+
+# --- C-b (Sec H2 ruling, 2026-09-16, AMBER, four conditions): a NAMED,
+# harness-only divergence from the committed supabase/roles.sql, which grants
+# `pfin_owner to $SUPERUSER WITH INHERIT FALSE, SET TRUE` -- non-ambient,
+# production posture, unchanged. THIS re-grant flips the SAME membership to
+# INHERIT TRUE so $SUPERUSER reaches pfin_owner's privileges AMBIENTLY in
+# THIS scratch database only, with no SET ROLE needed -- covering the
+# migration-apply loop below and every downstream consumer of this template
+# (worker-ci/etl-ci harnesses connecting as postgres for generic pfin.*
+# setup/cleanup; H1 -- a dedicated BYPASSRLS harness role -- was REJECTED on
+# a security ground, widening RT-31 leg (i)'s known-platform exclusion; H3
+# -- per-statement SET ROLE across 107 sites -- was REJECTED on correctness,
+# inheriting a transaction-span defect permanently). Never committed to
+# roles.sql itself -- see the CI-fenced pgTAP leg asserting the COMMITTED
+# BLOB still carries INHERIT FALSE.
+log "C-b: granting pfin_owner to $SUPERUSER WITH INHERIT (harness-only, against $CANDIDATE)"
+psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q \
+  -c "grant pfin_owner to $SUPERUSER with inherit true, set true;"
+
 psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q -f supabase/auth-grants.sql
 
 # ⚠ NEW CONSEQUENCE OF THE OWNERSHIP FLIP, measured 2026-09-17: on PG15+ the

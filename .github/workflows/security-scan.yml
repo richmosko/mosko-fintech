@@ -693,6 +693,43 @@ jobs:
           fi
           echo "OK: fence caught the golden fixture's committed enabled = false (exit $rc)."
 
+  fence-roles-sql-inherit-false:
+    name: roles.sql committed-blob INHERIT posture fence (unlabeled — F/CTO assigns any RT-NN, per ADR-011 D4)
+    runs-on: ubuntu-latest
+    # Sec H2 ruling (2026-09-16, AMBER, four conditions), condition C-a. CI's
+    # start-local-stack composite action and scripts/db-template-build.sh both
+    # carry a NAMED, harness-only step re-granting `pfin_owner to postgres WITH
+    # INHERIT TRUE` — an ambient-reach convenience approved for CI containers
+    # only (H1 — a dedicated BYPASSRLS harness role — REJECTED on a security
+    # ground; H3 — per-statement SET ROLE across 107 sites — REJECTED on
+    # correctness). This job is the mechanical guarantee that divergence never
+    # gets mirrored into the COMMITTED `supabase/roles.sql` production applies:
+    # reads the git blob at HEAD (not live CI database state, which now
+    # legitimately shows INHERIT TRUE thanks to the re-grant above, and not the
+    # worktree file, which could be dirty) and asserts it still carries
+    # `grant pfin_owner to migrator with inherit false` and `grant pfin_owner to
+    # postgres with inherit false`. This is a CI-FENCED-set addition (DIFFERENT
+    # from ADR-011 Decision 4's §10 catalogued ledger, never reconciled with
+    # it) — deliberately unlabeled; minting an RT-NN id is an F/CTO ADR-011
+    # Decision-4 ratify act.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: roles-sql-inherit-false production-mode (committed HEAD:supabase/roles.sql)
+        run: bash scripts/ci/fence-roles-sql-inherit-false.sh HEAD supabase/roles.sql
+
+      - name: roles-sql-inherit-false inversion-mode (golden fixture; expects exit 1)
+        run: |
+          set +e
+          bash scripts/ci/fence-roles-sql-inherit-false.sh HEAD tests/fixtures/ci/roles-sql-inherit-true-violation.sql
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: inversion expected exit 1 (violation caught) but got exit $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the golden fixture's committed INHERIT TRUE (exit $rc)."
+
   scanner-npm-audit:
     name: Dep scan — npm audit (high+critical)
     runs-on: ubuntu-latest
