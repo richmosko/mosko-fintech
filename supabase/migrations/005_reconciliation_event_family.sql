@@ -133,6 +133,32 @@
 --     fail-closed; rejects cross-account links. set search_path = ''.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 grant usage on schema pfin to authenticated;
 
@@ -400,3 +426,11 @@ create trigger reconciliation_event_trans_matched_account
   before insert on pfin.reconciliation_event_trans
   for each row
   execute function pfin.fn_reconciliation_event_trans_matched_account();
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

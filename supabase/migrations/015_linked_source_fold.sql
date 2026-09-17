@@ -116,47 +116,31 @@
 --   landing this PR. Detail: temp/015-architect-design-spec.md PART A.
 --
 -- ----------------------------------------------------------------------------
--- CONTRACT
---   pfin.linked_source — mutable credential-reference store. credential_secret_id is a
---     Vault secret handle (uuid, NULLABLE). ADMISSION (provider onboarding, service_role):
---       secret_id := vault.create_secret(<provider credential>, <label>, <desc>);
---       INSERT linked_source(..., provider = <kind>, credential_secret_id = secret_id).
---     authenticated holds column-level SELECT on NON-credential columns only
---     (credential_secret_id withheld). No authenticated write (service_role sole writer,
---     Decision 1 privileged-context-write). RLS direct-owner (users_id = auth.uid()).
---   pfin.decrypted_source_credential — decrypt view (JOIN vault.decrypted_secrets to
---     linked_source); columns (source_id, users_id, provider, external_connection_id,
---     decrypted_credential); SELECT to service_role ONLY (Sec merge-block 5). INNER JOIN
---     naturally excludes credential-less sources. Consumers filter WHERE source_id = $1
---     and bind tenant in code (Decision 1). Named pfin.* (postgres lacks CREATE on vault).
---   pfin.linked_source_state_history — append-only credential-error audit; normalized
---     status_class (provider-agnostic CHECK) + raw provider_error_code (forensic,
---     unconstrained). source_id SOLE anchor. Immutable audit-class (Decision 2).
---   pfin.linked_source_sync_audit — append-only multi-provider sync audit; provider
---     discriminator + source (webhook/scheduled_poll) + provider_event_id UNIQUE
---     idempotency gate (generalizes plaid_webhook_id). service_role-only. Immutable.
---   pfin.account (ALTERs) — linked_source_id (matched-tenant fenced) + provider_account_id
---     + backfill_cutover_date + currency (default 'USD').
---   pfin.fn_account_matched_linked_source() — BEFORE INSERT OR UPDATE ON pfin.account
---     WHEN (new.linked_source_id IS NOT NULL); INVOKER; set search_path = ''; NULL-safe
---     fail-closed (NOT EXISTS → raise); rejects a linked_source whose users_id !=
---     account.users_id. Decision-3 canonical instance #6.
---   RETENTION (SD-03 bounded-source-active-only) — the AFTER DELETE backstop trigger
---     fn_linked_source_cleanup_vault_secret (INVOKER, +0) deletes the backing
---     vault.secrets row on any credentialed source delete (A.3: gated on
---     credential_secret_id IS NOT NULL; credential-less manual/import deletes are clean
---     no-ops); closes the auth.users cascade orphan by-construction. Provider-side revoke
---     (revoke-then-delete) is the provider-sync build hard-gate (SELF-197+).
---   Security-load-bearing edges: credential stored only in vault.secrets (never on the
---     pfin row); decrypt view service_role-only + tenant-keyed by join; provider_event_id
---     UNIQUE; append-only triple-fence on both audit tables; matched-tenant fail-closed +
---     NULL-safe + INVOKER RLS composition; set search_path = '' on every function.
---   GRANTS ARE C6-GATED (ADR-023): every new pfin table here is internet-facing under the
---     Data API the moment it is granted — the SECURITY §4.5 two-tenant RLS battery (QA,
---     same-PR) must prove cross-tenant read+write fail closed before merge (Sec
---     merge-block 7). Grants land here; QA's battery + Sec sign-off gate V1-SHIP-BLOCK.
--- ============================================================================
-
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 grant usage on schema pfin to authenticated;
 -- service_role schema USAGE persists from 008 (grant usage on schema pfin to service_role).
@@ -253,7 +237,44 @@ create trigger linked_source_set_updated_at
 --   NOT security_invoker (must run as owner to resolve the vault join; locked down by the
 --   service_role-only grant) — distinct from the RLS-backed reader views in 018/019.
 -- ----------------------------------------------------------------------------
-create or replace view pfin.decrypted_source_credential as
+do $vg$
+declare
+  v_can boolean;
+begin
+  -- ⚠ VAULT VIEW UNIT — shape (iv‴). ADR-072 Amendment 5; Sec-approved 2026-09-16.
+  --   ⚠ THE UNIT IS create + comment + REVOKEs + grant, GUARDED TOGETHER. Not a
+  --   convenience: those five statements ARE the ratified SD-03 posture ("the grant"),
+  --   so splitting them from the create splits the posture, not merely the DDL. And a
+  --   `create view` that lands WITHOUT its REVOKEs exists, however briefly, under
+  --   whatever default ACL applies — the "default decrypt perms would defeat RT-02"
+  --   hazard this file's own header records. CREATE-THROUGH-GRANT, OR SKIP THE WHOLE
+  --   UNIT. There is no third option.
+  --   ⚠ WHY A GUARD: a view body is permission-checked at CREATE time regardless of
+  --   `security_invoker` (measured — it moves the RUNTIME identity only), so the
+  --   CREATING role needs the vault read. `pfin_owner` must never hold it, because
+  --   `migrator` reaches `pfin_owner` by SET ROLE and a standing, CI-triggerable DDL
+  --   credential must not reach every provider access token. Sec's veto, not withdrawn.
+  --   ⚠ NO EXISTENCE RAISE HERE. The base tables this view reads are created by THIS
+  --   migration, so a supervised PRE-step cannot have created it and an in-migration
+  --   existence check would fail EVERY CORRECT BOOTSTRAP (measured). The observer is the
+  --   SUPERVISED POST-STEP's own assertion, which runs on the production database at the
+  --   only moment it can be wrong.
+  -- --   ⚠ THIS IS THE SURVIVING DECRYPT VIEW — the final database carries exactly ONE
+  --   vault-reaching view, not two (015 drops 007's). A verify expecting two REDs on a
+  --   CORRECT database.
+  -- ⚠ Probe by OID via the catalog, never by name: `has_table_privilege(u,'vault.x',…)`
+  -- and `to_regclass('vault.x')` both need USAGE on schema vault merely to RESOLVE the
+  -- name, so a name-based probe raises 42501 for exactly the applier it exists to test.
+  select coalesce((select has_table_privilege(current_user, c.oid, 'SELECT')
+                     from pg_catalog.pg_class c
+                     join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+                    where n.nspname = 'vault' and c.relname = 'decrypted_secrets'), false)
+     and coalesce((select has_schema_privilege(current_user, n.oid, 'USAGE')
+                     from pg_catalog.pg_namespace n where n.nspname = 'vault'), false)
+    into v_can;
+
+  if v_can then
+    execute $ddl$create or replace view pfin.decrypted_source_credential as
   select
     ls.source_id,
     ls.users_id,
@@ -270,7 +291,13 @@ comment on view pfin.decrypted_source_credential is
 revoke all on pfin.decrypted_source_credential from public;
 revoke all on pfin.decrypted_source_credential from anon;
 revoke all on pfin.decrypted_source_credential from authenticated;
-grant select on pfin.decrypted_source_credential to service_role;
+grant select on pfin.decrypted_source_credential to service_role;$ddl$;
+    raise notice 'pfin.decrypted_source_credential: unit created by % (holds the vault read).', current_user;
+  else
+    raise warning 'VAULT-SKIP: the pfin.decrypted_source_credential UNIT (create + comment + revokes + grant) was NOT applied by % — it holds no SELECT on vault.decrypted_secrets, and it must not (ADR-072 Amendment 5; Sec veto: migrator reaches this role by SET ROLE). A SUPERVISED POST-STEP must apply this unit as the image''s true superuser AFTER the main pass completes, then transfer ownership to pfin_owner; its own assertion block is what proves it ran. Do NOT grant this role a vault privilege to get past this.', current_user;
+  end if;
+end
+$vg$;
 
 -- ----------------------------------------------------------------------------
 -- FOLD STEP 4 — RETENTION BACKSTOP (SD-03 bounded-source-active-only).
@@ -610,3 +637,11 @@ grant select, insert on pfin.linked_source_sync_audit to service_role;
 --       sync_audit) needs the SECURITY §4.5 two-tenant RLS battery proving cross-tenant
 --       read+write fail closed BEFORE merge (QA authors same-PR; Sec merge-block 7).
 -- ----------------------------------------------------------------------------
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

@@ -219,10 +219,13 @@ jobs:
         uses: ./.github/actions/supabase-cli-setup
 
       - name: Start local stack (db-only; -x drops non-db services incl gotrue/auth)
-        # `supabase start` applies supabase/migrations/** on bring-up. Mirrors
-        # db-tests.yml's db-only bring-up exactly (same -x exclusion list).
-        run: |
-          supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+        # Composite action -- single source of truth for db-only bring-up +
+        # the ADR-072 Amendment 5 Decision K auth-grants.sql privileged step,
+        # shared by db-tests.yml, security-scan.yml, worker-ci.yml, etl-ci.yml.
+        # See .github/actions/start-local-stack/action.yml for the full recipe
+        # and why it exists (all four lanes independently hit the identical
+        # "permission denied for schema auth" failure before this extraction).
+        uses: ./.github/actions/start-local-stack
 
       - name: Build the DevOps scratch-DB template from the running stack
         # scripts/db-template-build.sh discovers the running supabase_db_*
@@ -654,6 +657,78 @@ jobs:
             exit 1
           fi
           echo "OK: fence caught the allowlist/pin mismatch on a mutated copy (exit $rc)."
+
+  fence-config-toml-migrations-enabled:
+    name: config.toml migrations-gate fence (unlabeled — F/CTO assigns any RT-NN, per ADR-011 D4)
+    runs-on: ubuntu-latest
+    # ADR-072 Amendment 5 Decision K. CI's "Start local stack" step (db-tests.yml,
+    # this workflow's fence-set-config job) toggles supabase/config.toml's
+    # [db.migrations] enabled key to false for the duration of a single job — a
+    # local, scratch-copy edit, restored on EXIT via trap — because that key is
+    # the only lever that suppresses `supabase start`'s unconditional migration
+    # apply long enough to run supabase/auth-grants.sql as supabase_admin before
+    # the migrations that need it. The SAME function the key gates
+    # (internal/migration/apply/apply.go's applyMigrationFiles) is what
+    # `supabase db push` calls. Left `false` in the COMMITTED config.toml, a
+    # production db push would apply nothing and exit 0 — silent, with no error
+    # to notice it by. This job is the mechanical guarantee that never lands.
+    # This is a CI-FENCED-set addition (DIFFERENT from ADR-011 Decision 4's §10
+    # catalogued ledger, never reconciled with it) — deliberately unlabeled;
+    # minting an RT-NN id is an F/CTO ADR-011 Decision-4 ratify act.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: config-toml-migrations-enabled production-mode (supabase/config.toml)
+        run: bash scripts/ci/fence-config-toml-migrations-enabled.sh supabase/config.toml
+
+      - name: config-toml-migrations-enabled inversion-mode (golden fixture; expects exit 1)
+        run: |
+          set +e
+          bash scripts/ci/fence-config-toml-migrations-enabled.sh tests/fixtures/ci/config-toml-migrations-disabled.toml
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: inversion expected exit 1 (violation caught) but got exit $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the golden fixture's committed enabled = false (exit $rc)."
+
+  fence-roles-sql-inherit-false:
+    name: roles.sql committed-blob INHERIT posture fence (unlabeled — F/CTO assigns any RT-NN, per ADR-011 D4)
+    runs-on: ubuntu-latest
+    # Sec H2 ruling (2026-09-16, AMBER, four conditions), condition C-a. CI's
+    # start-local-stack composite action and scripts/db-template-build.sh both
+    # carry a NAMED, harness-only step re-granting `pfin_owner to postgres WITH
+    # INHERIT TRUE` — an ambient-reach convenience approved for CI containers
+    # only (H1 — a dedicated BYPASSRLS harness role — REJECTED on a security
+    # ground; H3 — per-statement SET ROLE across 107 sites — REJECTED on
+    # correctness). This job is the mechanical guarantee that divergence never
+    # gets mirrored into the COMMITTED `supabase/roles.sql` production applies:
+    # reads the git blob at HEAD (not live CI database state, which now
+    # legitimately shows INHERIT TRUE thanks to the re-grant above, and not the
+    # worktree file, which could be dirty) and asserts it still carries
+    # `grant pfin_owner to migrator with inherit false` and `grant pfin_owner to
+    # postgres with inherit false`. This is a CI-FENCED-set addition (DIFFERENT
+    # from ADR-011 Decision 4's §10 catalogued ledger, never reconciled with
+    # it) — deliberately unlabeled; minting an RT-NN id is an F/CTO ADR-011
+    # Decision-4 ratify act.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: roles-sql-inherit-false production-mode (committed HEAD:supabase/roles.sql)
+        run: bash scripts/ci/fence-roles-sql-inherit-false.sh HEAD supabase/roles.sql
+
+      - name: roles-sql-inherit-false inversion-mode (golden fixture; expects exit 1)
+        run: |
+          set +e
+          bash scripts/ci/fence-roles-sql-inherit-false.sh HEAD tests/fixtures/ci/roles-sql-inherit-true-violation.sql
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: inversion expected exit 1 (violation caught) but got exit $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the golden fixture's committed INHERIT TRUE (exit $rc)."
 
   scanner-npm-audit:
     name: Dep scan — npm audit (high+critical)
@@ -1124,6 +1199,109 @@ jobs:
 
       - name: Production-mode — real compose (expects internal-only; exit 0)
         run: bash scripts/ci/fence-datastore-private-bind.sh infra/supabase/docker-compose.yml
+
+      # ── G3 pfin-lane ownership pair (ADR-072 Amendment 5 G3 / F1-as-corrected-by-J) ──
+      # Sec-mandated at the PR #784 review (B-2). The convention lands on 114 files
+      # in that PR; without this fence nothing stops file 120 omitting the pair.
+      # ⚠ Six legs, not one. The production-mode leg and the `ok` fixture are POSITIVE
+      # controls; the four inversions each assert their OWN token, because a structural
+      # FATAL (missing directory, empty corpus) also exits non-zero and would print
+      # "OK: caught..." having proven nothing — the F-2 lesson, mirrored.
+      - name: Production-mode — real migration set (expects conformant; exit 0)
+        run: bash scripts/ci/fence-g3-paired-role.sh supabase/migrations
+
+      - name: Inversion — g3 negative control (conformant fixture corpus; expects exit 0)
+        run: bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/ok
+
+      - name: "Inversion — g3 golden 1: missing opener (expects violation, exit 1, its own token)"
+        # Leg (a). A file whose opener is dropped creates every object as the applying identity.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/missing-opener 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: g3 fence expected exit 1 on the missing-opener golden but got $rc — a structural FATAL also exits non-zero and would prove nothing. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'EXACTLY ONE opener'; then
+            echo "FATAL: the missing-opener golden exited 1 but its specific token is absent from fence output — the fence may have RED-ed for an unrelated reason. Failing closed."
+            exit 1
+          fi
+          echo "OK: g3 fence caught missing opener via its own token (exit $rc)."
+
+      - name: "Inversion — g3 golden 2: missing closer (expects violation, exit 1, its own token)"
+        # Leg (c). Without the closer the CLI's ledger INSERT runs as pfin_owner and the push fails.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/missing-closer 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: g3 fence expected exit 1 on the missing-closer golden but got $rc — a structural FATAL also exits non-zero and would prove nothing. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'EXACTLY ONE opener'; then
+            echo "FATAL: the missing-closer golden exited 1 but its specific token is absent from fence output — the fence may have RED-ed for an unrelated reason. Failing closed."
+            exit 1
+          fi
+          echo "OK: g3 fence caught missing closer via its own token (exit $rc)."
+
+      - name: "Inversion — g3 golden 3: transaction-scoped variant (expects violation, exit 1, its own token)"
+        # Leg (d), the one that already fooled two reviewers. ⚠ Its RED must carry Decision J's reason — it TAKES EFFECT, it is not a no-op — or the operator fixes the fence instead of the file.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/set-local 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: g3 fence expected exit 1 on the set-local golden but got $rc — a structural FATAL also exits non-zero and would prove nothing. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'transaction-scoped role statement'; then
+            echo "FATAL: the set-local golden exited 1 but its specific token is absent from fence output — the fence may have RED-ed for an unrelated reason. Failing closed."
+            exit 1
+          fi
+          echo "OK: g3 fence caught transaction-scoped variant via its own token (exit $rc)."
+
+      - name: "Inversion — g3 golden 4: statement after the closer (expects violation, exit 1, its own token)"
+        # Leg (c) second half: an appended statement after the closer silently creates a mis-owned object.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/trailing-after-closer 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: g3 fence expected exit 1 on the trailing-after-closer golden but got $rc — a structural FATAL also exits non-zero and would prove nothing. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'is not the LAST statement'; then
+            echo "FATAL: the trailing-after-closer golden exited 1 but its specific token is absent from fence output — the fence may have RED-ed for an unrelated reason. Failing closed."
+            exit 1
+          fi
+          echo "OK: g3 fence caught statement after the closer via its own token (exit $rc)."
+
+      - name: "Inversion — g3 golden 5: supervised-lane file carrying the pair (expects violation, exit 1, its own token)"
+        # Lane partition. pfin_owner has no CREATEROLE, so a role-lane file that enters it fails its own statements.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-g3-paired-role.sh tests/fixtures/ci/g3-paired-role/supervised-with-pair 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: g3 fence expected exit 1 on the supervised-with-pair golden but got $rc — a structural FATAL also exits non-zero and would prove nothing. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'must carry NEITHER half'; then
+            echo "FATAL: the supervised-with-pair golden exited 1 but its specific token is absent from fence output — the fence may have RED-ed for an unrelated reason. Failing closed."
+            exit 1
+          fi
+          echo "OK: g3 fence caught supervised-lane file carrying the pair via its own token (exit $rc)."
 
       - name: Inversion — negative control fixture (correct config; expects exit 0)
         run: bash scripts/ci/fence-datastore-private-bind.sh tests/fixtures/ci/datastore-bind-private.compose.yaml

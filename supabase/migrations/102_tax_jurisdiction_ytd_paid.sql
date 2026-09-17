@@ -220,6 +220,32 @@
 --   the existing pgTAP batteries that touch fn_nav_composition, run with pg_prove.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 -- ----------------------------------------------------------------------------
@@ -566,3 +592,11 @@ grant execute on function pfin.fn_nav_composition(date) to authenticated;
 
 comment on function pfin.fn_nav_composition(date) is
   'SECURITY INVOKER §2.1.5 NAV-composition aggregation (V1.1 "Net worth full"; PRD §2.1.5 / SELF-225; Lock 11 read-composition). Returns the composition tree as JSONB: {groups:[{category, accounts:[{account_id, account_name, current_market_value, unrealized_gl}], subtotal}], buildups:{total_non_re, gross_total, debt, realized_tax_liab, unrealized_tax_liab}, nav}. COMPOSES ON 049 fn_account_unrealized_gl (single leaf substrate — per active account current_market_value + unrealized_gl, naturally signed) joined to pfin.account for name + account_type; 049 already filters by the AS-OF predicate (closed_at is null or closed_at::date > p_as_of) — the boolean flag it used to filter on was RETIRED at 059 per ADR-042, and this function still adds NO predicate of its own and MUST NOT (adding one double-filters). groups[] in canonical category order (depository/investment/retirement/crypto/manual_other → real_estate → liability; §2.1.5/AC#2), empty categories omitted; accounts[] by account_id; leaf unrealized_gl NULL for non-investment (049, AC#3). DEBT SIGN (D-1): liability leaves + subtotal carry 049''s natural negative sign; buildups.debt = −(liability subtotal) = positive magnitude so AC#4 nav = gross_total − debt reads literally. TAX PLACEHOLDERS (Option A V1.1, AC#5): realized_tax_liab and unrealized_tax_liab are STILL 0::numeric literals here — including the two inside the nav expression above — and SELF-268 is where fn_compute_tax_liability''s values replace them. 102 changed the LEAF SET, not the tax scalars. FOOT-TO-NAV, AS AMENDED AT 102 — THE IDENTITY WITH fn_compute_nav IS DELIBERATELY BROKEN AND MUST NOT BE "RESTORED": nav = total_non_re + real_estate + Σ liability_signed over the leaf set MINUS every tax-authority-designated ledger (SELF-267 AC 2a; F/CTO ruling R3, E-2 option A, 2026-09-03), while fn_compute_nav(p_as_of, true) keeps its GROSS definition and still INCLUDES those ledgers — so the two differ by exactly the designated ledgers'' balances, and 051 no longer foots to it. The reason is arithmetic, not presentation: a tax payment lands as cash on a designated ledger while the obligation falls by the same amount, so counting both would raise NAV by the amount paid. WITHIN this function the buildup still foots to its own nav by construction (single-substrate natural summation over the FILTERED leaf set; ADR-038/039; no separate fn_compute_nav call). The exclusion predicate is NOT written in this body: pfin.fn_tax_authority_ledgers() is its single home, shared with pfin.fn_ytd_paid_per_jurisdiction (ADR-063 Decision item 2 — note ADR-063 numbers its protocols as ITEMS inside one Decision block). An unmarked tax-authority ledger is therefore NOT excluded and NAV reads high by its balance. The designation is a user-set NULLABLE attribute, so that default state is reachable by omission alone; it becomes visible on the §2.1.5 surface only where that surface renders the exclusion (SELF-268 AC 10a), and until it does, an unmarked ledger has no observer here. p_scope DROPPED (pfin.scope type does not exist; scope is a free-text ADR-004 label — per-scope reporting is V2+, PRD §2.1.7); p_users_id DROPPED (INVOKER + RLS scope by auth.uid()). AS-OF via 049 threading (Lock 15; V1.1 consumers pass CURRENT_DATE). INVOKER → cross-tenant caller sees no rows → empty groups / nav 0 (fails closed). set search_path=''''; NOT a DEFINER allowlist entry (read ADR-011 Decision 9 live; no count is stated here, for the same reason the next clause gives); §10 catalogued ledger UNCHANGED BY THIS OBJECT — and NO COUNT IS STATED HERE, deliberately. A ledger-impact claim is AUTHORING-TIME PROVENANCE: it belongs in a migration header, which is a dated artifact, not in a catalog comment, which reads as LIVE STATE. Read ADR-011 Decision 4 live. Decision-3 unchanged (no new FK column). Sec joint-review-mandatory (financial calc + multi-tenant); RLS verification → SELF-225 two-tenant battery. §2.1.6 MV-vs-COST-BASIS AUDIT-TRACE (SELF-227, comment-only — no body/signature/logic change): investment-account contributions to NAV use CURRENT MARKET VALUE (eod_price × qty × fx), NOT cost basis; cost basis is confined to 049.cost_basis / unrealized_gl (+ future §2.2.x cost-basis-display surfaces). PRD §2.1.6 / SELF-227.';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

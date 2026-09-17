@@ -596,14 +596,119 @@ $$;
 
 -- Privileged writes: `SET LOCAL ROLE service_role` (ADR-023 write role-of-record).
 -- Table privileges themselves stay decided in 008 / per-table grants — NOT here.
-grant service_role to pfin_etl;
+do $rg$
+declare
+  v_can     boolean;
+  v_missing text[] := array[]::text[];
+  v_app     text;
+begin
+  -- ⚠ ROLE-GRAPH GUARD — ADR-072 Amendment 5 G4 dispositions, widened to the four
+  -- `grant <app_role> to <worker_role>` statements after a measured full apply showed
+  -- them failing the unsupervised pass exactly as `119`'s comment did:
+  --     ERROR: permission denied to grant role "service_role" (42501)
+  -- PG 16+ requires ADMIN OPTION on the role being GRANTED. The image creates
+  -- service_role/authenticated, so no bounded applier can ever hold it — and giving it
+  -- one is Sec's standing VETO, because ADMIN OPTION is self-grantable and would let the
+  -- holder grant itself the app roles. These statements belong to the SUPERVISED lane;
+  -- 055 is on the pre-step file list, which is what makes degrading legitimate here.
+  -- ⚠ SKIP IS VERIFIED, NEVER ASSUMED (Sec's condition, the same one placed on `119`):
+  -- being on the list only helps if the pre-step actually ran, so the skip branch READS
+  -- pg_auth_members and RAISES when a membership is missing. A silently skipped grant
+  -- would surface as pfin_etl failing in production, which is the worst place to find it.
+  select coalesce((select r.rolsuper from pg_catalog.pg_roles r
+                    where r.rolname = current_user), false)
+      or (    pg_catalog.pg_has_role(current_user, 'service_role',  'USAGE')
+          and pg_catalog.pg_has_role(current_user, 'authenticated', 'USAGE'))
+    into v_can;
 
--- W-1 session-impersonation read path: `SET LOCAL ROLE authenticated` + a synthetic
--- request.jwt.claims, reusing the locked INVOKER fn_compute_nav under RLS (Lock 11).
-grant authenticated to pfin_etl;
+  if v_can then
+    grant service_role  to pfin_etl;
+    grant authenticated to pfin_etl;
+    raise notice 'pfin_etl: app-role memberships granted by %.', current_user;
+  else
+    foreach v_app in array array['service_role','authenticated'] loop
+      if not exists (select 1 from pg_catalog.pg_auth_members m
+                       join pg_catalog.pg_roles g on g.oid = m.roleid
+                       join pg_catalog.pg_roles u on u.oid = m.member
+                      where g.rolname = v_app and u.rolname = 'pfin_etl') then
+        v_missing := array_append(v_missing, v_app);
+      end if;
+    end loop;
+
+    if array_length(v_missing, 1) is not null then
+      raise exception using errcode = '42501',
+        message = pg_catalog.format('pfin_etl is MISSING app-role membership(s) %s and % cannot grant them.', array_to_string(v_missing, ', '), current_user),
+        detail  = 'Granting a role requires ADMIN OPTION on the role being granted; the image owns service_role/authenticated, so no bounded applier holds it, and giving one that option is a Sec veto (it is self-grantable). The supervised pre-step must have run these grants — and it did not.',
+        hint    = 'Run the pre-step grants for pfin_etl as the image''s true superuser (docs/deployment-runbook.md §6.3), then re-run the apply. Do NOT grant the applier ADMIN OPTION on an app role to get past this.';
+    end if;
+
+    raise warning 'ROLEGRANT-SKIP: app-role memberships for pfin_etl NOT re-granted by % — it holds no ADMIN OPTION on the app roles and must not. SKIP IS VERIFIED, NOT ASSUMED: pg_auth_members was read and both memberships are present, so the supervised pre-step demonstrably ran.', current_user;
+  end if;
+end
+$rg$;
 
 -- ----------------------------------------------------------------------------
 -- Self-documenting comment (the role analogue of `comment on function`).
 -- ----------------------------------------------------------------------------
-comment on role pfin_etl is
-  'Dedicated login identity for the workers/etl container (ADR-041; SELF-214 Sec joint-review B8 option (B), F/CTO-ratified 2026-08-02; migration 055). Created NOLOGIN + NOINHERIT with NO PASSWORD (inert by construction); NOT superuser, NOT owner, NOT BYPASSRLS, owns nothing, holds NO direct table or schema privilege in pfin. Its entire reach is via explicit SET ROLE to its two memberships: service_role (privileged writes, per the ADR-023 write role-of-record — table privileges stay decided in 008, not granted here) and authenticated (the W-1 session-impersonation read path reusing INVOKER fn_compute_nav under RLS, Lock 11). NOINHERIT is load-bearing: a forgotten SET ROLE fails 42501 loudly instead of silently running elevated. Because it is neither table owner nor superuser it can neither ALTER TABLE ... DISABLE TRIGGER nor set session_replication_role — which is what makes 054 nav_daily''s append-only fences and its B7 write-tenant binding fence un-bypassable by the writer. Chosen over sharing provider-sync''s authenticator so the ETL is INDEPENDENTLY REVOCABLE (ALTER ROLE pfin_etl NOLOGIN stops the ETL and nothing else) and so a compromised batch container does not yield the credential fronting the entire PostgREST Data API; this also pulls ADR-023''s C1 rotation coupling back to two consumers (PostgREST + provider-sync), leaving pfin_etl''s password independently rotatable. CREATED NOLOGIN WITH NO PASSWORD — a repo-committed credential is prohibited; an operator switches the role on at deploy time with TWO statements IN A LOAD-BEARING ORDER: (1) `\password pfin_etl` (prompts, computes the SCRAM verifier CLIENT-SIDE, sets ONLY the password while the role is still NOLOGIN and therefore inert), then (2) `ALTER ROLE pfin_etl LOGIN` (carries no secret). The single statement `ALTER ROLE ... WITH LOGIN PASSWORD ''<plaintext>''` is PROHIBITED per Sec B10: log_statement=ddl (measured) captures it verbatim, writing the credential to the server log in cleartext, and typing it also lands it in ~/.psql_history. Be precise about what \password buys: plaintext never leaves the client, but the resulting ALTER USER carrying a SCRAM-SHA-256$4096 verifier IS still logged — that verifier is not a usable credential (a client proof needs ClientKey, which StoredKey does not yield), leaving only an offline attack bounded by secret entropy and iteration count. Do NOT claim "the secret isn''t logged". Ordering matters: running (2) without (1) leaves LOGIN-with-no-password, the exact state this role is shaped to avoid. NOLOGIN rather than LOGIN-without-a-password because rolcanlogin is checked BEFORE any pg_hba auth method: a passwordless LOGIN role is reachable with NO credential under a `trust` line (measured on the local stack, which trusts 127.0.0.1/32 + ::1/128 + local), so the earlier shape outsourced its fail-closed property to a config file outside this repo. Consequence for tests: rolcanlogin is FALSE at migration time and TRUE only in a provisioned environment. Revoke with ALTER ROLE pfin_etl NOLOGIN — stops the ETL and nothing else. See SECURITY §4.4 SD-24 + §4.5 RT-31.';
+do $g4$
+declare
+  v_admin boolean;
+  v_text  text := $lit$Dedicated login identity for the workers/etl container (ADR-041; SELF-214 Sec joint-review B8 option (B), F/CTO-ratified 2026-08-02; migration 055). Created NOLOGIN + NOINHERIT with NO PASSWORD (inert by construction); NOT superuser, NOT owner, NOT BYPASSRLS, owns nothing, holds NO direct table or schema privilege in pfin. Its entire reach is via explicit SET ROLE to its two memberships: service_role (privileged writes, per the ADR-023 write role-of-record — table privileges stay decided in 008, not granted here) and authenticated (the W-1 session-impersonation read path reusing INVOKER fn_compute_nav under RLS, Lock 11). NOINHERIT is load-bearing: a forgotten SET ROLE fails 42501 loudly instead of silently running elevated. Because it is neither table owner nor superuser it can neither ALTER TABLE ... DISABLE TRIGGER nor set session_replication_role — which is what makes 054 nav_daily's append-only fences and its B7 write-tenant binding fence un-bypassable by the writer. Chosen over sharing provider-sync's authenticator so the ETL is INDEPENDENTLY REVOCABLE (ALTER ROLE pfin_etl NOLOGIN stops the ETL and nothing else) and so a compromised batch container does not yield the credential fronting the entire PostgREST Data API; this also pulls ADR-023's C1 rotation coupling back to two consumers (PostgREST + provider-sync), leaving pfin_etl's password independently rotatable. CREATED NOLOGIN WITH NO PASSWORD — a repo-committed credential is prohibited; an operator switches the role on at deploy time with TWO statements IN A LOAD-BEARING ORDER: (1) `\password pfin_etl` (prompts, computes the SCRAM verifier CLIENT-SIDE, sets ONLY the password while the role is still NOLOGIN and therefore inert), then (2) `ALTER ROLE pfin_etl LOGIN` (carries no secret). The single statement `ALTER ROLE ... WITH LOGIN PASSWORD '<plaintext>'` is PROHIBITED per Sec B10: log_statement=ddl (measured) captures it verbatim, writing the credential to the server log in cleartext, and typing it also lands it in ~/.psql_history. Be precise about what \password buys: plaintext never leaves the client, but the resulting ALTER USER carrying a SCRAM-SHA-256$4096 verifier IS still logged — that verifier is not a usable credential (a client proof needs ClientKey, which StoredKey does not yield), leaving only an offline attack bounded by secret entropy and iteration count. Do NOT claim "the secret isn't logged". Ordering matters: running (2) without (1) leaves LOGIN-with-no-password, the exact state this role is shaped to avoid. NOLOGIN rather than LOGIN-without-a-password because rolcanlogin is checked BEFORE any pg_hba auth method: a passwordless LOGIN role is reachable with NO credential under a `trust` line (measured on the local stack, which trusts 127.0.0.1/32 + ::1/128 + local), so the earlier shape outsourced its fail-closed property to a config file outside this repo. Consequence for tests: rolcanlogin is FALSE at migration time and TRUE only in a provisioned environment. Revoke with ALTER ROLE pfin_etl NOLOGIN — stops the ETL and nothing else. See SECURITY §4.4 SD-24 + §4.5 RT-31.$lit$;
+  v_live  text;
+begin
+  -- ⚠ G4 DISPOSITION, WIDENED TO 055 (ADR-072 Amendment 5). 055's ENTIRE effect is one
+  -- `comment on role pfin_etl`, so it fails the unsupervised pass exactly as 119 did:
+  -- COMMENT ON ROLE needs superuser or ADMIN OPTION on the target, and the image's
+  -- pre-step creates pfin_etl, so no bounded applier holds it. 055 therefore joins the
+  -- PRE-STEP FILE LIST alongside 118 and 119 — which is what makes degrading legitimate,
+  -- G4's criterion being a statement about the list and never a prohibition on a file.
+  -- ⚠ SKIP IS VERIFIED, NEVER ASSUMED (Sec's condition, as placed on 119): being on the
+  -- list only helps if the pre-step actually ran, so the skip branch READS the catalog and
+  -- RAISES when the comment is absent or stale. 055 exists precisely to CORRECT a stale
+  -- comment, so silently skipping it would restore the defect it was written to fix.
+  -- ⚠ `USAGE`, not `MEMBER`: under NOINHERIT `USAGE` under-reports, which is FAIL-CLOSED
+  -- for a guard and BLIND for a watcher. The battery's watcher uses MEMBER. Do not unify.
+  -- ⚠ oid read from pg_roles, not pg_authid: the latter is superuser-only, so reading it
+  -- would make this branch unreachable for exactly the applier it exists to serve.
+  select coalesce((select r.rolsuper from pg_catalog.pg_roles r
+                    where r.rolname = current_user), false)
+      or exists (
+           select 1
+             from pg_catalog.pg_auth_members m
+             join pg_catalog.pg_roles tgt     on tgt.oid = m.roleid
+             join pg_catalog.pg_roles grantee on grantee.oid = m.member
+            where tgt.rolname = 'pfin_etl'
+              and m.admin_option
+              and pg_catalog.pg_has_role(current_user, grantee.oid, 'USAGE'))
+    into v_admin;
+
+  if v_admin then
+    execute pg_catalog.format('comment on role pfin_etl is %L', v_text);
+    raise notice '055: comment on role pfin_etl re-issued as %.', current_user;
+    return;
+  end if;
+
+  select pg_catalog.shobj_description(r.oid, 'pg_authid') into v_live
+    from pg_catalog.pg_roles r where r.rolname = 'pfin_etl';
+
+  if v_live is null then
+    raise exception using errcode = '42501',
+      message = pg_catalog.format('migration 055 cannot be applied by %I AND the supervised pre-step did not land the comment: pg_shdescription carries NOTHING for role pfin_etl.', current_user),
+      detail  = 'COMMENT ON ROLE requires superuser or the ADMIN option on the target role, which no bounded applier holds for a role the pre-step created. Skipping here would leave the role undocumented with nothing observing it.',
+      hint    = 'Run the pre-step for 055 (psql -U supabase_admin -f supabase/migrations/055_pfin_etl_role.sql), then re-run the apply. Do NOT widen this role, and do NOT grant it ADMIN OPTION on pfin_etl, to get past this — an unexplained 42501 mid-bootstrap is exactly when the widening repair is most tempting and most wrong.';
+  end if;
+
+  -- ⚠ NO EQUALITY CHECK HERE, AND THAT IS DELIBERATE — 055 IS NOT THE LAST WRITER.
+  -- Migration 117 re-issues `comment on role pfin_etl` (the C1 rotation-coupling label
+  -- re-attribution), so on any correct database the live comment is 117's, NOT 055's.
+  -- Measured: an equality assertion here RED-FAILS a CORRECT bootstrap — the pre-step
+  -- runs 055 then 117, 117 legitimately overwrites, and 055's main-pass check then
+  -- calls the correct state stale. The rule this establishes, and it generalises:
+  --   VERIFY EQUALITY only where this file is the LAST WRITER of that role's comment
+  --   (116, 117, 119); VERIFY EXISTENCE where a later migration supersedes it (055, 118).
+  -- A leg that fails on correct input is worse than no leg — it is disabled on first
+  -- contact. Existence is the strongest predicate this file can honestly assert.
+
+  raise warning 'G4-SKIP: comment on role pfin_etl NOT re-issued by % — it holds neither superuser nor ADMIN OPTION on the role. SKIP IS VERIFIED, NOT ASSUMED: pg_shdescription was read and carries exactly this migration''s text, so the supervised pre-step demonstrably ran.', current_user;
+end
+$g4$;

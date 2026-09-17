@@ -227,21 +227,133 @@ create extension if not exists pg_net schema extensions;
 create extension if not exists supabase_vault schema vault cascade;
 SQL
 
-# --- 4. hand the DB to postgres before applying migrations ---
-# Must run as supabase_admin (superuser, and current owner of $CANDIDATE) —
-# $SUPERUSER (postgres) is neither superuser nor the owner yet, so it cannot
-# reassign ownership to itself. Measured: "ERROR: must be owner of database".
-log "transferring candidate ownership to $SUPERUSER"
-psql_admin -c "alter database \"$CANDIDATE\" owner to $SUPERUSER;"
+# --- 4. the ADR-072 Amendment 5 pre-step, against THIS candidate database ---
+# ⚠ 2026-09-17: this step replaced a bare `alter database ... owner to
+# $SUPERUSER` here. Under the (iv‴) paired-ownership sweep every pfin object
+# must be pfin_owner-owned by construction, not $SUPERUSER-owned — and
+# $SUPERUSER ($SUPERUSER=postgres) cannot even enter pfin_owner or reach
+# schema auth without the same pre-step production and CI both run.
+# Measured (CI, PR #784): the OLD step 4 handed the candidate to postgres,
+# then migration 001 line 91 (its swept opener) died with "permission denied
+# for database pfin_tmpl_build_<n>" — postgres never held the pfin_owner
+# membership or the auth reach a swept migration's `set role pfin_owner`
+# needs, because roles.sql/auth-grants.sql had never been run against this
+# database (roles are CLUSTER-WIDE, but the grants they carry are
+# PER-DATABASE — every fresh candidate needs its own pass).
+#
+# Runs BOTH files exactly as committed (`supabase/roles.sql`,
+# `supabase/auth-grants.sql`) — the same "one artifact, every consumer"
+# principle db-tests.yml/security-scan.yml/worker-ci.yml/etl-ci.yml's shared
+# start-local-stack composite action uses, never a hand-copied mirror.
+# roles.sql is FULLY database-name-agnostic already (its own `dbgrants` block
+# uses `current_database()`, not a literal name) — connecting to $CANDIDATE
+# and sourcing it unmodified does the ownership flip (TO pfin_owner, not
+# $SUPERUSER), the pfin_owner<->$SUPERUSER membership grant, and the
+# CREATE-ON-DATABASE re-grant to $SUPERUSER, all scoped to whichever
+# database the connection names. Both files are also fully idempotent
+# (every CREATE ROLE is existence-guarded, every GRANT is a no-op if already
+# held), so running them here duplicates nothing already granted cluster-
+# wide — it only does what's new for THIS database.
+#
+# As supabase_admin (superuser + $CANDIDATE's current owner from step 2) —
+# $SUPERUSER cannot run roles.sql itself: its `alter database ... owner to
+# pfin_owner` statement needs ownership/superuser, which $SUPERUSER does not
+# yet hold at this point in the build.
+log "running the ADR-072 Amendment 5 pre-step (roles.sql + auth-grants.sql) against $CANDIDATE"
+psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q -f supabase/roles.sql
+
+# --- C-b (Sec H2 ruling, 2026-09-16, AMBER, four conditions): a NAMED,
+# harness-only divergence from the committed supabase/roles.sql, which grants
+# `pfin_owner to $SUPERUSER WITH INHERIT FALSE, SET TRUE` -- non-ambient,
+# production posture, unchanged. THIS re-grant flips the SAME membership to
+# INHERIT TRUE so $SUPERUSER reaches pfin_owner's privileges AMBIENTLY in
+# THIS scratch database only, with no SET ROLE needed -- covering the
+# migration-apply loop below and every downstream consumer of this template
+# (worker-ci/etl-ci harnesses connecting as postgres for generic pfin.*
+# setup/cleanup; H1 -- a dedicated BYPASSRLS harness role -- was REJECTED on
+# a security ground, widening RT-31 leg (i)'s known-platform exclusion; H3
+# -- per-statement SET ROLE across 107 sites -- was REJECTED on correctness,
+# inheriting a transaction-span defect permanently). Never committed to
+# roles.sql itself -- see the CI-fenced pgTAP leg asserting the COMMITTED
+# BLOB still carries INHERIT FALSE.
+log "C-b: granting pfin_owner to $SUPERUSER WITH INHERIT (harness-only, against $CANDIDATE)"
+psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q \
+  -c "grant pfin_owner to $SUPERUSER with inherit true, set true;"
+
+psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q -f supabase/auth-grants.sql
+
+# ⚠ NEW CONSEQUENCE OF THE OWNERSHIP FLIP, measured 2026-09-17: on PG15+ the
+# `public` schema is owned by the pseudo-role `pg_database_owner`, which
+# resolves DYNAMICALLY to whoever owns the current database. roles.sql just
+# flipped $CANDIDATE's owner to pfin_owner, so `public`'s EFFECTIVE owner
+# silently flipped too -- $SUPERUSER (postgres) loses CREATE on schema
+# `public`, not just schema `pfin`, and step 6's `create extension pgtap
+# schema public` / step 7's marker-table CREATE both die with "permission
+# denied for schema public". Confirmed by reproducing the exact failure
+# locally (public.ecr.aws/supabase/postgres:17.6.1.132) and the exact fix
+# below against it. Re-grant explicitly, as supabase_admin, mirroring
+# roles.sql's own pattern for re-granting postgres what the flip took.
+psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q \
+  -c "grant create on schema public to $SUPERUSER;"
 
 # --- 5. apply the full migration chain, sorted, as postgres ---
+# $SUPERUSER now holds SET-only membership in pfin_owner (granted by step 4's
+# roles.sql pass) — each swept file's own `set role pfin_owner; ... reset
+# role;` is what actually lands objects pfin_owner-owned; $SUPERUSER itself
+# never needs direct CREATE on schema pfin.
 log "applying $MIGRATION_COUNT migrations..."
 i=0
+MIG_VERSIONS=()
 while IFS= read -r mig; do
   i=$((i + 1))
   psql -X -h "$DB_HOST" -p "$DB_PORT" -U "$SUPERUSER" -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q -f "$mig"
+  MIG_VERSIONS+=("$(basename "$mig" | grep -oE '^[0-9]+')")
 done < <(find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name '*.sql' | sort)
 log "applied $i migrations clean."
+
+# --- 5a. synthesize the CLI's ledger table, `supabase_migrations.schema_migrations`
+# --- this script applies migrations by hand-rolled psql (never `supabase migration
+# up` / `db push`), so unlike production/CI it never gets the CLI's own ledger.
+# The (iv‴) post-step's ordering gate (supabase/post-step-vault-view.sql line 27)
+# reads that ledger to refuse running before the main pass completes — a real,
+# useful check in production/CI, not something to work around by editing
+# Architect's canonical post-step file (routed, not silently patched, per the
+# same rule DevOps applies to db-tests.yml's post-step step). This script
+# instead supplies the ledger state the gate expects, matching what a real
+# `supabase migration up` run would have left: one row per applied migration,
+# keyed by its numeric prefix. Schema owned by $SUPERUSER, mirroring
+# production/CI's ledger ownership (the CLI's own connecting identity, never
+# pfin_owner — Decision F1/F3, the one deliberate ownership exception).
+log "synthesizing the migration ledger ($i rows) for the post-step's ordering gate"
+psql -X -h "$DB_HOST" -p "$DB_PORT" -U "$SUPERUSER" -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q <<SQL
+create schema if not exists supabase_migrations authorization $SUPERUSER;
+create table if not exists supabase_migrations.schema_migrations (
+  version text primary key,
+  statements text[],
+  name text
+);
+truncate supabase_migrations.schema_migrations;
+SQL
+{
+  printf 'insert into supabase_migrations.schema_migrations (version) values\n'
+  for idx in "${!MIG_VERSIONS[@]}"; do
+    sep=","; [ "$idx" -eq $((${#MIG_VERSIONS[@]} - 1)) ] && sep=";"
+    printf "  ('%s')%s\n" "${MIG_VERSIONS[$idx]}" "$sep"
+  done
+} | psql -X -h "$DB_HOST" -p "$DB_PORT" -U "$SUPERUSER" -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q
+
+# --- 5b. the ADR-072 Amendment 5 (iv‴) supervised post-step, against THIS
+# candidate database --- creates pfin.decrypted_source_credential (015's
+# vault guard takes the verified-skip branch inside every swept file, on
+# every lane, by construction — see supabase/post-step-vault-view.sql's own
+# header) and transfers it to pfin_owner. As supabase_admin: schema pfin is
+# pfin_owner-owned with CREATE revoked from public/$SUPERUSER under the
+# sweep, so $SUPERUSER cannot create this view itself. Must run AFTER the
+# migrations (its base table, pfin.linked_source, does not exist before
+# them) — committed-file reference, not a restated copy, same as the pre-step
+# above.
+log "applying the (iv‴) supervised post-step against $CANDIDATE"
+psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q -f supabase/post-step-vault-view.sql
 
 # --- 6. pgtap in public (not extensions) ---
 psql -X -h "$DB_HOST" -p "$DB_PORT" -U "$SUPERUSER" -d "$CANDIDATE" -v ON_ERROR_STOP=1 \

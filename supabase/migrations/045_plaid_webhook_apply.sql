@@ -247,6 +247,32 @@
 --     fns; service_role-only EXECUTE; sync_cursor withheld from authenticated.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 -- ----------------------------------------------------------------------------
@@ -460,3 +486,11 @@ grant  execute on function pfin.fn_plaid_webhook_commit(jsonb) to service_role;
 
 comment on function pfin.fn_plaid_webhook_commit(jsonb) is
   'SELF-206 Route Z-INVOKER atomic commit (WRITES). One plpgsql transaction: re-resolve (source_id, users_id) FROM p_event->>''item_id'' (authoritative; NEVER a caller key; fail-closed RAISE if the Item was removed) → state_history append + connection_status flip ONLY-ON-CHANGE (status_class + provider_error_code; NULL status_class = pure transactions event → no state write; the 015 CHECK enum is the defense-in-depth backstop) → INSERT the linked_source_sync_audit gate/audit row (provider=''plaid'', source=''webhook'', provider_event_id ON CONFLICT DO NOTHING; linked_source_id re-resolved → the 044 #15 matched-tenant fence validates same-tenant). AC2 idempotency is PER-PATH: STATE events carry a non-null per-delivery provider_event_id and the UNIQUE gate dedups exact-JWT replays; TRANSACTIONS events carry NULL (NULLs distinct → always insert) and are deduped by the /transactions/sync CURSOR, NOT the gate (avoids the same-iat-second false-collision on the byte-identical transactions body dropping a legit sync). Returns was_fresh = whether the row was freshly inserted (meaningful for STATE events; always true for transactions). Called by the handler ONLY after the external worker sync is confirmed dispatched (C-X2 sync-first / gate-at-completion; self-contained — Plaid''s at-least-once retry + sync idempotency re-drive it, no reliance on the code-level Plaid poll in poll.ts/SELF-279; the dormant-item-persistent-failure tail is re-driven by the next webhook or that poll, whose operational cadence is tracked at SELF-213). provider_event_id NULL RAISEs ONLY for a STATE event (transactions may be NULL). SECURITY INVOKER + set search_path='''' — runs with service_role privileges (BYPASSRLS) via the supabase-admin.ts caller; DEFINER allowlist unchanged (INVOKER). EXECUTE granted to service_role ONLY. ADR-026 A2: emits this sync-audit row, NOT the reserved general forensic log (forward-hook only).';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

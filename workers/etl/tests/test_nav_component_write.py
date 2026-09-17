@@ -29,9 +29,19 @@ Description:
     that fence DELETE for every role including postgres/table-owner, so
     isolating tests means never reusing an identity, not clearing state.
 
+    ⚠ ADR-072 Amendment 5 / Sec H2 harness-identity ruling (2026-09-17): the
+    `scratch_db` fixture below routes through DevOps's
+    `scripts/db-template-clone.sh` rather than building its scratch DB by
+    hand (dump `auth` -> re-create extensions -> re-apply every migration
+    file) — see that fixture's own docstring, and
+    test_nav_backfill_write.py's (same fix, same reason: ownership-sweep
+    broke the hand-rolled path with "permission denied for database").
+
     Requires (session-scoped fixture below, this file only):
       - Docker container `supabase_db_mosko-fintech` reachable.
-      - `psql`/`pg_dump` inside that container (standard Supabase image).
+      - `psql` inside that container (standard Supabase image).
+      - `scripts/db-template-clone.sh`'s own requirement: a fresh
+        `pfin_tmpl` template (built by `scripts/db-template-build.sh`).
     Skips cleanly if the container is unreachable.
 """
 
@@ -60,6 +70,17 @@ def _docker_psql(db, sql=None, sql_file=None, check=True):
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
 
+def _docker_psql_admin(db, sql, check=False):
+    # ⚠ `db-template-clone.sh` creates the clone as `supabase_admin`, NOT
+    # `postgres` — see test_nav_backfill_write.py's identical helper for the
+    # full reasoning. `postgres` cannot DROP DATABASE on this scratch DB
+    # post-clone; teardown must use the identity the script used to create
+    # it. `check=False`: best-effort teardown, same posture as before.
+    cmd = ["docker", "exec", _CONTAINER, "psql", "-U", "supabase_admin", "-d", db,
+           "-v", "ON_ERROR_STOP=1", "-c", sql]
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+
+
 def _docker_available():
     try:
         r = subprocess.run(
@@ -72,16 +93,27 @@ def _docker_available():
 
 @pytest.fixture(scope="module")
 def scratch_db():
-    """Session-for-this-module scratch database: fresh DB on the local
-    Postgres cluster, auth schema mirrored, all migrations applied in order
-    (through 107, since this glob picks up whatever is in the migrations dir
-    at test time — no version pin needed here), a THROWAWAY login role armed
-    for the write path. Dropped on teardown regardless of test outcome.
+    """Session-for-this-module scratch database: a fast structural CLONE of
+    `pfin_tmpl` (DevOps's `scripts/db-template-clone.sh` — already built
+    through the current migration head, `auth` schema mirrored, extensions
+    present, H2 `pfin_owner` INHERIT grant baked in), a THROWAWAY login role
+    armed for the write path. Dropped on teardown regardless of test
+    outcome.
+
+    ⚠ ROUTES THROUGH `db-template-clone.sh` RATHER THAN BUILDING THE SCRATCH
+    DB BY HAND — ADR-072 Amendment 5 / Sec H2 harness-identity ruling
+    (2026-09-17). See test_nav_backfill_write.py's identical fixture for the
+    full reasoning: the old DROP/CREATE DATABASE + `pg_dump --schema=auth` +
+    re-apply-every-migration-file path started failing "permission denied
+    for database" at `001_pfin_foundation.sql` once the ownership sweep
+    landed, and was a second hand-rolled copy of "how a pfin DB gets set
+    up" besides.
 
     ⚠ USES A ROLE THIS FIXTURE CREATES AND DROPS ITSELF — NEVER `pfin_etl`.
     See test_nav_backfill_write.py's own fixture docstring for the incident
     (POSTGRES ROLES ARE CLUSTER-LEVEL, NOT PER-DATABASE) this convention exists
-    to prevent from recurring.
+    to prevent from recurring. The clone script does not create this role
+    either — that stays this fixture's own step.
     """
     if not _docker_available():
         pytest.skip(f"docker container {_CONTAINER!r} not reachable — skipping integration tier")
@@ -89,54 +121,18 @@ def scratch_db():
     import pathlib
     # this file: <repo_root>/workers/etl/tests/test_nav_component_write.py
     repo_root = pathlib.Path(__file__).resolve().parents[3]
-    migrations_dir = repo_root / "supabase" / "migrations"
-    if not migrations_dir.is_dir():
-        pytest.skip(f"migrations dir not found at {migrations_dir} — worktree layout unexpected")
+    clone_script = repo_root / "scripts" / "db-template-clone.sh"
+    if not clone_script.is_file():
+        pytest.skip(f"{clone_script} not found — worktree layout unexpected")
 
-    _docker_psql("postgres", sql=f"DROP DATABASE IF EXISTS {_SCRATCH_DB};")
-    _docker_psql("postgres", sql=f"CREATE DATABASE {_SCRATCH_DB};")
-
-    dump = subprocess.run(
-        ["docker", "exec", _CONTAINER, "pg_dump", "-U", "postgres", "-d", "postgres",
-         "--schema=auth", "--schema-only", "--no-owner", "--no-privileges"],
-        capture_output=True, text=True, check=True,
+    # Non-zero exit = clone failed (no template, stale template, or a real
+    # DB error) — a hard failure, not a skip: the container IS reachable
+    # (checked above), so a clone failure here is a real problem the script
+    # already reports with a specific cause (see its own die() messages).
+    subprocess.run(
+        ["bash", str(clone_script), _SCRATCH_DB],
+        cwd=repo_root, capture_output=True, text=True, check=True,
     )
-    restore = subprocess.run(
-        ["docker", "exec", "-i", _CONTAINER, "psql", "-U", "postgres", "-d", _SCRATCH_DB,
-         "-v", "ON_ERROR_STOP=1"],
-        input=dump.stdout, capture_output=True, text=True,
-    )
-    assert restore.returncode == 0, f"auth schema restore failed: {restore.stderr}"
-
-    ext_sql = (
-        "create schema if not exists extensions;"
-        "create extension if not exists pg_net schema extensions;"
-        "create extension if not exists pg_stat_statements schema extensions;"
-        "create extension if not exists pgcrypto schema extensions;"
-        "create extension if not exists \"uuid-ossp\" schema extensions;"
-        "create schema if not exists vault;"
-        "create extension if not exists supabase_vault schema vault;"
-    )
-    r = _docker_psql(_SCRATCH_DB, sql=ext_sql)
-    assert r.returncode == 0, f"extensions setup failed: {r.stderr}"
-
-    # ⚠ THE PERMISSIVE-HARNESS LESSON (QA memory, SELF-218) — see
-    # test_nav_backfill_write.py's own fixture for the full explanation:
-    # `pg_dump --no-privileges` drops `grant usage on schema auth`, and this
-    # suite's fresh `select auth.uid()` under `authenticated` needs it back.
-    r = _docker_psql(
-        _SCRATCH_DB,
-        sql="grant usage on schema auth to authenticated, anon, service_role;",
-    )
-    assert r.returncode == 0, f"auth schema USAGE grant failed: {r.stderr}"
-
-    for f in sorted(migrations_dir.glob("*.sql")):
-        r = subprocess.run(
-            ["docker", "exec", "-i", _CONTAINER, "psql", "-U", "postgres", "-d", _SCRATCH_DB,
-             "-v", "ON_ERROR_STOP=1"],
-            input=f.read_text(), capture_output=True, text=True,
-        )
-        assert r.returncode == 0, f"migration {f.name} failed: {r.stderr}"
 
     _docker_psql("postgres", sql=f"DROP ROLE IF EXISTS {_SCRATCH_LOGIN_ROLE};")
     r = _docker_psql(
@@ -155,7 +151,7 @@ def scratch_db():
 
     yield {"dbname": _SCRATCH_DB}
 
-    _docker_psql("postgres", sql=f"DROP DATABASE IF EXISTS {_SCRATCH_DB};")
+    _docker_psql_admin("postgres", f"DROP DATABASE IF EXISTS {_SCRATCH_DB};")
     _docker_psql("postgres", sql=f"DROP ROLE IF EXISTS {_SCRATCH_LOGIN_ROLE};")
 
 

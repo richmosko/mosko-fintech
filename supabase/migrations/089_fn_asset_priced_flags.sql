@@ -169,6 +169,32 @@
 --     ADR-023).
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 create or replace function pfin.fn_asset_priced_flags(
@@ -222,3 +248,11 @@ comment on function pfin.fn_asset_priced_flags(bigint[], date) is
   'PREDICATE: for each asset, TRUE iff an eod_price row exists at that asset''s maximum price_date <= p_as_of with price > 0; an asset with no such rows returns FALSE, never NULL and never absent. It carries NO source-rank CASE, deliberately — 078''s D-FIRST pick is already inlined in several valuation kernels, which is why 078 and 079 exist as drift watchers, and an eighth copy is a cost an indicator need not pay. The price of that is one named imprecision: at a same-date tie between sources disagreeing about zero it reports on the DATE BAND rather than the pick''s winner, so it is optimistic in exactly one reachable case. ⚠ Inverting to bool_and would be locally safer and was explicitly NOT taken — it would make the purchase confirmation and the account view disagree about the same holding, spending the very agreement this function exists to guarantee. ⚠ INDICATOR ONLY, never a valuation primitive: nothing downstream may compute money from it; value comes from 049/050. '
   'Isolation rests entirely on INVOKER plus 019''s eod_price_select, which admits a price row iff its asset is GLOBAL or OWNED by the caller. ⚠ It cannot serve as an existence oracle: an asset the caller cannot see yields FALSE, the same answer as a visible asset with no usable price, so invisible and unpriced are indistinguishable in the output. ⚠ p_asset_ids is a TRANSIENT ARGUMENT, not a stored column, so ADR-011 Decision 3''s INTEGER[]-element rule does not reach it — RLS supplies the isolation a matched-tenant fence would otherwise owe, and THAT SUBSTITUTION HOLDS ONLY WHILE THIS STAYS INVOKER AND READ-ONLY; making it DEFINER or adding any write removes the stand-in and must return to Sec. Decision 3 family unchanged, no label taken; read Decision 3 live, including its amendments. '
   'NOT a SECURITY DEFINER allowlist entry — this file states no allowlist count; read ADR-011 Decision 9 live. service_role deliberately UNGRANTED (no worker path uses it). STABLE is pinned on the signature rather than left to the language default. set search_path = '''' injection fence. EXECUTE revoked from PUBLIC, granted to authenticated only. Signature is an API contract (PostgREST /rpc; pfin is [api]-exposed per ADR-023).';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

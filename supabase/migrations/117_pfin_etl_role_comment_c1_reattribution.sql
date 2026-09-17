@@ -139,5 +139,59 @@ create schema if not exists pfin;
 -- byte-identical to 055's text. The generator and its proof are recorded in the
 -- PR body.
 -- ----------------------------------------------------------------------------
-comment on role pfin_etl is
-  'Dedicated login identity for the workers/etl container (ADR-041; SELF-214 Sec joint-review B8 option (B), F/CTO-ratified 2026-08-02; migration 055). Created NOLOGIN + NOINHERIT with NO PASSWORD (inert by construction); NOT superuser, NOT owner, NOT BYPASSRLS, owns nothing, holds NO direct table or schema privilege in pfin. Its entire reach is via explicit SET ROLE to its two memberships: service_role (privileged writes, per the ADR-023 write role-of-record — table privileges stay decided in 008, not granted here) and authenticated (the W-1 session-impersonation read path reusing INVOKER fn_compute_nav under RLS, Lock 11). NOINHERIT is load-bearing: a forgotten SET ROLE fails 42501 loudly instead of silently running elevated. Because it is neither table owner nor superuser it can neither ALTER TABLE ... DISABLE TRIGGER nor set session_replication_role — which is what makes 054 nav_daily''s append-only fences and its B7 write-tenant binding fence un-bypassable by the writer. Chosen over sharing provider-sync''s authenticator so the ETL is INDEPENDENTLY REVOCABLE (ALTER ROLE pfin_etl NOLOGIN stops the ETL and nothing else) and so a compromised batch container does not yield the credential fronting the entire PostgREST Data API; this also pulls the ADR-019 condition C1 rotation coupling (reconstructed 2026-09-09; migration 117 re-pointed this label, which previously read ADR-023 — whose own enumerated C1 is a DIFFERENT condition, an exposure-readiness artifact reviewed before exposure) back to two consumers (PostgREST + provider-sync), leaving pfin_etl''s password independently rotatable. CREATED NOLOGIN WITH NO PASSWORD — a repo-committed credential is prohibited; an operator switches the role on at deploy time with TWO statements IN A LOAD-BEARING ORDER: (1) `\password pfin_etl` (prompts, computes the SCRAM verifier CLIENT-SIDE, sets ONLY the password while the role is still NOLOGIN and therefore inert), then (2) `ALTER ROLE pfin_etl LOGIN` (carries no secret). The single statement `ALTER ROLE ... WITH LOGIN PASSWORD ''<plaintext>''` is PROHIBITED per Sec B10: log_statement=ddl (measured) captures it verbatim, writing the credential to the server log in cleartext, and typing it also lands it in ~/.psql_history. Be precise about what \password buys: plaintext never leaves the client, but the resulting ALTER USER carrying a SCRAM-SHA-256$4096 verifier IS still logged — that verifier is not a usable credential (a client proof needs ClientKey, which StoredKey does not yield), leaving only an offline attack bounded by secret entropy and iteration count. Do NOT claim "the secret isn''t logged". Ordering matters: running (2) without (1) leaves LOGIN-with-no-password, the exact state this role is shaped to avoid. NOLOGIN rather than LOGIN-without-a-password because rolcanlogin is checked BEFORE any pg_hba auth method: a passwordless LOGIN role is reachable with NO credential under a `trust` line (measured on the local stack, which trusts 127.0.0.1/32 + ::1/128 + local), so the earlier shape outsourced its fail-closed property to a config file outside this repo. Consequence for tests: rolcanlogin is FALSE at migration time and TRUE only in a provisioned environment. Revoke with ALTER ROLE pfin_etl NOLOGIN — stops the ETL and nothing else. See SECURITY §4.4 SD-24 + §4.5 RT-31.';
+do $g4$
+declare
+  v_admin boolean;
+  v_text  text := $lit$Dedicated login identity for the workers/etl container (ADR-041; SELF-214 Sec joint-review B8 option (B), F/CTO-ratified 2026-08-02; migration 055). Created NOLOGIN + NOINHERIT with NO PASSWORD (inert by construction); NOT superuser, NOT owner, NOT BYPASSRLS, owns nothing, holds NO direct table or schema privilege in pfin. Its entire reach is via explicit SET ROLE to its two memberships: service_role (privileged writes, per the ADR-023 write role-of-record — table privileges stay decided in 008, not granted here) and authenticated (the W-1 session-impersonation read path reusing INVOKER fn_compute_nav under RLS, Lock 11). NOINHERIT is load-bearing: a forgotten SET ROLE fails 42501 loudly instead of silently running elevated. Because it is neither table owner nor superuser it can neither ALTER TABLE ... DISABLE TRIGGER nor set session_replication_role — which is what makes 054 nav_daily's append-only fences and its B7 write-tenant binding fence un-bypassable by the writer. Chosen over sharing provider-sync's authenticator so the ETL is INDEPENDENTLY REVOCABLE (ALTER ROLE pfin_etl NOLOGIN stops the ETL and nothing else) and so a compromised batch container does not yield the credential fronting the entire PostgREST Data API; this also pulls the ADR-019 condition C1 rotation coupling (reconstructed 2026-09-09; migration 117 re-pointed this label, which previously read ADR-023 — whose own enumerated C1 is a DIFFERENT condition, an exposure-readiness artifact reviewed before exposure) back to two consumers (PostgREST + provider-sync), leaving pfin_etl's password independently rotatable. CREATED NOLOGIN WITH NO PASSWORD — a repo-committed credential is prohibited; an operator switches the role on at deploy time with TWO statements IN A LOAD-BEARING ORDER: (1) `\password pfin_etl` (prompts, computes the SCRAM verifier CLIENT-SIDE, sets ONLY the password while the role is still NOLOGIN and therefore inert), then (2) `ALTER ROLE pfin_etl LOGIN` (carries no secret). The single statement `ALTER ROLE ... WITH LOGIN PASSWORD '<plaintext>'` is PROHIBITED per Sec B10: log_statement=ddl (measured) captures it verbatim, writing the credential to the server log in cleartext, and typing it also lands it in ~/.psql_history. Be precise about what \password buys: plaintext never leaves the client, but the resulting ALTER USER carrying a SCRAM-SHA-256$4096 verifier IS still logged — that verifier is not a usable credential (a client proof needs ClientKey, which StoredKey does not yield), leaving only an offline attack bounded by secret entropy and iteration count. Do NOT claim "the secret isn't logged". Ordering matters: running (2) without (1) leaves LOGIN-with-no-password, the exact state this role is shaped to avoid. NOLOGIN rather than LOGIN-without-a-password because rolcanlogin is checked BEFORE any pg_hba auth method: a passwordless LOGIN role is reachable with NO credential under a `trust` line (measured on the local stack, which trusts 127.0.0.1/32 + ::1/128 + local), so the earlier shape outsourced its fail-closed property to a config file outside this repo. Consequence for tests: rolcanlogin is FALSE at migration time and TRUE only in a provisioned environment. Revoke with ALTER ROLE pfin_etl NOLOGIN — stops the ETL and nothing else. See SECURITY §4.4 SD-24 + §4.5 RT-31.$lit$;
+  v_live  text;
+begin
+  -- ⚠ G4 DISPOSITION, WIDENED TO 117 (ADR-072 Amendment 5). 117's ENTIRE effect is one
+  -- `comment on role pfin_etl`, so it fails the unsupervised pass exactly as 119 did:
+  -- COMMENT ON ROLE needs superuser or ADMIN OPTION on the target, and the image's
+  -- pre-step creates pfin_etl, so no bounded applier holds it. 117 therefore joins the
+  -- PRE-STEP FILE LIST alongside 118 and 119 — which is what makes degrading legitimate,
+  -- G4's criterion being a statement about the list and never a prohibition on a file.
+  -- ⚠ SKIP IS VERIFIED, NEVER ASSUMED (Sec's condition, as placed on 119): being on the
+  -- list only helps if the pre-step actually ran, so the skip branch READS the catalog and
+  -- RAISES when the comment is absent or stale. 117 exists precisely to CORRECT a stale
+  -- comment, so silently skipping it would restore the defect it was written to fix.
+  -- ⚠ `USAGE`, not `MEMBER`: under NOINHERIT `USAGE` under-reports, which is FAIL-CLOSED
+  -- for a guard and BLIND for a watcher. The battery's watcher uses MEMBER. Do not unify.
+  -- ⚠ oid read from pg_roles, not pg_authid: the latter is superuser-only, so reading it
+  -- would make this branch unreachable for exactly the applier it exists to serve.
+  select coalesce((select r.rolsuper from pg_catalog.pg_roles r
+                    where r.rolname = current_user), false)
+      or exists (
+           select 1
+             from pg_catalog.pg_auth_members m
+             join pg_catalog.pg_roles tgt     on tgt.oid = m.roleid
+             join pg_catalog.pg_roles grantee on grantee.oid = m.member
+            where tgt.rolname = 'pfin_etl'
+              and m.admin_option
+              and pg_catalog.pg_has_role(current_user, grantee.oid, 'USAGE'))
+    into v_admin;
+
+  if v_admin then
+    execute pg_catalog.format('comment on role pfin_etl is %L', v_text);
+    raise notice '117: comment on role pfin_etl re-issued as %.', current_user;
+    return;
+  end if;
+
+  select pg_catalog.shobj_description(r.oid, 'pg_authid') into v_live
+    from pg_catalog.pg_roles r where r.rolname = 'pfin_etl';
+
+  if v_live is null then
+    raise exception using errcode = '42501',
+      message = pg_catalog.format('migration 117 cannot be applied by %I AND the supervised pre-step did not land the comment: pg_shdescription carries NOTHING for role pfin_etl.', current_user),
+      detail  = 'COMMENT ON ROLE requires superuser or the ADMIN option on the target role, which no bounded applier holds for a role the pre-step created. Skipping here would leave the role undocumented with nothing observing it.',
+      hint    = 'Run the pre-step for 117 (psql -U supabase_admin -f supabase/migrations/117_pfin_etl_role_comment_c1_reattribution.sql), then re-run the apply. Do NOT widen this role, and do NOT grant it ADMIN OPTION on pfin_etl, to get past this — an unexplained 42501 mid-bootstrap is exactly when the widening repair is most tempting and most wrong.';
+  elsif v_live is distinct from v_text then
+    raise exception using errcode = '42501',
+      message = pg_catalog.format('migration 117 cannot be applied by %I AND the comment on role pfin_etl is STALE — present, but not the text this migration carries.', current_user),
+      detail  = 'This migration exists to CORRECT a stale comment (the C1 rotation-coupling label re-attribution). Skipping over a stale comment would silently restore the exact defect 117 was written to fix, which is why this is an exception and not a warning.',
+      hint    = 'Re-run the pre-step with THIS revision of the file, then re-run the apply. Do NOT widen this role to get past this.';
+  end if;
+
+  raise warning 'G4-SKIP: comment on role pfin_etl NOT re-issued by % — it holds neither superuser nor ADMIN OPTION on the role. SKIP IS VERIFIED, NOT ASSUMED: pg_shdescription was read and carries exactly this migration''s text, so the supervised pre-step demonstrably ran.', current_user;
+end
+$g4$;
