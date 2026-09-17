@@ -1,0 +1,99 @@
+# .github/actions/start-local-stack/action.yml
+#
+# Composite action — single source of truth for db-only local Supabase
+# bring-up, shared by db-tests.yml (rls-battery), security-scan.yml (the C3
+# lane), worker-ci.yml (provider-sync + pdf-render), and etl-ci.yml. Extracted
+# 2026-09-17 after all four lanes were found to die at the identical failure
+# (see below) — a per-workflow copy of this recipe is exactly the drift this
+# action exists to close; bump/fix it in ONE place, every caller inherits it.
+#
+# WHY THIS EXISTS, ADR-072 Amendment 5 Decision K (measured, not inferred).
+# The Supabase CLI seeds `supabase/roles.sql` on bring-up as a NON-SUPERUSER
+# (rolsuper=f, not a member of supabase_admin, `set role supabase_admin`
+# refused — measured against the running container). Schema `auth` is owned
+# by `supabase_admin` on this image (measured; an earlier inference that it
+# was `supabase_auth_admin`, going only off the WARNING text, was wrong). So
+# the seeder cannot grant on `auth`, and the two grants that live in
+# `supabase/auth-grants.sql` (pfin_owner's `auth.users` FK reach) need a
+# separate, privileged application. Without it every migration in the
+# paired-ownership sweep dies at its first FK to `auth.users` with
+# "permission denied for schema auth" — this is what ALL FOUR consuming
+# workflows hit before this action existed (db-tests' rls-battery,
+# security-scan's C3 lane, worker-ci's Live-DB integration lane, etl-ci's
+# integration battery — same roles.sql WARNING, same downstream failure).
+#
+# ⚠ THE FAILURE MODE DEFEATS THE OBVIOUS GUARD. A grant issued without
+# authority over schema `auth` does NOT raise — it emits `WARNING 01007` and
+# grants nothing. An `exception when insufficient_privilege` handler never
+# fires; both `roles.sql` and `auth-grants.sql` read the privilege back and
+# fail loud on the actual outcome instead (see their own headers).
+#
+# RECIPE (Decision K, read from the CLI source at the pinned version
+# v2.105.0, not from `--help` — `--help` inventories the flag surface, never
+# the behaviour):
+#   1. [db.migrations] enabled=false in a scratch COPY of config.toml, THIS
+#      JOB ONLY. `internal/migration/apply/apply.go`'s applyMigrationFiles is
+#      gated by this key and is what BOTH `supabase start` and
+#      `supabase db start` reach unconditionally on bring-up
+#      (internal/db/start/start.go -> SetupLocalDatabase ->
+#      apply.MigrateAndSeed); there is no CLI flag for this. NEVER commit
+#      `false` -- the same function is what `supabase db push` calls, so
+#      `false` left in the COMMITTED config.toml makes a production db push
+#      apply nothing and exit clean (security-scan.yml's
+#      fence-config-toml-migrations-enabled job guards against exactly that).
+#   2. bring the stack up -- migrations are skipped on bring-up; roles.sql is
+#      still seeded (that part isn't gated).
+#   3. apply supabase/auth-grants.sql as supabase_admin via `docker exec` into
+#      the db container as its postgres OS user, over the unix socket -- this
+#      image's pg_hba.conf opens with a local/trust rule for supabase_admin,
+#      so no credential enters this workflow (measured against the running
+#      container, image public.ecr.aws/supabase/postgres:17.6.1.132).
+#      ⚠ `-d postgres` is REQUIRED: psql with no `-d` defaults to a database
+#      named after the connecting user, and no database named "supabase_admin"
+#      exists -- omitting it fails EVERY caller with "FATAL: database
+#      "supabase_admin" does not exist", a red herring that looks like a
+#      socket problem (it is not; the socket path and the trust rule were
+#      both independently measured correct against a live container before
+#      this action shipped).
+#   4. `supabase migration up` -- does NOT consult the gate
+#      (internal/migration/up/Run builds its own pending set directly), so
+#      this applies the full migration set with pfin_owner now holding its
+#      auth reach.
+#   5. restore config.toml unconditionally (trap on EXIT) so nothing in the
+#      calling job -- or a later step in it -- ever sees the gate off.
+#
+# Db-only: `-x` excludes the non-db service containers (identical list across
+# all four callers; invalid `-x` names only warn, never fail, so this list is
+# safe across CLI versions). Composite-action steps do NOT inherit the
+# calling job's `defaults.run.working-directory` (worker-ci.yml and
+# etl-ci.yml both set one, pointed at a workers/* subdirectory) — this
+# action's own steps run at `github.workspace` regardless of caller, which is
+# exactly the repo root supabase/config.toml, supabase/roles.sql, and
+# supabase/auth-grants.sql need.
+
+name: 'Start local Supabase stack (db-only, with the auth-grants privileged step)'
+description: 'supabase start (db-only, -x excludes non-db services) + the ADR-072 Amendment 5 Decision K auth-grants.sql privileged step + supabase migration up. Shared by db-tests.yml, security-scan.yml, worker-ci.yml, etl-ci.yml.'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Start local stack (db-only) and apply auth-grants.sql as supabase_admin
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        cp supabase/config.toml supabase/config.toml.orig
+        trap 'mv supabase/config.toml.orig supabase/config.toml' EXIT
+        awk '
+          /^\[db\.migrations\]/ { insec=1 }
+          /^\[/ && !/^\[db\.migrations\]/ { insec=0 }
+          insec && /^enabled = true/ { print "enabled = false"; next }
+          { print }
+        ' supabase/config.toml.orig > supabase/config.toml
+
+        supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+
+        docker exec -i -u postgres supabase_db_mosko-fintech \
+          psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres -f - < supabase/auth-grants.sql
+
+        supabase migration up

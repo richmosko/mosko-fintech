@@ -314,15 +314,18 @@ jobs:
         uses: ./.github/actions/supabase-cli-setup
 
       - name: Start local stack (db-only; -x drops non-db services incl gotrue/auth)
-        # Same exclusion list as db-tests.yml's rls-battery job. The `auth`
-        # SCHEMA (needed by both test files' `pg_dump --schema=auth` step) is
-        # created at DB init independent of the excluded GoTrue CONTAINER — see
-        # db-tests.yml's own "Smoke — auth.uid() resolves under db-only" step,
-        # which proves this same property. `supabase start` applies
-        # supabase/migrations/** (through the current head) on bring-up.
-        working-directory: .
-        run: |
-          supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+        # Composite action -- single source of truth for db-only bring-up +
+        # the ADR-072 Amendment 5 Decision K auth-grants.sql privileged step,
+        # shared by db-tests.yml, security-scan.yml, worker-ci.yml, etl-ci.yml.
+        # See .github/actions/start-local-stack/action.yml for the full recipe
+        # and why it exists (this job's integration battery independently hit
+        # the identical "permission denied for schema auth" failure before
+        # this extraction, from the same roles.sql WARNING). Composite-action
+        # steps do NOT inherit this job's `defaults.run.working-directory`
+        # (workers/etl) — the action's own steps run at `github.workspace`,
+        # which is what supabase/config.toml and supabase/auth-grants.sql
+        # need, with no override required here.
+        uses: ./.github/actions/start-local-stack
 
       - name: Install uv (provisions Python per workers/etl/.python-version = 3.14)
         uses: astral-sh/setup-uv@v6
