@@ -214,12 +214,18 @@ if [ -n "$ROWS" ]; then
     [ -z "$kv" ] && continue
     key="${kv%%=*}"
     val="${kv#*=}"
+    # ⚠ AS supabase_admin, NOT $SUPERUSER — same reason as the clone above:
+    # $SCRATCH_NAME is now owned by supabase_admin (whoever ran `createdb`
+    # becomes the new database's owner), and both ALTER DATABASE ... SET and
+    # ALTER ROLE ... IN DATABASE ... SET require ownership or superuser.
+    # Measured: $SUPERUSER (postgres) got "must be owner of database
+    # $SCRATCH_NAME" here once the clone step itself moved to supabase_admin.
     if [ -z "$rolename" ]; then
       log "replaying per-database setting onto clone: $key"
-      psql_as postgres -v ON_ERROR_STOP=1 -c "alter database \"$SCRATCH_NAME\" set \"$key\" = '$val';" >/dev/null
+      psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d postgres -v ON_ERROR_STOP=1 -c "alter database \"$SCRATCH_NAME\" set \"$key\" = '$val';" >/dev/null
     else
       log "replaying per-role-per-database setting onto clone: $rolename / $key"
-      psql_as postgres -v ON_ERROR_STOP=1 -c "alter role \"$rolename\" in database \"$SCRATCH_NAME\" set \"$key\" = '$val';" >/dev/null
+      psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d postgres -v ON_ERROR_STOP=1 -c "alter role \"$rolename\" in database \"$SCRATCH_NAME\" set \"$key\" = '$val';" >/dev/null
     fi
   done <<< "$ROWS"
 else
