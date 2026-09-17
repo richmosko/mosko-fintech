@@ -161,7 +161,7 @@ begin
     raise exception using errcode = '55000',
       message = format('ADR-072 (iv‴) post-step FAILED: %s can SELECT pfin.decrypted_source_credential.',
                        pg_catalog.array_to_string(v_offend, ', ')),
-      detail  = format('Step (1) revokes from public, anon and authenticated; the revoke for %s did not take. A revoke issued without authority does not raise — it warns and removes nothing — so re-run step (1) as the image superuser and re-run this block. The decrypted provider credential is readable below service_role until it passes.',
+      detail  = format('Step (1) revokes from public, anon and authenticated; the revoke for %s did not take — a revoke issued without authority does not raise, it warns and removes nothing. The decrypted provider credential is readable below service_role until this passes. REPAIR: re-run this file per docs/deployment-runbook.md §6.3 PHASE 3 (the post-step). The procedure lives there and is deliberately NOT restated here — one source.',
                        pg_catalog.array_to_string(v_offend, ' and '));
   end if;
 
