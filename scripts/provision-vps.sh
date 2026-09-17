@@ -639,7 +639,34 @@ KbdInteractiveAuthentication no
 # AllowTcpForwarding must stay yes (the default) -- the Coolify dashboard and
 # Supabase Studio tunnels (ssh -L) both depend on it. Stated explicitly so a
 # future hardening pass cannot flip the default without this line objecting.
-AllowTcpForwarding yes'
+AllowTcpForwarding yes
+# ADR-072 Amendment 6 (RATIFIED, merged c2b20cc2, 2026-09-17). Sec
+# joint-review was mandatory on this line before it shipped, same as any
+# other change to ci-migrate'"'"'s posture (C1/C3) -- done. Accepts exactly
+# ONE named environment variable from the client -- nothing else, no
+# pattern, no wildcard -- so .github/workflows/migrator-trigger.yml'"'"'s
+# ssh invocation can pass the triggering commit sha to
+# migrator-orchestrate.sh'"'"'s sha-check (see that script'"'"'s own comment
+# for why this is a DATA channel, not a widening of C2'"'"'s "never read
+# $SSH_ORIGINAL_COMMAND" rule -- this variable is never eval'"'"'d, never
+# dispatched on, only compared for equality against the container'"'"'s own
+# baked marker).
+# ⚠ CORRECTED (Sec joint-review, ADR-072 Amendment 6, PR #791): `AcceptEnv` is a
+# server-global sshd_config directive -- it is NOT scoped by the
+# "restrict,command=..." authorized_keys line, which governs what a
+# SESSION may run, not what the SERVER accepts from the wire before any
+# session or key is even matched. The prior comment here claimed a scoping
+# that did not exist. Made true BY CONSTRUCTION instead of merely
+# reworded: wrapped in `Match User ci-migrate` below, so this directive
+# only takes effect for connections authenticating as ci-migrate --
+# `Match all` immediately after closes the block so it cannot leak into
+# any sshd_config.d/*.conf file that sorts after this one (99-pfin-
+# hardening.conf is expected to load last, but Match'"'"'s scope otherwise
+# extends to end-of-config, not end-of-file, so closing it explicitly is
+# the correct-by-construction move here, not a defensive nicety).
+Match User ci-migrate
+    AcceptEnv MIGRATOR_EXPECT_SHA
+Match all'
 CURRENT_SSHD="$(sshx 'cat /etc/ssh/sshd_config.d/99-pfin-hardening.conf 2>/dev/null' || true)"
 if [[ "$CURRENT_SSHD" == "$DESIRED_SSHD" ]]; then
   ok "sshd drop-in already matches"
@@ -665,13 +692,51 @@ else
   # ssh.socket for port 22 -- the next connection gets the new config from
   # the drop-in regardless, since socket-activated sshd re-reads config on
   # every spawn.
+  #
+  # ⚠ CORRECTED (Sec hazard finding, ADR-072 Amendment 6, PR #791): the
+  # PRIOR form here was `cat > TARGET && sshd -t && reload` -- a fragment
+  # that FAILS `sshd -t` was already written to TARGET before validation
+  # ran, and only the reload was skipped. Socket-activated sshd re-reads
+  # its config on every new connection (the same property this comment's
+  # neighbor above relies on for a GOOD config to take effect without a
+  # running daemon to reload) -- so a bad fragment left on disk does not
+  # lock anyone out immediately, but defers the lockout to the next
+  # connection attempt rather than preventing it, which is not the same
+  # thing. Fixed: stage the new content OUTSIDE sshd_config.d (a mktemp
+  # path under /root, never sshd-visible), back up whatever TARGET
+  # currently holds (or note there was nothing to back up), copy staged
+  # -> TARGET, THEN run `sshd -t` -- and on failure, restore the backup
+  # (or remove TARGET if none existed) BEFORE returning non-zero, so a
+  # rejected config is never left live even transiently between this
+  # command and the next SSH connection.
   printf '%s\n' "$DESIRED_SSHD" | ssh "${SSH_OPTS[@]}" "root@$BOX_IP" \
-    'cat > /etc/ssh/sshd_config.d/99-pfin-hardening.conf && sshd -t && {
-       UNIT=ssh
-       systemctl list-unit-files --type=service 2>/dev/null | grep -qE "^sshd\.service" && UNIT=sshd
-       systemctl try-reload-or-restart "$UNIT"
-     }'
-  ok "sshd drop-in written and reloaded (unit auto-detected)"
+    'set -eu
+     TARGET=/etc/ssh/sshd_config.d/99-pfin-hardening.conf
+     STAGE="$(mktemp /root/.pfin-sshd-staging.XXXXXX)"
+     trap "rm -f \"$STAGE\"" EXIT
+     cat > "$STAGE"
+     HAD_PREVIOUS=0
+     BACKUP="$(mktemp /root/.pfin-sshd-backup.XXXXXX)"
+     if [ -f "$TARGET" ]; then
+       cp "$TARGET" "$BACKUP"
+       HAD_PREVIOUS=1
+     fi
+     cp "$STAGE" "$TARGET"
+     if ! sshd -t; then
+       echo "sshd -t REJECTED the staged config -- restoring the previous fragment (or removing TARGET if none existed) before returning non-zero" >&2
+       if [ "$HAD_PREVIOUS" = "1" ]; then
+         cp "$BACKUP" "$TARGET"
+       else
+         rm -f "$TARGET"
+       fi
+       rm -f "$BACKUP"
+       exit 1
+     fi
+     rm -f "$BACKUP"
+     UNIT=ssh
+     systemctl list-unit-files --type=service 2>/dev/null | grep -qE "^sshd\.service" && UNIT=sshd
+     systemctl try-reload-or-restart "$UNIT"'
+  ok "sshd drop-in staged, validated, written and reloaded (unit auto-detected)"
 fi
 
 step "Operator user 'deploy' + NOPASSWD sudo (runbook §1 step 3)"

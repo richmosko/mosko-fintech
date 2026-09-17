@@ -48,6 +48,41 @@
 #     enumerate confidential VALUES only — putting a non-secret here would
 #     assert a blast radius that does not exist, the same reasoning that
 #     keeps PUBLIC_SUPABASE_URL out of that file.
+#
+# ⚠ TODO — PENDING ADR-072 AMENDMENT 4 (design only, not built here). The
+# sha-check this workflow now passes to migrator-orchestrate.sh (see the
+# `-o SetEnv=MIGRATOR_EXPECT_SHA=...` line below) FAILS CLOSED on a stale
+# image — it does not by itself REBUILD one. Today the migrator container
+# is baked at build time (COPY supabase/migrations/ into the image,
+# infra/supabase/migrator/Dockerfile) and lives INSIDE the Supabase-stack
+# Coolify resource, so the only way to refresh it is a full stack redeploy
+# — which restarts the database. This workflow cannot trigger that today
+# without accepting a DB restart on every migration merge, which is
+# exactly the operational cost Sec's Amendment 6 note names as the reason
+# to elevate Amendment 4 (splitting the migrator into its own Coolify
+# resource) from hygiene to PRECONDITION.
+#   DESIGNED SHAPE, once Amendment 4 lands and the migrator is its own
+#   resource (rebuildable independently, no DB restart):
+#     1. This job gains an EARLIER step: `GET /applications/<migrator-uuid
+#        (now its OWN app, not the stack's)>/deploy` (or the Coolify
+#        "restart"/"redeploy" endpoint for a standalone resource — confirm
+#        the exact route against routes/api.php at whatever Coolify version
+#        is running then, same discipline as the executions endpoint
+#        correction earlier in this workstream) BEFORE the SSH step below,
+#        so the image is rebuilt from $GITHUB_SHA first.
+#     2. That step must itself POLL to a terminal "deployment finished"
+#        state before the SSH step runs -- but per Sec's Amendment 6
+#        ruling (Consequence 3), THIS POLL IS A PRECONDITION ONLY ("don't
+#        even try to fire until the rebuild is done"), never a success
+#        criterion -- the sha-check inside migrator-orchestrate.sh remains
+#        the only thing that proves the image is actually correct. Naming
+#        both roles in the same comment, per Sec's explicit wording
+#        requirement, so a future edit cannot quietly conflate them.
+#     3. Until Amendment 4 lands, an operator must rebuild/redeploy the
+#        Supabase-stack resource by hand (accepting the DB restart) before
+#        relying on this trigger for a migration that isn't in the image
+#        yet -- see docs/deployment-runbook.md §6.6's own ruling on this
+#        exact ordering question (Step 1.5, ADR-072 Amendment 6 draft).
 
 name: Migrator trigger (ADR-072 Option E)
 
@@ -56,6 +91,25 @@ on:
     branches: [main]
     paths:
       - 'supabase/migrations/**'
+  # Added per F/CTO instruction (2026-09-17), for docs/deployment-runbook.md
+  # §6.7 step 4 -- that recipe needs a way to fire THIS WORKFLOW on demand
+  # (not just via a real migration push) so it can assert the "SSH to
+  # ci-migrate" STEP itself goes red against the fail-probe target, not
+  # just the script's own exit code. No inputs -- same job, same forced-
+  # command invocation as the push trigger; the `paths` filter stays
+  # scoped to the push trigger only (workflow_dispatch has no path
+  # filtering to apply it to, and none is needed -- a manual dispatch is
+  # an explicit human action, not something a stray push should gate).
+  # ⚠ Widens WHO/WHEN can fire this: any principal with Actions
+  # write/trigger permission on this repo can now invoke the real SSH ->
+  # forced-command -> migrator-apply path on demand, not only via a
+  # migrations-touching push to `main`. `permissions: contents: read`
+  # below is unchanged by this addition and does not gate who may
+  # dispatch a workflow_dispatch run (that's a repo/branch-permission
+  # setting, not a workflow-file setting) -- flagging this explicitly so
+  # Sec can judge it as its own item, not fold it into the pre-existing
+  # push-trigger threat model.
+  workflow_dispatch: {}
 
 # One in flight at a time, and never cancel one that's already running: a
 # cancelled mid-migration SSH session is not necessarily a cancelled
@@ -74,6 +128,40 @@ jobs:
     name: Trigger migrator (SSH -> forced command -> apply + deploy)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # ADR-072 Amendment 6 (ratified, c2b20cc2) — Sec's condition on the
+    # workflow_dispatch addition (joint review, PR #791): the push path is
+    # gated by branch protection,
+    # a PR, required checks, and Sec joint review on migration PRs; the
+    # workflow_dispatch path added above skips ALL of that -- "it converts
+    # a multi-gate path into a one-click path against production." A
+    # GitHub Environment with a required reviewer restores an approval
+    # step equivalent to the push path's PR gate, for BOTH triggers (this
+    # key applies to the job regardless of which `on:` fired it).
+    #
+    # `production-migrator` MUST be created in this repo's Settings ->
+    # Environments, with F/CTO added as a required reviewer, BEFORE this
+    # workflow is taken out of Draft or exercised for real. THIS IS AN
+    # F/CTO !-STEP -- add to docs/deployment-runbook.md's operator
+    # checklist, same class of action as the CI_MIGRATE_SSH_PRIVATE_KEY /
+    # PROD_SSH_HOST steps in this file's own header comment.
+    #
+    # ⚠ WHAT HAPPENS IF `production-migrator` DOES NOT EXIST YET —
+    # documented GitHub Actions behavior, NOT verified live this session
+    # (zero network egress): referencing an environment name in a
+    # workflow that has no matching entry in Settings -> Environments
+    # causes GitHub to auto-create that environment on the run that first
+    # references it, with ZERO protection rules (no required reviewer)
+    # unless and until one is configured. That means an undefined
+    # environment does **NOT** fail closed -- the job runs immediately,
+    # exactly as if this `environment:` key were absent, until F/CTO
+    # configures the required-reviewer rule by hand. There is no YAML-only
+    # construct in Actions that can assert "this environment has a
+    # required reviewer configured" and refuse to run otherwise -- that
+    # gate lives entirely in repo settings, not in this file. Confirm
+    # against the live GitHub UI/API before relying on this, since this
+    # comment's claim about auto-creation is drawn from documentation, not
+    # a measurement against this repo.
+    environment: production-migrator
     steps:
       - uses: actions/checkout@v4
 
@@ -121,8 +209,22 @@ jobs:
           # itself never reads $SSH_ORIGINAL_COMMAND (C2). This SSH
           # invocation's ONLY jobs are: open the session, and let its exit
           # code become this step's exit code.
+          #
+          # ADR-072 Amendment 6 (RATIFIED, merged c2b20cc2, 2026-09-17) -- `-o
+          # SetEnv=MIGRATOR_EXPECT_SHA=$GITHUB_SHA` passes the commit this
+          # workflow run is FOR to migrator-orchestrate.sh's sha-check (that
+          # script's own comment explains why this is a data channel, never
+          # a command channel, and does not weaken C2). Only takes effect
+          # once provision-vps.sh's sshd_config drop-in adds `AcceptEnv
+          # MIGRATOR_EXPECT_SHA` (see that script's own comment) -- until
+          # then sshd silently drops any env var the client sets that it
+          # hasn't been told to accept, so this is safe to add here even
+          # before the sshd_config change lands (fails open to "no check",
+          # not open to "arbitrary env reaches the box"). $GITHUB_SHA is a
+          # GitHub Actions built-in (the checked-out commit), not a secret.
           ssh -i "$KEY_PATH" \
               -o BatchMode=yes \
               -o StrictHostKeyChecking=accept-new \
               -o ConnectTimeout=10 \
+              -o SetEnv="MIGRATOR_EXPECT_SHA=$GITHUB_SHA" \
               "ci-migrate@$PROD_SSH_HOST" true

@@ -25,7 +25,14 @@
 # inversion-mode jobs below generate (at test time, via sed into a temp
 # Dockerfile — never committed) two broken variants reproducing PR #753's and
 # PR #755's exact defect shapes, and assert the fence's own logic goes RED on
-# each. All three modes must pass for this workflow to report green.
+# each. A fourth inversion job (strike-missing-sha, added 2026-09-17, ADR-072
+# Amendment 6, PR #791) strikes the REAL committed Dockerfile with no
+# --build-arg at all, asserting the build fails closed with the Dockerfile's
+# own sha-empty FATAL message specifically — this is what caught this
+# workflow's own regression (all three original jobs red'd at `bdd9aab5`
+# because this harness never passed --build-arg GIT_SHA/SOURCE_COMMIT; the
+# Dockerfile's fail-closed check was correct, the harness was stale). All
+# four modes must pass for this workflow to report green.
 #
 # Path-filtered (matches web-tests.yml's precedent for docker-build jobs, NOT
 # db-tests.yml's run-always fences): the migrator image only changes when
@@ -89,3 +96,12 @@ jobs:
 
       - name: Build broken variant (templates COPY dropped) + assert the fence goes RED on it
         run: bash scripts/ci/fence-migrator-build-connect.sh --inversion=templates
+
+  strike-missing-sha:
+    name: Migrator image — inversion fence (ADR-072 Amendment 6 — no GIT_SHA/SOURCE_COMMIT build-arg)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the REAL Dockerfile with NO build-arg + assert it fails closed with the Dockerfile's own sha-empty message
+        run: bash scripts/ci/fence-migrator-build-connect.sh --inversion=no-sha
