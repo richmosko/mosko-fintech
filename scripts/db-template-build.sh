@@ -263,6 +263,20 @@ log "running the ADR-072 Amendment 5 pre-step (roles.sql + auth-grants.sql) agai
 psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q -f supabase/roles.sql
 psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q -f supabase/auth-grants.sql
 
+# ⚠ NEW CONSEQUENCE OF THE OWNERSHIP FLIP, measured 2026-09-17: on PG15+ the
+# `public` schema is owned by the pseudo-role `pg_database_owner`, which
+# resolves DYNAMICALLY to whoever owns the current database. roles.sql just
+# flipped $CANDIDATE's owner to pfin_owner, so `public`'s EFFECTIVE owner
+# silently flipped too -- $SUPERUSER (postgres) loses CREATE on schema
+# `public`, not just schema `pfin`, and step 6's `create extension pgtap
+# schema public` / step 7's marker-table CREATE both die with "permission
+# denied for schema public". Confirmed by reproducing the exact failure
+# locally (public.ecr.aws/supabase/postgres:17.6.1.132) and the exact fix
+# below against it. Re-grant explicitly, as supabase_admin, mirroring
+# roles.sql's own pattern for re-granting postgres what the flip took.
+psql -X -h "$DB_HOST" -p "$DB_PORT" -U supabase_admin -d "$CANDIDATE" -v ON_ERROR_STOP=1 -q \
+  -c "grant create on schema public to $SUPERUSER;"
+
 # --- 5. apply the full migration chain, sorted, as postgres ---
 # $SUPERUSER now holds SET-only membership in pfin_owner (granted by step 4's
 # roles.sql pass) — each swept file's own `set role pfin_owner; ... reset
