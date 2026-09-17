@@ -151,6 +151,32 @@
 --     not permit; via RLS, anything outside the caller's tenancy or step-up level.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 create or replace function pfin.fn_regenerate_monthly_report(p_target_month date)
@@ -221,3 +247,11 @@ grant  execute on function pfin.fn_regenerate_monthly_report(date) to authentica
 
 comment on function pfin.fn_regenerate_monthly_report(date) is
   'The A10 REGENERATE affordance (SELF-366 E15 item 10; the Decision 2 transition at 108 item 6(ii)). Returns the report_id of the LIVE DRAFT the caller should now edit. SECURITY INVOKER, volatile, set search_path = '''' — NOT a SECURITY DEFINER allowlist entry; it authors none and calls one only transitively through fn_open_monthly_report_draft (read ADR-011 Decision 9 live; no size stated here). EXECUTE revoked from public, granted to authenticated only, never to a rolbypassrls role — which here would be the entire perimeter around the wave''s most consequential transition. ⚠ JOINT-REVIEW-MANDATORY: THIS IS THE ONLY USER-REACHABLE PATH THAT PERFORMS THE final -> superseded TRANSITION, the single mutation Decision 2''s immutability rule permits outside the draft window, and it is a separate function for exactly that reason. WHY NOT A FLAG ON fn_open_monthly_report_draft: a boolean would make WHETHER A FINAL REPORT GETS SUPERSEDED a parameter, so a reviewer asking "what can supersede a final report?" would have to reason about an argument''s value at every call site instead of reading one function — on this transition the shape should make the answer greppable. WHY NOT ONE UNCONDITIONAL FUNCTION: then "Generate" on a month whose only row is final would SILENTLY SUPERSEDE IT because the user pressed the wrong button; E15 item 10 makes Regenerate a final-only affordance, and two affordances with different consequences want two contracts. THE TOCTOU OBJECTION TO SPLITTING DOES NOT SURVIVE CONTACT — it would hold only if the CALLER had to read the state and then choose; each function reads the state under its OWN lock and handles or delegates, so the caller maps a BUTTON to a function, never a state. ⚠ LOSING SIDE: two functions now lock rows of the same month, so a lock-ordering surface exists where one function had none — bounded, since both take the month''s rows in the same order and this one CALLS the other rather than racing it, but a third writer on this table must be checked against it rather than assumed compatible. BEHAVIOUR BY STATE: a live draft is RETURNED and nothing is inserted (a draft already composes live, so "regenerate a draft" has nothing to produce); a final row is moved to superseded and a new draft opened IN ONE TRANSACTION; a month with no report at all simply gets a draft, because refusing would be pedantry the caller works around by calling the other function. ⚠ THE SUPERSEDE HAPPENS FIRST, and the order is MEANING rather than uniqueness — the two touch different partial indexes and do not collide — because if the insert ran first and the transition then failed, the month would hold a final and a draft at once with no record that a regeneration was attempted. ⚠ THE INSERT SHAPE EXISTS EXACTLY ONCE: this function delegates the insert half rather than re-writing it, so the data_as_of derivation, the draft default, the absent tenant value, the audit emission and the unique_violation race handling cannot drift between the two entry paths. Exactly ONE audit row is written per successful regeneration, by the delegated call, because a row IS inserted; the transition itself emits none — 108''s trigger and the successor row are the record that it happened. ⚠ THIS FUNCTION DOES NOT ENFORCE THE TRANSITION RULE: it sets one column and changes nothing else, and 108''s immutability trigger permits or refuses the move. It is a CALLER of the rule, not a copy of it.';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

@@ -216,6 +216,32 @@
 --     session does not meet the aal2 step-up their own settings demand.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 create or replace function pfin.fn_save_monthly_commentary(
@@ -299,3 +325,11 @@ grant  execute on function pfin.fn_save_monthly_commentary(date, text, text, tex
 
 comment on function pfin.fn_save_monthly_commentary(date, text, text, text, text) is
   'The §2.6.2 commentary WRITE path — the DB half of P3 (SELF-355 AC 5); canonical test label RT-11. Replace-all of the four commentary columns on the caller''s LIVE DRAFT for one month, plus commentary_disposition = ''authored''. Returns the report_id written, so a caller can assert it hit the row it meant to. SECURITY INVOKER, volatile (it writes — stable would be a false promise the planner may act on; declared explicitly because CREATE OR REPLACE resets volatility), set search_path = '''' — NOT a SECURITY DEFINER allowlist entry (read ADR-011 Decision 9 live; no size is stated here). EXECUTE revoked from public, granted to authenticated only, NEVER to a rolbypassrls role — and on this function that would be worse than usual, because RLS is not merely one of its fences but the ONLY thing scoping the row it locks and updates. ⚠ THE SHAPE IS RATIFIED, NOT CHOSEN: Lock 14 says replace-all "under SERIALIZABLE", which is NOT REACHABLE FROM THIS TRANSPORT — PostgREST runs each call as its own transaction and SET TRANSACTION ISOLATION LEVEL cannot be issued inside a function body. ADR-011 Decision 18''s 2026-09-03 amendment records the realization this follows: one plpgsql body, therefore one transaction, whose FIRST statement takes a FOR UPDATE row lock (the fn_tax_bracket_schedule_replace_all shape at 101). ⚠ THAT FIRST STATEMENT IS ALSO THE ENTIRE TENANT FENCE: under INVOKER it runs with the caller''s own RLS, so another tenant''s month or an absent one resolves to ZERO ROWS and the function refuses. THERE IS NO TENANT PARAMETER, and there is deliberately NO users_id = auth.uid() PREDICATE IN THE BODY — a hand-written copy of the policy would read as the fence while not being it, and a later reader removing the "redundant" line could not tell which was load-bearing. ⚠ A CONSEQUENCE WORTH HAVING ON PURPOSE: because SELECT ... FOR UPDATE is checked against both the SELECT policy and the UPDATE policy''s USING, the ADR-029 / 025 aal2 step-up clause gates this write through the lock statement itself — a totp/passkey-enrolled caller on a below-aal2 JWT finds no row to lock — without this function containing a line about aal2. ⚠ DRAFT-WINDOW ONLY, and the illegal statement is NEVER CONSTRUCTED rather than pre-checked or caught: the lock predicate includes generation_status = ''draft'', so a final or superseded row is not among the rows it can lock and 108''s immutability trigger is never reached from this path. That does NOT make the trigger redundant — it remains the fence for every OTHER write path, including a caller reaching the table directly through PostgREST with their own JWT, which is the premise of a Lock 14 direct-write surface. Two controls, disjoint callers. A second NON-LOCKING diagnostic read classifies the refusal so the message can distinguish "no report for this month" from "already final"; it takes no lock and widens no fence. ⚠ REPLACE-ALL IS LITERAL: all four columns are assigned every call, so a cleared sub-section is WRITTEN empty and there is no notion of "unchanged" — the editor submits the whole form. commentary_disposition becomes ''authored'' EVEN WHEN ALL FOUR ARE EMPTY, because four empty strings are a legitimate AUTHORED state and not a skip; that distinction is the whole reason the column exists, and the SKIP is P4''s affordance, not writable here. There is no path back to NULL from this function, which is intended: NULL means the author has done neither, and that stops being true the moment they save. LENGTH IS FENCED BY 108''s CHECKS AND NOT HERE — a second bound would be a third fact that can disagree, making Sec N-5''s app-versus-DB EQUALITY unstatable; a body one character over raises 23514 through this call unmodified, and P3''s mirror must count CODE POINTS. NO AUDIT ROW, deliberately: ADR-011 Decision 1 clause (d) governs PRIVILEGED writes, and this is the tenant editing their own draft under their own session — there is no resolved-tenant question to record and no resolution chain to name. JOINT-REVIEW-MANDATORY (a user-reachable write onto a Lock 11 audit-class row).';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

@@ -122,5 +122,39 @@
 --   ⚠ NO fail-closed mechanism is removed or weakened by this migration.
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 comment on table pfin.user_taxonomy is
   'Per-user two-level Cat × Sub-Cat taxonomy (ADR-011 Decision 11 / Lock 7, Option A single-table; SELF-231). Covers asset (§2.2.1) + cash-flow (§2.3.1) domains via the domain CHECK. Carries the ADR-006 Axis 2 tax_relevant boolean + tax_character enum (5 V1 values). V1 is SEED-ONLY (no taxonomy-CRUD UI; V2+ expansion) and V1-MUTATE-DORMANT: authenticated holds SELECT + INSERT. 041 added the INSERT grant and the user_taxonomy_insert policy (with check users_id = auth.uid(), carrying the 025 aal2 backstop clause) so a user can provision their own default taxonomy on first access. UPDATE and DELETE carry no grant and no policy, so they are default-denied at BOTH the ACL layer and the RLS layer; un-deferring them is the V2 taxonomy-CRUD-UI PR decision and needs its own review. SUPERSESSION: this comment previously read "V1-WRITE-DORMANT ... authenticated holds SELECT ONLY ... Write policies + write grants are DEFERRED to the V2 taxonomy-CRUD-UI PR" -- true when 009 shipped, falsified by 041 on the INSERT half, corrected here. anon zero-grant; service_role ungranted (the default set is seeded by the migration chain under the schema-owning role, not by service_role; the CLI reset subcommand named by the original wording is BANNED for all agents -- see docs/records/2026-08-14-db-reset-incident.md). This is the sub_cat_id FK target that 004 deferred — that future FK is a separate Decision-3 evaluation (referencing row users_id must match user_taxonomy.users_id), added with the FK, not here. AC-vs-convention corrections: AC SERIAL→identity, AC INTEGER users_id→uuid (auth.users.id is uuid) — see 009 header.';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

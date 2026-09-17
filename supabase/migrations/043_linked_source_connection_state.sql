@@ -135,6 +135,32 @@
 --   introduced (the 040 security_barrier owner-semantics protection is inherited).
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 create or replace view pfin.linked_source_connection_state
@@ -172,3 +198,11 @@ grant select on pfin.linked_source_connection_state to authenticated;
 
 comment on view pfin.linked_source_connection_state is
   'SECURITY INVOKER connection-state read view (SELF-207 §2.4.4.b; ADR-037; R2). One owner-scoped row per caller-owned pfin.linked_source: connection_status (normalized 5-value current health) + status_class (latest linked_source_state_history transition) + last_successful_sync_at (DERIVED — MAX(created_at) over the 040 OWNER-SEMANTICS linked_source_sync_history view WHERE transactions_inserted IS NOT NULL; OWD-A A3, no scalar; NOT the service_role-only sync_audit base table, so no base grant to authenticated) + provider/institution_name/is_active. Matches the account_balance_checkpoint_latest / holdings_checkpoint_latest INVOKER _latest-view precedent. Owner isolation is inherited RLS (security_invoker=true): linked_source_select + the 025 aal2 clause on the linked_source driving table gate the whole view (aal1 → zero rows, fail-closed); state_history_select + the 040 view''s own auth.uid() self-scope cover the joins. Projection EXCLUDES provider_error_code (raw forensic), external_connection_id (provider-internal), credential_secret_id (Vault handle, not in grant) per the ADR-034 projection discipline. Re-auth affordance rule: show when connection_status IN (login_required,revoked,disconnected). Authors no function (DEFINER allowlist stays 4), no FK column (Decision-3 unchanged), no §10 instance (stays 3). Consumed by the connection-state endpoint + the provider-blind re-auth banner + later SELF-208 staleness.';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;

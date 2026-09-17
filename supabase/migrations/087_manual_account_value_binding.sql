@@ -307,6 +307,32 @@
 --     SELF-201 Task #7).
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
 create schema if not exists pfin;
 
 -- ----------------------------------------------------------------------------
@@ -551,3 +577,11 @@ grant execute on function pfin.fn_create_manual_account(text, text, text, text, 
 
 comment on function pfin.fn_create_manual_account(text, text, text, text, numeric, date, jsonb) is
   'SECURITY INVOKER write-composition RPC (SELF-201 §2.4.2; ADR-026; p_sub_cat_id dropped at 048 / SELF-319; p_positions added at 087 / SELF-325). Atomically creates a manual account, its AcctSetup opening-balance CASH account_trans row, and — for each entry in p_positions — a per-user pfin.asset row, its manual_valuation pfin.eod_price row, and an instrument-routed AcctSetup account_trans row, in ONE transaction under the caller''s RLS, RETURNING the new account_id. Three properties are load-bearing and each produces silently wrong money if dropped: the CASH row carries security_id NULL and asset_type ''currency'' is rejected, because cash is amount-carried (056 sums every amount) and its classification already routes through the global currency-asset (081), so binding it would change no figure and would put USD in the classify queue; every instrument-routed row carries amount=0, because 056 counts amount as cash while 019 fn_holdings_as_of counts quantity as a position and a nonzero amount would count the opening value twice (NO DDL enforces this — the observer is the paired QA battery leg); and every position also writes a USABLE eod_price row, because 049/050 value a position as quantity x price x fx. That hazard has TWO spellings and both zero the account''s bound value silently: a MISSING price row yields a NULL term that SUM drops, and a price row that EXISTS but rounds to 0.0000 (legal — 019 CHECKs only for NaN) values the position at quantity x 0. The second defeats any watcher that checks row PRESENCE rather than row VALUE, and is reachable whenever quantity > 20000 x cost_basis pushes the per-unit price below the numeric(20,4) grain; the body REJECTS that input (Sec, SELF-325 joint review). Opening balance and purchase stay distinguishable: acct_setup with amount=0 books an Opening-Balance-Equity contra (084 P5), a purchase is transaction_type=''standard'' with amount=-cost. Instrument binding is OPTIONAL: p_positions omitted/[]/null executes exactly 048''s statements, so an acquisition may instead be recorded later as a real purchase. users_id is NOT a parameter (DEFAULT auth.uid() per 003 — un-forgeable); an auth.uid() IS NULL caller is REJECTED — a deviation from 048 that is DEFENSE IN DEPTH over an already-closed path, not a new fence: measured, such a call already failed at account.users_id NOT NULL (23502), so the guard changes the error, not the outcome, and removes no exercisable capability. It earns its place by failing early with a named cause and by pinning the caller-context requirement in the function that relies on it instead of borrowing it from another table''s constraint. It does not reach an RLS-exempt caller that sets a JWT claim (ADR-023 impersonate-then-write): auth.uid() is non-NULL there. Fences evaluate as the caller: account_insert WITH CHECK, account_trans_insert wr_access-JOIN (006, satisfied by the same-txn fn_grant_creator_access creator-grant row), asset_insert WITH CHECK (016), eod_price_insert manual_valuation-on-owned (019), and the Decision-3 #7 security_id fence (017), which passes by construction because the asset is minted in this same transaction for this same caller. NOT a DEFINER allowlist entry — needs no elevation; read ADR-011 Decision 9 live. Needs NO service_role (anon-key client + RLS + INVOKER). set search_path = '''' injection fence. EXECUTE revoked from PUBLIC, granted to authenticated only (anon denied). Lock 14 numeric posture: quoted values including "NaN" and "Infinity" are rejected by the JSON type check, zero and negative by an explicit guard, and finite-but-huge magnitudes by numeric column coercion (017) rather than by this body. Adds NO FK-shaped column — ADR-011 Decision 3 family unchanged, no label taken; read Decision 3 live. Same-transaction audit-log DEFERRED (A2; forward-hook in body; SELF-201 Task #7). Signature is an API contract (PostgREST /rpc; pfin is [api]-exposed) — the 6-arg signature is replaced by this 7-arg one, and because the added parameter carries a DEFAULT an existing 6-named-arg call site is unaffected (migration-first is the backward-compatible direction here, the OPPOSITE of 048).';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;
