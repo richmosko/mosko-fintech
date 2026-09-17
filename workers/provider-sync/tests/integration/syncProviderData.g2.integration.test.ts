@@ -33,12 +33,18 @@
 // GATED behind RUN_DB_INTEGRATION=1 (see _liveDb.ts) — a visible skip when the stack is absent,
 // never a false pass. Local run: `RUN_DB_INTEGRATION=1 npx vitest run tests/integration`.
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Sql } from 'postgres';
 import type { BalanceDTO, HoldingDTO, TransactionDTO } from '../../src/adapters/ProviderAdapter.js';
 import { syncProviderData, type ProviderData, type SyncResult } from '../../src/ingest/mapper.js';
 import { TenantBoundClient } from '../../src/db/TenantBoundClient.js';
-import { cleanupG2, makeLiveTenantClient, rawSql, RUN_DB_INTEGRATION } from './_liveDb.js';
+import {
+	assertReplicationOrigin,
+	cleanupG2,
+	makeLiveTenantClient,
+	rawSql,
+	RUN_DB_INTEGRATION
+} from './_liveDb.js';
 
 const d = RUN_DB_INTEGRATION ? describe : describe.skip;
 
@@ -212,6 +218,16 @@ afterAll(async () => {
 	if (!RUN_DB_INTEGRATION) return;
 	await cleanupG2(db, TENANT, [SYMBOL]);
 	await db.end();
+});
+
+// Sec C-1 (ADR-072 Amendment 5 harness-identity ruling): this file's ONLY cleanup path
+// (cleanupG2) sets `session_replication_role = 'replica'` on this pooled connection (max:1).
+// Assert it did not leak past that transaction's `set local` BEFORE every test body — a leak
+// would run every subsequent assertion here against a DB with the trigger layer inert while
+// the suite stayed green.
+beforeEach(async () => {
+	if (!RUN_DB_INTEGRATION) return;
+	await assertReplicationOrigin(db);
 });
 
 d('G2 — first sync lands correctly across all four write-paths (live DB)', () => {

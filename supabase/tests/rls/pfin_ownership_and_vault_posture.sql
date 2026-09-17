@@ -17,7 +17,7 @@
 
 begin;
 
-select plan(7);
+select plan(8);
 
 -- ---------------------------------------------------------------------
 -- (o1) THE SWEEP'S OUTCOME — the property the paired statements exist to
@@ -113,6 +113,39 @@ select ok(
 select ok(
   not coalesce(has_schema_privilege('migrator', 'pfin', 'CREATE'), true),
   '(o7) ENGINE BACKSTOP: `migrator` holds NO CREATE on schema pfin, so a migration that loses its ownership pair fails 42501 instead of quietly creating a migrator-owned object. This is the PRIMARY control — the paired `set role`/`reset role` convention is the path, this is what catches the path being lost, including by a silent change in how the CLI batches statements (Decision J). ON RED: REVOKE it; never grant CREATE here to make a migration pass'
+);
+
+-- ---------------------------------------------------------------------
+-- (o8) THE relforcerowsecurity WATCHER — DECISIONS.md ADR-072 Amendment 5
+--      §5.3/§7 condition. NOT a Decision-4 §10 catalogued instance; this
+--      guards the mechanism-equivalence the sweep's D9 co-ownership
+--      verification rests on, across THREE consumers, named here because
+--      a RED naming only one dictates a repair that leaves the other two
+--      silently broken:
+--        (i)   the SECURITY DEFINER functions' owner-exemption basis —
+--              a DEFINER fn runs as its owner and today reaches rows via
+--              `pfin_owner`'s ownership-implied RLS bypass, not a policy;
+--        (ii)  the migrations' own seed/backfill DML, which Amendment 5
+--              records as bypassing RLS AS TABLE OWNER under the new
+--              (post-sweep) ownership shape;
+--        (iii) the CI cleanup fixtures under `set local role pfin_owner`
+--              (this file's own sibling harness, `_liveDb.ts`'s
+--              `cleanupG2` — see ADR-072 Amendment 5 harness-identity
+--              ruling) — table-owner RLS exemption stands in for
+--              `postgres`'s `rolbypassrls` there.
+--      All three are equivalent to today's exemption ONLY while no `pfin`
+--      relation sets FORCE ROW LEVEL SECURITY — measured zero across the
+--      set at authorship. `FORCE RLS` makes RLS bind even to the table
+--      OWNER, which silently breaks all three at once the moment anyone
+--      adds it for an unrelated reason.
+-- ---------------------------------------------------------------------
+select is(
+  (select count(*)::int
+     from pg_catalog.pg_class c
+     join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'pfin' and c.relkind = 'r' and c.relforcerowsecurity),
+  0,
+  '(o8) relforcerowsecurity WATCHER: NO pfin table sets FORCE ROW LEVEL SECURITY. RED means one now does, and it silently breaks THREE consumers of table-owner RLS exemption at once — (i) the SECURITY DEFINER functions'' owner-exemption basis, (ii) the migrations'' own seed/backfill DML (which runs as table owner post-sweep), and (iii) the CI cleanup fixtures'' `set local role pfin_owner` (ADR-072 Amendment 5 harness-identity ruling). Fixing only the consumer you were looking at leaves the other two broken — check all three before adding FORCE RLS anywhere in pfin'
 );
 
 select * from finish();

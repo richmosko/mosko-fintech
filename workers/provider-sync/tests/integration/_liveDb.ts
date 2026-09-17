@@ -65,9 +65,44 @@ export function liveConn(): LiveConn {
 	};
 }
 
-/** A raw client for test setup/measurement (runs as the connect user; superuser locally). */
+/**
+ * A raw client for test setup/measurement (runs as the connect user — `postgres` locally).
+ * ⚠ NOT superuser: measured `rolsuper = f`. Its reach into `session_replication_role` (a
+ * `superuser`-context GUC per pg_settings.context) comes from the Supabase image's
+ * privileged-settings extension, keyed to membership in `supabase_privileged_role` — a
+ * capability `has_parameter_privilege()` reports `f` for even though it demonstrably works,
+ * and which appears nowhere in this repository. `pfin_owner` holds no such membership and
+ * cannot be given one from here; that is why `cleanupG2` below sets the GUC as THIS
+ * connection's identity before it `set local role pfin_owner`s into table-owner reach —
+ * reversing the order is refused (measured, ADR-072 Amendment 5 harness-identity ruling).
+ */
 export function rawSql(conn: LiveConn = liveConn()): Sql {
 	return postgres({ ...conn, max: 1, prepare: false, onnotice: () => {} });
+}
+
+/**
+ * Sec C-1 fixture-level assertion (ADR-072 Amendment 5 harness-identity ruling): every test
+ * body that shares a pooled connection with a `session_replication_role = 'replica'` cleanup
+ * MUST prove that GUC did not leak past its owning transaction. `set local` dies at commit —
+ * but a future edit that drops the `local` (or reorders it outside `tx.begin`) would make it
+ * persist for the rest of the connection, silently running every later test body with the
+ * ENTIRE trigger layer inert (immutability fences AND the Decision-3 matched-tenant family)
+ * while the suite stays green. Call this as the FIRST statement of every `it()` that runs
+ * against a `db` connection `cleanupG2` has touched.
+ */
+export async function assertReplicationOrigin(db: Sql): Promise<void> {
+	const r = await db<{ v: string }[]>`select current_setting('session_replication_role') as v`;
+	const got = r[0]?.v;
+	if (got !== 'origin') {
+		throw new Error(
+			`Sec C-1 FENCE: session_replication_role = '${got}' at test-body start, expected ` +
+				`'origin'. A prior cleanup's 'set local session_replication_role' leaked past its ` +
+				`transaction (missing 'local', or set outside tx.begin) — the trigger layer ` +
+				`(immutability fences + Decision-3 matched-tenant family) is INERT for the rest ` +
+				`of this connection and every later assertion in this suite is running against ` +
+				`an unfenced database while reporting green.`
+		);
+	}
 }
 
 /**
@@ -144,15 +179,30 @@ export function makeLiveTenantClient(usersId: string, conn: LiveConn = liveConn(
  * Bulldoze all G2 test rows for a tenant + the ZZTG2 test asset. Append-only tables
  * (account_trans / holdings_checkpoint / account_balance_checkpoint) carry immutability
  * triggers that block DELETE for ALL roles incl. service_role — so the deletes run under
- * `session_replication_role = 'replica'` (superuser-only), which suppresses user + FK/cascade
- * triggers for THIS transaction only. Everything is deleted explicitly in dependency order,
- * so cascade is not relied on. Idempotent: safe to run as both pre-clean (a prior aborted run
- * may have left committed rows) and teardown. Keyed on stable identifiers (users_id + the
- * global ZZTG2 symbol), so it never touches another tenant's data.
+ * `session_replication_role = 'replica'`, which suppresses user + FK/cascade triggers for
+ * THIS transaction only. Everything is deleted explicitly in dependency order, so cascade is
+ * not relied on. Idempotent: safe to run as both pre-clean (a prior aborted run may have left
+ * committed rows) and teardown. Keyed on stable identifiers (users_id + the global ZZTG2
+ * symbol), so it never touches another tenant's data.
+ *
+ * ⚠ IDENTITY, POST ADR-072 AMENDMENT 5 (G3 pfin_owner ownership sweep). `postgres` no longer
+ * owns `pfin.account_trans` et al. — it needs an explicit `set local role pfin_owner` to reach
+ * DELETE (the grant, per `roles.sql`'s `grant pfin_owner to postgres with inherit false, set
+ * true` — deliberately non-ambient). ⚠⚠ ORDER IS LOAD-BEARING AND MEASURED, NOT A STYLE
+ * CHOICE: `session_replication_role` is set FIRST, while still `postgres` (the GUC is
+ * superuser-context and reachable only through the Supabase image's privileged-settings
+ * extension, keyed to `postgres`'s `supabase_privileged_role` membership — `pfin_owner` holds
+ * no such membership); `set local role pfin_owner` runs SECOND. Reversing the order is
+ * REFUSED — `pfin_owner` cannot set the GUC at all, so a hoisted role-switch fails at the GUC
+ * line with an error naming the wrong thing. `reset role` at the end is defense-in-depth
+ * (same discipline as the migration lane): `set local role` already dies at commit/rollback,
+ * but an explicit reset makes the identity-scoping visible at the site rather than implicit
+ * in the transaction boundary.
  */
 export async function cleanupG2(db: Sql, usersId: string, assetSymbols: readonly string[]): Promise<void> {
 	await db.begin(async (tx) => {
 		await tx.unsafe("set local session_replication_role = 'replica'");
+		await tx.unsafe('set local role pfin_owner');
 		await tx`delete from pfin.account_trans where account_id in (select account_id from pfin.account where users_id = ${usersId})`;
 		await tx`delete from pfin.holdings_checkpoint where account_id in (select account_id from pfin.account where users_id = ${usersId})`;
 		await tx`delete from pfin.account_balance_checkpoint where account_id in (select account_id from pfin.account where users_id = ${usersId})`;
@@ -162,5 +212,6 @@ export async function cleanupG2(db: Sql, usersId: string, assetSymbols: readonly
 		await tx`delete from pfin.account where users_id = ${usersId}`;
 		await tx`delete from pfin.linked_source where users_id = ${usersId}`;
 		await tx`delete from auth.users where id = ${usersId}`;
+		await tx.unsafe('reset role');
 	});
 }
