@@ -104,6 +104,28 @@ APP_UUID="${APP_UUID:-}"
 # runbook §7 step 7, once the migrate leg has been proven live and the
 # deploy leg is deliberately being exercised for the first time.
 DEPLOY_ON_SUCCESS="${DEPLOY_ON_SUCCESS:-}"
+# ⚠ MIGRATOR_TASK_COMMAND (ADR-072 Amendment 7, 2026-09-17) -- the byte-exact
+# literal migrator-orchestrate.sh compares the LIVE Scheduled Task's
+# `command` against before ever firing it (Sec's pre-fire task-command
+# integrity check: a [read,write,deploy] token, or a hand-edit in the
+# Coolify UI, can PATCH this task's command with nothing else stopping it —
+# measured against Coolify v4.3.18's routes/api.php + ScheduledTasksController
+# for this amendment's design). This is NOT read from .env/environment via
+# env_or_dotenv() below — that helper's `tr -d '"'"'"' \r\n'` trimming step
+# would destroy the spaces and quote characters this command is made of.
+# It is a fixed literal, matching scripts/migrator-scheduled-task.md's own
+# Command field EXACTLY. (Not a secret: this is the public, documented
+# shape of the migrator apply, not a credential.)
+#
+# ⚠ Sec NOTE 1 (2026-09-17, #801 review): this is a FOURTH hand-maintained
+# copy of the same command string — the other three are Coolify's own
+# stored Scheduled Task, scripts/migrator-scheduled-task.md's Command
+# field, and infra/supabase/docker-compose.yml's migrator-service comment.
+# docs/deployment-runbook.md §6.5 is the ONE place to change the command;
+# change it there first, then propagate to all four sites and re-run
+# --apply. migrator-orchestrate.sh fails closed (exit 10) if this literal
+# ever drifts from what Coolify's task actually holds.
+MIGRATOR_TASK_COMMAND='sh -c '"'"'echo "PFIN-BUILD-SHA=$(cat /workspace/.build-sha)"; supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace; rc=$?; echo "PFIN-LEDGER-TOP=$(psql "$PROD_DB_URL" -tAc "select max(version) from supabase_migrations.schema_migrations")"; echo "PFIN-NEWEST-FILE=$(ls /workspace/supabase/migrations | sort | tail -1 | cut -d_ -f1)"; exit $rc'"'"''
 # Escape hatch: allow an all-passphrase key set. Only for a box a human will
 # ever touch by hand. Nothing scripted will be able to reach it.
 ALLOW_NO_AUTOMATION_KEY="${ALLOW_NO_AUTOMATION_KEY:-0}"
@@ -1338,12 +1360,16 @@ else
   ok "ci-migrate authorized_keys written -- restrict (agent/X11/port-forwarding all off by construction), forced command $ORCH_SCRIPT_PATH"
 fi
 
-step "migrator-trigger box-resident config (non-secret UUIDs; scripts/migrator-orchestrate.sh's only input)"
+step "migrator-trigger box-resident config (non-secret UUIDs + task command; scripts/migrator-orchestrate.sh's only input)"
 [[ -n "$MIGRATOR_SERVICE_UUID" && -n "$MIGRATOR_TASK_UUID" && -n "$APP_UUID" ]] || die "MIGRATOR_SERVICE_UUID / MIGRATOR_TASK_UUID / APP_UUID must all be set (in .env or the environment) before provisioning the ci-migrate trigger -- these are the Coolify resource UUIDs from chunk 1's Scheduled Task and the V1 web app resource (see scripts/migrator-scheduled-task.md for where the Scheduled Task's UUID comes from)."
+# MIGRATOR_TASK_COMMAND is a fixed literal declared above (Amendment 7 --
+# see its own comment there), not operator-supplied -- no die-check needed,
+# it can never be empty.
 DESIRED_TRIGGER_CONF="MIGRATOR_SERVICE_UUID=$MIGRATOR_SERVICE_UUID
 MIGRATOR_TASK_UUID=$MIGRATOR_TASK_UUID
 APP_UUID=$APP_UUID
-DEPLOY_ON_SUCCESS=$DEPLOY_ON_SUCCESS"
+DEPLOY_ON_SUCCESS=$DEPLOY_ON_SUCCESS
+MIGRATOR_TASK_COMMAND=$MIGRATOR_TASK_COMMAND"
 CURRENT_TRIGGER_CONF="$(sshx 'cat /etc/pfin/migrator-trigger.conf 2>/dev/null' || true)"
 if [[ "$CURRENT_TRIGGER_CONF" == "$DESIRED_TRIGGER_CONF" ]]; then
   ok "/etc/pfin/migrator-trigger.conf already matches"

@@ -294,8 +294,21 @@ services:
   #
   # Pattern-A resident container (CMD tail -f /dev/null, baked in the
   # Dockerfile) — the Scheduled Task's `command` runs the fixed verb:
-  #   supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace
-  # `--yes` added 2026-09-17 (ADR-072 Amendment 6) so this unattended fire
+  #   sh -c 'echo "PFIN-BUILD-SHA=$(cat /workspace/.build-sha)"; supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace; rc=$?; echo "PFIN-LEDGER-TOP=$(psql "$PROD_DB_URL" -tAc "select max(version) from supabase_migrations.schema_migrations")"; echo "PFIN-NEWEST-FILE=$(ls /workspace/supabase/migrations | sort | tail -1 | cut -d_ -f1)"; exit $rc'
+  # ⚠ ADR-072 Amendment 7 (2026-09-17, draft): this is a FOURTH
+  # hand-maintained copy of the same literal (the other three: Coolify's
+  # own stored Scheduled Task, scripts/migrator-scheduled-task.md's
+  # Command row, and MIGRATOR_TASK_COMMAND in /etc/pfin/migrator-
+  # trigger.conf written by scripts/provision-vps.sh). docs/deployment-
+  # runbook.md §6.5 is the ONE place to change this command — edit there
+  # first, then propagate to all four sites and re-run `provision-vps.sh
+  # --apply`. migrator-orchestrate.sh fails closed (exit 10) if Coolify's
+  # live task ever drifts from MIGRATOR_TASK_COMMAND, so a stale copy
+  # here is caught, not silent. The three `PFIN-*` tagged lines are how
+  # migrator-orchestrate.sh asserts outcome without ever needing docker
+  # access (ci-migrate has none — measured, Amendment 7): it parses them
+  # out of the execution's own `message` field via the Coolify API. `--yes`
+  # added 2026-09-17 (ADR-072 Amendment 6) so this unattended fire
   # never depends on the CLI's own unversioned non-TTY prompt-default
   # behavior — measured safe on the pinned v2.107.0 binary, but not this
   # repo's to keep relying on across a future CLI bump. See

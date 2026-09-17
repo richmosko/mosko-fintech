@@ -22,24 +22,54 @@
 #   on comes from the box-resident config file below, never from the
 #   invoking SSH session.
 #
-# WHAT IT DOES (ADR-072 Decision 2 + Decision 3)
+# WHAT IT DOES (ADR-072 Decision 2 + Decision 3 + Amendment 7 draft)
 #   1. Execute the migrator Coolify Scheduled Task (the `supabase db push`
 #      apply, scripts/migrator-scheduled-task.md).
 #   2. Poll that task's own execution status to a terminal state — NEVER
 #      Coolify's deployment status (that swallows a post-deploy-command
 #      failure; this is the exact D-shaped trap ADR-072 Decision 3 records).
-#   3. On SUCCESS: assert DELIVERY, not just status (ADR-072 Amendment 6) —
-#      compare supabase_migrations.schema_migrations's top row against the
-#      newest migration file present in the running migrator container,
-#      both read via a direct `docker compose exec` (no Coolify API, no
-#      credential — `db`'s local socket auth). A mismatch exits non-zero
-#      (distinct code) and does NOT deploy, even though the Scheduled Task
-#      itself reported success. Only once delivery is confirmed: trigger
-#      the app deploy. On FAILURE, a poll timeout, or a failed delivery
-#      assertion: exit non-zero and do NOT deploy — the existing
-#      Coolify->Discord Scheduled-Task-failure routing fires on its own for
-#      the first two; the delivery assertion's own message is the record
-#      for the third.
+#   3. On SUCCESS: assert OUTCOME, not just status (ADR-072 Amendment 6/7) —
+#      but via the EXECUTION'S OWN REPORTED OUTPUT (Coolify's
+#      `.../executions` API `message` field), NEVER a direct `docker`
+#      call. ⚠ CHANGED 2026-09-17 (Amendment 7 draft): this script used to
+#      run `docker compose exec` directly against the box for both the
+#      pre-fire sha-check and the post-run delivery assertion. Sec's C-1
+#      finding + F/CTO's box measurement: `ci-migrate` has NO route to
+#      `/var/run/docker.sock` (no group, no ACL, no sudo) — every one of
+#      those docker calls has always failed closed with permission
+#      denied, and the three earlier "successful" fires only ever worked
+#      through the Coolify API alone. Every docker call is REMOVED from
+#      this script. The migrator Scheduled Task's own `command`
+#      (scripts/migrator-scheduled-task.md) now emits three tagged lines
+#      on its own stdout — `PFIN-BUILD-SHA=`, `PFIN-LEDGER-TOP=`,
+#      `PFIN-NEWEST-FILE=` — which Coolify captures into the execution's
+#      `message` field (ScheduledTaskJob's own success path -- measured
+#      from Coolify v4.3.18 source for ADR-072 Amendment 7's design; see
+#      that amendment's own record for the full source-cited measurement
+#      of that field). This script parses those
+#      three tags out of `message` and asserts: PFIN-BUILD-SHA equals
+#      MIGRATOR_EXPECT_SHA (byte-exact), and PFIN-LEDGER-TOP equals
+#      PFIN-NEWEST-FILE. A missing/malformed tag, a sha mismatch, or a
+#      ledger mismatch each exits non-zero on a DISTINCT code and does
+#      NOT deploy, even though the Scheduled Task itself reported success.
+#      Only once both assertions pass: trigger the app deploy. On FAILURE,
+#      a poll timeout, or any assertion failure: exit non-zero and do NOT
+#      deploy — the existing Coolify->Discord Scheduled-Task-failure
+#      routing fires on its own for a `failed` status; this script's own
+#      log line (including a tail of the execution's raw `message`, for a
+#      `failed` status) is the record otherwise.
+#   ⚠ DRAFT — NOT TO MERGE BEFORE ADR-072 AMENDMENT 7 IS RATIFIED. The sha
+#   and delivery checks below no longer gate BEFORE the Scheduled Task
+#   fires (they can't — nothing here can read the container's state
+#   without docker access) — they are asserted AFTER a successful run,
+#   against that same run's own self-reported output. If the assertions
+#   ever fail, the `db push` this run fired has ALREADY executed against
+#   whatever image/state existed at fire time; the app deploy is withheld,
+#   but the migration apply itself is not undone. This is a deliberate,
+#   named tradeoff of Amendment 7's design (the alternative being no
+#   outcome assertion at all, since ci-migrate cannot reach the socket to
+#   check anything beforehand) — Architect/Sec/F/CTO's call, not mine to
+#   soften or work around here.
 #
 #   The calling GitHub Actions workflow gates on THIS script's own SSH exit
 #   code — GHA's native step-sequencing is the fail-closed gate (ADR-072
@@ -97,6 +127,11 @@ set -euo pipefail
 # mode this script has. This also bounds BACKLOG §7.36 item 49's blocked-
 # exec window: a second fire while one is stuck is refused immediately,
 # not queued behind it.
+# ⚠ LOCK_FILE here MUST match LOCK_FILE_PATH in scripts/provision-vps.sh --
+# one path, asserted in both files, not two copies that can drift (Sec
+# FLAG 3 on PR #800: this cross-reference was missing the first time and
+# nothing tied the two literals together; matches the existing
+# TOKEN_VAR_NAME / MIGRATOR_TOKEN_VAR_NAME convention above).
 LOCK_FILE="/var/lock/pfin-migrator-orchestrate.lock"
 exec 200>"$LOCK_FILE" || { printf '[migrator-orchestrate] FAIL (exit 7): could not open %s for locking\n' "$LOCK_FILE" >&2; exit 7; }
 if ! flock -n 200; then
@@ -135,19 +170,61 @@ MIGRATOR_SERVICE_UUID="$(read_kv "$CONF_FILE" MIGRATOR_SERVICE_UUID)"
 MIGRATOR_TASK_UUID="$(read_kv "$CONF_FILE" MIGRATOR_TASK_UUID)"
 APP_UUID="$(read_kv "$CONF_FILE" APP_UUID)"
 DEPLOY_ON_SUCCESS="$(read_kv "$CONF_FILE" DEPLOY_ON_SUCCESS)"
+# ⚠ Sec FLAG on Amendment 7 (2026-09-17), measured against Coolify v4.3.18
+# source for this amendment's design (see that amendment's own record):
+# `PATCH /applications/{uuid}/scheduled-tasks/{task_uuid}` is gated ONLY by
+# `api.ability:write` (routes/api.php:413 -> ScheduledTasksController::
+# update_scheduled_task_by_application_uuid -> updateTask(), which allowlists
+# `command` as a plain unrestricted string field, :134/:138 -- measured for
+# ADR-072 Amendment 7's design; see that amendment's own record for the
+# full route/controller citation). The trigger
+# token this script holds ([read,write,deploy], ADR-072 Amendment 2) can
+# reach that route -- so can anyone else who obtains the token, or an
+# operator editing the task by hand in the Coolify UI. Either way: nothing
+# stops the Scheduled Task's `command` from silently drifting away from what
+# provision-vps.sh most recently wrote and what this script's tag-parsing
+# below assumes it's reading. MIGRATOR_TASK_COMMAND is the byte-exact literal
+# provision-vps.sh wrote into $CONF_FILE from scripts/migrator-scheduled-
+# task.md (the runbook's own source of truth) -- compared against a live GET
+# of the task, below, BEFORE this script ever fires it.
+MIGRATOR_TASK_COMMAND="$(read_kv "$CONF_FILE" MIGRATOR_TASK_COMMAND)"
 COOLIFY_API_TOKEN="$(read_kv "$TOKEN_FILE" "$TOKEN_VAR_NAME")"
 
 : "${MIGRATOR_SERVICE_UUID:?$CONF_FILE must set MIGRATOR_SERVICE_UUID}"
 : "${MIGRATOR_TASK_UUID:?$CONF_FILE must set MIGRATOR_TASK_UUID}"
 : "${APP_UUID:?$CONF_FILE must set APP_UUID}"
+: "${MIGRATOR_TASK_COMMAND:?$CONF_FILE must set MIGRATOR_TASK_COMMAND}"
 : "${COOLIFY_API_TOKEN:?$TOKEN_FILE must set $TOKEN_VAR_NAME}"
 
 api() { # api <METHOD> <PATH>
   curl -fsS -X "$1" -H "Authorization: Bearer $COOLIFY_API_TOKEN" "$COOLIFY_BASE$2"
 }
 jqp() { python3 -c "import json,sys;$1"; }
+# extract_one_tag <message> <TAG-NAME> -- Sec condition on Amendment 7
+# (2026-09-17): `supabase db push` echoes migration FILENAMES to stdout as
+# it applies them, so a naive grep for a tag prefix can match more than
+# once if a filename or diff line happens to start with the same text, or
+# can silently take a stale earlier occurrence via `tail -1` if the task
+# was ever re-run mid-message. EXACTLY ONE anchored match is required --
+# zero or two-or-more both fail closed, they are never averaged, deduped,
+# or resolved by position.
+extract_one_tag() {
+  local msg="$1" tag="$2" matches count
+  matches="$(printf '%s\n' "$msg" | grep -E "^${tag}=")"
+  count="$(printf '%s\n' "$matches" | grep -c "^${tag}=" || true)"
+  if [[ -z "$matches" ]]; then
+    printf ''
+    return 1
+  fi
+  if [[ "$count" -ne 1 ]]; then
+    printf ''
+    return 2
+  fi
+  printf '%s' "$matches" | cut -d= -f2-
+  return 0
+}
 
-# ⚠ ADR-072 Amendment 6 (draft) — Sec's "assert the OUTCOME, not the
+# ⚠ ADR-072 Amendment 6/7 (draft) — Sec's "assert the OUTCOME, not the
 # STATUS" ruling on the 119 fire (2026-09-17). Three Phase D fires ran
 # `db push` against a STALE migrator container — the image was never
 # rebuilt/redeployed after the sha that added new migrations merged — and
@@ -155,9 +232,7 @@ jqp() { python3 -c "import json,sys;$1"; }
 # outcome. Every hop this script controls (execute -> poll -> deploy) was
 # working correctly; nothing here could have caught it, because nothing
 # here asked "does the container about to run this actually carry the
-# migration set I was triggered for." This check asks exactly that,
-# LOCALLY on this box, no Coolify API involved -- a mismatch fails BEFORE
-# the Scheduled Task is ever executed.
+# migration set I was triggered for." This check asks exactly that.
 #
 # ⚠ THIS READS MIGRATOR_EXPECT_SHA, A NEW NAMED ENVIRONMENT VARIABLE -- NOT
 # $SSH_ORIGINAL_COMMAND, AND THIS IS NOT AN EXCEPTION TO C2 SWALLOWED
@@ -169,66 +244,72 @@ jqp() { python3 -c "import json,sys;$1"; }
 # by scripts/provision-vps.sh -- see that script's own comment at the
 # `AcceptEnv` line) and this script treats it PURELY AS A COMPARISON VALUE:
 # it is never eval'd, never used to construct a command, never branched on
-# beyond the single equality check below. It is data, not dispatch -- the
-# same distinction Decision 2's design already draws between "the box
-# decides what runs" (true here, still) and "the caller decides what value
-# is compared" (new, and exactly what an outcome-assertion needs to have
-# ANY meaning). ⚠ THIS IS STILL A WIDENED TRUST SURFACE AND IS NAMED AS ONE:
-# Sec joint-review is mandatory on the provision-vps.sh sshd_config change
-# this depends on, same as any other change to ci-migrate's authorized_keys
-# posture (C1/C3). This PR ships as DRAFT for exactly that reason — not to
-# merge before Amendment 6 is ratified.
-# ⚠ THIS SHA CHECK IS THE SUCCESS CRITERION for "the container about to run
-# carries the migration set from the merged sha" -- Sec's exact wording
-# requirement (Amendment 6 draft, Consequence 3): a deployment-status poll,
-# if one is EVER added here, is a PRECONDITION ONLY (e.g. "don't even try
-# until Coolify says the deploy finished") and its success is NEVER
-# evidence the migration applied -- Decision 3 already ruled deployment
-# status unreliable for exactly that purpose (it marks FINISHED before its
-# post-deploy command's failure is known), and putting that same status in
-# FRONT of this check would just bless a stale-image run one step earlier.
-# If a future edit adds a deploy-status wait, it MUST be named
-# "precondition" in the same comment that names THIS check "success
-# criterion" -- the two roles are different and Sec's ruling is explicit
-# that the distinction will drift if not stated together, every time.
-# ⚠ CORRECTED per Sec's re-review (ADR-072 Amendment 6, PR #791, 2026-09-17),
-# Condition C-2: this used to SKIP the check when
-# MIGRATOR_EXPECT_SHA was unset, reasoning that the workflow always sets
-# it. Sec's measurement: $GITHUB_SHA IS always set inside the workflow, so
-# the skip branch is UNREACHABLE from .github/workflows/migrator-trigger.yml
-# -- but it IS reachable from a manual `ssh ci-migrate@box` fire with no
-# `-o SetEnv=...` (exactly what §6.7's own recipe, and any operator
-# emergency fire, does). "The fail-open path is the human one, which is the
-# one most likely to be run in an emergency and least likely to be read
-# carefully" (Sec, verbatim). There is NO skip branch any more, on ANY
-# path, including this one: MIGRATOR_EXPECT_SHA is now REQUIRED, always,
-# full stop.
+# beyond the single equality check below. It is data, not dispatch.
 if [[ -z "${MIGRATOR_EXPECT_SHA:-}" ]]; then
-  log "FAIL (exit 4): MIGRATOR_EXPECT_SHA is not set. This check no longer skips when the variable is absent (Sec correction, 2026-09-17) -- every fire, workflow-triggered or a manual \`ssh ci-migrate@box\`, must supply it. Manual fire: \`ssh -o SetEnv=\"MIGRATOR_EXPECT_SHA=<40-hex-sha>\" ci-migrate@<box>\` (requires provision-vps.sh's AcceptEnv change to have landed). NOT executing the Scheduled Task."
+  log "FAIL (exit 4): MIGRATOR_EXPECT_SHA is not set. Every fire, workflow-triggered or a manual \`ssh ci-migrate@box\`, must supply it. Manual fire: \`ssh -o SetEnv=\"MIGRATOR_EXPECT_SHA=<40-hex-sha>\" ci-migrate@<box>\` (requires provision-vps.sh's AcceptEnv change to have landed). NOT executing the Scheduled Task."
   exit 4
 fi
-# 40-hex format validation -- DEFENCE-IN-DEPTH, not the primary control.
-# Sec's original C-1 argued this was BLOCKING (an attacker-controlled string
-# reaching a log line); measured on this path, MIGRATOR_EXPECT_SHA is always
-# $GITHUB_SHA (40 hex, workflow_dispatch takes no inputs) so that harm does
-# not exist TODAY -- Sec downgraded C-1 to defence-in-depth accordingly.
-# Kept as a guard against a future workflow input or a mistyped/truncated
-# manual SetEnv value, not because today's path can be attacker-steered.
+# 40-hex format validation on the INPUT (defence-in-depth, unchanged from
+# Amendment 6 -- distinct from the exit-8 tag-shape checks below, which
+# validate the Scheduled Task's OWN reported values, not this one).
 if [[ ! "$MIGRATOR_EXPECT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-  log "FAIL (exit 5): MIGRATOR_EXPECT_SHA ('$MIGRATOR_EXPECT_SHA') is not a well-formed 40-character hex git sha. Defence-in-depth check (Sec C-1, downgraded from blocking since \$GITHUB_SHA cannot currently be attacker-steered on this path) -- refusing rather than comparing against a malformed value. NOT executing the Scheduled Task."
+  log "FAIL (exit 5): MIGRATOR_EXPECT_SHA ('$MIGRATOR_EXPECT_SHA') is not a well-formed 40-character hex git sha. Refusing rather than comparing against a malformed value. NOT executing the Scheduled Task."
   exit 5
 fi
-log "checking migrator container's baked sha against MIGRATOR_EXPECT_SHA (ADR-072 Amendment 6 draft)"
-RUNNING_SHA="$(docker compose --project-name "$MIGRATOR_SERVICE_UUID" exec -T migrator cat /workspace/.build-sha 2>/dev/null || true)"
-if [[ -z "$RUNNING_SHA" ]]; then
-  log "FAIL (exit 3): could not read /workspace/.build-sha from the running migrator container — either the image predates this marker (rebuild needed) or the container is unreachable. Refusing to fire against an unverifiable image."
-  exit 3
+
+# ⚠ Sec, Amendment 7 (2026-09-17) -- pre-fire task-command integrity check.
+# A [read,write,deploy] token (this script's own token) CAN PATCH this
+# task's `command` (measured for this amendment's design against Coolify
+# v4.3.18 source -- see that amendment's own record) -- so can a hand-edit
+# in the Coolify UI. If the command ever
+# drifts from what provision-vps.sh last wrote, every tag this script
+# parses after firing describes whatever the DRIFTED command chose to
+# print, not the documented apply -- a rewritten task would otherwise
+# produce evidence this script trusts blindly. Fetch the task definition
+# and compare byte-exact against MIGRATOR_TASK_COMMAND BEFORE firing.
+#
+# ⚠ Sec NOTE 1 (2026-09-17, #801 review): this command string is now a
+# FOURTH hand-maintained copy of the same literal -- Coolify's own stored
+# task, scripts/migrator-scheduled-task.md, infra/supabase/docker-
+# compose.yml's migrator-service comment, and $CONF_FILE's
+# MIGRATOR_TASK_COMMAND (provision-vps.sh's literal). Divergence between
+# any two of these fails closed here, but the FIX is "change it in ONE
+# place" -- docs/deployment-runbook.md §6.5 is that one place; the other
+# three sites carry a comment pointing back to it (provision-vps.sh's
+# MIGRATOR_TASK_COMMAND declaration, scripts/migrator-scheduled-task.md's
+# Command field, and docker-compose.yml's migrator comment all say so).
+#
+# ⚠ Sec NOTE 2 (2026-09-17, #801 review): read_kv() (this script's own
+# helper, above) does NO quote-stripping and NO whitespace normalisation
+# -- it returns the raw remainder of the `NAME=` line, verbatim. The ONLY
+# normalisation applied to either side of this comparison is stripping
+# TRAILING CR / LF / space (a CRLF-saved conf file, or a trailing blank
+# line, must not by itself trip a byte-exact compare) -- nothing else:
+# no leading-whitespace trim, no internal-whitespace collapse, no quote
+# handling. $MIGRATOR_TASK_COMMAND (read via read_kv from $CONF_FILE) is
+# stored with the SAME quoting the Coolify API returns in `command`
+# (single/double quotes are literal characters inside the value, not
+# stripped by provision-vps.sh's writer or by read_kv) -- so a genuine
+# quoting mismatch is a REAL mismatch, not noise, and must not be
+# stripped away either.
+strip_trailing_ws() { printf '%s' "$1" | sed -E 's/[ \r]+$//'; }
+TASK_GET_JSON="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID" || true)"
+if [[ -z "$TASK_GET_JSON" ]]; then
+  log "FAIL (exit 10): could not GET the Scheduled Task definition (/applications/\$UUID/scheduled-tasks/\$TASK_UUID) to verify its command before firing. Refusing to fire against an unverifiable task. NOT executing the Scheduled Task."
+  exit 10
 fi
-if [[ "$RUNNING_SHA" != "$MIGRATOR_EXPECT_SHA" ]]; then
-  log "FAIL (exit 3): migrator container's baked sha ($RUNNING_SHA) does NOT match the sha this run was triggered for ($MIGRATOR_EXPECT_SHA). The container has NOT been rebuilt since that commit merged -- this is exactly the defect the 2026-09-17 119 fire surfaced. Rebuild and redeploy the migrator image (Amendment 4 / this Amendment 6's Consequence 2) before re-firing. NOT executing the Scheduled Task."
-  exit 3
+LIVE_TASK_COMMAND="$(printf '%s' "$TASK_GET_JSON" | jqp "
+d=json.load(sys.stdin)
+row=d.get('data', d) if isinstance(d, dict) else d
+print((row or {}).get('command','') if row else '')
+")"
+LIVE_TASK_COMMAND="$(strip_trailing_ws "$LIVE_TASK_COMMAND")"
+EXPECTED_TASK_COMMAND="$(strip_trailing_ws "$MIGRATOR_TASK_COMMAND")"
+if [[ -z "$LIVE_TASK_COMMAND" || "$LIVE_TASK_COMMAND" != "$EXPECTED_TASK_COMMAND" ]]; then
+  log "FAIL (exit 10): the Scheduled Task's command in Coolify differs from MIGRATOR_TASK_COMMAND in /etc/pfin/migrator-trigger.conf -- change it in ONE place per docs/deployment-runbook.md §6.5 (byte-exact comparison, trailing CR/LF/space only stripped from both sides). NOT executing the Scheduled Task. Re-run provision-vps.sh --apply after confirming which side is stale, or investigate an unauthorized edit -- do not just re-fire. (Live and expected command text withheld from this log line deliberately -- Sec's own instruction is that this script logs only extracted PFIN-* tag values, never a raw command/message blob; compare the Coolify UI's task definition against $CONF_FILE directly.)"
+  exit 10
 fi
-log "sha check OK: migrator container carries $RUNNING_SHA, matches the triggering commit"
+log "task command integrity check OK: live Scheduled Task command matches MIGRATOR_TASK_COMMAND in $CONF_FILE"
 
 log "executing migrator Scheduled Task ($MIGRATOR_TASK_UUID) on application $MIGRATOR_SERVICE_UUID"
 # Item 15 fix (Sec-gated, booked BACKLOG.md §7.36 #15): the migrator
@@ -250,8 +331,10 @@ api POST "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UU
 
 log "polling execution status (never Coolify's deployment status — ADR-072 Decision 3)"
 STATUS=""
+EXEC_ROW_JSON=""
 for _ in $(seq 1 "$POLL_MAX_ATTEMPTS"); do
-  STATUS="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID/executions" | jqp "
+  EXEC_ROW_JSON="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID/executions")"
+  STATUS="$(printf '%s' "$EXEC_ROW_JSON" | jqp "
 d=json.load(sys.stdin)
 rows=d if isinstance(d, list) else d.get('data', d)
 print((rows[0] or {}).get('status','') if rows else '')
@@ -259,49 +342,123 @@ print((rows[0] or {}).get('status','') if rows else '')
   [[ "$STATUS" != "running" && -n "$STATUS" ]] && break
   sleep "$POLL_INTERVAL_S"
 done
+# The execution's own `message` field -- captured on EVERY terminal
+# status, not just success. Fetched once, from the SAME row the poll
+# loop's last iteration already read -- no second API call needed.
+# ⚠ CORRECTED from this PR's own earlier draft intent: C-4's original
+# "include a tail of stderr on failure" carried over as "include a tail
+# of message on failure" -- but Sec's later condition on Amendment 7
+# (2026-09-17) is that this script logs ONLY the extracted PFIN-* tag
+# values, NEVER the raw message blob, on any path, success or failure.
+# The `failed)` branch below therefore does NOT log any part of
+# $EXEC_MESSAGE, and tag-parsing is never attempted on a `failed` status
+# either (strike requirement: parse only on `success`) -- operators use
+# the Coolify dashboard's own execution log for failure diagnosis, not
+# this script's stdout. Measured for this amendment's design against
+# Coolify v4.3.18 source (see that amendment's own record): `message` on
+# a successful execution holds the FULL merged stdout+stderr of the
+# `docker exec`
+# Coolify's own backend ran, capped at exactly 5MB with an explicit
+# truncation marker appended only if that cap is hit.
+EXEC_MESSAGE="$(printf '%s' "$EXEC_ROW_JSON" | jqp "
+d=json.load(sys.stdin)
+rows=d if isinstance(d, list) else d.get('data', d)
+print((rows[0] or {}).get('message','') if rows else '')
+")"
 
 case "$STATUS" in
   success)
-    # ⚠ ADR-072 Amendment 6 -- POST-RUN DELIVERY ASSERTION (Sec finding,
-    # 2026-09-17: this control was never built -- the sha-check above and
-    # this Scheduled Task's own "success" status both describe the RUN,
-    # neither confirms the DATABASE actually advanced). "Success" here
-    # means the Scheduled Task's `docker exec ... supabase db push`
-    # process exited 0 -- it does NOT by itself prove a migration
-    # actually applied. The devops-dbpush-prompt.md measurement
-    # (2026-09-17) found the CLI's own non-TTY confirmation-prompt
-    # behavior defaults to applying, not skipping, so this is not
-    # expected to trip today -- but this assertion is what makes that a
-    # MEASURED property instead of an assumption this script depends on
-    # forever. Reads the ledger's top row and the newest migration file
-    # PRESENT IN THE RUNNING CONTAINER RIGHT NOW -- both through the same
-    # direct `docker compose exec` trust path this script already uses
-    # for the sha-check above (ci-migrate already has this access; no
-    # Coolify API call, no credential -- `db`'s local Unix-socket auth
-    # trusts the connecting role by name with no password, the same
-    # property the runbook's own operator-facing verify commands rely
-    # on). A mismatch here means the run reported "success" but the
-    # ledger did not actually advance to what this box's own migrations
-    # directory says it should have -- exactly the outcome-vs-status gap
-    # Amendment 6 exists to close, one level further down than the
-    # sha-check (which only proves the IMAGE was fresh, not that the
-    # APPLY inside it actually landed).
-    log "verifying delivery -- comparing the ledger's top row to the newest migration file in the running container"
-    LEDGER_TOP="$(docker compose --project-name "$MIGRATOR_SERVICE_UUID" exec -T db psql -U supabase_admin -d postgres -tAc "select max(version) from supabase_migrations.schema_migrations" 2>/dev/null | tr -d '[:space:]' || true)"
-    NEWEST_FILE_VERSION="$(docker compose --project-name "$MIGRATOR_SERVICE_UUID" exec -T migrator sh -c "ls /workspace/supabase/migrations | sed -nE 's/^([0-9]+)_.*/\1/p' | sort -V | tail -1" 2>/dev/null | tr -d '[:space:]' || true)"
-    if [[ -z "$LEDGER_TOP" ]]; then
-      log "FAIL (exit 6): could not read supabase_migrations.schema_migrations's top row from the db container. Refusing to trust a 'success' status with no readable ledger to confirm it against. Deploy NOT triggered."
+    # ⚠ ADR-072 Amendment 7 (draft) -- ASSERT VIA THE EXECUTIONS API,
+    # NEVER DOCKER (2026-09-17). This used to run `docker compose exec`
+    # directly against the box for both a pre-fire sha-check and this
+    # post-run delivery assertion. Sec's C-1 finding + F/CTO's box
+    # measurement: `ci-migrate` has NO route to `/var/run/docker.sock` --
+    # no group, no ACL, no sudo (`sudo -u ci-migrate docker compose ...`
+    # -> permission denied, exit 1, measured live). Every docker call in
+    # this script was ALWAYS failing closed; the three earlier "working"
+    # fires only ever went through the Coolify API. Removed entirely.
+    #
+    # scripts/migrator-scheduled-task.md's Command now emits three tagged
+    # lines on its own stdout: `PFIN-BUILD-SHA=`, `PFIN-LEDGER-TOP=`,
+    # `PFIN-NEWEST-FILE=`. Coolify's ScheduledTaskJob captures that
+    # combined stdout+stderr into `message` on success (source-cited
+    # measurement above) -- this script parses the three tags out of
+    # `EXEC_MESSAGE` (already fetched above) instead of exec'ing anything
+    # itself. No new host privilege, no docker socket, ever.
+    #
+    # ⚠ SELF-REPORTED EVIDENCE, NAMED AS SUCH (Sec's preliminary framing
+    # on Amendment 7, PR #800 review): the task's own stdout is the same
+    # evidentiary CLASS as the deployment-status poll ADR-072 Decision 3
+    # already forbids -- a `db push` that silently applied nothing and
+    # still echoed a clean-looking `PFIN-LEDGER-TOP=`/`PFIN-NEWEST-FILE=`
+    # pair would pass this check. Sec has not yet graded the ratified
+    # amendment; this Draft ships exactly what was briefed, not a
+    # strengthened version of it -- do not soften or extend this parsing
+    # unilaterally if that concern needs a different mechanism later.
+    #
+    # ⚠ THE APPLY ALREADY HAPPENED BY THE TIME ANY OF THIS RUNS. Unlike
+    # Amendment 6's pre-fire sha-check, nothing here can gate the
+    # Scheduled Task BEFORE it fires -- there is no docker-free way to
+    # read the container's state in advance. If the assertions below
+    # fail, the `db push` already executed against whatever image/state
+    # existed at fire time; withholding the deploy does not undo the
+    # apply. Named, not softened -- Architect/Sec/F/CTO's tradeoff, not
+    # mine to work around here.
+    #
+    # Truncation check FIRST, before any tag extraction: a message cut at
+    # the 5MB cap could have lost a tag entirely (if the cut landed
+    # before `psql`/`ls` ever ran) or cut one mid-line -- either way,
+    # nothing extracted from a truncated message can be trusted.
+    if printf '%s' "$EXEC_MESSAGE" | grep -qF '[... Output truncated at 5MB limit ...]'; then
+      log "FAIL (exit 9): the execution's own message was truncated at Coolify's 5MB cap -- cannot trust any PFIN-* tag extracted from a truncated capture (a tag may be cut mid-line, or lost entirely if the cut landed before it was ever printed). Deploy NOT triggered. This should not happen for this task's expected output size; investigate what the command actually printed before re-firing."
+      exit 9
+    fi
+
+    # Sec condition on Amendment 7 (2026-09-17): `db push` echoes migration
+    # filenames into its own stdout as it applies -- a naive prefix grep can
+    # match more than once. extract_one_tag() (defined above) requires
+    # EXACTLY ONE anchored match per tag; zero or >=2 both fail closed via
+    # its return code, never silently resolved by `tail -1` or any other
+    # positional pick. Rc 1 = absent, rc 2 = ambiguous (>=2 matches) -- both
+    # collapse to exit 8 below; the distinction is diagnostic only, logged,
+    # never load-bearing for which code is returned.
+    PFIN_BUILD_SHA_TAG="" ; PFIN_BUILD_SHA_RC=0
+    PFIN_BUILD_SHA_TAG="$(extract_one_tag "$EXEC_MESSAGE" "PFIN-BUILD-SHA")" || PFIN_BUILD_SHA_RC=$?
+    PFIN_LEDGER_TOP_TAG="" ; PFIN_LEDGER_TOP_RC=0
+    PFIN_LEDGER_TOP_TAG="$(extract_one_tag "$EXEC_MESSAGE" "PFIN-LEDGER-TOP")" || PFIN_LEDGER_TOP_RC=$?
+    PFIN_NEWEST_FILE_TAG="" ; PFIN_NEWEST_FILE_RC=0
+    PFIN_NEWEST_FILE_TAG="$(extract_one_tag "$EXEC_MESSAGE" "PFIN-NEWEST-FILE")" || PFIN_NEWEST_FILE_RC=$?
+
+    if [[ "$PFIN_BUILD_SHA_RC" -ne 0 || "$PFIN_LEDGER_TOP_RC" -ne 0 || "$PFIN_NEWEST_FILE_RC" -ne 0 ]]; then
+      describe_rc() { case "$1" in 0) echo "ok";; 1) echo "absent";; 2) echo "ambiguous (>=2 matches)";; esac; }
+      log "FAIL (exit 8): tagged-line extraction did not yield exactly one match for every tag (PFIN-BUILD-SHA: $(describe_rc "$PFIN_BUILD_SHA_RC"); PFIN-LEDGER-TOP: $(describe_rc "$PFIN_LEDGER_TOP_RC"); PFIN-NEWEST-FILE: $(describe_rc "$PFIN_NEWEST_FILE_RC")). Either the Scheduled Task's command changed / failed partway through before emitting all three lines, or the apply's own output echoed a duplicate-looking line (Sec's exactly-one-match condition, Amendment 7). Deploy NOT triggered. (Raw message withheld from this log line by design -- see the header comment on logging only extracted tags.)"
+      exit 8
+    fi
+    if [[ ! "$PFIN_BUILD_SHA_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+      log "FAIL (exit 8): PFIN-BUILD-SHA ('$PFIN_BUILD_SHA_TAG') is not a well-formed 40-character hex sha -- the task's own /workspace/.build-sha read is malformed or empty. Deploy NOT triggered."
+      exit 8
+    fi
+    # Architect's Amendment-7 catch: STRING comparison of ledger/file
+    # version prefixes breaks the moment either side changes digit-width
+    # ('99' > '100' as strings). Both must be all-digits (fail closed
+    # otherwise) and are then compared with forced base-10 arithmetic
+    # (`10#...`), never `[[ = ]]`, so a width difference (e.g. a legacy
+    # 3-digit migration vs a future 14-digit-timestamp one) still
+    # compares correctly as numbers.
+    if [[ ! "$PFIN_LEDGER_TOP_TAG" =~ ^[0-9]+$ || ! "$PFIN_NEWEST_FILE_TAG" =~ ^[0-9]+$ ]]; then
+      log "FAIL (exit 8): PFIN-LEDGER-TOP ('$PFIN_LEDGER_TOP_TAG') or PFIN-NEWEST-FILE ('$PFIN_NEWEST_FILE_TAG') is not all-digits -- refusing a non-numeric comparison. Deploy NOT triggered."
+      exit 8
+    fi
+
+    if [[ "$PFIN_BUILD_SHA_TAG" != "$MIGRATOR_EXPECT_SHA" ]]; then
+      log "FAIL (exit 3): the migrator container's baked sha, as reported by this execution's own output ($PFIN_BUILD_SHA_TAG), does NOT match the sha this run was triggered for ($MIGRATOR_EXPECT_SHA). The container had NOT been rebuilt from the expected sha at fire time -- this is exactly the defect class the 2026-09-17 119 fire surfaced. The apply already ran against the wrong image; investigate before re-firing, and rebuild/redeploy the migrator image (Amendment 4 / this amendment's own consequence) first. Deploy NOT triggered."
+      exit 3
+    fi
+    if (( 10#$PFIN_LEDGER_TOP_TAG != 10#$PFIN_NEWEST_FILE_TAG )); then
+      log "FAIL (exit 6): the Scheduled Task reported success, but the ledger's top row ($PFIN_LEDGER_TOP_TAG, reported by this execution's own output) does not match the newest migration file present in the container at execution time ($PFIN_NEWEST_FILE_TAG). The apply did not actually deliver what the image says it should have -- this is the outcome-vs-status gap ADR-072 Amendment 6/7 exists to close. Deploy NOT triggered. Investigate before re-firing -- do not assume this is transient."
       exit 6
     fi
-    if [[ -z "$NEWEST_FILE_VERSION" ]]; then
-      log "FAIL (exit 6): could not read the migrator container's own /workspace/supabase/migrations directory to find the newest migration file. Refusing to trust a 'success' status with nothing to compare the ledger against. Deploy NOT triggered."
-      exit 6
-    fi
-    if [[ "$LEDGER_TOP" != "$NEWEST_FILE_VERSION" ]]; then
-      log "FAIL (exit 6): the Scheduled Task reported success, but the ledger's top row ($LEDGER_TOP) does not match the newest migration file present in the running container ($NEWEST_FILE_VERSION). The apply did not actually deliver what this box's own image says it should have -- this is the outcome-vs-status gap ADR-072 Amendment 6 exists to close. Deploy NOT triggered. Investigate before re-firing -- do not assume this is transient."
-      exit 6
-    fi
-    log "delivery verified: ledger top row ($LEDGER_TOP) matches the newest migration file present in the container"
+    log "outcome verified via the execution's own message: build-sha ($PFIN_BUILD_SHA_TAG) matches the triggering commit, ledger top row ($PFIN_LEDGER_TOP_TAG) matches the newest migration file ($PFIN_NEWEST_FILE_TAG)"
 
     # DEPLOY_ON_SUCCESS gate (Sec-ruled, Phase D deploy-gate consult): the
     # first live exercise of this externally-reachable path (ci-migrate's
