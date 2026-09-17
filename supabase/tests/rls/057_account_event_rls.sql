@@ -150,10 +150,22 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
   values (:'tb', 'B-acct', 'depository', 'household', 'taxable') returning account_id as bacct \gset
 
+-- ⚠ ADR-072 Amendment 5 / Sec H2 harness-identity ruling: `fn_account_event_block_direct_insert`
+-- exempts ONLY the table OWNER, by NAME comparison against `pg_get_userbyid(relowner)` — a
+-- deliberate identity check (Sec ratify condition: role-based, never GUC-keyed), not a
+-- privilege check. Post-sweep the owner is `pfin_owner`, not `postgres` — `postgres` reaching
+-- pfin objects via H2's INHERIT re-grant does NOT make `current_user` read `pfin_owner`, so
+-- these fixture-seed rows (which must land WITHOUT going through the account_event_write
+-- trigger) need an explicit `set local role pfin_owner` to pass the fence, same as the
+-- (D2b)/(D2c) OWNER-tier probes below. Scoped narrowly (restored to `postgres` immediately
+-- after) — this section touches only `pfin.account_event`, never `auth.users`, so it does not
+-- repeat the _liveDb.ts `cleanupG2` multi-schema trap the H2 ruling reverted.
+select set_config('role', 'pfin_owner', true);
 insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
   values (:'ta', :aacct, 'closed', 'no_longer_used', 'user:' || :'ta', '2026-06-30');
 insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
   values (:'tb', :bacct, 'closed', 'sold', 'user:' || :'tb', '2026-06-30');
+select set_config('role', 'postgres', true);
 
 -- ⟦VOCABULARY REBOUND at `e88b76c` (ADR-042 Amendment 1, F/CTO-ratified): reason_code
 --   `closed` is RENAMED to `no_longer_used`, and `institution_closed` is NEW. Six values:
@@ -396,6 +408,13 @@ select throws_like(
 select set_config('role', 'postgres', true);
 
 -- (D2b) MIGRATION-ROLE tier — the writer #16 actually exists for. RLS-exempt entirely.
+-- ⚠ H2: "the migration role" is the table OWNER, `pfin_owner`, post ADR-072 Amendment 5 —
+-- NOT `postgres`. `postgres` merely INHERITS pfin_owner's privileges now (CI-only re-grant);
+-- it does not become pfin_owner for `current_user`-keyed checks. Without this `set local
+-- role`, both (D2b) and (D2c) would be refused at account_event_block_direct_insert (the
+-- ORIGIN fence, which sorts first) instead of reaching the #16 matched-tenant fence they
+-- exist to test — the wrong fence, with a misleadingly plausible message.
+select set_config('role', 'pfin_owner', true);
 select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
               values (%L, %s, 'closed', 'no_longer_used', 'system:remediation', '2026-06-30') $$, :'ta', :bacct),
@@ -409,6 +428,10 @@ select lives_ok(
               values (%L, %s, 'closed', 'sold', 'system:remediation', '2026-06-30') $$, :'ta', :aacct),
   '(D2c) NON-VACUOUS: a MATCHED (users_id=A, account_id=A''s) pair succeeds privileged -> (D2a)/(D2b) are mismatch-driven, not a blanket privileged-write block'
 );
+-- ⚠ Role STAYS `pfin_owner` here — NOT restored to `postgres` yet. D4a/D4b/D4c below are
+-- ALSO owner-tier direct inserts (they must clear account_event_block_direct_insert to reach
+-- the CHECK constraints they actually test); D3 in between is pure catalog reads and is
+-- role-indifferent. Restored to `postgres` once, after (D4c) — see that point.
 
 -- (D2d) #16 is the ONLY new D3 instance. #17 (`linked_source_id`) is NOT created: its
 --   misroute-prevention justification depended on a system-path writer and the ratified
@@ -508,6 +531,10 @@ select throws_ok(
   null,
   '(D4c) `actor` is DISCRIMINATED: a BARE uid is rejected — it must be `user:<uid>` or `system:<source>`. A bare uid, or a NULL meaning "system", makes "we did not record the actor" indistinguishable from "the actor was the system" on a permanent audit record'
 );
+-- Restore: the `pfin_owner` window opened before (D2b) closes here — (D4d) is a catalog
+-- read and D5 sets its own role via `_rls.set_tenant`, but explicit restore keeps the
+-- invariant local rather than depending on a later block to establish it.
+select set_config('role', 'postgres', true);
 
 -- (D4d) ⚑ THE VOCABULARY PIN — ADR-042 B3 sub-decision 2, Sec F9 2026-08-04.
 --   `reason_code` has THREE representations: this CHECK, `CLOSURE_REASONS` in
