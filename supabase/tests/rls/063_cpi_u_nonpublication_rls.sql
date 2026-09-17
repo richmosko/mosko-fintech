@@ -441,8 +441,8 @@ select ok(
 -- (d0) tier identity anchor: without it, leg (d) could be fencing some other role.
 select is(
   (select tableowner from pg_tables where schemaname = 'pfin' and tablename = 'cpi_u_nonpublication'),
-  'postgres',
-  '(d0) owner-tier identity anchor: pfin.cpi_u_nonpublication is owned by `postgres` — the identity for which NO ACL layer exists (ownership confers the privilege intrinsically) and RLS is bypassed, so (d1)-(d4) have the TRIGGERS as their sole gate by construction. RED if ownership moved'
+  'pfin_owner',
+  '(d0) owner-tier identity anchor: pfin.cpi_u_nonpublication is owned by `pfin_owner` (ADR-072 Amendment 5 Decision A, the G3 ownership sweep — moved from `postgres`) — the identity for which NO ACL layer exists (ownership confers the privilege intrinsically) and RLS is bypassed, so (d1)-(d4) have the TRIGGERS as their sole gate by construction. `pfin_owner` remains DISTINCT from every worker identity (`pfin_etl` / `pfin_provider_sync`), which is the load-bearing half — RED if ownership moved again or a worker identity became the owner'
 );
 -- (d1) row-level UPDATE fence, at the tier where nothing else can deny it.
 select throws_like(

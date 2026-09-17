@@ -160,6 +160,15 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
 -- (D2b)/(D2c) OWNER-tier probes below. Scoped narrowly (restored to `postgres` immediately
 -- after) — this section touches only `pfin.account_event`, never `auth.users`, so it does not
 -- repeat the _liveDb.ts `cleanupG2` multi-schema trap the H2 ruling reverted.
+--
+-- ⚠ pgtap ITSELF needs to stay reachable once we are `pfin_owner`. `authenticated` /
+-- `service_role` / `anon` get `usage on schema extensions` from the platform's own bootstrap
+-- grants (they exist for PostgREST); `pfin_owner` is a NEW role this sweep introduced and was
+-- never given that grant — it has nothing to do with pgtap. Test-only, transaction-scoped
+-- (rolled back with the file's own begin/rollback, same idiom as 111's held-open ACL for
+-- service_role): grant it here, once, before the first switch — a schema-usage grant is not
+-- undone by `set local role`, so one grant covers every owner-tier span below.
+grant usage on schema extensions to pfin_owner;
 select set_config('role', 'pfin_owner', true);
 insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
   values (:'ta', :aacct, 'closed', 'no_longer_used', 'user:' || :'ta', '2026-06-30');
