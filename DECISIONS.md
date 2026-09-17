@@ -695,6 +695,61 @@ Schema `auth` is owned by `supabase_auth_admin`, so that seeder cannot grant on 
 ---
 
 
+### ADR-072 — Amendment 7 (2026-09-17): the two Amendment 6 assertions read the Docker socket, and `ci-migrate` cannot — the next fire WEDGES at the sha gate, fail-closed, with a MISLEADING diagnosis
+
+**Status: DRAFT.** Sec joint-review **mandatory and not discharged here** — this touches [C1](#adr-072) directly. It authorises **no build**.
+
+#### (A) Sec's C-1 finding is DISCHARGED by measurement, and C1/C5 hold as written
+
+**Measured on the box by F/CTO, 2026-09-17:** `id ci-migrate` → groups `ci-migrate`, `users` **only**; `/var/run/docker.sock` is `root:docker` **660**, **no ACL**; `sudo -l -U ci-migrate` → **not allowed**; `sudo -u ci-migrate docker compose … exec -T migrator true` → *"permission denied while trying to connect to the docker API"*, **exit 1**; the forced command is `/usr/local/sbin/migrator-orchestrate.sh`.
+
+**[C1](#adr-072) and [C5](#adr-072) therefore hold exactly as written** — C1's own words are *"a **dedicated non-root `ci-migrate` user, no sudo**, whose sole `authorized_keys` line is the forced command."* ✅ **Sec's C-1 finding is discharged: the confinement is real, and it is real on the box rather than only in the design.**
+
+#### (B) And that is precisely why the next fire breaks — the confinement and the new assertions are in direct conflict
+
+**Why every fire so far "worked" is now explained, and the explanation is not reassuring.** The **pre-#790** orchestrator only ever called the **Coolify API over `localhost:8000`** — an HTTP call needing no privilege beyond the scoped token. **It never touched the Docker socket, so C1 never bit.**
+
+**Both Amendment 6 assertions, as built, DO touch it** — measured on `main`:
+
+- **The sha precondition** (#790) — `scripts/migrator-orchestrate.sh:222` reads `/workspace/.build-sha` via `docker compose … exec -T migrator cat …`.
+- **The delivery assertion** (#798, merged) — `:290` reads the ledger via `docker compose … exec -T db psql …`, and `:291` lists the container's own migrations directory the same way.
+
+⚠ **So the next fire exits non-zero at the sha gate before the task ever runs. Fail-closed — correct behaviour, wedged pipeline.**
+
+⚠⚠ **AND THE DIAGNOSIS IT PRINTS IS WRONG, which is the part that will cost hours.** The measured exit-3 message reads *"either the image predates this marker (rebuild needed) or the container is not running"*. **Neither is true.** The image is fine and the container is running; **the caller cannot reach the Docker API.** A fail-closed branch that names two innocent causes and not the real one sends the operator to rebuild an image that was never stale. **Whatever option is chosen, that message must name the permission case.**
+
+⚠ **Correction to the exit-code pairing as briefed, measured line by line:** the distinct pair is **exit 3 (sha: unreadable marker *or* mismatch)** and **exit 6 (delivery: unreadable ledger, unreadable migrations dir, *or* mismatch)**. **Exit 5 is a malformed `MIGRATOR_EXPECT_SHA`**, exit 4 is an absent one, exit 7 is the concurrency lock. **Semantics to preserve: sha and delivery keep distinct codes, and every unreadable case fails closed** — all four `could not read …` branches already do.
+
+#### (C) ⚠ THE TWO ASSERTIONS HAVE DIFFERENT TIMING REQUIREMENTS, AND NO SINGLE OPTION SERVES BOTH WELL
+
+**This is the structural fact that decides the answer, and it is easy to miss because the two assertions are usually named in one breath.** Measured in the orchestrator: the **sha check (`:222`) runs BEFORE the execute (`:248`)** — it is a **precondition** whose whole value is *refusing to run*. The **delivery check (`:290`) runs after the status poll** — it is **post-run by nature**. ⚠ **And the execute call passes NOTHING into the run:** `POST …/scheduled-tasks/{uuid}/execute` is sent with no body. **Any option that sources a value from the task's own output can therefore only ever serve the POST-RUN assertion** — by the time output exists, the apply has happened.
+
+#### (D) Options
+
+- **(A) Add `ci-migrate` to the `docker` group, or `setfacl` the socket. ⛔ REJECTED, and not on cost.** Docker socket access is **root-equivalent** — a caller who can create containers can mount the host filesystem. It would make C1's *"non-root, no sudo"* true in letter and void in substance. ⚠ **C1 exists to forbid exactly this**, and the measurement in (A) above is the evidence it is currently working. **Never demote a control to make a procedure work.**
+- **(B) A narrow `NOPASSWD` sudoers rule for exactly the two read commands.** *Why it might be right:* it is the smallest mechanical change, it keeps both assertions **independent observations from outside the container**, and it preserves the precondition's timing. *What it costs:* ⚠ **C1 says "no sudo" in those words, so this is not a widening of C1 — it AMENDS C1**, and that is a Sec-veto surface, not a judgement call. ⚠ **And a sudoers rule around `docker` is far harder to make narrow than it looks:** the safety depends on the command being pinned with no operator-controllable argument, since `docker … exec` with any flexibility reaches root. **If (B) is taken, the rule must be fully literal — no wildcards — and Sec should grade the exact string, not the intent.**
+- **(C) The Scheduled Task's own command prints `.build-sha` and the post-push `select max(version)` to stdout; the orchestrator reads them from the executions API it ALREADY polls with the scoped token.** *Why it might be right:* **no new privilege of any kind** — same endpoint, same token, same channel that already works under C1. It is the only option that adds nothing to `ci-migrate`'s reach. *What it costs:* **(1)** it depends on the API returning task **stdout** — we know the `message` field is populated (`'Job permanently failed after 1 attempts: probe'`), but **whether stdout is returned is unmeasured, and DevOps must measure what `GET …/executions` actually returns.** **(2)** ⚠ **It converts an independent observation into a SELF-REPORT** — the container tells the orchestrator what it is, instead of being inspected from outside. *For the threat this assertion was built for — an operationally stale image — that is still sound, because a stale image honestly reports its stale sha and is caught.* It fails only against a container that **lies**, which is not this assertion's threat model. **Named because it is a real change in kind, not because it is fatal here.** **(3)** ⚠⚠ **PER (C) ABOVE, IT CANNOT SERVE THE SHA PRECONDITION** — output exists only after the run. The sha check would have to **move INSIDE the task** (the task refuses to push when its own baked sha is wrong), and **the expected sha cannot reach it**, because the execute call passes no parameters and the task command is statically configured. **So (C) is a complete answer for the DELIVERY assertion and an incomplete one for the SHA gate.**
+- **(D) A root-owned systemd timer writes both values to a world-readable file under `/run/pfin/`; the orchestrator reads the file.** *Why it might be right:* no sudo, no socket, no API dependency, and the orchestrator's read is a plain file read. *What it costs:* one more root-owned artifact on the box to version, provision and reason about — and ⚠ **a staleness window in a FRESHNESS assertion, which is close to self-defeating.** The sha gate asks *"is the container that is about to run the current one?"*; a cached answer can say **yes about the previous container**, which is **exactly the defect [Amendment 6](#adr-072) exists to catch, reintroduced one layer out.** A timer short enough to be safe is a timer that is nearly always running.
+
+#### (E) Recommendation — and it is a SPLIT, because the timing fact in (C) makes a single answer impossible
+
+**Delivery assertion → (C).** It is post-run by nature, it needs no new privilege, and self-reporting is sound against the stale-image threat model. **Conditional on DevOps's measurement** of what `GET …/executions` returns; if stdout is not available, it falls back with the sha gate.
+
+**Sha precondition → (B), narrowly and with C1 amended EXPLICITLY rather than silently.** It is the only option that keeps a **precondition** that is also an **independent observation**, and those two properties are what the gate is. ⚠ **The security trade, named plainly: (B) buys back the precondition by spending a literal clause of C1.** That is a real cost and Sec may judge it too high — in which case the honest fallback is **(D) for the sha value only, with the timer interval stated as the staleness bound**, accepting a weaker gate rather than a broken one.
+
+⚠ **What I will not recommend is leaving it wedged while this is decided.** The pipeline is fail-closed **now**, and the next merge that fires the trigger stops at exit 3 with a message pointing at the wrong cause. **Fixing the message is independent of every option above and should not wait for the ruling.**
+
+#### (F) And Amendment 6's assertions have NEVER EXECUTED ON THE BOX
+
+⚠ **Recorded because it is the honest frame for everything above.** Both assertions were written, reviewed, merged — and **neither has ever run as `ci-migrate`.** They were exercised in CI and by reasoning, and the identity that actually invokes them was never the identity under test. **The on-box measurement in (A) is the first time that identity was examined at all**, and it immediately falsified the assumption both assertions were built on. ⚠ **This is the same shape as [Amendment 6](#adr-072)'s own finding, one layer out: a mechanism that looks right, reviews clean, and was never exercised by the thing that will actually run it.**
+
+---
+
+**Ledgers — all flat.** This amendment authors no DDL, no FK-shaped column and no function. [ADR-011](#adr-011) Decision 4's §10 catalogued-instance ledger is **unchanged** and no catalogued instance is touched — Decision 4's catalogued list read **verbatim and live at draft time (2026-09-17)**; the three-axis cross-check is clean (**instance-numbering**: none added, removed, reordered or renumbered; **layer-attribution**: no layer moves and no surface becomes "four-layer"; **verbatim-vs-paraphrase**: linked, not restated, no count carried). The **SECURITY DEFINER allowlist is UNCHANGED**. The **Decision 3** cross-tenant FK-bypass family is untouched. ⚠ The **C9 CI-fenced RT set** is a **DIFFERENT set** from the §10 catalogued ledger and is not reconciled here or anywhere. **No `RT-NN` is minted here.** ⚠ **Option (B), if taken, amends [C1](#adr-072) — a Sec-condition surface, not a ledger surface; the two must not be conflated.**
+
+---
+
+
 ## ADR-071 — V1.6 (statement tie-out, SELF-205) closes BEFORE the V1.final close PR: a V1.x sub-version left open would make the §3.4 certification false (terse pattern)
 
 **Date:** 2026-09-09 · **Status:** **Accepted** — F/CTO ruled 2026-09-09 (relayed by team-lead). **Not a one-way door**: the ordering is reversible by a document edit — no data migration, no schema surface, no vendor or protocol commitment. · **Phase:** 6 Build Loop, with Phase 7 running in parallel per [ADR-070](#adr-070) Decision 1. · **Surface:** `docs/records/v1final/self365-protocol.md` §B.4 *Dependencies*; [MILESTONES.md](MILESTONES.md) *Milestone close-gate* cell. · **Source:** F/CTO ruling 2026-09-09 — *V1.6 should close before V1.final.*
