@@ -294,7 +294,13 @@ services:
   #
   # Pattern-A resident container (CMD tail -f /dev/null, baked in the
   # Dockerfile) — the Scheduled Task's `command` runs the fixed verb:
-  #   supabase db push --db-url "$PROD_DB_URL" --workdir /workspace
+  #   supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace
+  # `--yes` added 2026-09-17 (ADR-072 Amendment 6) so this unattended fire
+  # never depends on the CLI's own unversioned non-TTY prompt-default
+  # behavior — measured safe on the pinned v2.107.0 binary, but not this
+  # repo's to keep relying on across a future CLI bump. See
+  # scripts/migrator-scheduled-task.md's Command row for the full
+  # citation and measurement.
   # See docs/deployment-runbook.md §6 for the full trigger/fail-closed
   # sequencing and the Coolify Scheduled Task config this service expects.
   migrator:
