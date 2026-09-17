@@ -185,14 +185,24 @@ env_or_dotenv CI_MIGRATE_SSH_PUBKEY
 env_or_dotenv DEPLOY_ON_SUCCESS
 [[ -n "$DEPLOY_ON_SUCCESS" ]] || DEPLOY_ON_SUCCESS=0
 
-APPLY=0; REBUILD=0; RESET_ADMIN_PASSWORD=0
+APPLY=0; REBUILD=0; RESET_ADMIN_PASSWORD=0; ROTATE_MIGRATOR_TOKEN=0
 for arg in "$@"; do
   case "$arg" in
-    --apply)                APPLY=1 ;;
-    --rebuild)               REBUILD=1 ;;
-    --reset-admin-password)  RESET_ADMIN_PASSWORD=1 ;;
+    --apply)                  APPLY=1 ;;
+    --rebuild)                 REBUILD=1 ;;
+    --reset-admin-password)    RESET_ADMIN_PASSWORD=1 ;;
+    # Sec-required rotation path (token-step silent-exit incident,
+    # 2026-09-16): the migrator-trigger token mint's own leak-check and
+    # abilities read-back never ran on the last apply, so this token's
+    # cleanliness and scope are UNMEASURED, not confirmed clean -- rotate
+    # unconditionally rather than gate on a log search after the fact.
+    # Idempotent and non-interactive: deletes the existing 'migrator-trigger'
+    # token DB row (same tinker call the orphan-clear branch already uses)
+    # then falls through to the normal ABSENT/mint path, so a repeat run is
+    # safe and never prompts.
+    --rotate-migrator-token)   ROTATE_MIGRATOR_TOKEN=1 ;;
     *) echo "unknown flag: $arg" >&2
-       echo "usage: $0 [--apply] [--rebuild] [--reset-admin-password]" >&2; exit 2 ;;
+       echo "usage: $0 [--apply] [--rebuild] [--reset-admin-password] [--rotate-migrator-token]" >&2; exit 2 ;;
   esac
 done
 
@@ -1066,7 +1076,12 @@ REMOTE
     die "a secret value (or a token-shaped string) appeared in the admin-bootstrap step's own captured output. PRESERVED for diagnosis (mode 600; may contain a real secret -- handle with care) at: $BOOTSTRAP_LOG -- read it, find the exact matching line, fix the leak at its source, then 'shred -u $BOOTSTRAP_LOG' yourself once done. Do not re-run until fixed. Treat any token/password this run touched as exposed until you've confirmed otherwise -- revoke and re-mint (the orphan-clear logic above handles the re-mint)."
   fi
 
-  grep -vE '^(ADMIN_CREATED|ADMIN_CREATE_FAILED|RESET_OK|TOKEN_WRITTEN)$' "$BOOTSTRAP_LOG" | sed 's/^/      /'
+  # Same silent-exit class fixed in the migrator-trigger token step below
+  # (`|| true` there has the full explanation): a clean run whose only
+  # captured line matches this exclusion set leaves `grep -v` with zero
+  # lines to select, which exits 1 and, under `set -euo pipefail` on a bare
+  # (non-conditional) pipeline, kills the script here with no message.
+  grep -vE '^(ADMIN_CREATED|ADMIN_CREATE_FAILED|RESET_OK|TOKEN_WRITTEN)$' "$BOOTSTRAP_LOG" | sed 's/^/      /' || true
   grep -q ADMIN_CREATED "$BOOTSTRAP_LOG" && ok "admin user created (email/name from .env or prompt; password human-chosen, never printed)"
   grep -q RESET_OK "$BOOTSTRAP_LOG" && ok "admin password reset (value never printed by this script or tinker)"
   grep -q TOKEN_WRITTEN "$BOOTSTRAP_LOG" && ok "automation token minted on the box (value never left it, never printed, never even returned to this script)"
@@ -1310,6 +1325,26 @@ step "migrator-trigger Coolify API token -- scoped read+write+deploy, NOT root (
 # C4's own wording from "effectively root" to "read+write+deploy," not as
 # an unreviewed reopening of the ratified residual.
 MIGRATOR_TOKEN_STATE="$(sshx "docker exec coolify php artisan tinker --execute=\"echo \\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','migrator-trigger')->exists() ? 'EXISTS' : 'ABSENT';\"" 2>/dev/null | tail -1)"
+
+# --rotate-migrator-token (Sec-required, token-step silent-exit incident,
+# 2026-09-16): force rotation UNCONDITIONALLY -- do not gate this on
+# whether a leak was found. The last mint's leak-check and abilities
+# read-back both silently never ran, so this token's cleanliness and scope
+# are UNMEASURED, not established-clean; rotating is cheap insurance, not
+# an accusation. Reuses the exact delete call the orphan-clear branch
+# below already uses, then falls through into the same ABSENT/mint path --
+# idempotent (a second run finds ABSENT already and just re-mints again)
+# and non-interactive (tinker --execute, no prompts).
+if [[ "$MIGRATOR_TOKEN_STATE" == "EXISTS" && $ROTATE_MIGRATOR_TOKEN -eq 1 ]]; then
+  if [[ $APPLY -eq 0 ]]; then
+    info "--rotate-migrator-token: would delete the existing 'migrator-trigger' token row and re-mint"
+  else
+    sshx "docker exec coolify php artisan tinker --execute=\"\\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','migrator-trigger')->delete();\"" >/dev/null
+    ok "--rotate-migrator-token: deleted the existing 'migrator-trigger' token row -- re-minting"
+    MIGRATOR_TOKEN_STATE="ABSENT"
+  fi
+fi
+
 if [[ "$MIGRATOR_TOKEN_STATE" == "EXISTS" ]]; then
   # Same orphan-detection shape as the admin-bootstrap token above: a DB
   # row with no usable host-side value is evidence of a failed capture, not
@@ -1327,20 +1362,69 @@ if [[ "$MIGRATOR_TOKEN_STATE" == "EXISTS" ]]; then
 fi
 
 if [[ "$MIGRATOR_TOKEN_STATE" == "EXISTS" ]]; then
-  ok "migrator-trigger token already provisioned -- not touched (delete the DB row by hand + re-run --apply to rotate)"
+  ok "migrator-trigger token already provisioned -- not touched (pass --rotate-migrator-token to rotate)"
 elif [[ $APPLY -eq 0 ]]; then
   info "migrator-trigger token missing -- would mint one (abilities: read, write, deploy) and write it to /etc/pfin/migrator-coolify-token.env (ci-migrate:ci-migrate, 0600), printing nothing secret"
 else
+  # MIGRATOR_TOKEN_VAR_NAME must match TOKEN_VAR_NAME in
+  # scripts/migrator-orchestrate.sh -- one name, asserted in both files.
+  # The heredoc below writes it as a literal (a quoted <<'REMOTE'
+  # heredoc cannot interpolate a local shell variable, deliberately --
+  # that quoting is what keeps remote-executed content free of local
+  # expansion), so this constant's job is the read-back assertion after
+  # the write, not the write itself; the two are kept in sync by the
+  # cross-reference comment in both files and by grepping this repo for
+  # the literal string before ever renaming either one.
+  MIGRATOR_TOKEN_VAR_NAME="COOLIFY_API_TOKEN"
   MIGRATOR_TOKEN_LOG="$(mktemp)"
   chmod 600 "$MIGRATOR_TOKEN_LOG"
+  MIGRATOR_TOKEN_LEAK_DONE=0
+
+  # Sec-required structural fix (token-step silent-exit incident,
+  # 2026-09-16): the leak-check used to sit AFTER the point where the
+  # script could die -- a silent `set -e` abort anywhere in the mint block
+  # skipped it entirely, which is exactly what happened. Moved into a
+  # function callable from an EXIT trap so it runs on every exit path from
+  # here on: normal completion, a `set -e` abort, or a signal. Idempotent
+  # (MIGRATOR_TOKEN_LEAK_DONE guards against firing twice if both the trap
+  # and the explicit call below run). Strike-proved in the PR body by
+  # killing a harness mid-block with `kill -TERM` and showing this still
+  # fires and prints its verdict.
+  migrator_token_leak_check() {
+    [[ $MIGRATOR_TOKEN_LEAK_DONE -eq 1 ]] && return 0
+    MIGRATOR_TOKEN_LEAK_DONE=1
+    if [[ ! -f "$MIGRATOR_TOKEN_LOG" ]]; then
+      # Sec requirement: never report "clean" for an absent measurement.
+      printf '\n\033[33mWARN\033[0m  leak check: %s no longer exists -- NO MEASUREMENT EXISTS to confirm the migrator-trigger mint output was clean. Not "clean" -- unmeasured. Treat as unverified: rotate with --rotate-migrator-token.\n' "$MIGRATOR_TOKEN_LOG" >&2
+      return 1
+    fi
+    if grep -qE '[0-9]+\|[A-Za-z0-9]{20,}' "$MIGRATOR_TOKEN_LOG"; then
+      printf '\n\033[31mFAIL\033[0m  LEAK CHECK: a token-shaped string appeared in the migrator-trigger mint step'"'"'s own captured output. PRESERVED for diagnosis (mode 600) at: %s -- read it, fix the leak at its source, then '"'"'shred -u %s'"'"' yourself once done. Treat the token as exposed until confirmed otherwise -- delete the DB row and re-mint (--rotate-migrator-token).\n' "$MIGRATOR_TOKEN_LOG" "$MIGRATOR_TOKEN_LOG" >&2
+      return 1
+    fi
+    printf '  ok  leak check: no token-shaped string found in the mint step'"'"'s captured output (%s)\n' "$MIGRATOR_TOKEN_LOG" >&2
+    rm -f "$MIGRATOR_TOKEN_LOG"
+    return 0
+  }
+  migrator_token_leak_exit_trap() {
+    local rc=$?
+    migrator_token_leak_check || rc=1
+    exit "$rc"
+  }
+  trap migrator_token_leak_exit_trap EXIT
+
   # Same shape as the admin-bootstrap token mint above -- non-interactive
   # tinker via --execute, a single IIFE statement returning null, the
   # plaintext never crossing back into this script's own variables or
   # stdout (container -> host /root/.pfin staging -> /etc/pfin, chowned to
   # ci-migrate, never printed). See that step's incident note for why this
   # shape is load-bearing, not stylistic.
-  {
-    sshx_in <<'REMOTE'
+  # Sec requirement: fail LOUD, never silently, if the remote mint itself
+  # exits non-zero. Wrapped as an `if` condition (not a bare command)
+  # specifically so `set -e` cannot kill the script here before this
+  # block's own message has a chance to print -- that was the second
+  # silent-exit vector in this step, distinct from the leak-check one.
+  if { sshx_in <<'REMOTE'
 set -euo pipefail
 docker exec coolify php artisan tinker --execute='
 (function () {
@@ -1360,21 +1444,71 @@ docker cp coolify:/tmp/.pfin_migrator_token /root/.pfin/_migrator_token.tmp
 docker exec coolify rm -f /tmp/.pfin_migrator_token
 umask 077
 mkdir -p /etc/pfin && chmod 0755 /etc/pfin
+# The literal name here (COOLIFY_API_TOKEN) MUST match TOKEN_VAR_NAME in
+# scripts/migrator-orchestrate.sh (its reader) and MIGRATOR_TOKEN_VAR_NAME
+# in this file (asserted by name, read-only, right after this heredoc
+# returns) -- 2026-09-16 incident: a stale box file with no NAME= prefix
+# at all made the reader's `source` execute the token value as a command,
+# disclosing it to the operator's terminal. This writer/reader contract
+# was never exercised until that first live fire.
 printf 'COOLIFY_API_TOKEN=%s\n' "$(cat /root/.pfin/_migrator_token.tmp)" > /etc/pfin/migrator-coolify-token.env
 chown ci-migrate:ci-migrate /etc/pfin/migrator-coolify-token.env
 chmod 0600 /etc/pfin/migrator-coolify-token.env
 shred -u /root/.pfin/_migrator_token.tmp 2>/dev/null || rm -f /root/.pfin/_migrator_token.tmp
 echo MIGRATOR_TOKEN_WRITTEN
 REMOTE
-  } > "$MIGRATOR_TOKEN_LOG" 2>&1
-
-  if grep -qE '[0-9]+\|[A-Za-z0-9]{20,}' "$MIGRATOR_TOKEN_LOG"; then
-    die "a token-shaped string appeared in the migrator-trigger mint step's own captured output. PRESERVED for diagnosis (mode 600) at: $MIGRATOR_TOKEN_LOG -- read it, fix the leak at its source, then 'shred -u $MIGRATOR_TOKEN_LOG' yourself once done. Treat the token as exposed until confirmed otherwise -- delete the DB row (tinker, as in the orphan-clear branch above) and re-mint."
+  } > "$MIGRATOR_TOKEN_LOG" 2>&1; then
+    :
+  else
+    echo "FAIL  migrator-trigger token mint's remote step exited non-zero -- see captured output below (if any)." >&2
+    grep -vE '^MIGRATOR_TOKEN_WRITTEN$' "$MIGRATOR_TOKEN_LOG" 2>/dev/null | sed 's/^/      /' || true
+    exit 1
   fi
-  grep -vE '^MIGRATOR_TOKEN_WRITTEN$' "$MIGRATOR_TOKEN_LOG" | sed 's/^/      /'
-  grep -q MIGRATOR_TOKEN_WRITTEN "$MIGRATOR_TOKEN_LOG" || die "migrator-trigger token mint did not report success -- see output above; log preserved at $MIGRATOR_TOKEN_LOG"
+
+  # Sec C-1 (PR #772 joint-review): CAPTURE the diagnostic content here
+  # (assigned to a variable, nothing printed) but do NOT display it yet --
+  # the #741 property this must preserve is "the leak-check runs before
+  # the operator ever sees the filtered log." Displaying it here, ahead of
+  # migrator_token_leak_check below, would print an unexamined log to the
+  # terminal on the one path (success) where nothing has looked at it yet.
+  # `|| true` for the same reason as the original defect: grep -v alone
+  # exits 1 when it selects zero lines (a fully clean marker-only log), and
+  # this is a bare assignment, not a conditional -- set -e would otherwise
+  # kill the script silently right here.
+  MIGRATOR_TOKEN_DIAG="$(grep -vE '^MIGRATOR_TOKEN_WRITTEN$' "$MIGRATOR_TOKEN_LOG" 2>/dev/null)" || true
+  if ! grep -q MIGRATOR_TOKEN_WRITTEN "$MIGRATOR_TOKEN_LOG"; then
+    echo "FAIL  migrator-trigger token mint did not report success -- see output above; log preserved at $MIGRATOR_TOKEN_LOG" >&2
+    exit 1
+  fi
+
+  # Sec requirement: the abilities read-back must actually run and print
+  # (names only, never the token value), and fail closed on anything but
+  # exactly [read, write, deploy] -- ADR-072 Amendment 2's measured-ground
+  # correction does not transfer to a token nobody confirmed.
+  MIGRATOR_TOKEN_ABILITIES="$(sshx "docker exec coolify php artisan tinker --execute=\"echo json_encode(optional(\\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','migrator-trigger')->first())->abilities);\"" 2>/dev/null | tail -1)"
+  if [[ "$MIGRATOR_TOKEN_ABILITIES" != '["read","write","deploy"]' ]]; then
+    echo "FAIL  migrator-trigger token abilities read-back is not exactly [read, write, deploy] -- got: $MIGRATOR_TOKEN_ABILITIES" >&2
+    exit 1
+  fi
+  ok "migrator-trigger token abilities confirmed (read back non-interactively, names only): read, write, deploy -- not root"
+
+  # Read the written file back BY NAME and assert non-empty -- names only,
+  # never the value. This is the writer/reader contract check: had this
+  # existed before the 2026-09-16 incident, a malformed file would have
+  # been caught here, at mint time, instead of at the first live fire.
+  MIGRATOR_TOKEN_FILE_HAS_NAME="$(sshx "grep -qE \"^${MIGRATOR_TOKEN_VAR_NAME}=.\" /etc/pfin/migrator-coolify-token.env && echo PRESENT || echo MISSING" 2>/dev/null | tail -1)"
+  [[ "$MIGRATOR_TOKEN_FILE_HAS_NAME" == "PRESENT" ]] \
+    || die "wrote /etc/pfin/migrator-coolify-token.env but reading it back by name found no non-empty $MIGRATOR_TOKEN_VAR_NAME= line -- the writer/reader contract broke at write time. Not left in place; delete the DB row and re-mint (--rotate-migrator-token)."
+  ok "migrator-trigger token file verified by name: $MIGRATOR_TOKEN_VAR_NAME= present and non-empty (value never read locally)"
+
+  migrator_token_leak_check
+  trap - EXIT
+  # Only reached once the leak-check above has returned OK (a non-zero
+  # return there kills the script via set -e before this line, and the
+  # FAIL/WARN paths inside it print their own message instead) -- nothing
+  # from the captured log reaches stdout before that verdict.
+  [[ -n "$MIGRATOR_TOKEN_DIAG" ]] && printf '%s\n' "$MIGRATOR_TOKEN_DIAG" | sed 's/^/      /'
   ok "migrator-trigger token minted (read+write+deploy, NOT root) -- value never left the box, never printed, never even returned to this script"
-  rm -f "$MIGRATOR_TOKEN_LOG"
 fi
 
 step "Phase 2 verification"
@@ -1411,7 +1545,9 @@ cat <<NEXT
         -- nothing to copy here.
 
       ADR-072 (Option E) chunk 2 -- ci-migrate CI trigger (operator step, NOT
-      run by this script): put the ci_only keypair's PRIVATE half into this
+      run by this script): IF NOT ALREADY SET (check first --
+      'gh secret list' / 'gh variable list' -- this script never checks or
+      sets either), put the ci_only keypair's PRIVATE half into this
       repo's GitHub Actions secrets as CI_MIGRATE_SSH_PRIVATE_KEY (Settings ->
       Secrets and variables -> Actions -> New repository secret), and set a
       PROD_SSH_HOST repository VARIABLE (not a secret -- an SSH destination

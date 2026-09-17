@@ -120,6 +120,22 @@ Durable rewrites — prefer either:
 
 ⚠ **Extends to nothing else. Editing an applied migration's SQL is out under every framing — including "it was wrong and never worked."**
 
+> ### ⚠ DATED ONE-TIME EXCEPTION — OPEN 2026-09-16. READ THE EXPIRY BEFORE CITING IT.
+>
+> **This is an EXCEPTION, not a precedent, and it is recorded here because this is where a reader of the RULE meets it** — a reader who only sees the PRs would read the edits as licence.
+>
+> - **Window opened:** F/CTO's ruling of **2026-09-16** that the current `001`–`118` apply is **DISPOSABLE** — never deployed, no data, the box is wiped and re-bootstrapped ([ADR-072](../../../DECISIONS.md#adr-072) Amendment 5). **Rule (A)/(B) above rests on the premise "already applied"; that premise is false for this window and true again the moment it closes.**
+> - **Scope:** migrations `001`–`118` **and `007`/`015`**, and only the edits named in ADR-072 Amendment 5's exception table — **this list and that table must name the same set**:
+>   - the **guard-visibility branch** on `055`/`116`/`118` (**PR #781**) — adds an executable `raise warning` branch;
+>   - the **`comment on role` / `create role` statement dispositions** on `118`/`119` (**PR #775** and Amendment 5 **Decision G4**) — changes statements, not header prose;
+>   - the **paired `set role pfin_owner;` / `reset role;` sweep** across `001`–`118` (Amendment 5 **Decision G3**) — adds executable statements to every file;
+>   - **`007`/`015`: the `security_invoker = true` change** under **vault disposition (iii), F/CTO-ratified 2026-09-16**, **plus the two header corrections riding with it** — `015`'s *"owner-semantics required"* mechanism sentence, and **both files' *"never the raw whole-vault surface"* claim, re-graded to enforcement for `anon`/`authenticated` and convention for `service_role`** (`service_role` already holds SELECT and DELETE on both `vault` relations in the image's own ACL). The view change is **executable DDL**; the header corrections ride the same edit because separating them would leave a corrected view standing on a falsified rationale.
+> - ⚠ **NOT covered, and named so it is not assumed to be:** `118`'s `rolcanlogin` header reword ([BACKLOG](../../../BACKLOG.md) §7.36 **item 38**) — an ordinary **(B)**-class in-place edit that needs no exception. *(This bullet previously cited "item 39"; that number moved when PR #776 landed the same booking independently and Architect's duplicate was dropped at the merge — the referent is unchanged.)*
+> - **⚠ EXPIRES** when the re-bootstrap lands and a deployment survives. **After that, Step 1.6 governs again unamended and this block is history, not authority.**
+> - **It does NOT cover:** any migration numbered `119`+, any edit outside ADR-072 Amendment 5's named list, or any future "it was wrong and never worked" argument. **Those remain out under every framing.**
+> - ✅ **RATIFIED by F/CTO on 2026-09-16 (this session), scope and expiry exactly as stated above — no broader.** *This bullet previously read: "**Requires F/CTO's explicit ratify** — being requested at PRs #775 / #781; not assumed by either." Kept as the dated record that the permission was sought before it was used, not after.* ⚠ **Ratified means the edits named in Scope may now be authored — it does NOT widen the Scope list, move the expiry, or make this block precedent.**
+> - ⚠ **Unlike a (B)-class correction, edits under this exception may add EXECUTABLE lines** (PR #781 adds a `raise warning` branch). **That is exactly why the exception is needed rather than (B), and why it must not be reviewed as comment-only.**
+
 **Sec joint-review whenever the file is Sec-load-bearing** (`055` is).
 
 While a migration is still **unmerged**, edit in place freely — the merged-history guard applies to neither case.
