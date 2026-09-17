@@ -1172,6 +1172,13 @@ select has_table_privilege('pfin_owner', 'vault.decrypted_secrets', 'SELECT');
 1. Create the V1 web-app Coolify resource; note its `APP_UUID`. **Gap:** §7 is still a STUB for this step — it names the web-app as the 3rd fleet container but does not yet carry concrete Coolify resource-creation instructions. Until §7 is filled in, this step has no home to point at beyond the Coolify dashboard itself.
 2. Create the migrator Coolify Scheduled Task (`scripts/migrator-scheduled-task.md` — task fields, resource attachment, the fail-closed `status` semantics); note the `MIGRATOR_SERVICE_UUID` (the Supabase-stack resource) and `MIGRATOR_TASK_UUID` (the task itself).
 3. Redeploy the Supabase stack so the `migrator` sibling service comes up and `provision-supabase-stack.sh`'s `MINT_SECRETS` mints `MIGRATOR_DB_PASSWORD` (§6's credential bullet; §5).
+3a. **Verify line, added 2026-09-17 (ADR-072 Amendment 6, PR #791) — confirm which build-arg name Coolify 4.3.18 actually injects.** `infra/supabase/migrator/Dockerfile` accepts BOTH `GIT_SHA` and `SOURCE_COMMIT` because this was never confirmed live (no network egress in the session that wrote it) — this step is where that gets resolved on evidence instead of staying open forever:
+    ```
+    docker compose --project-name <MIGRATOR_SERVICE_UUID> exec -T migrator cat /workspace/.build-sha-source
+    # or, equivalently, no exec needed:
+    docker inspect --format '{{index .Config.Labels "org.mosko.migrator.git-sha-source"}}' <migrator container/image>
+    ```
+    Expect either `GIT_SHA` or `SOURCE_COMMIT` printed — whichever name this build actually received a non-empty value under. **Once confirmed, this is a follow-up (not blocking, and not this PR's scope): collapse the Dockerfile's dual-path ARG-acceptance down to the one real name**, so the mechanism stops silently tolerating a name nobody uses. Leaving both accepted indefinitely defeats the point of asking the question.
 
 **Phase B — supervised first bootstrap, `pfin_owner` by construction (rewritten 2026-09-16, ADR-072 [Amendment 5](../DECISIONS.md#adr-072) — §6.3 as `supabase_admin` runs the pre-step and creates `pfin_owner`; `migrator` runs the apply, entering `pfin_owner` per-file)**
 
@@ -1186,10 +1193,56 @@ select has_table_privilege('pfin_owner', 'vault.decrypted_secrets', 'SELECT');
 9. `scripts/provision-vps.sh --apply` (§6.4 step 4) — materializes the `ci-migrate` user, its forced-command key, the orchestration script, and the scoped Coolify token.
 10. Add the GitHub Actions secret `CI_MIGRATE_SSH_PRIVATE_KEY` (§6.4 step 5).
 11. Add the GitHub Actions repository variable `PROD_SSH_HOST` (§6.4 step 6).
+11a. **F/CTO !-step (ADR-072 Amendment 6 draft, added 2026-09-17 — Sec condition on #790):** create the GitHub Environment `production-migrator` (Settings → Environments → New environment) and add F/CTO as a **required reviewer**. `.github/workflows/migrator-trigger.yml`'s box-touching job now declares `environment: production-migrator` so a `workflow_dispatch` run carries an approval gate equivalent to the push path's PR/branch-protection gate — **but this only holds once the environment exists with that reviewer configured**. Per GitHub's documented (not live-verified this session — no network egress) behavior, a workflow referencing an undefined environment auto-creates it with zero protection rules on first run, i.e. **it does NOT fail closed on its own** — the job simply runs ungated until this step is done by hand. Do this before Phase C's steady-state is considered live, not after.
 
 **Phase D — integration test**
 
 12. Merge a migration touching `supabase/migrations/**` and watch `.github/workflows/migrator-trigger.yml` fire end-to-end (§6's "steady-state" bullet; §6.4 step 7's verify). **With `DEPLOY_ON_SUCCESS=0` (the default), this proves migrate-then-NO-deploy, not the full steady-state**: expect the orchestration script's `"migration apply SUCCEEDED — app deploy SUPPRESSED (DEPLOY_ON_SUCCESS!=1)"` log line and a green (exit 0) job — the suppressed deploy is the PASS condition here, not a failure to chase down. The deploy leg is proven separately at §7 step 7.
+
+**`fail-probe` — the permanent positive control (named 2026-09-17, ADR-072 Amendment 6 draft).** Phase D above (step 12) is a positive-path proof only — it shows a migration that SUCCEEDS reports success. It says nothing about whether a migration that FAILS is reported as failed, and the 119-fire incident (Sec's ruling on the root cause, ADR-072 Amendment 6) showed that gap matters: the transport chain (Coolify Scheduled Task → `docker exec` exit code → SSH forced-command exit code → GitHub Actions job status) must be independently proven to fail closed, not just assumed from the positive case. `fail-probe` is a throwaway Coolify Scheduled Task, UUID `hffv8um6zruwslmndqc5su2l`, deliberately configured to fail (a non-zero-exit command) — it exists for exactly this purpose and should be kept permanently rather than deleted as box-cleanup debris. **`enabled` was verified `True` via a direct Coolify API read-back** (F/CTO measurement, 2026-09-17) despite the Coolify UI's toggle control appearing, at a glance, to say otherwise — API read-back, not the UI's rendered toggle state, is the authoritative check for this field going forward; if the UI is ever consulted for this task's enabled/disabled state, cross-check it against `GET /api/v1/.../scheduled-tasks/{uuid}` before trusting it. See §6.7 below for the exact recipe that exercises `fail-probe` against the real SSH → forced-command → GitHub Actions path (hops (d)/(e) in Sec's five-hop trace) — that recipe is runnable today, independent of ADR-072 Amendment 6's ratify status.
+
+---
+
+### 6.7 `fail-probe` positive-control recipe — hops (d)/(e), runnable today
+
+**Purpose.** Sec's five-hop trace of the migration-trigger transport chain identified hops (d) and (e) — the SSH forced-command's exit-code propagation back through to the GitHub Actions job — as **not gradable from source**: nothing in `migrator-orchestrate.sh` or `.github/workflows/migrator-trigger.yml`'s text proves the exit code of a failing box-side command actually reaches GitHub Actions as a failed step, only that the code is written with that intent. This recipe exercises the real path with `fail-probe` (§6.5's note above) as the deliberately-failing input, so hops (d)/(e) are measured, not inferred. **Not gated on ADR-072 Amendment 6** — the sha-assertion work in that draft is orthogonal; this recipe uses today's trigger path exactly as it exists on `main`.
+
+**Scope discipline — config only, never the credential file.** `/etc/pfin/migrator-trigger.conf` (the `MIGRATOR_TASK_UUID` binding `migrator-orchestrate.sh` reads) is edited. `/etc/pfin/migrator-coolify-token.env` (or wherever the scoped Coolify API token itself lives, per §6.4) is **never touched** by this recipe — swapping the target task UUID does not require, and must not involve, touching the credential.
+
+1. **Read the current conf, keep an exact copy.**
+   ```
+   ssh <box-admin-user>@<box-ip> "sudo cat /etc/pfin/migrator-trigger.conf" > /tmp/migrator-trigger.conf.orig
+   grep -n '^MIGRATOR_TASK_UUID=' /tmp/migrator-trigger.conf.orig
+   ```
+   Note the printed value — this is the value Step 6 below restores.
+
+2. **Swap `MIGRATOR_TASK_UUID` to `fail-probe`'s UUID, on the box, by editing the one line — not by regenerating the file.**
+   ```
+   ssh <box-admin-user>@<box-ip> "sudo sed -i 's/^MIGRATOR_TASK_UUID=.*/MIGRATOR_TASK_UUID=hffv8um6zruwslmndqc5su2l/' /etc/pfin/migrator-trigger.conf"
+   ssh <box-admin-user>@<box-ip> "sudo cat /etc/pfin/migrator-trigger.conf" | grep -n '^MIGRATOR_TASK_UUID='
+   ```
+   Confirm the printed line now shows `hffv8um6zruwslmndqc5su2l` before proceeding — do not proceed on an assumed edit.
+
+3. **Fire via the real forced-command path — the same SSH invocation `.github/workflows/migrator-trigger.yml` uses, not a direct API call.** From a machine holding the `ci_only` private key (§6.4):
+   ```
+   ssh -i <ci_only private key path> -o BatchMode=yes -o StrictHostKeyChecking=accept-new ci-migrate@<box-ip> true
+   echo "exit code: $?"
+   ```
+   Record the exit code directly — this is hop (e), the forced command's own exit status reaching the SSH client.
+
+4. **Assert the WORKFLOW STEP goes red, not just the script.** `.github/workflows/migrator-trigger.yml` carries a `workflow_dispatch` trigger (added 2026-09-17 specifically for this step, no inputs) alongside its push trigger — **this manual dispatch is the vehicle for this step**: from the Actions tab, "Run workflow" on `migrator-trigger.yml` while the conf is swapped to `fail-probe`, then confirm in the Actions UI that the "SSH to ci-migrate" step shows failed (red X), not a misleadingly-green step with a logged error buried in its output. (The push-trigger fallback — a throwaway migration on a scratch branch merged to `main` and reverted immediately after — is no longer needed now that the dispatch trigger exists, but is still valid if `workflow_dispatch` is ever removed.) This is hop (d) — the exit code surviving GitHub Actions' own step-result mapping — and is the part Sec's ruling says cannot be graded from source at all; only this live run closes it.
+
+5. **Record the result** (pass/fail on each of steps 3 and 4) in the runbook's operating log or the Linear issue tracking this recipe's execution — whichever this repo's convention for one-off box measurements currently is (§6.0).
+
+6. **Restore the original conf — by name, not by eyeballing.**
+   ```
+   ssh <box-admin-user>@<box-ip> "sudo cp /etc/pfin/migrator-trigger.conf /etc/pfin/migrator-trigger.conf.pre-restore.bak"
+   ssh <box-admin-user>@<box-ip> "sudo sed -i 's/^MIGRATOR_TASK_UUID=.*/MIGRATOR_TASK_UUID=<original value from Step 1>/' /etc/pfin/migrator-trigger.conf"
+   ssh <box-admin-user>@<box-ip> "sudo cat /etc/pfin/migrator-trigger.conf" | grep -c '^MIGRATOR_TASK_UUID=<original value from Step 1>$'
+   ```
+   The final `grep -c` must print `1` — that count, not a visual diff, is the restoration proof. If it prints `0`, STOP and diff the live conf against `/tmp/migrator-trigger.conf.orig` before doing anything else; do not re-run Step 6 blind.
+
+7. **`migrator-coolify-token.env` (or equivalent credential file) was not opened, read, or modified at any point in this recipe** — confirm this by `ls -l` timestamp on that file before Step 2 and after Step 6; the mtime must be unchanged.
 
 ---
 
@@ -1219,9 +1272,34 @@ select n.nspname, pg_get_userbyid(c.relowner), c.relkind, count(*) from pg_class
 
 **If any row is non-zero: STOP and route to Sec** (Amendment 5 Decision A's own instruction — a hard gate, not a checklist item). The 2026-09-16 measurement (§6.3, cited above) found all three clean; re-measuring rather than trusting that record is the point of a gate.
 
+**Fourth gate, added 2026-09-17 (ADR-072 Amendment 6, ratified) — image freshness AND sweep-currency, both required, same STOP:** Sec's finding from F/CTO's box measurement: the running migrator container's own `supabase/migrations/` was observed ending at `118`, which by itself is ambiguous — it could be a stale-but-post-sweep image (the ordinary Amendment 6 gap) OR a **pre-sweep** image, in which case Step 2 below would apply pre-sweep `001`–`118` from that container and every object would land `migrator`-owned, not `pfin_owner`-owned — the exact defect Amendment 5's rewrite exists to prevent, reached through the image-freshness gap instead of a fresh apply. Both conditions must measure true before proceeding to Step 1:
+
+```
+docker compose --project-name <MIGRATOR_SERVICE_UUID> exec -T migrator cat /workspace/.build-sha
+# expect: exactly the merged sha this bring-up is for -- not merely present, not stale
+docker compose --project-name <MIGRATOR_SERVICE_UUID> exec -T migrator \
+  grep -c 'set role pfin_owner' /workspace/supabase/migrations/001_pfin_foundation.sql
+# expect: non-zero -- zero means the image predates Architect's pfin_owner sweep (Amendment 5) even if .build-sha matches, and 001 alone would apply migrator-owned
+```
+
+**If `/workspace/.build-sha` does not equal the merged sha this bring-up targets, OR the `grep -c` above is zero: STOP.** Rebuild/redeploy the migrator image from the correct merged sha (Amendment 4 / this Amendment 6's Consequence 2) before re-attempting — do not proceed to Step 1 on an assumption that "ends at 118" means "post-sweep 118." This gate is independent of, and in addition to, the three census gates above; a clean census does not substitute for it.
+
 **Both of §6.3's dependencies are merged.** The vault disposition is ruled at (iv‴) and the pre-step (Phase 1), main pass (Phase 2), and post-step (Phase 3) are all specified in §6.3 — Architect's `feat/migrations-pfin-owner-sweep` (PR #784, `6f9f6b7e`) and PR #775 (`119`'s file, `ec9ac316`) are both on `main`. Re-read §6.3 immediately before the wipe in case a later correction has landed since.
 
 **Step 1 — the wipe.** §6.3's `drop schema pfin cascade; drop schema supabase_migrations cascade;`, as `supabase_admin`. Roles and passwords survive; `auth`/`public`/`storage`/`vault`/`extensions` are untouched.
+
+**Step 1.5 — redeploy the Supabase stack, rebuilding the migrator image, before Step 2 (added 2026-09-17, devops ruling accepted by F/CTO).** The migrator image is baked at build time (`infra/supabase/migrator/Dockerfile`) and this box's own container was measured ending at `118` — the fourth Step-0 gate above catches that when it's true, but a redeploy here is what actually MAKES it true, not merely something the gate checks for. Redeploying the Supabase-stack Coolify resource restarts Postgres — **acceptable here, specifically, only because Step 1 already wiped the DB**: `DROP SCHEMA` is durable/committed, so a restart immediately after the wipe loses nothing the wipe didn't already give up. This is NOT acceptable after Step 2 (a redeploy there restarts the DB mid-or-post-migration for no reason — exactly the operational cost that elevated Amendment 4 to a precondition). Do not skip this step on an assumption that the existing image is "probably fine" — that assumption is the 119-fire's own root cause, reached again here via the manual bring-up path instead of the CI-trigger path.
+
+Redeploy, then **re-run the same two predicates as the Step 0 gate above, now expected to pass because the redeploy is what makes them true**:
+
+```
+docker exec <migrator container> cat /workspace/.build-sha
+# expect: exactly the merged sha this bring-up is for
+docker exec <migrator container> grep -c 'set role pfin_owner' /workspace/supabase/migrations/001_pfin_foundation.sql
+# expect: non-zero
+```
+
+**If either check fails after the redeploy: STOP** — the redeploy did not rebuild from the expected sha (check Coolify's build source/branch config) or the merged sha itself predates Architect's `pfin_owner` sweep (Amendment 5) on `main`. Do not proceed to Step 2 until both pass.
 
 **Step 2 — the fresh Phase B run.** §6.5 steps 4–6, in order: **Phase 1** (role creation, grants, engine backstop, credential, the `055`/`116`/`117`/`118`/`119` file-runs), **Phase 2** (the `migrator`-run main pass, with its own verify block), **Phase 3** (the supervised post-step that creates `pfin.decrypted_source_credential` and transfers it to `pfin_owner`) — **Phase 3 must complete and pass before proceeding to Step 3 below.**
 
