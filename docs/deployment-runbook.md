@@ -1264,6 +1264,18 @@ select n.nspname, pg_get_userbyid(c.relowner), c.relkind, count(*) from pg_class
 
 **If any row is non-zero: STOP and route to Sec** (Amendment 5 Decision A's own instruction — a hard gate, not a checklist item). The 2026-09-16 measurement (§6.3, cited above) found all three clean; re-measuring rather than trusting that record is the point of a gate.
 
+**Fourth gate, added 2026-09-17 (ADR-072 Amendment 6, ratified) — image freshness AND sweep-currency, both required, same STOP:** Sec's finding from F/CTO's box measurement: the running migrator container's own `supabase/migrations/` was observed ending at `118`, which by itself is ambiguous — it could be a stale-but-post-sweep image (the ordinary Amendment 6 gap) OR a **pre-sweep** image, in which case Step 2 below would apply pre-sweep `001`–`118` from that container and every object would land `migrator`-owned, not `pfin_owner`-owned — the exact defect Amendment 5's rewrite exists to prevent, reached through the image-freshness gap instead of a fresh apply. Both conditions must measure true before proceeding to Step 1:
+
+```
+docker compose --project-name <MIGRATOR_SERVICE_UUID> exec -T migrator cat /workspace/.build-sha
+# expect: exactly the merged sha this bring-up is for -- not merely present, not stale
+docker compose --project-name <MIGRATOR_SERVICE_UUID> exec -T migrator \
+  grep -c 'set role pfin_owner' /workspace/supabase/migrations/001_pfin_foundation.sql
+# expect: non-zero -- zero means the image predates Architect's pfin_owner sweep (Amendment 5) even if .build-sha matches, and 001 alone would apply migrator-owned
+```
+
+**If `/workspace/.build-sha` does not equal the merged sha this bring-up targets, OR the `grep -c` above is zero: STOP.** Rebuild/redeploy the migrator image from the correct merged sha (Amendment 4 / this Amendment 6's Consequence 2) before re-attempting — do not proceed to Step 1 on an assumption that "ends at 118" means "post-sweep 118." This gate is independent of, and in addition to, the three census gates above; a clean census does not substitute for it.
+
 **⚠ Confirm §6.3 carries both in-flight PRs before running Step 1.** The vault disposition is ruled at (iv‴) and the pre-step (Phase 1), main pass (Phase 2), and post-step (Phase 3) are all specified in §6.3 as of this writing — but two dependencies are still in-flight PRs, not yet on `main`: Architect's `feat/migrations-pfin-owner-sweep` and PR #775 (`119`'s file). Re-read §6.3 immediately before the wipe to confirm both have landed.
 
 **Step 1 — the wipe.** §6.3's `drop schema pfin cascade; drop schema supabase_migrations cascade;`, as `supabase_admin`. Roles and passwords survive; `auth`/`public`/`storage`/`vault`/`extensions` are untouched.
