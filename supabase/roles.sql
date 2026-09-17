@@ -30,6 +30,38 @@
 --     lane: CI applies as a superuser, so they take the "applier holds it" branch
 --     and run in-file; under `migrator` they take the verified-skip branch.
 --
+-- ⚠⚠ TWO DIFFERENT IDENTITIES ACT ON THIS FILE, AND CONFLATING THEM IS THE SINGLE
+-- MOST EXPENSIVE MISTAKE AVAILABLE HERE. It cost three red CI matrices before it was
+-- written down. State which one you mean, every time:
+--
+--   (A) THE SEEDING IDENTITY — whoever executes THIS FILE. The Supabase CLI sources it
+--       on bring-up ("Seeding globals from roles.sql…"); the runbook's §6.3 pre-step
+--       runs it as `supabase_admin`. ⚠ WHICH ROLE THE CLI USES IS NOT YET MEASURED.
+--       It decides one thing only, and decisively: the `auth` grants below. Schema
+--       `auth` is owned by `supabase_auth_admin`, so a NON-SUPERUSER seeder cannot
+--       grant on it at all — no ordering and no split inside this file changes that.
+--       If the CLI seeds as a non-superuser, those grants CANNOT live here and the CI
+--       wiring needs a privileged step the CLI's own bring-up does not currently
+--       provide, because it applies the migrations itself with no window in between.
+--       The guarded block below fails LOUD rather than silent on exactly that case.
+--
+--   (B) THE MIGRATION-APPLY IDENTITY — whoever the CLI then connects as to apply
+--       `supabase/migrations/**` and to write its own ledger. ⚠ **MEASURED, NOT
+--       ASSUMED: it is `postgres`, and `postgres` is NOT a superuser on this image
+--       (`rolsuper = f`).** The evidence is a CI failure, not an inference from
+--       configuration: after the database-owner transfer below, the CLI reported
+--           failed to create migration table: ERROR: permission denied for database postgres
+--       which can only be the role creating the ledger, and it lacked a privilege the
+--       owner transfer had just removed from it.
+--       THIS FACT IS WHY TWO ROWS IN THIS FILE EXIST AT ALL — the membership granting
+--       `pfin_owner` to `postgres` (without it, every swept migration dies at its own
+--       opener with `permission denied to set role "pfin_owner"`) and the explicit
+--       re-grant of CREATE on the database to `postgres` after the transfer. Delete
+--       either and the CLI cannot apply this project's migrations.
+--
+-- ⚠ (A) and (B) may or may not be the same role. Do not reason from one to the other:
+--    every failure in this file's history came from assuming they were.
+--
 -- Idempotent: safe to source repeatedly (the CLI does).
 -- ============================================================================
 
