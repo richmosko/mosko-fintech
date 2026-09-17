@@ -640,20 +640,33 @@ KbdInteractiveAuthentication no
 # Supabase Studio tunnels (ssh -L) both depend on it. Stated explicitly so a
 # future hardening pass cannot flip the default without this line objecting.
 AllowTcpForwarding yes
-# ⚠ ADR-072 Amendment 6 (DRAFT, not ratified) -- Sec joint-review MANDATORY
-# on this line before it ships, same as any other change to ci-migrate'"'"'s
-# posture (C1/C3). Accepts exactly ONE named environment variable from the
-# client -- nothing else, no pattern, no wildcard -- so
-# .github/workflows/migrator-trigger.yml'"'"'s ssh invocation can pass the
-# triggering commit sha to migrator-orchestrate.sh'"'"'s sha-check (see that
-# script'"'"'s own comment for why this is a DATA channel, not a widening of
-# C2'"'"'s "never read $SSH_ORIGINAL_COMMAND" rule -- this variable is never
-# eval'"'"'d, never dispatched on, only compared for equality against the
-# container'"'"'s own baked marker). Scoped to ci-migrate'"'"'s forced-command
-# session by the "restrict,command=..." authorized_keys line below, exactly
-# like every other capability ci-migrate has -- this does not grant any
-# OTHER account or session anything.
-AcceptEnv MIGRATOR_EXPECT_SHA'
+# ADR-072 Amendment 6 (RATIFIED, merged c2b20cc2, 2026-09-17). Sec
+# joint-review was mandatory on this line before it shipped, same as any
+# other change to ci-migrate'"'"'s posture (C1/C3) -- done. Accepts exactly
+# ONE named environment variable from the client -- nothing else, no
+# pattern, no wildcard -- so .github/workflows/migrator-trigger.yml'"'"'s
+# ssh invocation can pass the triggering commit sha to
+# migrator-orchestrate.sh'"'"'s sha-check (see that script'"'"'s own comment
+# for why this is a DATA channel, not a widening of C2'"'"'s "never read
+# $SSH_ORIGINAL_COMMAND" rule -- this variable is never eval'"'"'d, never
+# dispatched on, only compared for equality against the container'"'"'s own
+# baked marker).
+# ⚠ CORRECTED (Sec C-3, sec-790-7d4962f8.md): `AcceptEnv` is a
+# server-global sshd_config directive -- it is NOT scoped by the
+# "restrict,command=..." authorized_keys line, which governs what a
+# SESSION may run, not what the SERVER accepts from the wire before any
+# session or key is even matched. The prior comment here claimed a scoping
+# that did not exist. Made true BY CONSTRUCTION instead of merely
+# reworded: wrapped in `Match User ci-migrate` below, so this directive
+# only takes effect for connections authenticating as ci-migrate --
+# `Match all` immediately after closes the block so it cannot leak into
+# any sshd_config.d/*.conf file that sorts after this one (99-pfin-
+# hardening.conf is expected to load last, but Match'"'"'s scope otherwise
+# extends to end-of-config, not end-of-file, so closing it explicitly is
+# the correct-by-construction move here, not a defensive nicety).
+Match User ci-migrate
+    AcceptEnv MIGRATOR_EXPECT_SHA
+Match all'
 CURRENT_SSHD="$(sshx 'cat /etc/ssh/sshd_config.d/99-pfin-hardening.conf 2>/dev/null' || true)"
 if [[ "$CURRENT_SSHD" == "$DESIRED_SSHD" ]]; then
   ok "sshd drop-in already matches"

@@ -209,7 +209,7 @@ jobs:
           # invocation's ONLY jobs are: open the session, and let its exit
           # code become this step's exit code.
           #
-          # ⚠ ADR-072 Amendment 6 (DRAFT, not ratified) -- `-o
+          # ADR-072 Amendment 6 (RATIFIED, merged c2b20cc2, 2026-09-17) -- `-o
           # SetEnv=MIGRATOR_EXPECT_SHA=$GITHUB_SHA` passes the commit this
           # workflow run is FOR to migrator-orchestrate.sh's sha-check (that
           # script's own comment explains why this is a data channel, never
