@@ -980,7 +980,7 @@ select has_schema_privilege('pfin_owner','auth','USAGE') as auth_usage,
 -- whatever it printed
 ```
 
-**Three things worth knowing about `roles.sql` without opening it, all measured:** (a) it also grants `pfin_owner` to `postgres` (`INHERIT FALSE` — non-ambient, an explicit `SET ROLE` is still required) — on this image `postgres` is NOT a superuser (`rolsuper = f`), so without that grant every swept migration dies at its opener with `permission denied to set role "pfin_owner"` in CI and local dev; it is a role-graph change and the file flags it as one, Sec's to grade. (b) **order inside the file is load-bearing**: the database-ownership flip (`alter database … owner to pfin_owner`) runs FIRST, every grant AFTER it — `alter database … owner to` rewrites the owner's ACL entry, so a grant issued before the flip is silently erased by it, which presents as `failed to create migration table: permission denied for database postgres` and looks like a missing grant rather than a revoked one. (c) the schema-scoped engine backstop below is **not** in that file and cannot be — schema `pfin` doesn't exist until migration `001` creates it, which happens after `roles.sql` runs — so it stays an explicit operator step here, exactly as below.
+**Three things worth knowing about `roles.sql` without opening it, all measured:** (a) it also grants `pfin_owner` to `postgres` (`INHERIT FALSE` — non-ambient, an explicit `SET ROLE` is still required) — on this image `postgres` is NOT a superuser (`rolsuper = f`), so without that grant every swept migration dies at its opener with `permission denied to set role "pfin_owner"` in CI and local dev; it is a role-graph change and the file flags it as one, Sec's to grade. (b) **order inside the file is load-bearing**: the database-ownership flip (`alter database … owner to pfin_owner`) runs FIRST, every grant AFTER it — `alter database … owner to` rewrites the owner's ACL entry, so a grant issued before the flip is silently erased by it, which presents as `failed to create migration table: permission denied for database postgres` and looks like a missing grant rather than a revoked one. (c) **CORRECTED 2026-09-17** — this used to say the schema-scoped engine backstop (the two REVOKEs below) "cannot live in `roles.sql`" because schema `pfin` "doesn't exist until migration `001` creates it." That premise is now false: `roles.sql` itself creates schema `pfin` (idempotently, `if not exists`-guarded — see the ENGINE BACKSTOP block's own correction note below) before migration `001` ever runs, precisely so the CLI's own `if not exists` in `001` becomes a no-op rather than a race for who owns the schema. The two REVOKEs stay an explicit operator step here **only because they haven't been moved into `roles.sql` yet, not because they can't be** — moving them (after the schema-creation `DO` block, idempotently) would let the interactive block below shrink to just the `migrator` credential handoff, one source per the encode-once ruling. **Flagged to Architect as a follow-up** (`supabase/roles.sql` is Architect-owned, not edited in this PR).
 
 ```sql
 -- (2) the ENGINE BACKSTOP -- the primary control (Sec G2), not
@@ -991,15 +991,49 @@ select has_schema_privilege('pfin_owner','auth','USAGE') as auth_usage,
 --     batching, an undocumented detail a future CLI change could flip
 --     SILENTLY -- this REVOKE converts that failure mode into a loud
 --     42501 at the first create, instead of ownership landing wrong with
---     nothing raised. Cannot live in roles.sql -- schema pfin doesn't
---     exist until migration 001 creates it. In CI this property holds BY
---     CONSTRUCTION (no grant is ever made there), so this REVOKE is
---     defence against a later explicit grant, not the source of the
---     property -- the standing battery leg (o7) asserts the RESULT, not
---     this statement.
-create schema pfin authorization pfin_owner;
+--     nothing raised. The revokes below are the operator step;
+--     ⚠ CORRECTED 2026-09-17 (measured against a real re-bootstrap run):
+--     this file previously also repeated `create schema pfin
+--     authorization pfin_owner;` here -- WRONG. `supabase/roles.sql`
+--     (step (1) above) already creates schema `pfin` itself, inside an
+--     `if not exists` guard (`do $pfinschema$ ... if not exists (select 1
+--     from pg_catalog.pg_namespace where nspname = 'pfin') then execute
+--     'create schema pfin authorization pfin_owner'; end if; end
+--     $pfinschema$;` -- read on the tree, not assumed). A second, BARE
+--     `create schema` here has no such guard and errors "schema pfin
+--     already exists" on any correct run where step (1) already ran --
+--     which is every run, since step (1) always runs first. Removed. In
+--     CI the REVOKEs' property holds BY CONSTRUCTION (no grant is ever
+--     made there), so this REVOKE is defence against a later explicit
+--     grant, not the source of the property -- the standing battery leg
+--     (o7) asserts the RESULT, not this statement.
 revoke create on schema pfin from migrator;
 revoke create on schema pfin from public;
+```
+
+**⚠ Branch added 2026-09-17 (Sec condition on PR #793's re-bootstrap fixes) — check whether `migrator` already has a working credential on THIS box before touching it.** `supabase/roles.sql` only creates `migrator` if absent — on a box that has bootstrapped before, `migrator` already exists with `LOGIN` and a password that matches the running `migrator` container's own `PROD_DB_URL`. Re-running `\password`/`ALTER ROLE … LOGIN` there is not a safe no-op: a single mistyped character at the interactive `\password` prompt silently breaks the container's own credential, on a step that was never needed. **Verify both halves — `LOGIN` is set AND a password actually exists — as `supabase_admin`:**
+
+```sql
+-- rolcanlogin from pg_roles is fine to read (it is a real attribute, not
+-- the redacted column) -- but "a password is set" must be read from
+-- pg_authid, never pg_roles.rolpassword. pg_roles.rolpassword is the
+-- LITERAL CONSTANT '********' for every role (see this file's own
+-- pfin_etl caveat above) -- `rolpassword is not null` against pg_roles is
+-- ALWAYS true and proves nothing. 118's guard exists specifically to
+-- catch LOGIN-with-no-password, so this check must be able to see that
+-- state too, which only pg_authid (superuser-only) can show.
+select r.rolcanlogin, a.rolpassword is not null as password_set
+  from pg_catalog.pg_roles r
+  join pg_catalog.pg_authid a on a.rolname = r.rolname
+  where r.rolname = 'migrator';
+```
+
+- **If this reads `f | *` (LOGIN not set) or `t | f` (LOGIN set, NO password — the one dangerous ordering §6.1/§6.2 name for their own roles) or the row is absent (role never created):** this is a fresh box for this role — use the FULL form below (interactive `\password` + `alter role … login`).
+- **If this reads `t | t` (LOGIN set, password present):** **SKIP `\password migrator` and `alter role migrator login;` entirely.** This query is the verify for this branch; nothing further to run here.
+
+**Full form (fresh-box branch only, per the check above):**
+
+```sql
 -- (3) order load-bearing: credential lands LAST, on a role whose reach is
 --     already fixed. Prompts; verifier computed CLIENT-SIDE.
 \password migrator
@@ -1023,10 +1057,12 @@ psql -U supabase_admin -d <app_db> -f supabase/migrations/119_migrator_role_comm
 
 `\password` sets **only** the password — the credential lands while the role is still `NOLOGIN`, and `LOGIN` then flips onto an already-credentialed role, so **LOGIN-with-no-password never exists at any instant**. The single-statement form `ALTER ROLE migrator WITH LOGIN PASSWORD '…'` is **PROHIBITED** (Sec B10). Generate the password with `openssl rand -hex 32` if minting fresh; **in production the value is already minted on-box** — look it up, don't regenerate it (`scripts/db-shell.sh --migrator-url --i-am-a-human`, §6.0 Step 0.2), and set `\password` to match. **Operator privilege:** every Phase 1 statement requires true superuser (`supabase_admin` on this image, not `postgres` — measured, `postgres` fails `ALTER DATABASE … OWNER` with `ERROR: must be able to SET ROLE`).
 
-**PHASE 2 — the main pass, from `migrator`'s own container, as `migrator`, no `--db-url` override:**
+**PHASE 2 — the main pass, from `migrator`'s own container, as `migrator`, `--db-url "$PROD_DB_URL"` REQUIRED (⚠ CORRECTED 2026-09-17 — see below):**
+
+⚠ **This line previously read "no `--db-url` override" and gave the bare form below with no `--db-url` at all — WRONG, measured against the real pinned CLI (v2.107.0): `supabase db push --workdir /workspace` with no `--db-url`/`--linked`/`--local` flag exits 1 with `"Cannot find project ref. Have you run supabase link?"` before it ever reaches the database.** `--db-url` is not an override here — it is the only way this command has ever worked. The correct, PROVEN form is what the actual Coolify Scheduled Task runs (`scripts/migrator-scheduled-task.md`'s own command field, confirmed against `infra/supabase/docker-compose.yml`'s `migrator` service header comment): `supabase db push --db-url "$PROD_DB_URL" --workdir /workspace`, where `$PROD_DB_URL` is a variable **already present in the `migrator` container's own environment** (built from `MIGRATOR_DB_USER`/`MIGRATOR_DB_PASSWORD` etc. — see this file's own `docker-compose.yml` citation above) and must expand **inside the container's shell**, never on the operator's own machine — hence the `sh -c '...'` wrapping below, with the inner single quotes preventing the operator's own shell from touching `$PROD_DB_URL` before it ever leaves that machine:
 
 ```sh
-docker compose --project-name <supabase-stack-app-uuid> exec -T migrator supabase db push --workdir /workspace
+docker compose --project-name <supabase-stack-app-uuid> exec -T migrator sh -c 'supabase db push --db-url "$PROD_DB_URL" --workdir /workspace'
 ```
 
 **Expected output:** `"Finished supabase db push"`, one ledger row per migration file present in `supabase/migrations/` at apply time (**not a count to compare against a fixed number — see the pass-criterion note below**; `119` IS applied here despite Phase 1's file-run in step (4) already having run it — a file-run writes no ledger row, so the main pass still applies the file, sees `119`'s G4 guard take its verified-skip branch, WARNs, and records the row anyway), and **four benign WARNINGs**: `VAULT-SKIP` ×2 (`007` and `015` — each fires because every swept migration executes under `set role pfin_owner`, so `current_user` inside the file evaluates to `pfin_owner`, which holds no vault privilege, **on every lane including a superuser-applied one** — this is not a fallback for an unprivileged applier, it is the only path there is; points to the Phase 3 post-step, by design), `ROLEGRANT-SKIP`, `G4-SKIP` (`119`'s guard, verified-skip on the comment, not an exclusion from the CLI's scan). Each WARNING is the guard **reporting that the supervised step already ran**, not a fallback assumption — Phase 1's file-run in step (4) already landed these; the CLI still applies and records every file regardless. `PGSSLMODE=disable` must be in the container's environment; the `--db-url` `sslmode` query parameter is silently dropped by the CLI (§7.36 items 26/30, reproduced again here). **This depends on `001`–`118` already carrying the paired `set role pfin_owner;` / `reset role;` wrapper** (Decision G3's one-time sweep, Architect's `feat/migrations-pfin-owner-sweep`, PR #784, merged `6f9f6b7e`) — **without that sweep, this apply creates every object owned by `migrator`, reproducing the original defect.**
@@ -1183,7 +1219,7 @@ select has_table_privilege('pfin_owner', 'vault.decrypted_secrets', 'SELECT');
 **Phase B — supervised first bootstrap, `pfin_owner` by construction (rewritten 2026-09-16, ADR-072 [Amendment 5](../DECISIONS.md#adr-072) — §6.3 as `supabase_admin` runs the pre-step and creates `pfin_owner`; `migrator` runs the apply, entering `pfin_owner` per-file)**
 
 4. **Phase 1 (pre-step), `supabase_admin`, interactive (§6.3):** `psql -f supabase/roles.sql` (role creation, membership grants, the database-ownership flip and its post-flip grants) → `psql -f supabase/auth-grants.sql` (the `auth` column-level grants — a separate file; schema `auth`'s owner, `supabase_admin` (measured, Decision K), means a non-superuser seeder can't make these, so they can't live in `roles.sql`) → `CREATE SCHEMA pfin AUTHORIZATION pfin_owner` + `REVOKE CREATE ON SCHEMA pfin FROM migrator`/`public` (the engine backstop, an operator step — cannot live in either file) → `\password migrator` → `ALTER ROLE migrator LOGIN` → the `055`/`116`/`117`/`118`/`119` role-comment files, run directly. **If a prior apply already exists on this box, wipe first** (`drop schema pfin cascade; drop schema supabase_migrations cascade;`), behind the three measured gates §6.3 states (zero non-seed `pfin` rows, `auth.users = 0`, the outside-`pfin` enumeration empty — item 36). **Prepare all three passwords before starting — §6.0's Step 0.** Depends on Architect's `feat/migrations-pfin-owner-sweep` (the `pfin_owner` migration + the `001`–`118` paired `set role`/`reset role` sweep + the `007`/`015` (iv‴) view-unit guards, PR #784, merged `6f9f6b7e`) and PR #775 (`119`'s file, merged `ec9ac316`) — both on `main`.
-5. **Phase 2 (main pass), `migrator`, from its own container, no `--db-url` override (§6.3):** `docker compose … exec -T migrator supabase db push --workdir /workspace`. Applies 001–118 in order, each file entering `pfin_owner` via the paired `set role pfin_owner; … reset role;` its own text now carries — including a second, tolerant pass over the role-creation files (report-don't-repair on the pre-existing roles, still hard-fails a real C8 violation) and benign `VAULT-SKIP`/`ROLEGRANT-SKIP`/`G4-SKIP` warnings for the supervised-lane statements — creating every `pfin` object `pfin_owner`-owned and `supabase_migrations` `migrator`-owned from the first row (**item 32's manual `ALTER SCHEMA`/`ALTER TABLE … OWNER TO` statements are retired**, not carried forward). **Then Phase 3 (§6.3): the supervised post-step, before §7** — creates `pfin.decrypted_source_credential`, transfers it to `pfin_owner`, asserts exactly one decrypt view with `security_invoker = true`. Then the §6.1 (`pfin_etl`) and §6.2 (`pfin_provider_sync`) worker-role handoffs, same two-step credential shape, same deploy pass, unchanged from before.
+5. **Phase 2 (main pass), `migrator`, from its own container, `--db-url "$PROD_DB_URL"` REQUIRED — corrected 2026-09-17, see §6.3's own correction note (§6.3):** `docker compose … exec -T migrator sh -c 'supabase db push --db-url "$PROD_DB_URL" --workdir /workspace'`. Applies 001–118 in order, each file entering `pfin_owner` via the paired `set role pfin_owner; … reset role;` its own text now carries — including a second, tolerant pass over the role-creation files (report-don't-repair on the pre-existing roles, still hard-fails a real C8 violation) and benign `VAULT-SKIP`/`ROLEGRANT-SKIP`/`G4-SKIP` warnings for the supervised-lane statements — creating every `pfin` object `pfin_owner`-owned and `supabase_migrations` `migrator`-owned from the first row (**item 32's manual `ALTER SCHEMA`/`ALTER TABLE … OWNER TO` statements are retired**, not carried forward). **Then Phase 3 (§6.3): the supervised post-step, before §7** — creates `pfin.decrypted_source_credential`, transfers it to `pfin_owner`, asserts exactly one decrypt view with `security_invoker = true`. Then the §6.1 (`pfin_etl`) and §6.2 (`pfin_provider_sync`) worker-role handoffs, same two-step credential shape, same deploy pass, unchanged from before.
 6. **Verify — the ownership census, not the read verb alone (§6.3, Phase 2 verify):** `migrator`'s own attributes, its `pfin_owner` membership (NOINHERIT, SET TRUE, no ADMIN OPTION), database ownership = `pfin_owner`, the engine backstop (`migrator` holds no `CREATE` on `pfin`), no app-role membership, the worker-role memberships landed, **zero `postgres`- or `migrator`-owned `pfin` objects — every one `pfin_owner`** (the census query — this is the property the whole rewrite exists to establish), `supabase_migrations` owned by `migrator` with `bootstrap_complete` (a row for `118`) `= t` — **never a bare row count**, which is scoped to whichever migration files are present at apply time and would RED a correct box past `120` (§6.3), the four seed tables re-populated (`asset`=7, `posting_prototype_default`=30, `tax_character`=5, `taxonomy_default`=38), `rest` healthy. **Then Phase 3 (§6.3), before §7**: the supervised post-step creates `pfin.decrypted_source_credential`, transfers it to `pfin_owner`, and its own assertion block plus the runbook's query (10) both confirm exactly one decrypt view, owned by `pfin_owner`, `security_invoker = true`, and `pfin_owner` holding no `vault` privilege of any kind — **§7 does not proceed until this passes.** The true write proof is Phase D's first real migration, watched — and per Sec's ruling, the re-apply above already discharges item 32's write proof, the ownership property, and the from-scratch path in one pass; Phase D now proves the CI **transport**, not content, so its vehicle can be the smallest real `comment on` fixing a stale `pfin` comment, not a no-op.
 
 **Phase C — the CI trigger, makes steady-state live (§6.4)**
@@ -1320,6 +1356,16 @@ select has_table_privilege('pfin_owner', 'vault.decrypted_secrets', 'SELECT');
 ```
 
 **Pass:** every row in the first two queries reads `pfin_owner`; the third reads `1 | pfin_owner | true`; the fourth reads `f`. **Fail:** any `postgres`/`migrator` row, a view count other than 1, `security_invoker` not `true`, or the vault-privilege check reading `t` — stop before Phase C/D, do not hand-patch with a manual `ALTER … OWNER TO` (§6.3's own instruction: that is the emergency-transfer shape this design replaced). A stranger reading only this section has the full box-specific order; every command's *why* lives in §6.3.
+
+**Step 5 — added 2026-09-17, added on Sec's condition (PR #793): re-materialize `provision-vps.sh` before any real Phase D fire, not after.** This box's `ci-migrate` forced-command script and sshd drop-in were last materialized before ADR-072 Amendment 6 (PR #790) and its Sec joint-review (PR #791) landed on `main`. Those PRs changed `scripts/migrator-orchestrate.sh` (the sha-assertion check, now required on every path with no skip) and `scripts/provision-vps.sh`'s sshd_config fragment (`AcceptEnv MIGRATOR_EXPECT_SHA` now scoped inside `Match User ci-migrate` / `Match all`) — **neither change reaches this box until `--apply` is re-run here.** Firing the real trigger (§6.7 below, or a real migration push) before this step exercises the box's OLD script, not the one that was reviewed.
+
+```sh
+BOX_IP=<box-ip> scripts/provision-vps.sh --apply
+```
+
+**Expect:** idempotent re-materialization — rewrites `scripts/migrator-orchestrate.sh` on the box (root-owned, `0755`) and the sshd drop-in, reloading sshd via the stage/validate/restore-on-failure sequence (§6.4's own script; the sequence itself is unchanged by this step, only its target content is newer).
+
+**STOP condition:** any `sshd -t` rejection reported by the script, or a non-zero exit → **STOP.** Do not proceed to §6.7's exercise, or to a real Phase D fire, with a half-applied box. Once this passes, §6.7's hops-(d)/(e) recipe (or a real migration push) is exercising the current, reviewed box-side mechanism.
 
 ---
 
