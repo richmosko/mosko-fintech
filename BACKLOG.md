@@ -1622,3 +1622,13 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 - **AC.** Walk **every ratified clause** of ADR-072 and of **each** of its amendments — Decisions 1–7 and Amendments 1–6, their sub-decisions included — and mark each one of exactly three ways: **IMPLEMENTED**, with the artifact named (file and, where it is a line-level claim, the line); **UNIMPLEMENTED**, with a `BACKLOG.md` booking created and cited; or **N-A**, with the reason stated. ⚠ **A clause may not be left unmarked, and "presumably implemented" is not one of the three** — the whole point is that presumption is what failed here. ⚠ **The walk asserts against the TREE and, where the clause is about the box, says so and marks it unmeasured rather than inferring** — several Amendment 6 findings are precisely clauses whose on-box behaviour has never been observed. Output lands as a record under `docs/records/`, not as prose inside ADR-072, **so an audit finding is not buried inside the document being audited.**
 - **Dependencies.** Upstream: none — it reads the record and the tree, and blocks on nothing. Downstream: it will likely **create** bookings; item 45 (the orchestrator change) is the first one already known, and item 32's reopened proof leg is a second. **Not a gate on Phase D**, but it is the control that stops the next unimplemented clause from being found by a production symptom.
 
+**47. The 40-hex sha regex `^[0-9a-f]{40}$` lives in two files (`infra/supabase/migrator/Dockerfile`, `scripts/migrator-orchestrate.sh`) with a comment saying "kept in sync deliberately" — a convention with no mechanism.** [DevOps; no milestone yet]
+- **Source.** Sec, #790 pin at `a47e8c3f` (2026-09-17): the shape Sec flags in others — two literals, one comment, nothing watching.
+- **AC.** One CI fence leg (in `security-scan.yml`'s existing fence family) asserting the two literals are byte-identical; golden with one drifted expecting RED. Or: one source (a shared file both read at build/run time) — state which and why.
+- **Dependencies.** None.
+
+**48. `/workspace/.build-sha` is written without a trailing newline (byte-compared) and `.build-sha-source` with one (human-read) — the asymmetry is correct, load-bearing, and undocumented at the second site.** [DevOps; no milestone yet]
+- **Source.** Sec, #790 pin at `a47e8c3f` (2026-09-17). Anyone who later compares `.build-sha-source` programmatically will be bitten.
+- **AC.** A comment at each write site in the Dockerfile naming the other file and why the newline differs; the orchestrator's read of `.build-sha` documented as byte-exact.
+- **Dependencies.** None.
+
