@@ -149,9 +149,18 @@ jobs:
         # would be permanently RED for a correct database. Applying the same committed
         # artifact a production box runs is what makes the definition-lane watcher
         # observe the same end state. One file, both lanes — the roles.sql principle.
+        #
+        # ⚠ CONNECTS AS `supabase_admin`, NOT `postgres` — measured 2026-09-17 against a
+        # live container: schema `pfin` is owned by `pfin_owner` and CREATE is revoked
+        # from `public`/`migrator` under the (iv‴) sweep, so `postgres` (not a superuser
+        # on this image, ADR-072 Amendment 5 Decision K) gets "permission denied for
+        # schema pfin" creating the view; `supabase_admin` succeeds. Same privileged
+        # channel as the auth-grants.sql step in .github/actions/start-local-stack —
+        # `docker exec` into the db container as its postgres OS user, over the unix
+        # socket's local/trust rule, no credential in this workflow.
         run: |
-          PGPASSWORD=postgres psql -X -h 127.0.0.1 -p 54322 -U postgres -d postgres \
-            -v ON_ERROR_STOP=1 -f supabase/post-step-vault-view.sql
+          docker exec -i -u postgres supabase_db_mosko-fintech \
+            psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres -f - < supabase/post-step-vault-view.sql
 
       - name: Run pgTAP battery (directory-mode; verbs excluded by non-test extension)  ⟦WIRE-VALIDATE #1⟧
         # `supabase test db` (no args) defaults to the supabase/tests directory and binds the WHOLE
