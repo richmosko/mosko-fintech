@@ -1,0 +1,96 @@
+-- ============================================================================
+-- Migration: pfin.account table comment — correct a claim 015 falsified.
+--   COMMENT-ONLY. Re-issues `comment on table pfin.account` to replace one sentence
+--   that has been false since 015. No DDL, no policy, no grant, no function.
+--
+-- Numbering: 120 follows 119. Depends only on 003 (which created the table and wrote
+--   the comment) and 015 (which falsified it). Nothing depends on 120.
+--
+-- ----------------------------------------------------------------------------
+-- WHAT WAS WRONG, and why a new migration is the only vehicle.
+--   003 wrote, and nothing has re-written since (003 is the SOLE writer of this
+--   comment across 001-119, verified by grep over the chain):
+--
+--     "The Plaid-item linkage column (SD-03) is DEFERRED - it lands via ALTER in the
+--      plaid_items migration (avoids a forward-reference to a not-yet-created table);
+--      manual accounts carry no Plaid linkage."
+--
+--   015 falsified BOTH halves in one file: it added the linkage column by ALTER as
+--   `linked_source_id` (015:546) and it DROPPED `pfin.plaid_items` entirely (015:159)
+--   as part of the linked_source fold. So the column is not deferred, and the
+--   migration named as its vehicle does not exist.
+--
+--   A `comment on ...` has a DATABASE representation: it ships into pg_description and
+--   is what `\d+` shows a reader who has no repo in front of them. Editing 003 would
+--   change the repo and leave the catalog wrong. Per the apply-migration skill's Step
+--   1.6 case (A), the only vehicle is a new comment-only migration - the 052 shape.
+--
+-- ----------------------------------------------------------------------------
+-- WHY THE REPLACEMENT TEXT IS SHAPED THE WAY IT IS (skill Step 1.5).
+--   (a) The old sentence was a PRESENT-TENSE claim about state the reader cannot check
+--       from where they are standing - "is DEFERRED", "it lands via ALTER in the
+--       plaid_items migration". That is the failure mode Step 1.5(a) names, and it is
+--       why this went stale silently. The replacement is a PAST-TENSE DURABLE EVENT
+--       ("landed via ALTER at 015 as linked_source_id"), which stays true, and it names
+--       a column the reader CAN check at `\d+`.
+--   (b) It quotes the retired claim AS WRONG rather than restating it as history - the
+--       form Step 1.5 explicitly preserves - so a reader who remembers the old text
+--       learns it changed instead of doubting their memory.
+--   (c) No counts, no enumerations, no forward reference: 015 is merged and applied.
+--
+-- ----------------------------------------------------------------------------
+-- SHAPE - COMMENT-ONLY. One `comment on table` statement between the pfin-lane pair.
+--   Zero DDL, zero policy, zero grant, zero function, zero role-graph statement - so it
+--   is applicable by `migrator` with no supervised step. `set search_path = ''` is N/A
+--   for a comment statement (052 precedent) and is deliberately kept out.
+--
+-- PROVENANCE OF THE LITERAL - regenerated, never retyped (skill Step 1.6 (A)).
+--   The string below was produced from 003's literal by ONE anchored substitution
+--   asserted to match exactly once, with a containment proof that the 283-byte prefix
+--   and the 176-byte suffix are byte-identical to 003's and that exactly one contiguous
+--   span changed. The literal contains no single quote, so there is no '' doubling and
+--   no divergence between source and rendered catalog text.
+--
+-- ADR-011 Decision 4's §10 catalogued-instance ledger: read verbatim and live at draft
+--   time. Unchanged - no catalogued instance added, removed, reordered or renumbered; no
+--   layer attribution moves; the enumeration is linked, not restated (Path B). No
+--   Decision 3 FK-shaped column. No SECURITY DEFINER function. No RT minted.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — opener. ADR-072 Amendment 5 (Decisions F1, G3).
+-- DO NOT SPLIT, REORDER OR CONVERT THIS PAIR. Every object this file creates
+-- must be owned by pfin_owner, whichever identity applies the file.
+--   · The transaction-scoped variant of this statement is FORBIDDEN here and is
+--     a CI-fence RED — but NOT for the reason an earlier revision of this comment
+--     gave. ⚠ CORRECTED, MEASURED THROUGH THE CLI: that variant emits WARNING
+--     25P01 on every file AND STILL TAKES EFFECT, because the CLI sends the file
+--     as one multi-statement query, which Postgres runs in an IMPLICIT
+--     transaction. It is NOT a silent no-op; the earlier "does nothing" claim was
+--     wrong. It is refused because (i) it warns on every apply, which trains an
+--     operator to ignore warnings, and (ii) its correctness rests on the CLI's
+--     query-batching — an undocumented implementation detail a CLI change could
+--     flip without notice, at which point ownership would silently land wrong.
+--     The session-scoped pair depends on nothing but SQL semantics. The tokens
+--     are deliberately NOT spelled out in this comment, so a fence counting them
+--     over source stays exact — read the statement itself, below.
+--   · The closing statement at the foot of this file is LOAD-BEARING, not
+--     tidiness: the CLI writes its ledger row on this same session immediately
+--     after the file, and pfin_owner cannot write supabase_migrations — without
+--     the close, the push FAILS on the ledger INSERT.
+--   · Fail-closed backstop: migrator holds no CREATE on schema pfin, so a file
+--     that loses this pair errors 42501 rather than quietly creating a
+--     migrator-owned object. The backstop is the control; the pair is the path.
+-- ----------------------------------------------------------------------------
+set role pfin_owner;
+
+comment on table pfin.account is
+  'Core account entity (ADR-011 Decision 5 / Lock 1; SELF-187). DP-6 = B minimal V1 column set. acct_number stored full, rendered masked-only via pfin.fn_mask_acct_number (SD-15 / Lock 5 / Decision 9 — masked-only enforcement is app-layer + Phase-6 PR-review fence, NOT a DB boundary). The provider linkage column (SD-03) landed via ALTER at 015 as linked_source_id, and 015 also dropped plaid_items. This sentence previously read that the column was DEFERRED and would land in a plaid_items migration; both halves are false — there is no deferral and no such table. Manual accounts carry no provider linkage (§2.4.2). scope is a free-text user-defined ownership label (ADR-004 Decision B) — a user-data attribute, NOT a tenant-isolation boundary. RLS isolation anchor is users_id = auth.uid().';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ PFIN-LANE OWNERSHIP PAIR — closer. ADR-072 Amendment 5 (Decisions F1, G3).
+-- This statement is SESSION-scoped and there is no transaction to roll it back,
+-- so it MUST be the last statement in the file: the CLI's ledger INSERT runs
+-- next, on this session, and must run as migrator. NOTHING MAY FOLLOW IT.
+-- ----------------------------------------------------------------------------
+reset role;
