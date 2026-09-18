@@ -18,17 +18,28 @@
 #   BOX_IP=<box-ip> scripts/record-coolify-uuids.sh --apply    # write to .env
 #
 # What it looks up, by NAME (never a stored/assumed UUID):
-#   MIGRATOR_SERVICE_UUID — the Supabase-stack Coolify application (default
-#     name "pfin-supabase-stack", matching provision-supabase-stack.sh's own
-#     APP_NAME default) — migrator is a SIBLING SERVICE inside this one
-#     application, not a standalone resource (see docs/deployment-runbook.md
-#     §6's migrator Credential bullet).
+#   MIGRATOR_SERVICE_UUID — ⚠ CHANGED, ADR-072 Amendment 4 (2026-09-16,
+#     F/CTO-ratified) / BACKLOG.md §7.36 item 29, 2026-09-18: `migrator`
+#     moved OFF the Supabase-stack application to its OWN standalone
+#     Coolify application (default name "pfin-migrator", MIGRATOR_APP_NAME
+#     below — matching scripts/provision-migrator-app.sh's own default).
+#     The VARIABLE NAME is kept as MIGRATOR_SERVICE_UUID (Architect's
+#     ratified naming call, ADR-072 Amendment 4: "keep the variable name...
+#     its meaning — the application holding the task — is still exactly
+#     true") even though WHICH application it resolves against changed —
+#     do not read the unchanged name as evidence the topology didn't move;
+#     see DECISIONS.md's ADR-072 Amendment 4 for the full citation. This is
+#     load-bearing in scripts/migrator-orchestrate.sh,
+#     /etc/pfin/migrator-trigger.conf, and scripts/provision-vps.sh, none
+#     of which needed to change for this rename.
 #   APP_UUID — the V1 web-app Coolify application (default name "pfin-app").
-#   MIGRATOR_TASK_UUID — the "migrator-db-push" Scheduled Task attached to
-#     the Supabase-stack application (scripts/migrator-scheduled-task.md).
+#   MIGRATOR_TASK_UUID — the "migrator-db-push" Scheduled Task, now attached
+#     to the migrator application (see MIGRATOR_SERVICE_UUID above), NOT
+#     the Supabase-stack application (scripts/migrator-scheduled-task.md's
+#     own "Resource attachment" section).
 #
 # Override the names this script searches for via env vars
-# (SUPABASE_STACK_APP_NAME / WEB_APP_NAME / MIGRATOR_TASK_NAME) if a
+# (MIGRATOR_APP_NAME / WEB_APP_NAME / MIGRATOR_TASK_NAME) if a
 # rebuild ever uses different resource names — never hardcode a second copy
 # of this script's defaults elsewhere.
 
@@ -61,7 +72,11 @@ else
 fi
 BOX_IP="${BOX_IP:-}"
 AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
-SUPABASE_STACK_APP_NAME="${SUPABASE_STACK_APP_NAME:-pfin-supabase-stack}"
+# ADR-072 Amendment 4 / BACKLOG.md §7.36 item 29 (2026-09-18): MIGRATOR_APP_NAME
+# replaces SUPABASE_STACK_APP_NAME as the lookup name for the resource
+# MIGRATOR_SERVICE_UUID resolves against — see this file's header comment.
+# Matches scripts/provision-migrator-app.sh's own MIGRATOR_APP_NAME default.
+MIGRATOR_APP_NAME="${MIGRATOR_APP_NAME:-pfin-migrator}"
 WEB_APP_NAME="${WEB_APP_NAME:-pfin-app}"
 MIGRATOR_TASK_NAME="${MIGRATOR_TASK_NAME:-migrator-db-push}"
 
@@ -100,10 +115,10 @@ step "Looking up resource UUIDs by name"
 
 MIGRATOR_SERVICE_UUID="$(api GET /applications | jqp "
 d=json.load(sys.stdin)
-m=[a for a in d if a['name']=='$SUPABASE_STACK_APP_NAME']
+m=[a for a in d if a['name']=='$MIGRATOR_APP_NAME']
 print(m[0]['uuid'] if m else '')")"
-[[ -n "$MIGRATOR_SERVICE_UUID" ]] || die "no application named '$SUPABASE_STACK_APP_NAME' found -- run scripts/provision-supabase-stack.sh --apply first, or override SUPABASE_STACK_APP_NAME"
-ok "MIGRATOR_SERVICE_UUID ($SUPABASE_STACK_APP_NAME) — $MIGRATOR_SERVICE_UUID"
+[[ -n "$MIGRATOR_SERVICE_UUID" ]] || die "no application named '$MIGRATOR_APP_NAME' found -- run scripts/provision-migrator-app.sh --apply first, or override MIGRATOR_APP_NAME"
+ok "MIGRATOR_SERVICE_UUID ($MIGRATOR_APP_NAME) — $MIGRATOR_SERVICE_UUID"
 
 APP_UUID="$(api GET /applications | jqp "
 d=json.load(sys.stdin)

@@ -31,14 +31,31 @@ first supervised bootstrap (ADR-072 Decision 6).
 
 ## Resource attachment
 
-Attach the Scheduled Task to the **Supabase stack Coolify resource**
-(`infra/supabase/docker-compose.yml` — the one Compose application that also
-runs `db`/`auth`/`rest`/`api-gw`/`supavisor`/`meta`/`studio`), targeting the
-**`migrator`** service specifically. `migrator` is a sibling service in that
-same Compose file, not a standalone Coolify application (see
-`secrets-manifest.yml`'s `MIGRATOR_DB_PASSWORD` entry and
-`scripts/provision-supabase-stack.sh` for why its credential is minted
-there rather than pushed by `scripts/push-production-secrets.sh`).
+⚠ **CHANGED, ADR-072 Amendment 4 (2026-09-16, F/CTO-ratified) / BACKLOG.md
+§7.36 item 29, 2026-09-18.** This section previously said to attach the
+Scheduled Task to the Supabase-stack Coolify resource, with `migrator` as a
+sibling service inside `infra/supabase/docker-compose.yml`. That topology
+is **RETIRED** — ADR-072 Amendment 3 measured that a sibling service inside
+a multi-service `dockercompose` application does not get the confinement
+C7 requires (Coolify's `env_file:` gives every service in the application
+the whole env store).
+
+Attach the Scheduled Task to **migrator's OWN standalone Coolify
+application** (`infra/supabase/migrator/docker-compose.yaml`, created by
+`scripts/provision-migrator-app.sh` — one service, one Coolify application
+UUID, its own env store, same Coolify **project** as the Supabase stack but
+a **separate application**), targeting the **`migrator`** service (the
+only service in that compose file). See `secrets-manifest.yml`'s
+`MIGRATOR_DB_PASSWORD` entry and `scripts/provision-migrator-app.sh` for
+why its credential is minted into that application's own store rather than
+the stack's, and rather than pushed by `scripts/push-production-secrets.sh`
+(ADR-072 Amendment 4 Decision B forbids that route for this credential).
+
+`scripts/record-coolify-uuids.sh` resolves `MIGRATOR_SERVICE_UUID` by the
+migrator application's own name (`MIGRATOR_APP_NAME`, default
+`pfin-migrator`) — the variable name is unchanged (Architect's ratified
+naming call: its meaning, "the application holding the task," is still
+exactly true) even though which application it resolves against moved.
 
 ## Task fields (Coolify UI: Scheduled Tasks tab on the Supabase resource)
 

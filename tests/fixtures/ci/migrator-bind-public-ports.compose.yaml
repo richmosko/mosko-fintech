@@ -1,0 +1,19 @@
+# fence-migrator-private-bind: target
+# GOLDEN FIXTURE — VECTOR 1a (`ports:` key present → fence FAILS, exit 1).
+#
+# Unlike the datastore fence, there is no allowlisted exception here — this
+# application publishes nothing, ever. Exercised by the fence-migrator-bind
+# CI job, asserting exit 1 AND the vector-1 `ports:` token.
+
+services:
+  migrator:
+    container_name: supabase-migrator
+    build:
+      context: ../../..
+      dockerfile: infra/supabase/migrator/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "9999:9999"
+    environment:
+      PROD_DB_URL: postgres://user:pass@db:5432/postgres?sslmode=disable
+      PGSSLMODE: disable

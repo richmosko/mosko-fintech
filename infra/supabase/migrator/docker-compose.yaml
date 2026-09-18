@@ -1,0 +1,207 @@
+# infra/supabase/migrator/docker-compose.yaml
+#
+# migrator — ADR-072 Amendment 4 (2026-09-16, F/CTO-ratified 2026-09-16) —
+# STANDALONE Coolify application (dockercompose build pack), same Coolify
+# PROJECT as the Supabase stack, its OWN env store, its OWN Coolify
+# application UUID. DevOps-owned. BACKLOG.md §7.36 item 29 build.
+#
+# WHY THIS FILE EXISTS SEPARATELY FROM infra/supabase/docker-compose.yml
+#   ADR-072 Amendment 3 (2026-09-14) measured that Coolify gives EVERY
+#   service inside a multi-service `dockercompose` application the WHOLE
+#   env store via `env_file:` in its own rendered compose — a service's
+#   declared `environment:` block does NOT bound its container's actual
+#   environment. As a sibling service inside the Supabase-stack compose,
+#   `migrator` held every stack secret (POSTGRES_PASSWORD, JWT_SECRET,
+#   SERVICE_ROLE_KEY, VAULT_ENC_KEY, ANON_KEY, SECRET_KEY_BASE) alongside its
+#   own bounded credential — C7's confinement clause was FALSE as a live
+#   property. Moving `migrator` to its OWN Coolify application/env store
+#   re-establishes C7's confinement BY CONSTRUCTION: a store holding roughly
+#   five names, provable by `docker inspect .Config.Env` on this container.
+#   See DECISIONS.md ADR-072 Amendment 4 for the full option analysis
+#   (topology / credential channel / CI-fence boundary are three separable
+#   decisions) and BACKLOG.md §7.36 item 29 for the AC this PR discharges.
+#
+# ┌─ RECIPROCAL POINTER ────────────────────────────────────────────────────┐
+# │ `db`'s address, container name and the rest of the Supabase-stack       │
+# │ topology are declared in infra/supabase/docker-compose.yml, NOT here.  │
+# │ Two compose files now describe one datastore relationship — `db`'s      │
+# │ address lives in the stack's own file; this is its only DDL client.    │
+# │ See infra/supabase/docker-compose.yml's own pointer comment back to     │
+# │ this file. Keep both pointers in sync if either file's shape changes.  │
+# └───────────────────────────────────────────────────────────────────────┘
+#
+# ┌─ NO ports:, NO Coolify Domain, NO network_mode: host (ADR-072 C9,       │
+# │ carried forward to THIS file's own sentinel — NOT RT-32's) ─────────────┤
+# │ This service takes ZERO inbound connections of any kind — not even an   │
+# │ `expose:` entry. It is invoked ONLY by a Coolify Scheduled Task         │
+# │ `docker exec`ing into it; nothing ever dials IN to this container. Its  │
+# │ only network activity is OUTBOUND, to `db`, on the network this file's  │
+# │ own `networks:` block attaches (see below). Adding `ports:` or a        │
+# │ Domain here is a CI-fenced-set regression (the sibling fence this file  │
+# │ carries its own sentinel for — scripts/ci/fence-migrator-private-bind.sh│
+# │ + security-scan.yml's `fence-migrator-bind` job) — never do it.         │
+# └─────────────────────────────────────────────────────────────────────────┘
+# fence-migrator-private-bind: target
+#
+# CREDENTIAL (ADR-072 Decision 4 / Sec C7/C8, channel corrected by
+# Amendment 4 Decision B): PROD_DB_URL is built here from a DEDICATED
+# `migrator` login role — CREATEROLE + owner of the app database, NOT
+# `postgres`, NOT `authenticator`, NOT a `pfin_*` worker role, and NOT a
+# member of `service_role`/`authenticated`. MIGRATOR_DB_USER (non-secret) /
+# MIGRATOR_DB_PASSWORD (`production_only`, secrets-manifest.yml) are
+# minted/injected by scripts/provision-migrator-app.sh (mint-if-absent) into
+# THIS application's OWN Coolify env store — NOT the Supabase-stack's store
+# (Amendment 1's route, now withdrawn — see Amendment 3/4) and NOT
+# scripts/push-production-secrets.sh's per-worker push (Amendment 4 Decision
+# B: routing this credential through that script would require the
+# production DDL password to exist in plaintext on the operator's own
+# machine, which is the wrong direction for this specific credential —
+# `SECRET_RESOURCE_MAP → migrator` is FORBIDDEN). Lands ONLY here — never
+# CI, never the `app` container, never any other worker, and — this is the
+# whole point of this file existing — never the Supabase-stack's own env
+# store. See infra/supabase/migrator/.env.example for the per-surface
+# contract.
+#
+# Pattern-A resident container (CMD tail -f /dev/null, baked in the
+# Dockerfile at infra/supabase/migrator/Dockerfile — UNCHANGED, still lives
+# there, still built from repo-root context; only the compose file that
+# invokes it moved) — the Scheduled Task's `command` runs `sh
+# /workspace/pfin-task.sh`. See infra/supabase/docker-compose.yml's own
+# (former) migrator comment block, now a pointer, for the full citation
+# chain on the task script / Amendment 7 / Amendment 8 mechanics — none of
+# that changed by this move, only WHICH Coolify application hosts the
+# container and WHICH env store the credential lands in.
+#
+# See docs/deployment-runbook.md §6 / §6.5 / §6.6 for the full trigger/
+# fail-closed sequencing and the CUTOVER PROCEDURE that moves a live box
+# from the old (sibling-service) topology to this one.
+
+services:
+  migrator:
+    container_name: supabase-migrator
+    build:
+      # Build context is the repo root — THREE levels up from this file's
+      # own directory (infra/supabase/migrator/), one more than the
+      # Supabase-stack compose's `../..` (that file lives at
+      # infra/supabase/, two levels up). Coolify's Base Directory for THIS
+      # application must be set to /infra/supabase/migrator (mirroring the
+      # stack's own /infra/supabase) so `docker compose --project-directory
+      # <clone>/infra/supabase/migrator` resolves `context: ../../..` to the
+      # clone root, where `supabase/config.toml` / `supabase/migrations/`
+      # actually live — same reasoning as the stack compose's own context
+      # comment, one directory level deeper.
+      context: ../../..
+      dockerfile: infra/supabase/migrator/Dockerfile
+      # ADR-072 Amendment 6 sha-baking — UNCHANGED by this move. See
+      # infra/supabase/docker-compose.yml's history (git blame) for the full
+      # citation on why BOTH GIT_SHA and SOURCE_COMMIT are accepted, and
+      # docs/deployment-runbook.md §6.5 Phase A step 3a for the measured
+      # answer (Coolify 4.3.18 supplies GIT_SHA via this compose route).
+      args:
+        GIT_SHA: ${SOURCE_COMMIT:-}
+    restart: unless-stopped
+    environment:
+      # Transport: plaintext, deliberately and explicitly (Sec ruling,
+      # BACKLOG.md §7.36 item 26, 2026-09-14) — CARRIED VERBATIM, both the
+      # setting and its belt-and-braces pairing with PGSSLMODE below
+      # (§7.36 item 30's binding constraint: PGSSLMODE/PGSSLROOTCERT are the
+      # mechanism of record for this CLI's TLS mode, the URL query parameter
+      # is never trustworthy alone).
+      #
+      # JUSTIFICATION — RE-STATED, not copied, per ADR-072 Amendment 4: the
+      # sibling-service version of this comment said the hop stayed on "the
+      # stack's own project network" because `db` was `expose:`-only *on
+      # that network*. Under THIS topology the hop is container-to-container
+      # across the EXTERNAL network this file's own `networks:` block
+      # attaches to (the Supabase-stack application's Docker network,
+      # measured/selected at cutover — see the `networks:` block below and
+      # docs/deployment-runbook.md §6.6's CUTOVER PROCEDURE) — still never
+      # off-host, so the Sec ruling at item 26 stands, but the network the
+      # traffic crosses is a shared attachment between two Coolify
+      # applications, not a single application's own internal project
+      # network. `db` remains `expose:`-only and never host-published
+      # (RT-32) regardless of which mechanism attaches this container to
+      # its network.
+      #
+      # ⚠ VOID CONDITION — CARRIED VERBATIM (item 26's AC): this is void the
+      # moment `db` or `supavisor` becomes reachable off-host. If any RT-32
+      # vector is ever opened, TLS on this hop becomes required, not
+      # optional.
+      #
+      # POSTGRES_HOST/POSTGRES_PORT/POSTGRES_DB are hardcoded literals here
+      # (`db` / `5432` / `postgres`), NOT sourced from this application's own
+      # env store — they describe the STACK's shape (its NONSECRET_DEFAULTS,
+      # set by scripts/provision-supabase-stack.sh), not this application's,
+      # and duplicating a second mint-if-absent path for three constants
+      # that have never varied is not worth the indirection. If the stack
+      # ever changes its `db` service name or port, update this literal
+      # alongside infra/supabase/docker-compose.yml's own `POSTGRES_PORT`/
+      # `POSTGRES_DB` NONSECRET_DEFAULTS — there is no shared variable
+      # between the two applications' env stores to keep this in sync
+      # automatically.
+      PROD_DB_URL: postgres://${MIGRATOR_DB_USER}:${MIGRATOR_DB_PASSWORD}@db:5432/postgres?sslmode=disable
+      # PGSSLMODE=disable is required, not optional — measured (§7.36 item
+      # 26 follow-up, 2026-09-14; see infra/supabase/docker-compose.yml's
+      # git history for the full citation on why the URL param alone is
+      # insufficient). Carried verbatim from the sibling-service compose —
+      # this setting is a property of the migrator SERVICE, not of which
+      # Coolify application hosts it.
+      PGSSLMODE: disable
+
+    # ── NETWORK ATTACHMENT (ADR-072 Amendment 4 Decision A / "Network
+    #    reachability" section) ──────────────────────────────────────────
+    # Mechanism (b) — RECOMMENDED, ACTIVE BELOW: an `external:` network
+    # naming the Supabase-stack application's own Docker network. Attaches
+    # exactly ONE new member (this container) rather than widening a
+    # predefined network shared by every resource toggled onto it (see
+    # mechanism (a), commented out below, and what it widens).
+    #
+    # ⚠⚠ UNMEASURED, STATED PLAINLY PER AMENDMENT 4: whether Coolify
+    # 4.3.18's `dockercompose` build pack PERMITS an `external:` network
+    # declaration at all has NOT been measured against a live Coolify
+    # instance as of this PR. This must be measured ON THE BOX FIRST, as
+    # the opening step of the CUTOVER PROCEDURE (docs/deployment-runbook.md
+    # §6.6) — before any credential migration or DNS-affecting step. If
+    # Coolify rejects this shape (parse error, or the network fails to
+    # attach), fall back to mechanism (a) below and RECORD, in the runbook's
+    # cutover log, the explicit widening statement mechanism (a) requires —
+    # do not silently swap shapes without that record.
+    #
+    # STACK_NETWORK_NAME is NOT a secret — it is a Coolify-generated Docker
+    # network name, environment-specific (derived from the stack
+    # application's UUID), and is populated into this application's env
+    # store by scripts/provision-migrator-app.sh at cutover time (read off
+    # the box via `docker network ls` / `docker compose ... config` against
+    # the running stack resource — see that script's own header for the
+    # exact lookup). The `:?` form fails the compose interpolation closed
+    # (refuses to start) rather than silently falling back to Coolify's own
+    # per-application default network, which would leave `migrator`
+    # unable to reach `db` at all — a loud failure here is preferable to a
+    # silent one at first `db push`.
+    networks:
+      default:
+        name: ${MIGRATOR_STACK_NETWORK_NAME:?MIGRATOR_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at cutover, see docs/deployment-runbook.md §6.6 CUTOVER PROCEDURE step 3. Do NOT default this to a guessed value.}
+        external: true
+
+    # ── FALLBACK MECHANISM (a) — Coolify's predefined-network toggle,
+    #    enabled on BOTH this resource and the Supabase-stack resource via
+    #    the Coolify dashboard (`connect_to_docker_network`), matching the
+    #    existing `app`↔`provider-sync`/`api-gw` precedent
+    #    (docs/deployment-runbook.md §4 (1d) / §7). USE ONLY IF mechanism
+    #    (b) above is measured unavailable on this Coolify version.
+    #
+    #    ⚠ WHAT THIS WIDENS, STATED EXPLICITLY PER AMENDMENT 4 (never adopt
+    #    silently): `connect_to_docker_network`'s toggle attaches a
+    #    resource to a network shared with EVERY OTHER resource also
+    #    toggled onto it — not exclusively with the Supabase-stack
+    #    application. `db`'s reachable-from set widens to that whole set,
+    #    on an axis the RT-32 / fence-migrator-private-bind fences CANNOT
+    #    see (they read host-publish, Domain and `network_mode`, not
+    #    network membership). If this fallback is adopted, remove the
+    #    `networks:` block above, delete this comment block's leading `#`
+    #    on the two lines below, and record in the runbook's cutover log
+    #    exactly which other resources share that network at the time of
+    #    adoption.
+    #
+    # networks:
+    #   - <predefined-network-name-shared-with-the-stack-resource>

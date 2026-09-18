@@ -1,0 +1,15 @@
+# fence-migrator-private-bind: target
+# GOLDEN FIXTURE — STRUCTURAL: a `ports:` key with zero value lines
+# (exit 2, fail closed).
+#
+# A `ports:` key the walker cannot read the contents of must never produce
+# a pass — same fail-closed discipline as fence-datastore-private-bind.sh's
+# own empty-block fixture, and the missing-sentinel case. Exercised by the
+# fence-migrator-bind CI job, asserting exit 2 specifically.
+
+services:
+  migrator:
+    container_name: supabase-migrator
+    restart: unless-stopped
+    ports:
+    image_placeholder: unused

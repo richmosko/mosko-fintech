@@ -1,0 +1,21 @@
+# GOLDEN FIXTURE — STRUCTURAL (sentinel absent → fence FAILS CLOSED, exit 2).
+#
+# Otherwise identical to migrator-bind-private.compose.yaml (a clean,
+# zero-inbound shape) but deliberately missing the
+# `# fence-migrator-private-bind: target` sentinel line. Proves the fence
+# refuses to emit a clean pass over a file it cannot confirm is the
+# intended migrator-application manifest — a renamed/unmarked compose must
+# not silently pass by virtue of having no violations in it. Exercised by
+# the fence-migrator-bind CI job, asserting exit 2 specifically (not just
+# non-zero).
+
+services:
+  migrator:
+    container_name: supabase-migrator
+    build:
+      context: ../../..
+      dockerfile: infra/supabase/migrator/Dockerfile
+    restart: unless-stopped
+    environment:
+      PROD_DB_URL: postgres://user:pass@db:5432/postgres?sslmode=disable
+      PGSSLMODE: disable

@@ -1,0 +1,19 @@
+# fence-migrator-private-bind: target
+# GOLDEN FIXTURE — VECTOR 2 (reverse-proxy Domain / public-FQDN request →
+# fence FAILS, exit 1).
+#
+# The migrator application has no legitimate reason to request a public
+# Domain/Host()/SERVICE_FQDN — it has no HTTP surface at all. Exercised by
+# the fence-migrator-bind CI job, asserting exit 1 AND the vector-2 token.
+
+services:
+  migrator:
+    container_name: supabase-migrator
+    build:
+      context: ../../..
+      dockerfile: infra/supabase/migrator/Dockerfile
+    restart: unless-stopped
+    environment:
+      PROD_DB_URL: postgres://user:pass@db:5432/postgres?sslmode=disable
+      PGSSLMODE: disable
+      SERVICE_FQDN_MIGRATOR: ${SERVICE_FQDN_MIGRATOR}
