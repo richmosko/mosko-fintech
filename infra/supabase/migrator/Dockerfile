@@ -153,6 +153,56 @@ COPY supabase/config.toml supabase/config.toml
 COPY supabase/templates/ supabase/templates/
 COPY supabase/migrations/ supabase/migrations/
 
+# ⚠ ADR-072 Amendment 8 (2026-09-18, F/CTO-ratified option (B) --
+# Architect's architect-a7-command-length.md; Sec pre-graded in
+# sec-pregrade-baked-task-script.md): Coolify's `scheduled_tasks.command`
+# is `character varying(255)` and the tagged 3-assertion literal this
+# used to be is 357 bytes -- every rewrite that fits 255 deletes either
+# the `rc=$?` failure-capture (making every FAILED migration report
+# SUCCESS -- see pfin-task.sh's own named prohibition) or one of the two
+# ledger-comparison tags (making the delivery assertion one-sided,
+# meaningless). Neither is acceptable; Sec vetoes both. This bakes the
+# full logic into the image instead, so Coolify's command becomes the
+# 26-byte `sh /workspace/pfin-task.sh` -- see that file's own header for
+# the full rationale, including why this is a NET SECURITY IMPROVEMENT
+# for C5 (the evidence-producing instruction moves OUT of a store the
+# trigger token's `write` ability can rewrite, and INTO an image layer
+# built from merged, CI-reviewed `main` -- Sec's pre-grade).
+COPY --chmod=0755 infra/supabase/migrator/pfin-task.sh /workspace/pfin-task.sh
+
+# ⚠ Item-21 class self-check, per Architect's addendum: "the same blind
+# spot [item 21's own -- a Dockerfile build-time check that cannot
+# observe whether a companion file/binary is actually present and
+# usable] applies to this script -- a COPY that silently lands a
+# zero-byte or non-executable file would fail at FIRE TIME, not build
+# time." Two checks, in the same RUN chain as everything else that
+# already fails the build (the sha checks below) -- named FATAL token
+# distinct from this Dockerfile's OTHER fail-closed messages and from
+# any CI harness's own generic "docker build failed" string (matching
+# the wrong token would make an inversion leg testing this vacuous, same
+# discipline as the no-sha leg scripts/ci/fence-migrator-build-connect.sh
+# already has):
+#   (1) `test -x` -- the file exists AND is executable (the `--chmod`
+#       above should already guarantee this; asserting it anyway is the
+#       point -- a COPY flag silently ignored by some future BuildKit
+#       version, or a base-image umask interaction, is exactly the class
+#       item 21 named as unobservable otherwise).
+#   (2) `sh -n` -- the file is syntactically valid POSIX sh. Catches a
+#       COPY from a corrupted/truncated source (a zero-byte file passes
+#       `-x` if the COPY --chmod still ran, but `sh -n` on an empty file
+#       is trivially valid too -- so this is a floor, not a guarantee of
+#       CONTENT correctness; it catches a truncated/garbled copy, not a
+#       silently-wrong-but-valid script).
+RUN set -eu; \
+    if ! test -x /workspace/pfin-task.sh; then \
+      echo "FATAL: /workspace/pfin-task.sh is missing or not executable after COPY -- the migrator Scheduled Task's command (sh /workspace/pfin-task.sh) would exec a file that does not exist or cannot run. Refusing to ship an image whose baked task script is unusable." >&2; \
+      exit 1; \
+    fi; \
+    if ! sh -n /workspace/pfin-task.sh; then \
+      echo "FATAL: /workspace/pfin-task.sh failed a POSIX sh syntax check (sh -n) -- the COPY landed a corrupted or truncated file. Refusing to ship an image whose baked task script cannot even parse." >&2; \
+      exit 1; \
+    fi
+
 # ADR-072 Amendment 6 (ratified, c2b20cc2) — the OUTCOME marker Sec's
 # ruling requires, in TWO forms so both a `docker inspect` (no exec
 # needed, matches how migrator-orchestrate.sh's box-side check reads it)

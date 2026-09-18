@@ -74,11 +74,45 @@
 #                            property the whole Amendment 6 mechanism relies
 #                            on -- it must have its own dedicated RED, same
 #                            as the other two defect classes above.
+#   --inversion=no-pfin-task Strike leg for ADR-072 Amendment 8 (2026-09-18,
+#                            F/CTO-ratified option (B)): the migrator task
+#                            script is now baked into the image
+#                            (infra/supabase/migrator/pfin-task.sh, COPYed
+#                            in with --chmod=0755) rather than living as an
+#                            inline Coolify command literal, specifically
+#                            because Coolify's own scheduled_tasks.command
+#                            column (character varying(255)) is too narrow
+#                            for the tagged logic. This is item 21's exact
+#                            blind spot again, one file over: "a COPY that
+#                            silently lands a zero-byte or non-executable
+#                            file would fail at fire time, not build time"
+#                            (Architect's addendum). The Dockerfile's own
+#                            RUN step now asserts `test -x
+#                            /workspace/pfin-task.sh && sh -n
+#                            /workspace/pfin-task.sh` and FATALs the BUILD
+#                            if either fails -- same shape as --inversion=
+#                            no-sha (a build-failure assertion, not a
+#                            runtime-probe assertion like the two legs
+#                            above), so this leg follows that pattern:
+#                            generates (via sed into a temp file, never
+#                            committed) a variant that drops the `COPY
+#                            --chmod=0755 infra/supabase/migrator/
+#                            pfin-task.sh /workspace/pfin-task.sh` line,
+#                            builds it, and asserts the build FAILS with
+#                            the Dockerfile's OWN specific "is missing or
+#                            not executable after COPY" message -- never
+#                            this harness's generic "docker build failed"
+#                            string, same vacuity concern the no-sha leg
+#                            already names.
 #
-# Both inversion legs must observe the DEFECT-CLASS token (not the CONNECT
-# token) to pass. If a strike leg instead observes the CONNECT token, the
-# fence's own assertion would have been fooled by that defect — fail closed
-# (exit 1) with a FATAL message naming which leg was vacuous.
+# Both `supabase-go`/`templates` inversion legs must observe the
+# DEFECT-CLASS token (not the CONNECT token) to pass; the `no-sha` and
+# `no-pfin-task` legs must observe a build FAILURE carrying the
+# Dockerfile's own specific FATAL message (not this harness's generic
+# one). If a strike leg instead observes the wrong token (or a successful
+# build, for the two build-failure legs), the fence's own assertion would
+# have been fooled by that defect — fail closed (exit 1) with a FATAL
+# message naming which leg was vacuous.
 #
 # Hermetic: no secrets. The unreachable target
 # (postgres://x:x@127.0.0.1:1/postgres?sslmode=disable, PGSSLMODE=disable in
@@ -106,6 +140,13 @@ BAD_TOKEN_MISSING_BINARY="Could not find the"
 # Matching the wrong one would make the --inversion=no-sha leg vacuous
 # (Sec's condition on this fence fix, PR #791).
 DOCKERFILE_SHA_FATAL_TOKEN="GIT_SHA/SOURCE_COMMIT build-arg is empty"
+# The Dockerfile's OWN fail-closed message for the pfin-task.sh
+# existence-and-executable assertion (ADR-072 Amendment 8, item-21
+# class) -- same discipline as DOCKERFILE_SHA_FATAL_TOKEN above: kept as
+# an exact substring, distinct from this harness's own generic
+# "docker build failed" string, so the --inversion=no-pfin-task leg
+# cannot be fooled by matching the wrong FATAL.
+DOCKERFILE_PFIN_TASK_FATAL_TOKEN="is missing or not executable after COPY"
 
 # ADR-072 Amendment 6 (ratified, c2b20cc2): every build below now supplies
 # the sha the Dockerfile's GIT_SHA/SOURCE_COMMIT ARGs require, sourced from
@@ -125,8 +166,9 @@ for arg in "$@"; do
     --inversion=supabase-go) MODE="inversion-supabase-go" ;;
     --inversion=templates) MODE="inversion-templates" ;;
     --inversion=no-sha) MODE="inversion-no-sha" ;;
+    --inversion=no-pfin-task) MODE="inversion-no-pfin-task" ;;
     *)
-      echo "FATAL: unrecognized argument '$arg' (expected --inversion=supabase-go, --inversion=templates, or --inversion=no-sha)" >&2
+      echo "FATAL: unrecognized argument '$arg' (expected --inversion=supabase-go, --inversion=templates, --inversion=no-sha, or --inversion=no-pfin-task)" >&2
       exit 2
       ;;
   esac
@@ -202,6 +244,28 @@ case "$MODE" in
       fail=1
     else
       echo "OK: leg 'templates present' passed" >&2
+    fi
+
+    # Explicit leg 2b (ADR-072 Amendment 8): pfin-task.sh present,
+    # executable, AND syntactically valid -- the Dockerfile's own
+    # build-time RUN step already asserts this and would have failed the
+    # BUILD above if it didn't hold; this leg re-confirms it against the
+    # built IMAGE directly, matching the belt-and-braces discipline of
+    # leg 1/leg 2 above (which also re-check what the Dockerfile's own
+    # steps already guarantee).
+    docker run --rm "$IMAGE_TAG" test -x /workspace/pfin-task.sh
+    if [ $? -ne 0 ]; then
+      echo "FATAL: leg 'pfin-task.sh executable' FAILED — /workspace/pfin-task.sh missing or not executable" >&2
+      fail=1
+    else
+      echo "OK: leg 'pfin-task.sh executable' passed" >&2
+    fi
+    docker run --rm "$IMAGE_TAG" sh -n /workspace/pfin-task.sh
+    if [ $? -ne 0 ]; then
+      echo "FATAL: leg 'pfin-task.sh syntax' FAILED — sh -n /workspace/pfin-task.sh reported a parse error inside the built image" >&2
+      fail=1
+    else
+      echo "OK: leg 'pfin-task.sh syntax' passed" >&2
     fi
 
     # Explicit leg 3: db push against an unreachable target fails with the
@@ -313,6 +377,43 @@ case "$MODE" in
     else
       echo "FATAL: STRIKE INCONCLUSIVE — the build failed (expected), but NOT with the Dockerfile's expected '${DOCKERFILE_SHA_FATAL_TOKEN}' message. Some other defect is masking the intended fail-closed assertion (e.g. a network/apt failure upstream of the sha check, or the check's own message text drifted from this constant) -- failing closed rather than passing on an unrelated failure." >&2
       tail -n 60 /tmp/fence-migrator-build-no-sha.log >&2
+      exit 1
+    fi
+    ;;
+
+  inversion-no-pfin-task)
+    # Strike leg for ADR-072 Amendment 8's item-21-class self-check
+    # (2026-09-18). Unlike inversion-no-sha (which withholds a build-arg
+    # from the REAL, unmodified Dockerfile), the "defect" here requires
+    # sed-modifying a temp copy -- there is no build-arg that skips a
+    # COPY line -- so this leg combines BOTH prior patterns: generate the
+    # broken variant like inversion-supabase-go/inversion-templates do,
+    # but expect a build FAILURE like inversion-no-sha does (the
+    # Dockerfile's own RUN step FATALs the build when
+    # /workspace/pfin-task.sh is missing -- this is a build-time
+    # assertion, not a runtime-probe one, so build_image()'s
+    # "any failure is the harness's own error" framing is wrong here too).
+    TMP_DOCKERFILE="$(mktemp /tmp/Dockerfile.migrator-inversion-no-pfin-task.XXXXXX)"
+    sed '/^COPY --chmod=0755 infra\/supabase\/migrator\/pfin-task\.sh \/workspace\/pfin-task\.sh$/d' "$DOCKERFILE" > "$TMP_DOCKERFILE"
+    if diff -q "$DOCKERFILE" "$TMP_DOCKERFILE" >/dev/null 2>&1; then
+      echo "FATAL: sed transform produced NO change vs the real Dockerfile — the pfin-task.sh COPY line the fixture targets is no longer present verbatim (drift). Fixture is not testing what it claims; failing closed." >&2
+      exit 2
+    fi
+    IMAGE_TAG="migrator-fence-inversion-no-pfin-task:$$"
+    echo "--- building ${IMAGE_TAG} from ${TMP_DOCKERFILE} WITH THE pfin-task.sh COPY LINE DROPPED (expect FAILURE, and specifically the Dockerfile's own pfin-task.sh-missing FATAL message)" >&2
+    if docker build -f "$TMP_DOCKERFILE" -t "$IMAGE_TAG" --build-arg "GIT_SHA=$FENCE_SHA" "$REPO_ROOT" >/tmp/fence-migrator-build-no-pfin-task.log 2>&1; then
+      echo "FATAL: STRIKE FAILED — the no-pfin-task-COPY variant built SUCCESSFULLY. The build-time existence-and-executable assertion (item 21's own blind spot, applied to this file) is not holding — a COPY that silently lands nothing would ship an image whose Scheduled Task fails only at fire time." >&2
+      IMAGE_TAG="$IMAGE_TAG" # leave set so cleanup() removes the (unexpectedly built) image
+      tail -n 60 /tmp/fence-migrator-build-no-pfin-task.log >&2
+      exit 1
+    fi
+    IMAGE_TAG="" # build failed -- no image exists; nothing for cleanup() to remove
+    if grep -qF "$DOCKERFILE_PFIN_TASK_FATAL_TOKEN" /tmp/fence-migrator-build-no-pfin-task.log; then
+      echo "OK: STRIKE PASSED — build correctly failed with the Dockerfile's own '${DOCKERFILE_PFIN_TASK_FATAL_TOKEN}' message when the pfin-task.sh COPY was dropped. Distinct from this harness's own \"FATAL: docker build failed for ...\" string — matching THAT one instead would have made this leg vacuous (any build failure, for any reason, would pass)." >&2
+      exit 0
+    else
+      echo "FATAL: STRIKE INCONCLUSIVE — the build failed (expected), but NOT with the Dockerfile's expected '${DOCKERFILE_PFIN_TASK_FATAL_TOKEN}' message. Some other defect is masking the intended assertion (e.g. an unrelated build failure upstream) -- failing closed rather than passing on an unrelated failure." >&2
+      tail -n 60 /tmp/fence-migrator-build-no-pfin-task.log >&2
       exit 1
     fi
     ;;
