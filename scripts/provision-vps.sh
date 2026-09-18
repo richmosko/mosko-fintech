@@ -134,19 +134,24 @@ DEPLOY_ON_SUCCESS="${DEPLOY_ON_SUCCESS:-}"
 # commands this literal used to spell out inline) and its own named
 # prohibition against ever deleting the `rc` capture there instead.
 #
-# ⚠ Sec NOTE 1 (2026-09-17, #801 review; ADDENDUM 2026-09-18): this
-# short literal is STILL hand-maintained in the same FOUR places as
-# before (Coolify's own stored task, scripts/migrator-scheduled-task.md's
-# Command row -- the literal's HOME, Sec FLAG B fix on #802 --
-# infra/supabase/docker-compose.yml's migrator comment, and this
-# variable) -- the (B) addendum did NOT reduce the number of sites
-# holding the INVOCATION string, it reduced what each one holds from a
-# 357-byte inline logic dump to a 26-byte path. The REAL logic now lives
-# in exactly ONE place, infra/supabase/migrator/pfin-task.sh, never
-# duplicated anywhere. To change the invoked command: edit the Command
+# ⚠ Sec NOTE 1 (2026-09-17, #801 review; ADDENDUM 2026-09-18, refined on
+# #811's verdict): the hand-maintained-COPY count is genuinely TWO now,
+# not four -- this variable, and scripts/migrator-scheduled-task.md's
+# Command row (the literal's HOME, Sec FLAG B fix on #802).
+# infra/supabase/docker-compose.yml's migrator comment is now a POINTER,
+# not a third copy (it names where the literal lives and where the real
+# logic lives, but does not restate the invocation string itself).
+# Coolify's own stored task is the live TARGET this variable is compared
+# against, not a repo-tracked copy. The REAL logic lives in exactly ONE
+# place, infra/supabase/migrator/pfin-task.sh, never duplicated
+# anywhere -- the (B) addendum's whole point was reducing what each
+# tracked copy holds from a 357-byte inline logic dump to a 26-byte
+# path, and reducing the copy count itself was the natural next step
+# once that logic stopped needing to be repeated for documentation's
+# sake. To change the invoked command: edit the Command
 # field in scripts/migrator-scheduled-task.md first, then follow
-# docs/deployment-runbook.md §6.5's propagation procedure to the other
-# three sites and re-run --apply. migrator-orchestrate.sh fails closed
+# docs/deployment-runbook.md §6.5's propagation procedure to this site
+# and re-run --apply. migrator-orchestrate.sh fails closed
 # (exit 10/11) if this literal ever drifts from what Coolify's task
 # actually holds.
 MIGRATOR_TASK_COMMAND='sh /workspace/pfin-task.sh'
