@@ -743,6 +743,8 @@ Schema `auth` is owned by `supabase_auth_admin`, so that seeder cannot grant on 
 
 **What DevOps measured, against Coolify v4.3.18's own source rather than from behaviour:** a Scheduled Task execution's **`message`** field is a `longText` carrying the **combined stdout+stderr** of the `docker exec` Coolify's job worker ran, bounded at a **5 MB** app-layer cap, returned **verbatim** by `GET …/executions` — the endpoint the orchestrator already polls with the scoped token. ⚠ **And the mechanism that makes this cost nothing: Coolify's job worker performs that `docker exec` AS ROOT over its own SSH connection. The orchestrator never execs anything.** `ci-migrate` can **already** cause a root `docker exec` by calling `POST …/execute`; **reading the output of that exec is strictly less than causing it.** **(C) therefore extends no trust — it reads a channel already in use.**
 
+⚠ **SUPERSEDED IN ITS STORAGE LOCATION, NOT IN ITS CONTENT, by [Amendment 8](#adr-072) (2026-09-18): the tagged command does not FIT — Coolify's `command` column is `varchar(255)` and this literal is 357 bytes. It is now baked into the image as `pfin-task.sh` and Coolify stores only `sh /workspace/pfin-task.sh`. What the task PRINTS is unchanged; WHERE the instruction lives is not.** The paragraph is left as written because it is the canonical statement of what the evidence consists of.
+
 **Shape.** The task command prints `.build-sha` and, after `db push --yes`, `select max(version) from supabase_migrations.schema_migrations` **as `migrator` under its own credential** — it owns that schema, so this needs no new grant — each on a **tagged line**. The orchestrator parses the tagged lines out of `message` and asserts the sha equals the fired sha and the ledger top equals the newest migration file of the merged sha (known from the workflow's checkout, or printed by the task as a third tagged line).
 
 ⚠ **THE DOWNGRADE, NAMED: the sha gate stops being a PRECONDITION and becomes POST-HOC. That is acceptable here, and the reason is specific rather than general.** A stale container cannot make a **wrong** write — migrations are forward-only and append-only, so a stale image can only **no-op** (its set is already applied — exactly the three earlier fires) or apply a **prefix** of the merged set, which is legitimate migrations landing early rather than corruption. **The harm a stale container actually causes is a FALSE GREEN, not a bad write** — and post-hoc detection converts that false green into a RED just as a precondition would. ⚠⚠ **The protection that must be preserved is the app-deploy gate, and it holds ONLY IF BOTH post-hoc assertions complete, fail-closed, BEFORE the `DEPLOY_ON_SUCCESS` branch is evaluated.** The delivery assertion already does — `:301` precedes `:321`. **The now-post-hoc SHA assertion must too, and it is an ordering an implementer can get wrong while satisfying every other line: a post-hoc sha gate that reports AFTER the deploy has fired protects nothing at all, and the entire acceptance of this downgrade rests on it still gating.** **Both assertions, both fail-closed, before the deploy branch.** ⚠ **One supporting reason Sec supplies, which answers the skew question instead of leaving a reader to worry at it: the design ALREADY runs DB-ahead-of-app** — migrate, then deploy — **so a prefix-applied database with the app not redeployed sits INSIDE the compatibility window the deploy ordering already assumes. The downgrade introduces no new skew class; it produces a state the normal path produces transiently on every deploy.** And `db push` is **ledger-idempotent**, so a re-fire after a rebuild **completes** the set rather than double-applying.
@@ -770,6 +772,65 @@ Schema `auth` is owned by `supabase_auth_admin`, so that seeder cannot grant on 
 ---
 
 **Ledgers — all flat.** This amendment authors no DDL, no FK-shaped column and no function. [ADR-011](#adr-011) Decision 4's §10 catalogued-instance ledger is **unchanged** and no catalogued instance is touched — Decision 4's catalogued list read **verbatim and live at draft time (2026-09-17)**; the three-axis cross-check is clean (**instance-numbering**: none added, removed, reordered or renumbered; **layer-attribution**: no layer moves and no surface becomes "four-layer"; **verbatim-vs-paraphrase**: linked, not restated, no count carried). The **SECURITY DEFINER allowlist is UNCHANGED**. The **Decision 3** cross-tenant FK-bypass family is untouched. ⚠ The **C9 CI-fenced RT set** is a **DIFFERENT set** from the §10 catalogued ledger and is not reconciled here or anywhere. **No `RT-NN` is minted here.** ⚠ **Option (B), if taken, amends [C1](#adr-072) — a Sec-condition surface, not a ledger surface; the two must not be conflated.**
+
+---
+
+
+### ADR-072 — Amendment 8 (2026-09-18): the Coolify `command` column is `varchar(255)` and the tagged task does not fit — the evidence-producing instruction moves INTO the image, which partially REVERSES Amendment 7's C5 loss
+
+**Status: DRAFT.** Sec joint-review **mandatory and not discharged here** — this relocates the evidence-producing instruction, which is the surface [Amendment 7](#adr-072)'s FLAG 1 was raised on. **F/CTO ratified option (B) on 2026-09-18**; this amendment records the ratified shape and its conditions. It authorises **no build**.
+
+**⚠ Why its OWN NUMBER rather than an addendum inside Amendment 7 — stated because the alternative was available and was rejected.** Amendment 7 is **RATIFIED**, and what it ratified is option (C): the assertions sourced from the executions API, **with the evidence-producing instruction living in Coolify's task store**. This change **moves that instruction**. It is therefore a change to the mechanism Amendment 7 ratified, not a clarification of it — and it **partially reverses the named consequence** that Amendment 7's security-trade paragraph exists to record. An addendum inside a ratified amendment would blur what F/CTO ratified on the 17th against what was ratified on the 18th, and would bury a posture change inside a paragraph a reader consults for a different question. **Amendments 1–4 each corrected a premise; 6 a consequence of the build; 7 the mechanism. A further mechanism change takes the next number.**
+
+#### (1) The measured fact
+
+`scheduled_tasks.command` is **`character varying(255)`** on Coolify 4.3.18. F/CTO's UI save of the Amendment 7 literal was rejected with **`SQLSTATE 22001`**. The literal at `scripts/migrator-scheduled-task.md:49` is **357 bytes** (measured). The tightest rewrite that keeps all three tags, the ledger query **and the exit-status capture** is **263 bytes** (measured — `cd /workspace`, no quoting, `--workdir` dropped as redundant). ⚠ **Still over budget.** *The column width is measured-by-symptom rather than read from Coolify's schema: `22001` is raised only by a length overflow, and no Coolify schema was available locally. The exact figure is relayed; the fact that the value is too long is not.*
+
+#### (2) The ratified shape — option (B)
+
+`infra/supabase/migrator/pfin-task.sh` is **baked into the image** and Coolify's command becomes **`sh /workspace/pfin-task.sh`** — an order of magnitude inside the budget. **AC (4d)'s read-back is UNCHANGED in kind**: it still compares Coolify's stored `command` byte-exact to the `$CONF_FILE` literal, and that literal is now the short invocation. ⚠ **Comparing a short literal is also more robust**, because the whitespace-normalization hazard Sec flagged on the list serializer bites hardest on long strings.
+
+**Copies collapse from four to two** — the task-doc **Command row** and **`$CONF_FILE`** — and both then hold the same short string. ⚠ **The script is a THIRD artifact and is deliberately not counted as a copy: it lives in the repo, is the thing being invoked rather than a restatement of it, and nothing compares it to the other two.**
+
+#### (3) ⚠⚠ NAMED PROHIBITION — the `rc` capture is load-bearing and must never be removed to save bytes
+
+**255 IS reachable — at 230 bytes — and the 33 bytes it deletes are `rc=$?; … ; exit $rc`.** Measured, not argued:
+
+```
+sh -c 'false; echo TAG=x'                  -> exit 0
+sh -c 'false; rc=$?; echo TAG=x; exit $rc' -> exit 1
+```
+
+**Without the capture, a FAILED `db push` reports exit 0** — the status becomes that of the last `echo`, which always succeeds. **[Decision 3](#adr-072)'s entire fail-closed gate reads the Scheduled Task's exit status**, so such a command saves cleanly, fires cleanly, and **reports success on every failed migration, permanently.** That is the vacuous-green shape at production scale — the defect [Amendment 6](#adr-072) exists to prevent.
+
+⚠ **It is also the FIRST thing a future shortener will delete, because it reads as boilerplate.** **The prohibition must live where that person is standing — in `pfin-task.sh` itself and in the task-doc Command row — not only here.** Two smaller losses on the same path, recorded so "just trim it" is fully costed: single-character tags defeat [BACKLOG.md](BACKLOG.md) §7.36 item 51 AC (4b)'s *sentinel that cannot occur in a migration filename*; and dropping `sort -V` makes the newest-file read lexicographic, which agrees with version order **only while every version is the same width** — the trap already recorded at item 51 AC (5).
+
+#### (4) ⚠ RE-GRADE of Amendment 7 (D)(C)(2) — the self-report acceptance HOLDS, and for a better reason than the one originally given
+
+Amendment 7 accepted the self-report on the ground that *"a stale image honestly reports its stale sha and is caught. It fails only against a container that lies, which is not this assertion's threat model."* **Under (B) the image now carries the evidence-producing script as well as the values, so the question must be asked again rather than inherited.**
+
+**What a lying container can do under (B): exactly what it could do before.** A container that lies controls `/workspace/.build-sha`, `cat`, `echo` and the shell. **The instruction's LOCATION never constrained it** — a Coolify-stored `echo $(cat /workspace/.build-sha)` executed inside a hostile image produces whatever that image wants, precisely as a baked script would. ⚠ **The capability is UNCHANGED; only the storage location of the instruction moved.**
+
+**What DOES change, and it changes in the defending direction.** The set of parties who can **install** a lie narrows. Before (B), anyone holding the trigger token's `write` ability could rewrite the task command and inject an instruction directly — the exposure Amendment 7's FLAG 1 named. After (B), that party can only change **which script is invoked**, and the AC (4d) read-back catches that. Changing **what the evidence producer does** now requires **landing code on `main`**, which is review-gated and CI-built, and the resulting image is pinned by [Amendment 6](#adr-072)'s sha assertion. **The trust root moves from "a string in a vendor database reachable by an API token" to "merged main plus the CI build" — a strictly stronger root.**
+
+**Verdict: the acceptance holds.** ⚠ **But the reason has changed and the record must say so:** it holds because the lying-container capability was never a function of where the instruction lived, **not** because (B) made lying harder. **(B) did not make lying harder. It made installing a lie harder.** Those are different claims and conflating them would overstate what was bought.
+
+#### (5) Architect's two conditions
+
+1. ⚠ **A BUILD-TIME existence-and-executable assertion on the copied script.** [BACKLOG.md](BACKLOG.md) §7.36 **item 21** records that the Dockerfile's build-time self-check cannot observe whether a companion binary is present. **The same blind spot applies here**: a `COPY` that silently lands a zero-byte or non-executable file fails **at fire time, not build time** — which spends a sitting step to discover. **Without the assertion, (B) inherits item 21's defect class by construction.**
+2. ⚠ **On-box order: IMAGE FIRST, COMMAND SECOND.** The image must carry `/workspace/pfin-task.sh` **before** the Coolify command is switched to invoke it. **Switching the command first execs a missing file on the first fire.**
+
+#### (6) What (B) does NOT buy — stated so it is not sold as more than it is
+
+**Evidence independence is UNCHANGED.** The values remain **self-reported by the container**; nothing inspects it from outside. That trade was accepted at Amendment 7 (E) and is untouched here. ⚠ **(B) is not a fix for it and must not be described as one.** (B) buys budget compliance, a partial C5 restoration, and a cheaper read-back — nothing about independence.
+
+#### (7) ⚠ THE PATTERN — this is the THIRD vendor-shape premise in this chain to be reasoned about rather than read
+
+`ci-migrate`'s route to the Docker socket. The single-task `GET` route that does not exist. Now a column width. **All three were properties of the platform or the box, all three were inferred from an adjacent shape, and all three surfaced at first contact.** ⚠ **Three is not luck; it is a method failing.** Sec's standing ask — enumerate every remaining premise that was reasoned rather than measured, and measure them **as a set** rather than one sitting step at a time — is booked at [BACKLOG.md](BACKLOG.md) §7.36 **item 56**, widened there to **vendor SCHEMA constraints** (column types, lengths, nullability) on **every field the trigger chain writes or compares**, because a width is the shape none of the route reads would have caught.
+
+---
+
+**Ledgers — all flat.** This amendment authors no DDL, no FK-shaped column and no function. [ADR-011](#adr-011) Decision 4's §10 catalogued-instance ledger is **unchanged** and no catalogued instance is touched — Decision 4's catalogued list read **verbatim and live at draft time (2026-09-18)**; the three-axis cross-check is clean (**instance-numbering**: none added, removed, reordered or renumbered; **layer-attribution**: no layer moves and no surface becomes "four-layer" — relocating a command string creates no fence at any layer; **verbatim-vs-paraphrase**: linked, not restated, and no count is carried). The **SECURITY DEFINER allowlist is UNCHANGED**. The **Decision 3** cross-tenant FK-bypass family is untouched. ⚠ The **C9 CI-fenced RT set** is a **DIFFERENT set** from the §10 catalogued ledger and is not reconciled here or anywhere. **No `RT-NN` is minted here.**
 
 ---
 
