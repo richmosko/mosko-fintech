@@ -70,7 +70,25 @@
 #                                never a bare `sort` (lexicographic --
 #                                agrees with numeric order only while
 #                                every version is the same digit-width;
-#                                Sec FLAG A on #802, item 51 AC(5)).
+#                                Sec FLAG A on #802, item 51 AC(5)). ⚠
+#                                CORRECTED (Sec, #812 GREEN pin,
+#                                2026-09-18 -- pre-existing since #802's
+#                                original literal, first caught here
+#                                because the script is new and the box
+#                                gets one image): the bare `ls
+#                                .../migrations` listed EVERY entry in
+#                                that directory, not just migration
+#                                files -- a stray non-migration file
+#                                (any editor swap file, a README, a
+#                                directory) sorting last with `sort -V`
+#                                would wedge the trigger at exit 8
+#                                (malformed tag) on every future fire.
+#                                Filtered to migration-SHAPED names
+#                                (`^[0-9]+_.*\.sql$` -- matches every
+#                                real file in supabase/migrations/,
+#                                confirmed against the tree) before the
+#                                sort, so only real migration files are
+#                                ever candidates for "newest."
 #   A missing, malformed, or duplicated tag; a sha mismatch; or a ledger
 #   mismatch each fail closed on the orchestrator's own side, with a
 #   distinct exit code per case -- none of that logic lives here. This
@@ -94,6 +112,6 @@ supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace
 rc=$?
 
 echo "PFIN-LEDGER-TOP=$(psql "$PROD_DB_URL" -tAc "select max(version) from supabase_migrations.schema_migrations")"
-echo "PFIN-NEWEST-FILE=$(ls /workspace/supabase/migrations | sort -V | tail -1 | cut -d_ -f1)"
+echo "PFIN-NEWEST-FILE=$(ls /workspace/supabase/migrations | grep -E '^[0-9]+_.*\.sql$' | sort -V | tail -1 | cut -d_ -f1)"
 
 exit $rc
