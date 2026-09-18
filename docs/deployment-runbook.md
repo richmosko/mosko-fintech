@@ -1343,6 +1343,17 @@ select has_table_privilege('pfin_owner', 'vault.decrypted_secrets', 'SELECT');
 
 7. **`migrator-coolify-token.env` (or equivalent credential file) was not opened, read, or modified at any point in this recipe** — confirm this by `ls -l` timestamp on that file before Step 2 and after Step 6; the mtime must be unchanged.
 
+**Sha-mismatch strike — exercises exit 3 (sha mismatch) through the real GitHub Actions `workflow_dispatch` path, not the manual SSH fire.** Confirms the workflow's own `-o SetEnv="MIGRATOR_EXPECT_SHA=$GITHUB_SHA"` line reaches the box and that a genuine mismatch surfaces as a red job with a message naming both shas, not a silent pass. **MEASURED LIVE, 2026-09-18** — see `docs/records/v1final/standup-log.md`'s Phase D entry for the run's own detail (execution uuid, both shas, exit code).
+
+1. **Dispatch on a ref that has `workflow_dispatch` available but predates the current migrator image's build sha.** The `workflow_dispatch` trigger and the `production-migrator` environment gate exist only from PR #790 onward — a ref that predates that merge has no `workflow_dispatch` event to receive at all, and `gh workflow run` against it fails before ever reaching the box. The dispatched ref must be a commit **after** #790's merge (`eea2fdab`) and **before** the migrator image's actual current build sha (confirm both live: `git log --oneline main` for the ref, `docker compose --project-name <MIGRATOR_SERVICE_UUID> exec -T migrator cat /workspace/.build-sha` for the image's current sha):
+   ```sh
+   gh workflow run migrator-trigger.yml --ref <a commit after eea2fdab, before the image's current build sha>
+   ```
+2. **Approve at the `production-migrator` gate** (Actions tab → the waiting run → **Review deployments** → approve).
+3. **Expect:** the job goes **RED**, exit **3** — `migrator-orchestrate.sh`'s sha-mismatch message, naming both the actual baked sha and the sha this run was dispatched with.
+
+⚠ **This strike is a WRITE against production, not a read-only probe.** Under Amendment 7's post-hoc design, the sha is read from the execution's own output — meaning the Scheduled Task **runs a real `supabase db push` against the production database** before the mismatch is ever detected and the run goes red. This is accepted, deliberate design (Amendment 7 §(E)), not a defect — but the harmlessness of any given run is a property of the **database state at the time**, not of the strike itself: on a box whose ledger already matches every migration file present, the apply this strike triggers is a no-op; on a box with pending migrations, this same strike applies a prefix of them. Still inside the forward-only envelope Amendment 7 §(E) accepted, but not what "strike" suggests to an unwarned operator. **Do not run this recipe against a box that is not already known to be current on its migrations.**
+
 ---
 
 ### 6.6 Re-bootstrap execution plan — THIS box, concrete, 2026-09-16
