@@ -121,6 +121,17 @@
 #   the pre-fire snapshot and the fire itself, both of which a
 #   timestamp-inference binding would depend on.
 #
+#   ⚠ Sec joint review on this binding (PR #814, 2026-09-18): every
+#   API-sourced uuid interpolated into a `jqp` Python literal is now
+#   shape-guarded first (`^[a-z0-9]{24}$`, exit 15 -- a DISTINCT code from
+#   the parse-failure family, since a malformed-shape uuid still parses
+#   as valid JSON). And the Coolify API token is no longer passed as an
+#   argv-visible `curl -H` (readable via `ps`) -- `api()` now uses a
+#   `--config` file, mode 0600 by this script's own `umask 077`, removed
+#   by an EXIT trap (BACKLOG.md item 52 AC(3)'s constraint on the
+#   machine path, matching the standard already required of the
+#   runbook's human-operator path).
+#
 # CONFIGURATION — box-resident only, never client-supplied
 #   /etc/pfin/migrator-trigger.conf   Non-secret: MIGRATOR_SERVICE_UUID,
 #                                     MIGRATOR_TASK_UUID, APP_UUID. Written by
@@ -310,8 +321,24 @@ if [[ ! "$MIGRATOR_SERVICE_UUID" =~ ^[a-z0-9]{24}$ ]]; then
   exit 12
 fi
 
+# ⚠ Sec FLAG 2 on PR #814's GREEN pin (2026-09-18): `api()` used to pass
+# the token via an argv-visible `curl -H "Authorization: Bearer ..."` --
+# readable via `ps` by any local user for the duration of every call.
+# Pre-existing, not introduced by #814, but Sec required the runbook's
+# operator block (BACKLOG.md item 52 AC(3): "hand it to curl via a
+# header file, --config file (mode 0600), or stdin -- never an
+# argv-visible -H") to meet exactly this standard, so the machine path
+# must not fall short of the human one. A single `--config` file is
+# written once per run (mode 0600 by construction -- this script's own
+# `umask 077`, set above, applies to every `mktemp` after it, same as
+# every other temp file here) and removed by an EXIT trap, so it does
+# not persist past this invocation, does not get rewritten per call, and
+# is cleaned up on every exit path (success, any `exit N`, or a signal).
+CURL_CONFIG_FILE="$(mktemp)"
+trap 'rm -f "$CURL_CONFIG_FILE"' EXIT
+printf 'header = "Authorization: Bearer %s"\n' "$COOLIFY_API_TOKEN" > "$CURL_CONFIG_FILE"
 api() { # api <METHOD> <PATH>
-  curl -fsS -X "$1" -H "Authorization: Bearer $COOLIFY_API_TOKEN" "$COOLIFY_BASE$2"
+  curl -fsS -X "$1" --config "$CURL_CONFIG_FILE" "$COOLIFY_BASE$2"
 }
 jqp() { python3 -c "import json,sys;$1"; }
 # extract_one_tag <message> <TAG-NAME> -- Sec condition on Amendment 7
@@ -621,6 +648,29 @@ print('\n'.join(sorted(set((r or {}).get('uuid','') for r in (rows or []) if (r 
   exit 10
 fi
 rm -f "$JQP_ERR_FILE"
+# ⚠ Sec FLAG 1 on PR #814's GREEN pin (2026-09-18): every uuid in
+# $PRE_FIRE_UUIDS is about to be interpolated into a Python string
+# literal inside the jqp heredoc below (`set('''$PRE_FIRE_UUIDS'''.split())`)
+# -- and unlike $MIGRATOR_TASK_UUID (root-owned, box-resident,
+# ci-migrate-unwritable), these values arrive OVER THE NETWORK from
+# Coolify's own executions API. Not a privilege-escalation concern (Sec:
+# crafting a malicious value here requires already compromising Coolify
+# or the path to localhost:8000, both already root-equivalent) but a
+# DIAGNOSIS concern -- an unguarded malformed value would surface as an
+# opaque Python traceback (misreported as a parse failure) rather than
+# as what it actually is. Same 24-char lowercase-alphanumeric Coolify
+# uuid shape as MIGRATOR_TASK_UUID's own guard (new_public_id(),
+# bootstrap/helpers/shared.php:119-124, measured above) -- but this is
+# its OWN exit code and message, not a reuse of the parse-failure branch
+# above: a well-formed-but-malformed-shape uuid parsed the JSON fine, it
+# just isn't the shape this script can safely reason about downstream.
+while IFS= read -r pre_fire_uuid; do
+  [[ -z "$pre_fire_uuid" ]] && continue
+  if [[ ! "$pre_fire_uuid" =~ ^[a-z0-9]{24}$ ]]; then
+    log "FAIL (exit 15): the executions API returned a malformed execution uuid ('$pre_fire_uuid') in the pre-fire snapshot -- not a well-formed 24-character lowercase-alphanumeric Coolify uuid. Refusing to interpolate an unvalidated, network-sourced value into this script's own comparison logic. NOT executing the Scheduled Task. See GET $EXECUTIONS_PATH directly to investigate what Coolify actually returned."
+    exit 15
+  fi
+done <<< "$PRE_FIRE_UUIDS"
 log "pre-fire execution uuid snapshot recorded"
 
 log "executing migrator Scheduled Task ($MIGRATOR_TASK_UUID) on application $MIGRATOR_SERVICE_UUID"
@@ -716,6 +766,16 @@ print(newu[0] if len(newu) == 1 else '')
       log "FAIL (exit 14): $NEW_UUID_COUNT execution uuids are present that were absent from the pre-fire snapshot -- this fire's execution is AMBIGUOUS among them. This is a concurrent-fire diagnosis, not a transient glitch: something else (another operator firing from the Coolify UI is the likely source -- this script's own flock only bars a second copy of itself) started a Scheduled Task execution for this same task in the same window. Refusing to guess which uuid is THIS fire's rather than resolving by position. Deploy NOT triggered. See $EXECUTIONS_PATH directly to investigate before re-firing."
       exit 14
     elif [[ "$NEW_UUID_COUNT" -eq 1 ]]; then
+      # ⚠ Sec FLAG 1 (same as the pre-fire snapshot guard above): this
+      # candidate is about to become $BOUND_EXEC_UUID and get
+      # interpolated into a Python string literal in every subsequent
+      # status/message read below (`... == '$BOUND_EXEC_UUID'`) -- guard
+      # it BEFORE binding, not after, with its own exit code, not a
+      # reuse of the parse-failure or ambiguous-fire branches.
+      if [[ ! "$NEW_UUID_CANDIDATE" =~ ^[a-z0-9]{24}$ ]]; then
+        log "FAIL (exit 15): the executions API returned a malformed execution uuid ('$NEW_UUID_CANDIDATE') as the sole new execution since the pre-fire snapshot -- not a well-formed 24-character lowercase-alphanumeric Coolify uuid. Refusing to bind to (and interpolate) an unvalidated, network-sourced value. Deploy NOT triggered. See $EXECUTIONS_PATH directly to investigate what Coolify actually returned."
+        exit 15
+      fi
       BOUND_EXEC_UUID="$NEW_UUID_CANDIDATE"
       log "bound to execution uuid $BOUND_EXEC_UUID (the one execution present now that was absent from the pre-fire snapshot)"
     fi
