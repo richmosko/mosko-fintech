@@ -35,10 +35,15 @@
 #      run `docker compose exec` directly against the box for both the
 #      pre-fire sha-check and the post-run delivery assertion. Sec's C-1
 #      finding + F/CTO's box measurement: `ci-migrate` has NO route to
-#      `/var/run/docker.sock` (no group, no ACL, no sudo) — every one of
-#      those docker calls has always failed closed with permission
-#      denied, and the three earlier "successful" fires only ever worked
-#      through the Coolify API alone. Every docker call is REMOVED from
+#      `/var/run/docker.sock` (no group, no ACL, no sudo) — a direct
+#      `docker compose exec` as `ci-migrate` cannot succeed (permission
+#      denied, exit 1, measured live). ⚠ CORRECTED (Sec, carried from
+#      #800's review): "has always failed closed" overstated this as
+#      EVENT HISTORY -- Amendment 7 §(F) is that these assertions never
+#      actually executed on the box at all; "cannot succeed" is the
+#      accurate form, a capability claim, not a record of past runs. The
+#      three earlier "successful" fires only ever worked through the
+#      Coolify API alone. Every docker call is REMOVED from
 #      this script. The migrator Scheduled Task's own `command`
 #      (scripts/migrator-scheduled-task.md) now emits three tagged lines
 #      on its own stdout — `PFIN-BUILD-SHA=`, `PFIN-LEDGER-TOP=`,
@@ -375,8 +380,11 @@ case "$STATUS" in
     # measurement: `ci-migrate` has NO route to `/var/run/docker.sock` --
     # no group, no ACL, no sudo (`sudo -u ci-migrate docker compose ...`
     # -> permission denied, exit 1, measured live). Every docker call in
-    # this script was ALWAYS failing closed; the three earlier "working"
-    # fires only ever went through the Coolify API. Removed entirely.
+    # this script COULD NOT succeed (Sec's correction, carried from #800:
+    # "always failing closed" overstates this as event history when
+    # Amendment 7 §(F) is that these assertions never actually executed
+    # on the box); the three earlier "working" fires only ever went
+    # through the Coolify API. Removed entirely.
     #
     # scripts/migrator-scheduled-task.md's Command now emits three tagged
     # lines on its own stdout: `PFIN-BUILD-SHA=`, `PFIN-LEDGER-TOP=`,
