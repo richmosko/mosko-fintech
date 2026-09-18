@@ -273,16 +273,18 @@ fi
 # produce evidence this script trusts blindly. Fetch the task definition
 # and compare byte-exact against MIGRATOR_TASK_COMMAND BEFORE firing.
 #
-# ⚠ Sec NOTE 1 (2026-09-17, #801 review): this command string is now a
-# FOURTH hand-maintained copy of the same literal -- Coolify's own stored
-# task, scripts/migrator-scheduled-task.md, infra/supabase/docker-
-# compose.yml's migrator-service comment, and $CONF_FILE's
-# MIGRATOR_TASK_COMMAND (provision-vps.sh's literal). Divergence between
-# any two of these fails closed here, but the FIX is "change it in ONE
-# place" -- docs/deployment-runbook.md §6.5 is that one place; the other
-# three sites carry a comment pointing back to it (provision-vps.sh's
-# MIGRATOR_TASK_COMMAND declaration, scripts/migrator-scheduled-task.md's
-# Command field, and docker-compose.yml's migrator comment all say so).
+# ⚠ Sec NOTE 1 (2026-09-17, #801 review; FLAG B fix, #802 review): this
+# command string is now a FOURTH hand-maintained copy of the same literal
+# -- Coolify's own stored task, scripts/migrator-scheduled-task.md's
+# Command row (the literal's HOME), infra/supabase/docker-compose.yml's
+# migrator-service comment, and $CONF_FILE's MIGRATOR_TASK_COMMAND
+# (provision-vps.sh's literal). Divergence between any two of these fails
+# closed here. To change the command: edit the Command row in
+# scripts/migrator-scheduled-task.md first, then follow
+# docs/deployment-runbook.md §6.5's propagation procedure to the other
+# three sites -- §6.5 documents HOW to propagate the change, it does not
+# hold the literal itself (the two previously each pointed at the other
+# as "edit here first," a loop; fixed).
 #
 # ⚠ Sec NOTE 2 (2026-09-17, #801 review): read_kv() (this script's own
 # helper, above) does NO quote-stripping and NO whitespace normalisation
