@@ -427,9 +427,41 @@ strip_ws() { printf '%s' "$1" | sed -E $'s/^[ \t\r]+//; s/[ \t\r]+$//'; }
 # All four hold: this route change is the same evidence the (never-
 # existent) single-task GET would have offered, not weaker evidence
 # through a different envelope.
+# ⚠ Sec build criterion, #807 pin: "the list call itself failed" (an
+# HTTP-level failure -- curl error, or a 404 that could mean the ROUTE
+# isn't registered on this Coolify version, or the APP UUID doesn't
+# resolve for this token's TEAM, or a generic not-found -- Coolify
+# returns the same bare 404 for all three) is a DIFFERENT diagnosis than
+# "the list call SUCCEEDED and returned a 200 with zero (or duplicate)
+# matches for MIGRATOR_TASK_UUID" (the task itself was deleted, its UUID
+# drifted, or -- for a duplicate, which should be impossible for a real
+# UUID -- something is actively wrong). The first says "something about
+# THIS SCRIPT'S OWN ACCESS to the API is broken" (team-scope, route
+# registration, token, network); the second says "the API answered fine,
+# but the TASK ISN'T WHERE EXPECTED" (tampering-or-drift on the resource
+# itself). Those demand opposite operator responses -- re-provision or
+# re-check the token/route in the first case, investigate the task/UUID
+# in the second -- so they get TWO DISTINCT MESSAGES below, split at
+# exactly the same boundary `curl -fsS`'s own empty-output-on-failure
+# behavior already draws (a 4xx/5xx with `-f` exits non-zero and prints
+# no body, which is why the `|| true` above yields an EMPTY
+# `$TASK_LIST_JSON` for every HTTP-level failure and a real JSON body
+# for every successful-but-wrong-content response).
+#
+# ⚠ EXIT CODE KEPT AS 10 FOR BOTH, DELIBERATELY, NOT SPLIT -- both are
+# still "the pre-fire task-command integrity check refused to fire," the
+# same severity and the same caller-facing action (do not deploy, do not
+# retry blindly); splitting the exit code would only duplicate
+# information the MESSAGE TEXT already carries more precisely (which
+# exact branch fired, and why) without changing what the caller (GitHub
+# Actions' own step-red / a human reading stderr) needs to do next. The
+# distinction Sec's criterion requires is diagnostic, not dispatch --
+# exactly the same reasoning that already gives exit 8's two sub-causes
+# (absent vs. ambiguous tag match) one shared code with two distinct
+# messages, below.
 TASK_LIST_JSON="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks" || true)"
 if [[ -z "$TASK_LIST_JSON" ]]; then
-  log "FAIL (exit 10): could not GET the Scheduled Task list to verify the migrator task's command before firing. Refusing to fire against an unverifiable task. See the task list directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks. NOT executing the Scheduled Task."
+  log "FAIL (exit 10): the Scheduled Task LIST CALL ITSELF FAILED (empty response from an HTTP-level failure, not a successful-but-empty list) -- could not verify the migrator task's command before firing. This means something about THIS SCRIPT'S OWN ACCESS is broken, not the task: Coolify returns an identical bare 404 whether the route isn't registered on this Coolify version, MIGRATOR_SERVICE_UUID doesn't resolve for this token's team, or (less likely, already measured stable) a genuine not-found -- check the token's abilities/team scope and MIGRATOR_SERVICE_UUID in $CONF_FILE before assuming a route regression. See GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks directly. Refusing to fire against an unverifiable task. NOT executing the Scheduled Task."
   exit 10
 fi
 TASK_MATCH_COUNT="$(printf '%s' "$TASK_LIST_JSON" | jqp "
@@ -438,7 +470,7 @@ rows=d if isinstance(d, list) else d.get('data', d)
 print(sum(1 for r in (rows or []) if (r or {}).get('uuid') == '$MIGRATOR_TASK_UUID'))
 ")"
 if [[ "$TASK_MATCH_COUNT" != "1" ]]; then
-  log "FAIL (exit 10): the Scheduled Task list returned $TASK_MATCH_COUNT entries matching MIGRATOR_TASK_UUID ($MIGRATOR_TASK_UUID) -- expected exactly one (zero means the task was deleted or the UUID is wrong; two-or-more should be impossible for a UUID but is refused rather than resolved by position, same discipline as the tagged-line extraction below). See the task list directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks. NOT executing the Scheduled Task."
+  log "FAIL (exit 10): the Scheduled Task LIST CALL SUCCEEDED but returned $TASK_MATCH_COUNT entries matching MIGRATOR_TASK_UUID ($MIGRATOR_TASK_UUID), not exactly one -- this is a TAMPERING-OR-DRIFT diagnosis, distinct from an access failure: the API answered fine, the task itself is not where expected (zero means the task was deleted or the UUID drifted; two-or-more should be impossible for a UUID but is refused rather than resolved by position, same discipline as the tagged-line extraction below). See the task list directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks. NOT executing the Scheduled Task."
   exit 10
 fi
 LIVE_TASK_COMMAND="$(printf '%s' "$TASK_LIST_JSON" | jqp "
