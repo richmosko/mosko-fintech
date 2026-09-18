@@ -162,7 +162,28 @@ function flush_block(    ) {
     }
   }
 
-  if (!in_block && indent > 0 && trimmed ~ /^ports:[ \t]*(#.*)?$/) {
+  # Inline-value form: a `ports:`/`expose:` key carrying a value on the SAME
+  # line -- flow-sequence (`ports: ["9999:9999"]`), a YAML alias
+  # (`ports: *anchor`), or any other scalar. This fence has ZERO tolerance
+  # for these keys, so it does not need to parse the value to know it is
+  # forbidden -- any inline value is an immediate violation, closing the
+  # gap where a bare-key block-open regex would silently skip a one-line
+  # form entirely. Also accepts a QUOTED key ("ports": / 'ports':), which
+  # the original bare `ports:` regex silently skipped. (QA strike-proof,
+  # BACKLOG.md §7.36 item 29 close-gate, 2026-09-18 -- see
+  # tests/fixtures/ci/migrator-bind-ports-flowlist.compose.yaml,
+  # migrator-bind-ports-quotedkey.compose.yaml and
+  # migrator-bind-ports-alias.compose.yaml for the three measured-false-pass
+  # shapes this closes.)
+  if (!in_block && indent > 0 && trimmed ~ /^["\x27]?ports["\x27]?:[ \t]*[^ \t#]/) {
+    print "VIOLATION:ports:" NR ":" line
+    next
+  }
+  if (!in_block && indent > 0 && trimmed ~ /^["\x27]?expose["\x27]?:[ \t]*[^ \t#]/) {
+    print "VIOLATION:expose:" NR ":" line
+    next
+  }
+  if (!in_block && indent > 0 && trimmed ~ /^["\x27]?ports["\x27]?:[ \t]*(#.*)?$/) {
     in_block = 1
     block_indent = indent
     block_lines = 0
@@ -171,7 +192,7 @@ function flush_block(    ) {
     print "VIOLATION:ports:" NR ":" line
     next
   }
-  if (!in_block && indent > 0 && trimmed ~ /^expose:[ \t]*(#.*)?$/) {
+  if (!in_block && indent > 0 && trimmed ~ /^["\x27]?expose["\x27]?:[ \t]*(#.*)?$/) {
     in_block = 1
     block_indent = indent
     block_lines = 0

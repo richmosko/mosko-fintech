@@ -1,0 +1,28 @@
+# fence-migrator-private-bind: target
+# GOLDEN FIXTURE — VECTOR 1c (`ports:` key with an INLINE flow-sequence
+# value on the same line → fence FAILS, exit 1).
+#
+# QA-found gap (BACKLOG.md §7.36 item 29 close-gate, 2026-09-18): the
+# original vector-1 regex only opened a block on a BARE `ports:` key
+# (nothing after the colon but optional whitespace/comment). A one-line
+# flow-sequence form — `ports: ["9999:9999"]` — carries a value on the SAME
+# line and silently matched neither the bare-key-open regex nor any
+# per-line block check, producing a false CLEAN PASS (exit 0) on a real
+# published-port mapping. Closed by adding an inline-value check ahead of
+# the block-open check: any `ports:`/`expose:` key followed by non-comment,
+# non-whitespace content on the same line is an immediate violation — this
+# fence has zero tolerance, so it does not need to parse the value to know
+# it is forbidden. Exercised by the fence-migrator-bind CI job, asserting
+# exit 1 AND the vector-1 `ports:` token.
+
+services:
+  migrator:
+    container_name: supabase-migrator
+    build:
+      context: ../../..
+      dockerfile: infra/supabase/migrator/Dockerfile
+    restart: unless-stopped
+    ports: ["9999:9999"]
+    environment:
+      PROD_DB_URL: postgres://user:pass@db:5432/postgres?sslmode=disable
+      PGSSLMODE: disable

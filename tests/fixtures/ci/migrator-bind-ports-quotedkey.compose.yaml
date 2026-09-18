@@ -1,0 +1,26 @@
+# fence-migrator-private-bind: target
+# GOLDEN FIXTURE — VECTOR 1d (`ports:` key spelled with QUOTES → fence
+# FAILS, exit 1).
+#
+# QA-found gap (BACKLOG.md §7.36 item 29 close-gate, 2026-09-18): the
+# original vector-1 regex matched only the bare literal `ports:` — a
+# quoted key (`"ports":`), valid Compose/YAML syntax, silently bypassed
+# both the block-open regex and every per-line check, producing a false
+# CLEAN PASS (exit 0) on a real published-port mapping. Closed by making
+# both the block-open and inline-value checks tolerate an optional
+# leading/trailing single or double quote around the key. Exercised by the
+# fence-migrator-bind CI job, asserting exit 1 AND the vector-1 `ports:`
+# token.
+
+services:
+  migrator:
+    container_name: supabase-migrator
+    build:
+      context: ../../..
+      dockerfile: infra/supabase/migrator/Dockerfile
+    restart: unless-stopped
+    "ports":
+      - "9999:9999"
+    environment:
+      PROD_DB_URL: postgres://user:pass@db:5432/postgres?sslmode=disable
+      PGSSLMODE: disable

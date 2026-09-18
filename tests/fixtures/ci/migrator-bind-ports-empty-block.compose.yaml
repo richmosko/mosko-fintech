@@ -2,10 +2,35 @@
 # GOLDEN FIXTURE — STRUCTURAL: a `ports:` key with zero value lines
 # (exit 2, fail closed).
 #
-# A `ports:` key the walker cannot read the contents of must never produce
-# a pass — same fail-closed discipline as fence-datastore-private-bind.sh's
-# own empty-block fixture, and the missing-sentinel case. Exercised by the
-# fence-migrator-bind CI job, asserting exit 2 specifically.
+# ⚠ CORRECTED per QA strike-proof, BACKLOG.md §7.36 item 29 close-gate,
+# 2026-09-18 — this fixture is caught TWICE, in a specific order, and the
+# comment below states both catches rather than implying one (team-lead
+# ruling: a golden whose stated reason is not its actual reason does not
+# ship). Unlike fence-datastore-private-bind.sh, whose Vector-1 violation
+# print lives INSIDE the block-content walk (so an empty block reaches
+# ONLY the structural guard — striking that guard there flips the golden
+# to a false PASS), THIS fence prints a VIOLATION unconditionally the
+# moment a `ports:`/`expose:` key is sighted, before any block-content
+# check runs (zero-tolerance design: it does not need to read the value to
+# know the key is forbidden). Both catches fire on this fixture:
+#   (1) the unconditional per-key VIOLATION print (would independently
+#       yield exit 1 if the check below were ever removed);
+#   (2) the STRUCTURAL check (`STRUCTURAL_HIT`), which this script's own
+#       exit-code ordering checks FIRST and which therefore determines the
+#       exit code actually observed here: exit 2, not 1.
+# **Striking (2) alone does NOT flip this fixture to exit 0** — (1) still
+# fires and the script still exits 1, just under the OTHER fail-closed
+# reason (measured by QA: disabling the STRUCTURAL_HIT branch left this
+# fixture at exit 1, not exit 0). That is a stronger property than a
+# single-catch design, not a weaker one, but it means this fixture's exit
+# CODE is not a strike-test of the structural guard the way
+# fence-datastore-private-bind.sh's own empty-block golden is of ITS
+# structural guard — this one is defense-in-depth on top of an
+# already-fail-closed design, not the sole line of defense. Exercised by
+# the fence-migrator-bind CI job, asserting exit 2 specifically (the
+# observed, current behavior) — a future refactor that removes the
+# unconditional per-key print would still need this fixture to exit
+# non-zero, just not necessarily via this exact code.
 
 services:
   migrator:

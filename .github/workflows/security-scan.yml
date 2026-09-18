@@ -1669,6 +1669,66 @@ jobs:
           fi
           echo "OK: fence refused a 'ports:' block it could not read, failing closed (exit $rc)."
 
+      - name: "Inversion — golden 7: inline flow-list ports (expects violation, exit 1, vector-1 'ports:' token)"
+        # QA strike-proof, BACKLOG.md §7.36 item 29 close-gate, 2026-09-18:
+        # the original vector-1 regex only opened a block on a BARE
+        # `ports:` key — a one-line flow-sequence form silently bypassed it
+        # entirely, a measured false CLEAN PASS on a real published port.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-ports-flowlist.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: migrator-bind fence expected exit 1 on the flow-list golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: the flow-list golden exited 1 but the vector-1 'ports:' token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: migrator-bind fence caught an inline flow-list ports: via its own token (exit $rc)."
+
+      - name: "Inversion — golden 8: quoted ports key (expects violation, exit 1, vector-1 'ports:' token)"
+        # QA strike-proof: a quoted key ("ports":) is valid Compose/YAML and
+        # silently bypassed the bare-literal regex — measured false CLEAN PASS.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-ports-quotedkey.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: migrator-bind fence expected exit 1 on the quoted-key golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: the quoted-key golden exited 1 but the vector-1 'ports:' token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: migrator-bind fence caught a quoted \"ports\": key via its own token (exit $rc)."
+
+      - name: "Inversion — golden 9: YAML alias ports (expects violation, exit 1, vector-1 'ports:' token)"
+        # QA strike-proof: a YAML anchor/alias resolves (verified with
+        # pyyaml) to a real published-port mapping but the literal `ports:`
+        # line carries an inline alias token — measured false CLEAN PASS.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-ports-alias.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: migrator-bind fence expected exit 1 on the YAML-alias golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: the YAML-alias golden exited 1 but the vector-1 'ports:' token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: migrator-bind fence caught a ports: *alias reference via its own token (exit $rc)."
+
   fence-entity-grep:
     name: entity-grep — HTML-entity-obscured §/# in doc artifacts
     runs-on: ubuntu-latest
