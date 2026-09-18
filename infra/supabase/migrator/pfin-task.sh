@@ -9,7 +9,8 @@
 # WHY THIS FILE EXISTS AT ALL — the column is too narrow for the logic
 #   Coolify's `scheduled_tasks.command` is `character varying(255)`
 #   (measured, never widened through v4.3.18 — see
-#   $CLAUDE_JOB_DIR/tmp/devops-task-command-column.md). The tagged
+#   database/migrations/2023_12_31_173041_create_scheduled_tasks_table.php
+#   in Coolify's own tree, and ADR-072 Amendment 8's own record). The tagged
 #   3-assertion literal this script replaces is 357 bytes; every rewrite
 #   that fits 255 either deletes the `rc` capture below (Architect's
 #   measured "dangerous finding": with it gone, a FAILED `supabase db
