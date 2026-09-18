@@ -286,23 +286,28 @@ fi
 # hold the literal itself (the two previously each pointed at the other
 # as "edit here first," a loop; fixed).
 #
-# ⚠ Sec NOTE 2 (2026-09-17, #801 review): read_kv() (this script's own
-# helper, above) does NO quote-stripping and NO whitespace normalisation
-# -- it returns the raw remainder of the `NAME=` line, verbatim. The ONLY
-# normalisation applied to either side of this comparison is stripping
-# TRAILING CR / LF / space (a CRLF-saved conf file, or a trailing blank
-# line, must not by itself trip a byte-exact compare) -- nothing else:
-# no leading-whitespace trim, no internal-whitespace collapse, no quote
-# handling. $MIGRATOR_TASK_COMMAND (read via read_kv from $CONF_FILE) is
-# stored with the SAME quoting the Coolify API returns in `command`
-# (single/double quotes are literal characters inside the value, not
-# stripped by provision-vps.sh's writer or by read_kv) -- so a genuine
-# quoting mismatch is a REAL mismatch, not noise, and must not be
-# stripped away either.
-strip_trailing_ws() { printf '%s' "$1" | sed -E 's/[ \r]+$//'; }
+# ⚠ Sec NOTE 2 (2026-09-17, #801 review; item (1) fix, #802 GREEN pin):
+# read_kv() (this script's own helper, above) does NO quote-stripping and
+# NO whitespace normalisation -- it returns the raw remainder of the
+# `NAME=` line, verbatim. The ONLY normalisation applied to either side
+# of this comparison is stripping LEADING AND TRAILING space / tab / CR /
+# LF on BOTH the live Coolify API value and the $CONF_FILE literal --
+# nothing else: no internal-whitespace collapse, no quote handling.
+# ⚠ CORRECTED (Sec, #802 GREEN pin item 1): the prior version stripped
+# TRAILING CR/space only -- missed trailing TABS entirely, and missed
+# LEADING whitespace on both sides (e.g. a hand-edited conf line
+# `MIGRATOR_TASK_COMMAND= sh -c …` with a stray space after `=`, or a
+# Coolify-side value with incidental leading whitespace, would each trip
+# a false exit-10 mismatch). $MIGRATOR_TASK_COMMAND (read via read_kv
+# from $CONF_FILE) is stored with the SAME quoting the Coolify API
+# returns in `command` (single/double quotes are literal characters
+# inside the value, not stripped by provision-vps.sh's writer or by
+# read_kv) -- so a genuine quoting mismatch is a REAL mismatch, not
+# noise, and must not be stripped away either.
+strip_ws() { printf '%s' "$1" | sed -E $'s/^[ \t\r]+//; s/[ \t\r]+$//'; }
 TASK_GET_JSON="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID" || true)"
 if [[ -z "$TASK_GET_JSON" ]]; then
-  log "FAIL (exit 10): could not GET the Scheduled Task definition (/applications/\$UUID/scheduled-tasks/\$TASK_UUID) to verify its command before firing. Refusing to fire against an unverifiable task. NOT executing the Scheduled Task."
+  log "FAIL (exit 10): could not GET the Scheduled Task definition to verify its command before firing. Refusing to fire against an unverifiable task. See the task definition directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID. NOT executing the Scheduled Task."
   exit 10
 fi
 LIVE_TASK_COMMAND="$(printf '%s' "$TASK_GET_JSON" | jqp "
@@ -310,10 +315,10 @@ d=json.load(sys.stdin)
 row=d.get('data', d) if isinstance(d, dict) else d
 print((row or {}).get('command','') if row else '')
 ")"
-LIVE_TASK_COMMAND="$(strip_trailing_ws "$LIVE_TASK_COMMAND")"
-EXPECTED_TASK_COMMAND="$(strip_trailing_ws "$MIGRATOR_TASK_COMMAND")"
+LIVE_TASK_COMMAND="$(strip_ws "$LIVE_TASK_COMMAND")"
+EXPECTED_TASK_COMMAND="$(strip_ws "$MIGRATOR_TASK_COMMAND")"
 if [[ -z "$LIVE_TASK_COMMAND" || "$LIVE_TASK_COMMAND" != "$EXPECTED_TASK_COMMAND" ]]; then
-  log "FAIL (exit 10): the Scheduled Task's command in Coolify differs from MIGRATOR_TASK_COMMAND in /etc/pfin/migrator-trigger.conf -- change it in ONE place per docs/deployment-runbook.md §6.5 (byte-exact comparison, trailing CR/LF/space only stripped from both sides). NOT executing the Scheduled Task. Re-run provision-vps.sh --apply after confirming which side is stale, or investigate an unauthorized edit -- do not just re-fire. (Live and expected command text withheld from this log line deliberately -- Sec's own instruction is that this script logs only extracted PFIN-* tag values, never a raw command/message blob; compare the Coolify UI's task definition against $CONF_FILE directly.)"
+  log "FAIL (exit 10): the Scheduled Task's command in Coolify differs from MIGRATOR_TASK_COMMAND in /etc/pfin/migrator-trigger.conf -- change it in ONE place per docs/deployment-runbook.md §6.5 (byte-exact comparison; leading/trailing space, tab, CR, LF stripped from both sides, nothing else). NOT executing the Scheduled Task. Re-run provision-vps.sh --apply after confirming which side is stale, or investigate an unauthorized edit -- do not just re-fire. (Live and expected command text withheld from this log line by design -- Sec's own instruction is that this script logs only extracted PFIN-* tag values, never a raw command/message blob. See the live task definition directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID and compare against \$CONF_FILE's MIGRATOR_TASK_COMMAND by hand.)"
   exit 10
 fi
 log "task command integrity check OK: live Scheduled Task command matches MIGRATOR_TASK_COMMAND in $CONF_FILE"
@@ -420,7 +425,7 @@ case "$STATUS" in
     # before `psql`/`ls` ever ran) or cut one mid-line -- either way,
     # nothing extracted from a truncated message can be trusted.
     if printf '%s' "$EXEC_MESSAGE" | grep -qF '[... Output truncated at 5MB limit ...]'; then
-      log "FAIL (exit 9): the execution's own message was truncated at Coolify's 5MB cap -- cannot trust any PFIN-* tag extracted from a truncated capture (a tag may be cut mid-line, or lost entirely if the cut landed before it was ever printed). Deploy NOT triggered. This should not happen for this task's expected output size; investigate what the command actually printed before re-firing."
+      log "FAIL (exit 9): the execution's own message was truncated at Coolify's 5MB cap -- cannot trust any PFIN-* tag extracted from a truncated capture (a tag may be cut mid-line, or lost entirely if the cut landed before it was ever printed). Deploy NOT triggered. This should not happen for this task's expected output size. See the execution record for this run at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID/executions to investigate what the command actually printed before re-firing (raw message withheld from this log line by design -- Sec's own instruction is that this script logs only extracted PFIN-* tag values, never a raw message blob)."
       exit 9
     fi
 
@@ -441,11 +446,11 @@ case "$STATUS" in
 
     if [[ "$PFIN_BUILD_SHA_RC" -ne 0 || "$PFIN_LEDGER_TOP_RC" -ne 0 || "$PFIN_NEWEST_FILE_RC" -ne 0 ]]; then
       describe_rc() { case "$1" in 0) echo "ok";; 1) echo "absent";; 2) echo "ambiguous (>=2 matches)";; esac; }
-      log "FAIL (exit 8): tagged-line extraction did not yield exactly one match for every tag (PFIN-BUILD-SHA: $(describe_rc "$PFIN_BUILD_SHA_RC"); PFIN-LEDGER-TOP: $(describe_rc "$PFIN_LEDGER_TOP_RC"); PFIN-NEWEST-FILE: $(describe_rc "$PFIN_NEWEST_FILE_RC")). Either the Scheduled Task's command changed / failed partway through before emitting all three lines, or the apply's own output echoed a duplicate-looking line (Sec's exactly-one-match condition, Amendment 7). Deploy NOT triggered. (Raw message withheld from this log line by design -- see the header comment on logging only extracted tags.)"
+      log "FAIL (exit 8): tagged-line extraction did not yield exactly one match for every tag (PFIN-BUILD-SHA: $(describe_rc "$PFIN_BUILD_SHA_RC"); PFIN-LEDGER-TOP: $(describe_rc "$PFIN_LEDGER_TOP_RC"); PFIN-NEWEST-FILE: $(describe_rc "$PFIN_NEWEST_FILE_RC")). Either the Scheduled Task's command changed / failed partway through before emitting all three lines, or the apply's own output echoed a duplicate-looking line (Sec's exactly-one-match condition, Amendment 7). Deploy NOT triggered. See the execution record for this run at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID/executions to investigate (raw message withheld from this log line by design -- see the header comment on logging only extracted tags)."
       exit 8
     fi
     if [[ ! "$PFIN_BUILD_SHA_TAG" =~ ^[0-9a-f]{40}$ ]]; then
-      log "FAIL (exit 8): PFIN-BUILD-SHA ('$PFIN_BUILD_SHA_TAG') is not a well-formed 40-character hex sha -- the task's own /workspace/.build-sha read is malformed or empty. Deploy NOT triggered."
+      log "FAIL (exit 8): PFIN-BUILD-SHA ('$PFIN_BUILD_SHA_TAG') is not a well-formed 40-character hex sha -- the task's own /workspace/.build-sha read is malformed or empty. Deploy NOT triggered. See the execution record for this run at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID/executions for the full context."
       exit 8
     fi
     # Architect's Amendment-7 catch: STRING comparison of ledger/file
@@ -456,7 +461,7 @@ case "$STATUS" in
     # 3-digit migration vs a future 14-digit-timestamp one) still
     # compares correctly as numbers.
     if [[ ! "$PFIN_LEDGER_TOP_TAG" =~ ^[0-9]+$ || ! "$PFIN_NEWEST_FILE_TAG" =~ ^[0-9]+$ ]]; then
-      log "FAIL (exit 8): PFIN-LEDGER-TOP ('$PFIN_LEDGER_TOP_TAG') or PFIN-NEWEST-FILE ('$PFIN_NEWEST_FILE_TAG') is not all-digits -- refusing a non-numeric comparison. Deploy NOT triggered."
+      log "FAIL (exit 8): PFIN-LEDGER-TOP ('$PFIN_LEDGER_TOP_TAG') or PFIN-NEWEST-FILE ('$PFIN_NEWEST_FILE_TAG') is not all-digits -- refusing a non-numeric comparison. Deploy NOT triggered. See the execution record for this run at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID/executions for the full context."
       exit 8
     fi
 
