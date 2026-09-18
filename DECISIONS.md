@@ -699,7 +699,11 @@ Schema `auth` is owned by `supabase_auth_admin`, so that seeder cannot grant on 
 
 ### ADR-072 — Amendment 7 (2026-09-17): the two Amendment 6 assertions read the Docker socket, and `ci-migrate` cannot — the next fire WEDGES at the sha gate, fail-closed, with a MISLEADING diagnosis
 
-**Status: DRAFT.** Sec joint-review **mandatory and not discharged here** — this touches [C1](#adr-072) directly. It authorises **no build**.
+**Status: ✅ RATIFIED — F/CTO, 2026-09-18.** *This line previously read **Draft**, with the note that Sec joint-review was mandatory and not yet discharged; it is replaced rather than annotated because a stale `Draft` on a ratified amendment is the one marker a reader must not act on.* **Sec graded GREEN and pinned at `3b4403a1`**, with one non-blocking follow-up — C4's superseded scope claim — folded before ratify. This amendment **still authorises no build**: the implementation is [BACKLOG.md](BACKLOG.md) §7.36 item **51**, built by DevOps in **#802**, under its own review.
+
+⚠ **Every measurement this amendment opened has been taken, which is why it could be ratified rather than left conditional.** The executions `message` channel (DevOps, Coolify source — carries combined stdout+stderr, 5 MB cap, verbatim). The migration-version width (3 digits, so a string max is safe **today only**). And the scheduled-task `PATCH` route (`routes/api.php:413`, `api.ability:write` and nothing narrower) — **which resolved to the unfavourable branch and made the read-back mandatory rather than conditional.**
+
+⚠ **One consequence of that last measurement is WIDER than this amendment, and is booked rather than absorbed here:** the token's `write` ability reaches that route for **every** scheduled task on the application, not only the migrator's. **Item 52** carries it (F/CTO ruled *"book"*, 2026-09-18).
 
 #### (A) Sec's C-1 finding is DISCHARGED by measurement, and C1/C5 hold as written
 
