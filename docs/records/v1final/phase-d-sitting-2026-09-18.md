@@ -332,7 +332,11 @@ gh workflow run migrator-trigger.yml --ref 95b8fc92
 
 ## 6. The real fire — PR #806 (migration 120) merges, the push trigger fires
 
-**✅ PASSED, 2026-09-18. PHASE D IS PROVEN, BOTH TRANSPORT AND CONTENT.** PR #806 merged at `9030a62b`. The real **`push`-triggered** run (`35394373476` — not a manual dispatch) paused at the `production-migrator` gate; redeploy confirmed before approval (`.build-sha == 9030a62b`, `120_account_comment_linked_source_correction.sql` last in the container); approved; orchestrator: integrity OK → pre-fire uuid snapshot → execute → bound to execution `qxtjevwmpms2swokbkjqwwam` by set difference → *"outcome verified via the execution's own message: build-sha (9030a62b...) matches the triggering commit, ledger top row (120) matches the newest migration file (120)"* → SUCCEEDED, deploy SUPPRESSED. **First non-degenerate delivery-assertion pass — something was actually applied (`119` → `120`).** F/CTO's own independent `supabase_admin` read confirms from two further angles: `select max(version) from supabase_migrations.schema_migrations` → `120`; `obj_description('pfin.account'::regclass, 'pg_class') like '%was DEFERRED%'` → `t`. Full detail: `docs/deployment-runbook.md` §6.5, `docs/records/v1final/standup-log.md`.
+**✅ PASSED, 2026-09-18. Transport proven; the delivery assertion has now passed its non-degenerate case (read the distinctions below).** PR #806 merged at `9030a62b`. The real **`push`-triggered** run (`35394373476` — not a manual dispatch) paused at the `production-migrator` gate (required-reviewer approval observed a second time); redeploy confirmed before approval (`.build-sha == 9030a62b`, `120_account_comment_linked_source_correction.sql` last in the container); approved; orchestrator: integrity OK → pre-fire uuid snapshot → execute → bound to execution `qxtjevwmpms2swokbkjqwwam` by set difference → *"outcome verified via the execution's own message: build-sha (9030a62b...) matches the triggering commit, ledger top row (120) matches the newest migration file (120)"* → SUCCEEDED, deploy SUPPRESSED. **This is residual (1)'s discharge: the ledger advanced `119` → `120` through the real path.**
+
+⚠ **Three distinctions (Sec, `sec-record-step6-non-degenerate.md`):** (1) **COMPLETENESS, not CORRECTNESS** — the assertion proved the ledger advanced to `120`, not that `120`'s content landed correctly; correctness comes from QA's battery plus F/CTO's own independent `supabase_admin` read: `select max(version) from supabase_migrations.schema_migrations` → `120`; `obj_description('pfin.account'::regclass, 'pg_class') like '%was DEFERRED%'` → `t` (expected 791 chars, md5 `02971ca980d8791f82d6bd6362f2575c`, pinned by Sec at `9ba45b15`). (2) **First OUT-OF-BAND corroboration — does NOT close the self-report residual** (every orchestrator assertion is still self-reported by the container); converts it to "accepted risk, corroborated once," not "closed." (3) **ONE observation, not a demonstrated property** — the next fire is degenerate again until migration `121` exists.
+
+Full detail: `docs/deployment-runbook.md` §6.5, `docs/records/v1final/standup-log.md`.
 
 **Where:** GitHub UI (the merge, the environment approval) → Coolify UI (the redeploy) → box (the pre-approval confirm, then post-fire checks).
 
@@ -376,11 +380,11 @@ SQL
 
 ## What remains unmeasured after this sitting (steps 1–6 complete)
 
-Phase D's orchestrator path is now proven end to end, both transport (SSH → forced command → Coolify API → GitHub Actions, both `workflow_dispatch` and real `push`) and content (a non-degenerate apply, ledger `119` → `120`, independently confirmed by F/CTO's own `psql` read). Three things this sitting deliberately did not exercise:
+Phase D's orchestrator transport is now proven end to end (SSH → forced command → Coolify API → GitHub Actions, both `workflow_dispatch` and real `push`), and the delivery assertion has passed its non-degenerate case once (ledger `119` → `120`, completeness only — see step 6's own distinctions above for what that does and does not establish). Ordered largest-first:
 
+- **`DEPLOY_ON_SUCCESS=1` is the LARGEST unmeasured item in this whole chain.** Every successful fire this sitting ran with the app deploy suppressed; the branch that actually triggers a production deploy (`GET /deploy?uuid=$APP_UUID`) has never executed — the branch where a mistake is most expensive, since it is the one that makes the app go live. Proven separately at `docs/deployment-runbook.md` §7 step 7, not this sitting.
 - **The pre-fire read-back's MISMATCH branch (exit 10, AC (4d)'s tamper/drift detection).** Step 5 swapped both `MIGRATOR_TASK_UUID` and `MIGRATOR_TASK_COMMAND` together, so the comparison agreed — only the read-back's AGREEMENT path has run live.
 - **Exits 13/14/15 and the ≥2-new-uuid branch** (PR #814's fail-closed binding paths) — the set-difference binding bound cleanly on the first attempt every time it ran; none of these branches has been reached outside DevOps's own strikes.
-- **The `DEPLOY_ON_SUCCESS=1` leg** — the actual app-deploy call (`GET /deploy?uuid=$APP_UUID`) — deliberately never fired this sitting; proven separately at `docs/deployment-runbook.md` §7 step 7.
 
 ## Residuals this sheet does not close (named, not silently assumed closed)
 
