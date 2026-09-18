@@ -137,7 +137,41 @@ set -euo pipefail
 # FLAG 3 on PR #800: this cross-reference was missing the first time and
 # nothing tied the two literals together; matches the existing
 # TOKEN_VAR_NAME / MIGRATOR_TOKEN_VAR_NAME convention above).
-LOCK_FILE="/var/lock/pfin-migrator-orchestrate.lock"
+#
+# ⚠ MOVED off /var/lock, 2026-09-18 (Sec FLAG 2 on PR #800, confirmed live
+# by F/CTO's box measurement: `readlink -f /var/lock` -> `/run/lock`,
+# `findmnt -no FSTYPE /run/lock` -> `tmpfs`). /var/lock's target is
+# tmpfs -- cleared on every reboot -- so a file provisioned there does
+# NOT survive a reboot; the ownership wedge (whoever creates it first
+# owns it) reopens on every boot until provision-vps.sh's --apply is
+# re-run by hand. LOCK_FILE now lives under /run/lock/pfin/, a directory
+# provision-vps.sh provisions via a systemd-tmpfiles drop-in (`d
+# /run/lock/pfin 0750 ci-migrate ci-migrate -`) so it is RECREATED
+# correctly-owned by systemd-tmpfiles-setup.service on every boot, before
+# anything else can race to create it first. The file-level type gate
+# (regular-file-only) and `chown -h` in provision-vps.sh's lock-file step
+# are KEPT as defense-in-depth even though a 0750 directory (vs. the old
+# 1777 /var/lock) already closes the unprivileged-attacker symlink vector
+# -- an operator running a debug command AS ROOT bypasses directory
+# permissions entirely and could still leave the file wrong-owned or
+# symlinked, which is the same failure class Sec's C-2/FLAG-1 findings
+# were about in the first place.
+LOCK_FILE="/run/lock/pfin/pfin-migrator-orchestrate.lock"
+# ⚠ Sec FLAG on PR #804 (2026-09-18): this script set no umask, so
+# `exec 200>"$LOCK_FILE"` created a first-acquire lock file under
+# whatever umask it inherited -- typically 022, i.e. mode 0644, not the
+# 0600 provision-vps.sh's DESIRED_LOCK_STATE compares for exact equality
+# against. That mismatch is ROUTINE, not an edge case: reboot -> tmpfiles
+# recreates the directory empty -> the next fire creates the lock file
+# 0644 -> the next --apply preflight sees "644 != 600" and `die`s with a
+# message claiming every future run will exit 7 (lock unopenable) --
+# FALSE, since a 0644 file owned by ci-migrate opens for write by
+# ci-migrate perfectly well. The failure direction was safe but the
+# message misdescribed a healthy box as broken. Sec's preferred fix (of
+# three offered): make the 0600 invariant true BY CONSTRUCTION rather
+# than by after-the-fact correction, so provision-vps.sh's strict
+# exact-mode compare stays strict AND stays honest.
+umask 077
 exec 200>"$LOCK_FILE" || { printf '[migrator-orchestrate] FAIL (exit 7): could not open %s for locking\n' "$LOCK_FILE" >&2; exit 7; }
 if ! flock -n 200; then
   printf '[migrator-orchestrate] FAIL (exit 7): another migrator-orchestrate.sh invocation already holds the lock (%s) -- refusing to run concurrently against production. Fail-fast by design (Sec, ADR-072 Amendment 6): a queued second run would assert against a container state that can change while it waits, not a safe serialization. Wait for the other invocation to finish (or fail) and re-fire.\n' "$LOCK_FILE" >&2
