@@ -8,8 +8,10 @@
 # ┌─ WHAT THIS CONTAINER IS ────────────────────────────────────────────────┐
 # │ A resident, otherwise-idle container (Pattern A — same convention as     │
 # │ workers/etl and workers/provider-sync: `CMD tail -f /dev/null`) that a  │
-# │ Coolify Scheduled Task `docker exec`s into to run ONE fixed command:    │
-# │ `supabase db push --db-url "$PROD_DB_URL"`. It never listens on a port, │
+# │ Coolify Scheduled Task `docker exec`s into to run ONE fixed command    │
+# │ (ADR-072 Amendment 7 — see scripts/migrator-scheduled-task.md for the  │
+# │ current byte-exact literal; docs/deployment-runbook.md §6.5 is the ONE │
+# │ place to change it). It never listens on a port,                       │
 # │ never accepts inbound connections, and its ONLY outbound reach is to    │
 # │ `db` on the shared Coolify project network (ADR-072 Decision 1/C9 — no  │
 # │ `ports:`, no Domain, no firewall change; see docker-compose.yml).       │
@@ -97,15 +99,30 @@ ARG TARGETARCH
 # `supabase db push` failed at runtime: "Could not find the `supabase-go`
 # binary" — the CLI at this pinned version ships as a shim that forwards
 # DB-affecting subcommands to a co-located Go binary. Extract both.
+#
+# ⚠ ADR-072 Amendment 7 (2026-09-17): `postgresql-client-15` added —
+# scripts/migrator-scheduled-task.md's Command now runs `psql` inside this
+# container (reading the ledger's top row post-apply, for
+# migrator-orchestrate.sh's docker-free delivery assertion). Pinned to the
+# `-15` package name explicitly (Debian bookworm's own default major, so
+# this pin does not change what would resolve anyway; explicit rather than
+# the floating `postgresql-client` meta-package so a future bookworm point
+# release cannot silently move which major gets installed here). `migrator`
+# authenticates to its own ledger schema with `MIGRATOR_DB_USER`/
+# `MIGRATOR_DB_PASSWORD` (already in this container's env per docker-
+# compose.yml) — it owns `supabase_migrations.schema_migrations` per
+# Amendment 5's design, so no new grant is needed for the `select
+# max(version)` read the Command runs.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl tar \
+    && apt-get install -y --no-install-recommends ca-certificates curl tar postgresql-client-15 \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL -o /tmp/supabase-cli.tar.gz \
        "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_linux_${TARGETARCH}.tar.gz" \
     && tar -xzf /tmp/supabase-cli.tar.gz -C /usr/local/bin supabase supabase-go \
     && chmod +x /usr/local/bin/supabase /usr/local/bin/supabase-go \
     && rm /tmp/supabase-cli.tar.gz \
-    && supabase --version
+    && supabase --version \
+    && psql --version
 
 WORKDIR /workspace
 
