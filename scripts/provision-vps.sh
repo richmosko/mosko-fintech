@@ -1337,6 +1337,63 @@ else
   ok "$ORCH_SCRIPT_PATH written -- root:root, 0755 (ci-migrate can execute it via the forced command; cannot write it)"
 fi
 
+step "orchestrator lock directory -- systemd-tmpfiles drop-in (ADR-072 Amendment 7, Sec FLAG 2 on PR #800, confirmed live 2026-09-18)"
+# ⚠ F/CTO measured on the box: `readlink -f /var/lock` -> `/run/lock`,
+# `findmnt -no FSTYPE /run/lock` -> `tmpfs`. Sec's FLAG-2 concern is
+# CONFIRMED, not hypothetical: /var/lock's target is tmpfs, cleared on
+# every reboot, so the lock file's provisioned ownership (below) does
+# NOT survive a reboot -- the C-2 ownership wedge (whoever creates the
+# file first owns it) reopens on every boot until this script's --apply
+# is re-run BY HAND. A systemd-tmpfiles drop-in fixes this at the root:
+# it recreates the directory correctly-owned by
+# systemd-tmpfiles-setup.service EVERY boot, before anything else races
+# to create it first -- no manual re-apply needed after a reboot.
+#
+# Directory, not the lock file itself, is what tmpfiles manages (`d`
+# line type) -- the file inside it is still provisioned by the next step
+# below, unchanged in mechanism (touch/chown/chmod, re-checked every
+# run), just at a new path. 0750 ci-migrate:ci-migrate (not 1777 like
+# /var/lock) also closes the UNPRIVILEGED-attacker symlink vector FLAG 1
+# was about: only ci-migrate can write into this directory at all now, so
+# a local unprivileged foothold can no longer pre-create a symlink here
+# the way it could in the old world-writable /var/lock. This does NOT
+# make the file-level type-gate/`chown -h` in the next step redundant --
+# an operator running a debug command AS ROOT bypasses directory
+# permissions entirely and could still leave the file wrong-owned or
+# symlinked, the exact class of failure those checks exist for.
+TMPFILES_CONF_PATH="/etc/tmpfiles.d/pfin-migrator-orchestrate.conf"
+LOCK_DIR_PATH="/run/lock/pfin"
+# `d <path> <mode> <user> <group> <age>` -- `-` for age means "never
+# auto-clean" (systemd-tmpfiles's own age-based cleanup is for scratch/
+# cache dirs, not somewhere holding a lock file that must persist for the
+# life of the box). Mode 0750: ci-migrate needs rwx to create/open its
+# own lock file inside; group read+execute is harmless (no secret lives
+# in this directory, only an empty lock file) and matches the existing
+# ci-migrate:ci-migrate convention rather than inventing a new group.
+DESIRED_TMPFILES_CONF="d $LOCK_DIR_PATH 0750 ci-migrate ci-migrate -"
+CURRENT_TMPFILES_CONF="$(sshx "cat $TMPFILES_CONF_PATH 2>/dev/null" || true)"
+if [[ "$CURRENT_TMPFILES_CONF" == "$DESIRED_TMPFILES_CONF" ]]; then
+  ok "$TMPFILES_CONF_PATH already matches"
+elif [[ $APPLY -eq 0 ]]; then
+  info "$TMPFILES_CONF_PATH missing or differs -- would write it and run systemd-tmpfiles --create"
+else
+  printf '%s\n' "$DESIRED_TMPFILES_CONF" | ssh "${SSH_OPTS[@]}" "root@$BOX_IP" \
+    "cat > $TMPFILES_CONF_PATH && chown root:root $TMPFILES_CONF_PATH && chmod 0644 $TMPFILES_CONF_PATH"
+  ok "$TMPFILES_CONF_PATH written"
+fi
+# Apply NOW, not just at the next boot -- an --apply run today must fix
+# TODAY's running state, not leave the directory missing until whoever
+# reboots the box next happens to notice. Idempotent: re-running
+# `systemd-tmpfiles --create` against an already-correct directory is a
+# no-op. Run unconditionally (even when the conf already matched above)
+# so a directory that got deleted/wrong-owned SINCE the last --apply
+# (e.g. a stray `rm -rf /run/lock/pfin`) is corrected without requiring a
+# reboot either.
+if [[ $APPLY -eq 1 ]]; then
+  sshx "systemd-tmpfiles --create $TMPFILES_CONF_PATH"
+  ok "systemd-tmpfiles --create applied -- $LOCK_DIR_PATH exists, ci-migrate:ci-migrate 0750"
+fi
+
 step "orchestrator lock file (ADR-072 Amendment 6, ci-migrate:ci-migrate 0600 -- Sec C-2 on PR #798)"
 # ⚠ LOCK_FILE_PATH here MUST match LOCK_FILE in scripts/migrator-orchestrate.sh
 # -- one path, asserted in both files, not two copies that can drift (the
@@ -1346,20 +1403,19 @@ step "orchestrator lock file (ADR-072 Amendment 6, ci-migrate:ci-migrate 0600 --
 #
 # migrator-orchestrate.sh does `exec 200>"$LOCK_FILE"` (flock -n) AS
 # ci-migrate -- that needs WRITE permission on the FILE, not just on the
-# (1777, sticky) directory it lives in. /var/lock's sticky bit only
-# governs who may delete/rename another user's file there, not who may
-# open an EXISTING file for writing -- so whichever identity happens to
-# create this file first (an operator debugging as root, say) leaves it
-# owned by THAT identity, and every later ci-migrate-invoked run then
-# fails to open it and exits 7 (lock-unopenable) PERMANENTLY. Sec C-2,
-# measured: nothing previously provisioned this file at all, so its
-# first creator's identity was pure chance. Provisioned here,
+# directory it lives in. Now that the directory above is 0750
+# ci-migrate:ci-migrate (not the old 1777, sticky /var/lock), an
+# unprivileged local user can no longer pre-create anything inside it at
+# all -- but root always bypasses filesystem permission checks, so an
+# operator debugging as root inside this directory can still leave the
+# file wrong-owned, which is Sec's exact originally-named C-2 failure
+# mode ("an operator debugging as root, say"). Provisioned here,
 # ci-migrate:ci-migrate 0600 (only ci-migrate needs to read/write its own
 # lock), and re-checked on EVERY run, not just at creation, so a stray
 # root-owned recreation is caught and named immediately rather than
 # silently wedging every subsequent automated fire until someone notices
 # a string of exit-7 failures.
-LOCK_FILE_PATH="/var/lock/pfin-migrator-orchestrate.lock"
+LOCK_FILE_PATH="$LOCK_DIR_PATH/pfin-migrator-orchestrate.lock"
 DESIRED_LOCK_STATE="ci-migrate:ci-migrate 600"
 # ⚠ Sec FLAG 1 on PR #800, measured this session (BSD stat/chmod on
 # darwin -- same POSIX symlink-dereference semantics; one confirmation on
@@ -1409,25 +1465,15 @@ else
   fi
 fi
 
-# ⚠ Sec FLAG 2 on PR #800 (offered, not yet measured on the box): on a
-# systemd host `/var/lock` is typically a symlink to `/run/lock`, which is
-# TMPFS -- cleared on every reboot. The provisioning above makes this
-# durable WITHIN a boot, but after a reboot the file is simply gone again
-# and the wedge (whoever creates it first owns it) can recur until this
-# script's `--apply` is re-run. Direction is still fail-closed either way
-# (exit 7, distinguishable "could not open" vs "already holds the lock"),
-# so this is not treated as a blocking condition -- but it is NOT
-# currently provisioned durably, and that gap should not be silently
-# assumed closed. MEASURE FIRST (F/CTO, on the box, read-only):
-#   readlink -f /var/lock; findmnt -no FSTYPE /run/lock
-# If that confirms /run/lock is tmpfs, add a systemd-tmpfiles drop-in so
-# the file is recreated correctly-owned at every boot, independent of
-# whichever process happens to touch it first:
-#   printf 'f %s 0600 ci-migrate ci-migrate -\n' "$LOCK_FILE_PATH" > /etc/tmpfiles.d/pfin-migrator-orchestrate.conf
-# Not written by this script yet -- Sec's own framing is "measure, then
-# choose the tmpfiles.d drop-in OR move the lock to a persistent
-# ci-migrate-owned directory," and that choice is worth making with the
-# measurement in hand, not guessed at here.
+# ⚠ Sec FLAG 2 on PR #800 -- RESOLVED 2026-09-18. F/CTO's box measurement
+# confirmed `/var/lock` -> `/run/lock` (tmpfs), so the reboot-durability
+# gap this comment used to describe as unmeasured is real. Fixed by
+# MOVING the lock off /var/lock entirely, not by tmpfiles-managing a file
+# directly on it: see the "orchestrator lock directory" step above, which
+# provisions /run/lock/pfin via a systemd-tmpfiles `d` (directory) line
+# and applies it immediately with `systemd-tmpfiles --create`. The lock
+# file itself (this step, above) now lives inside that directory and is
+# still provisioned/re-checked the same way on every run.
 
 step "ci-migrate authorized_keys -- forced command (ADR-072 C3 -- 'restrict', not a hand-listed no-* set)"
 [[ -f "$CI_MIGRATE_SSH_PUBKEY" ]] || die "no public key at CI_MIGRATE_SSH_PUBKEY=$CI_MIGRATE_SSH_PUBKEY -- generate the ci_only keypair first (ssh-keygen -t ed25519 -N '' -f <path>), give F/CTO the PRIVATE half for this repo's CI_MIGRATE_SSH_PRIVATE_KEY GitHub Actions secret, and point this var at the PUBLIC half."
