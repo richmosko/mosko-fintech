@@ -254,6 +254,24 @@ if [[ ! "$MIGRATOR_TASK_UUID" =~ ^[a-z0-9]{24}$ ]]; then
   log "FAIL (exit 11): MIGRATOR_TASK_UUID ('$MIGRATOR_TASK_UUID') in $CONF_FILE is not a well-formed 24-character lowercase-alphanumeric Coolify UUID. This is a config defect in $CONF_FILE, not a tampering-or-drift finding about the live task -- fix the value there (re-run provision-vps.sh --apply with the correct MIGRATOR_TASK_UUID in .env) before firing. NOT executing the Scheduled Task."
   exit 11
 fi
+# ⚠ Sec NOTE 1 on PR #808's f802ce20 pin (2026-09-18): the companion guard
+# to the MIGRATOR_TASK_UUID check above. $MIGRATOR_SERVICE_UUID gets
+# interpolated directly into the URL path below (`/applications/
+# $MIGRATOR_SERVICE_UUID/scheduled-tasks`) rather than into a Python
+# literal, but the same diagnosis problem applies either way: WITHOUT
+# this guard, a malformed $CONF_FILE value here (a bad hand-edit, a
+# truncated write) reaches the list call, 404s exactly like a genuine
+# access/team-scope failure would, and gets reported by the "list call
+# itself failed" branch below as an ACCESS-FAILURE diagnosis -- when the
+# real cause is a config defect in $CONF_FILE, not anything about the
+# token's identity or team scope. Same 24-char lowercase-alphanumeric
+# Coolify uuid shape (new_public_id(), measured above) checked BEFORE
+# any API call, with its own exit code and a message naming $CONF_FILE
+# directly, exactly the same discipline as MIGRATOR_TASK_UUID's guard.
+if [[ ! "$MIGRATOR_SERVICE_UUID" =~ ^[a-z0-9]{24}$ ]]; then
+  log "FAIL (exit 12): MIGRATOR_SERVICE_UUID ('$MIGRATOR_SERVICE_UUID') in $CONF_FILE is not a well-formed 24-character lowercase-alphanumeric Coolify UUID. This is a config defect in $CONF_FILE -- fix the value there (re-run provision-vps.sh --apply with the correct MIGRATOR_SERVICE_UUID in .env) before firing. Without this check, a malformed value here would reach the Scheduled Task list call, 404, and be misdiagnosed as an access/team-scope failure rather than the config defect it actually is. NOT executing the Scheduled Task."
+  exit 12
+fi
 
 api() { # api <METHOD> <PATH>
   curl -fsS -X "$1" -H "Authorization: Bearer $COOLIFY_API_TOKEN" "$COOLIFY_BASE$2"
