@@ -287,14 +287,26 @@ case "$STATUS" in
     # sha-check (which only proves the IMAGE was fresh, not that the
     # APPLY inside it actually landed).
     log "verifying delivery -- comparing the ledger's top row to the newest migration file in the running container"
-    LEDGER_TOP="$(docker compose --project-name "$MIGRATOR_SERVICE_UUID" exec -T db psql -U supabase_admin -d postgres -tAc "select max(version) from supabase_migrations.schema_migrations" 2>/dev/null | tr -d '[:space:]' || true)"
-    NEWEST_FILE_VERSION="$(docker compose --project-name "$MIGRATOR_SERVICE_UUID" exec -T migrator sh -c "ls /workspace/supabase/migrations | sed -nE 's/^([0-9]+)_.*/\1/p' | sort -V | tail -1" 2>/dev/null | tr -d '[:space:]' || true)"
+    # ⚠ CORRECTED 2026-09-17 (Sec C-4 on PR #798): the two execs below used
+    # to redirect stderr to /dev/null, so a permission-denied, a stopped
+    # container, and a genuinely-empty result were all indistinguishable
+    # on exit 6 -- the operator who has to act on that exit code saw the
+    # same message for three very different problems. Captured to a
+    # per-call temp file instead and folded into the FAIL messages below.
+    LEDGER_ERR_FILE="$(mktemp)"
+    LEDGER_TOP="$(docker compose --project-name "$MIGRATOR_SERVICE_UUID" exec -T db psql -U supabase_admin -d postgres -tAc "select max(version) from supabase_migrations.schema_migrations" 2>"$LEDGER_ERR_FILE" | tr -d '[:space:]' || true)"
+    LEDGER_ERR="$(tr '\n' ' ' <"$LEDGER_ERR_FILE" 2>/dev/null || true)"
+    rm -f "$LEDGER_ERR_FILE"
+    FILE_ERR_FILE="$(mktemp)"
+    NEWEST_FILE_VERSION="$(docker compose --project-name "$MIGRATOR_SERVICE_UUID" exec -T migrator sh -c "ls /workspace/supabase/migrations | sed -nE 's/^([0-9]+)_.*/\1/p' | sort -V | tail -1" 2>"$FILE_ERR_FILE" | tr -d '[:space:]' || true)"
+    FILE_ERR="$(tr '\n' ' ' <"$FILE_ERR_FILE" 2>/dev/null || true)"
+    rm -f "$FILE_ERR_FILE"
     if [[ -z "$LEDGER_TOP" ]]; then
-      log "FAIL (exit 6): could not read supabase_migrations.schema_migrations's top row from the db container. Refusing to trust a 'success' status with no readable ledger to confirm it against. Deploy NOT triggered."
+      log "FAIL (exit 6): could not read supabase_migrations.schema_migrations's top row from the db container. stderr: '${LEDGER_ERR:-<empty>}'. Refusing to trust a 'success' status with no readable ledger to confirm it against. Deploy NOT triggered."
       exit 6
     fi
     if [[ -z "$NEWEST_FILE_VERSION" ]]; then
-      log "FAIL (exit 6): could not read the migrator container's own /workspace/supabase/migrations directory to find the newest migration file. Refusing to trust a 'success' status with nothing to compare the ledger against. Deploy NOT triggered."
+      log "FAIL (exit 6): could not read the migrator container's own /workspace/supabase/migrations directory to find the newest migration file. stderr: '${FILE_ERR:-<empty>}'. Refusing to trust a 'success' status with nothing to compare the ledger against. Deploy NOT triggered."
       exit 6
     fi
     if [[ "$LEDGER_TOP" != "$NEWEST_FILE_VERSION" ]]; then
