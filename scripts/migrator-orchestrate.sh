@@ -234,6 +234,26 @@ COOLIFY_API_TOKEN="$(read_kv "$TOKEN_FILE" "$TOKEN_VAR_NAME")"
 : "${APP_UUID:?$CONF_FILE must set APP_UUID}"
 : "${MIGRATOR_TASK_COMMAND:?$CONF_FILE must set MIGRATOR_TASK_COMMAND}"
 : "${COOLIFY_API_TOKEN:?$TOKEN_FILE must set $TOKEN_VAR_NAME}"
+# ⚠ Sec FLAG 1 on PR #808's GREEN pin (2026-09-18): $MIGRATOR_TASK_UUID gets
+# interpolated directly into a Python string literal inside the jqp
+# heredoc below (`... == '$MIGRATOR_TASK_UUID'`) -- same shape validation
+# discipline MIGRATOR_EXPECT_SHA already gets (its own exit-4/exit-5
+# pair, above) is owed here too, and BEFORE that interpolation, not
+# after. Coolify's own uuid generator (`new_public_id()`,
+# bootstrap/helpers/shared.php:119-124: `Str::lower(Str::random(24))`)
+# is exactly 24 lowercase alphanumeric characters -- measured against
+# the pinned source, not guessed; every real UUID already read on this
+# box or cited anywhere in this repo (MIGRATOR_SERVICE_UUID, APP_UUID,
+# the fail-probe UUID) is 24 chars, matching. A malformed value here is
+# a $CONF_FILE defect (a bad hand-edit, a truncated write, a wrong key
+# pasted in) -- NOT the same diagnosis as a well-formed UUID that simply
+# doesn't match any live task (the tampering-or-drift branch, below) --
+# so it gets its OWN exit code and a message naming $CONF_FILE, not the
+# list-response branch's wording.
+if [[ ! "$MIGRATOR_TASK_UUID" =~ ^[a-z0-9]{24}$ ]]; then
+  log "FAIL (exit 11): MIGRATOR_TASK_UUID ('$MIGRATOR_TASK_UUID') in $CONF_FILE is not a well-formed 24-character lowercase-alphanumeric Coolify UUID. This is a config defect in $CONF_FILE, not a tampering-or-drift finding about the live task -- fix the value there (re-run provision-vps.sh --apply with the correct MIGRATOR_TASK_UUID in .env) before firing. NOT executing the Scheduled Task."
+  exit 11
+fi
 
 api() { # api <METHOD> <PATH>
   curl -fsS -X "$1" -H "Authorization: Bearer $COOLIFY_API_TOKEN" "$COOLIFY_BASE$2"
@@ -464,21 +484,54 @@ if [[ -z "$TASK_LIST_JSON" ]]; then
   log "FAIL (exit 10): the Scheduled Task LIST CALL ITSELF FAILED (empty response from an HTTP-level failure, not a successful-but-empty list) -- could not verify the migrator task's command before firing. This means something about THIS SCRIPT'S OWN ACCESS is broken, not the task: Coolify returns an identical bare 404 whether the route isn't registered on this Coolify version, MIGRATOR_SERVICE_UUID doesn't resolve for this token's team, or (less likely, already measured stable) a genuine not-found -- check the token's abilities/team scope and MIGRATOR_SERVICE_UUID in $CONF_FILE before assuming a route regression. See GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks directly. Refusing to fire against an unverifiable task. NOT executing the Scheduled Task."
   exit 10
 fi
-TASK_MATCH_COUNT="$(printf '%s' "$TASK_LIST_JSON" | jqp "
+# ⚠ Sec FLAG 2 on PR #808's GREEN pin (2026-09-18): under this script's
+# own `set -euo pipefail` (top of file), a jqp/python3 failure (a
+# traceback -- e.g. TASK_LIST_JSON is present but not valid JSON, an
+# HTTP error page that slipped past the `-z` check above, or any other
+# parse exception) would otherwise either (a) abort the WHOLE SCRIPT
+# silently via `-e`/`pipefail` with no exit-10-family message at all, or
+# (b) if caught, leave `$TASK_MATCH_COUNT` empty -- which then falls
+# into the `!= "1"` branch below and gets reported as "zero matches,"
+# a TAMPERING-OR-DRIFT diagnosis. Neither is correct: a parse failure
+# means the response couldn't be READ at all, which is closer to the
+# access-failure branch above than to a real zero-match result. Guard
+# the assignment with `if !` (the standard bash idiom that does NOT
+# trigger `-e` on a failing command substitution used as a condition)
+# and give it a THIRD, distinct message -- kept at exit 10, same
+# reasoning as the two messages above: same severity and caller action,
+# distinguished by text, not by code.
+JQP_ERR_FILE="$(mktemp)"
+if ! TASK_MATCH_COUNT="$(printf '%s' "$TASK_LIST_JSON" | jqp "
 d=json.load(sys.stdin)
 rows=d if isinstance(d, list) else d.get('data', d)
 print(sum(1 for r in (rows or []) if (r or {}).get('uuid') == '$MIGRATOR_TASK_UUID'))
-")"
+" 2>"$JQP_ERR_FILE")"; then
+  JQP_ERR="$(tail -1 "$JQP_ERR_FILE" 2>/dev/null || true)"
+  rm -f "$JQP_ERR_FILE"
+  log "FAIL (exit 10): could not PARSE the Scheduled Task list response -- the list call itself succeeded (non-empty response) but the JSON parser failed ('${JQP_ERR:-<no error captured>}'). This is neither an access failure nor a tampering-or-drift finding -- the response body itself is not valid/parseable JSON. Investigate what Coolify actually returned before re-firing. NOT executing the Scheduled Task."
+  exit 10
+fi
+rm -f "$JQP_ERR_FILE"
 if [[ "$TASK_MATCH_COUNT" != "1" ]]; then
   log "FAIL (exit 10): the Scheduled Task LIST CALL SUCCEEDED but returned $TASK_MATCH_COUNT entries matching MIGRATOR_TASK_UUID ($MIGRATOR_TASK_UUID), not exactly one -- this is a TAMPERING-OR-DRIFT diagnosis, distinct from an access failure: the API answered fine, the task itself is not where expected (zero means the task was deleted or the UUID drifted; two-or-more should be impossible for a UUID but is refused rather than resolved by position, same discipline as the tagged-line extraction below). See the task list directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks. NOT executing the Scheduled Task."
   exit 10
 fi
-LIVE_TASK_COMMAND="$(printf '%s' "$TASK_LIST_JSON" | jqp "
+# Same jqp-failure guard as above -- a parse failure here must not be
+# read as "command is empty" (which would otherwise fall into the
+# mismatch branch below and be misreported as a differing command).
+JQP_ERR_FILE="$(mktemp)"
+if ! LIVE_TASK_COMMAND="$(printf '%s' "$TASK_LIST_JSON" | jqp "
 d=json.load(sys.stdin)
 rows=d if isinstance(d, list) else d.get('data', d)
 matches=[r for r in (rows or []) if (r or {}).get('uuid') == '$MIGRATOR_TASK_UUID']
 print((matches[0] or {}).get('command','') if matches else '')
-")"
+" 2>"$JQP_ERR_FILE")"; then
+  JQP_ERR="$(tail -1 "$JQP_ERR_FILE" 2>/dev/null || true)"
+  rm -f "$JQP_ERR_FILE"
+  log "FAIL (exit 10): could not PARSE the Scheduled Task list response while extracting the matched task's command ('${JQP_ERR:-<no error captured>}'). This is a parse failure, not a command mismatch -- do not treat an empty read as evidence the command differs. Investigate before re-firing. NOT executing the Scheduled Task."
+  exit 10
+fi
+rm -f "$JQP_ERR_FILE"
 LIVE_TASK_COMMAND="$(strip_ws "$LIVE_TASK_COMMAND")"
 EXPECTED_TASK_COMMAND="$(strip_ws "$MIGRATOR_TASK_COMMAND")"
 if [[ -z "$LIVE_TASK_COMMAND" || "$LIVE_TASK_COMMAND" != "$EXPECTED_TASK_COMMAND" ]]; then
