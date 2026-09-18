@@ -355,7 +355,12 @@ strip_ws() { printf '%s' "$1" | sed -E $'s/^[ \t\r]+//; s/[ \t\r]+$//'; }
 # failed closed on a route defect, not on the task. Same absence on the
 # `/services/{uuid}/scheduled-tasks/...` family (`:418-423`), which this
 # script does not use (Item 15 fix, below, already established this task
-# is application-attached).
+# is application-attached) -- noted here, not built here, because it is
+# relevant to BACKLOG.md item 52's audit arm (any future audit of every
+# scheduled task the trigger token's team owns, including SERVICE-
+# attached ones, will hit the identical no-single-task-GET absence and
+# needs the same list-and-filter shape, not a route this script has no
+# reason to call itself).
 #
 # Fixed: use the LIST route (`ScheduledTasksController::
 # scheduled_tasks_by_application_uuid`, `:294-307`, which calls
@@ -376,6 +381,52 @@ strip_ws() { printf '%s' "$1" | sed -E $'s/^[ \t\r]+//; s/[ \t\r]+$//'; }
 # script has never used it; reusing the same `jqp()`/python3 pattern
 # already established for the executions parsing above, not introducing
 # a new dependency.
+#
+# ⚠ Sec's four "same evidence, not weaker" conditions (2026-09-18,
+# pre-position on this fix) -- all four measured against Coolify 4.3.18
+# source, not assumed, before this route swap was trusted:
+#   (1) SAME COLUMN. `updateTask()`'s actual write
+#       (`ScheduledTasksController.php:172`, `$task->update($request->
+#       only($allowedFields))`) persists to the SAME Eloquent `command`
+#       attribute this list route reads back via
+#       `$resource->scheduled_tasks->map(...)` -- one column, one store,
+#       read through a different envelope, not a different value.
+#   (2) NO TRANSFORM, checked in the direction that matters. `command`
+#       carries NO Eloquent accessor/mutator/cast of any kind
+#       (`app/Models/ScheduledTask.php`: `casts()` touches only
+#       `enabled`/`timeout`; `HasSafeStringAttribute`
+#       (`app/Traits/HasSafeStringAttribute.php`) defines mutators for
+#       `name`/`description` ONLY -- `command` is untouched by either).
+#       `serializeApiResponse()` (`bootstrap/helpers/api.php:38-95`,
+#       read in full) only reorders keys (`sortKeys()`, then prepends
+#       `name`/`description`/`uuid`/`id` and re-appends
+#       `created_at`/`updated_at`) -- no truncation (which would fail
+#       CLOSED, loud) and no whitespace normalisation (which would NOT
+#       fail closed -- it would make this byte-exact compare pass
+#       against a stored command that actually differs, compounding
+#       with `strip_ws`'s own leading/trailing strip rather than being
+#       caught by it). Confirmed absent, not merely unmentioned.
+#   (3) NO PAGINATION. `Application::scheduled_tasks()`
+#       (`app/Models/Application.php:1090-1092`) is a bare
+#       `hasMany(ScheduledTask::class)->orderBy('name','asc')` -- no
+#       `->paginate()`, `->take()`, or `->limit()` anywhere in this
+#       relation or in `listTasks()`
+#       (`ScheduledTasksController.php:38-47`), which accesses it as a
+#       plain Eloquent collection property (always the FULL related set,
+#       never a paginator) and `->map()`s over the whole thing. A
+#       page-one-only read with the migrator task off page one would be
+#       a permanent exit-10 wedge indistinguishable from tampering --
+#       ruled out by construction, not by assumption.
+#   (4) FIELD MATCH, NOT SUBSTRING. The uuid selection below is
+#       `(r or {}).get('uuid') == '$MIGRATOR_TASK_UUID'` on PARSED JSON
+#       -- a field-equality test against each element's own `uuid` key,
+#       never a substring search over the raw response body (which
+#       would be an injection surface of the same shape as the tagged-
+#       line parse this script already guards against with
+#       extract_one_tag()'s anchored, exactly-one-match discipline).
+# All four hold: this route change is the same evidence the (never-
+# existent) single-task GET would have offered, not weaker evidence
+# through a different envelope.
 TASK_LIST_JSON="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks" || true)"
 if [[ -z "$TASK_LIST_JSON" ]]; then
   log "FAIL (exit 10): could not GET the Scheduled Task list to verify the migrator task's command before firing. Refusing to fire against an unverifiable task. See the task list directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks. NOT executing the Scheduled Task."
