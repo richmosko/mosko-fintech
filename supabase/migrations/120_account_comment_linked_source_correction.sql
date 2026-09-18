@@ -52,9 +52,9 @@
 --   derivable from the two files, a stated figure is a maintenance obligation this
 --   comment cannot honour, and the paired battery's (t3)/(t4) pin both ends by content
 --   rather than by count. This line previously carried two figures labelled as byte
---   counts; they were CHARACTER counts, and a re-derivation from a different span
---   boundary did not reproduce them either - which is the argument for the property
---   over the number. The literal contains no single quote, so there is no '' doubling and
+--   counts; they matched neither a character count nor a byte count at the containment
+--   boundary, and the boundary that produced them is unknown - which is the argument
+--   for the property over the number. The literal contains no single quote, so there is no '' doubling and
 --   no divergence between source and rendered catalog text.
 --
 -- ADR-011 Decision 4's §10 catalogued-instance ledger: read verbatim and live at draft
