@@ -75,9 +75,25 @@ status:
   "the latest entry" is that previous row, not this fire's. `scripts/
   migrator-orchestrate.sh` binds this by a **uuid set difference**, and an
   operator doing this by hand should do the same, not read the list head:
-  1. **Before** executing: `GET /api/v1/scheduled-tasks/{task-uuid}/executions`
-     and note every `uuid` present (or, at minimum, the count).
-  2. `POST /api/v1/scheduled-tasks/{task-uuid}/execute`.
+  1. **Before** executing: `GET
+     /api/v1/applications/{app-uuid}/scheduled-tasks/{task-uuid}/executions`
+     and note every `uuid` present (or, at minimum, the count). ⚠
+     **CORRECTED 2026-09-18 (Sec measured, same pass as the uuid-binding
+     rewrite):** this step previously cited `GET
+     /api/v1/scheduled-tasks/{task-uuid}/executions` — a route that does
+     not exist at Coolify v4.3.18. Scheduled-task routes are namespaced
+     under the owning resource; there is no bare `/scheduled-tasks/...`
+     family. Confirmed against `routes/api.php` directly
+     (github.com/coollabsio/coolify, tag v4.3.18): the executions route
+     is `Route::get('/applications/{uuid}/scheduled-tasks/{task_uuid}/executions',
+     ...)` (line 415, `ScheduledTasksController::executions_by_application_uuid`)
+     — the third inferred-not-measured vendor route caught on this chain
+     (see `migrator-orchestrate.sh`'s own "Item 15" comment for the
+     first two, execute/executions under `/applications/`, not
+     `/services/`).
+  2. `POST /api/v1/applications/{app-uuid}/scheduled-tasks/{task-uuid}/execute`
+     (`routes/api.php` line 416, `execute_scheduled_task_by_application_uuid`
+     — same correction as step 1).
   3. Poll `GET .../executions` again, repeatedly, until **exactly one**
      `uuid` appears that was **not** in step 1's set. Zero new uuids
      means this fire's execution hasn't shown up yet — keep polling; two
@@ -102,7 +118,9 @@ status:
 
 An operator can execute this Scheduled Task by hand (Coolify dashboard
 "Run now", or a direct authenticated
-`POST /api/v1/scheduled-tasks/{task-uuid}/execute`) as the supervised
+`POST /api/v1/applications/{app-uuid}/scheduled-tasks/{task-uuid}/execute`
+— `routes/api.php` line 416, same correction as the polling steps above)
+as the supervised
 first-apply step, in place of the `supabase db push --db-url "$PROD_DB_URL"`
 operator command `docs/deployment-runbook.md` §4/§6 already documents for
 the interim/bootstrap path — same verb, same tracking table
