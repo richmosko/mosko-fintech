@@ -157,6 +157,21 @@ set -euo pipefail
 # symlinked, which is the same failure class Sec's C-2/FLAG-1 findings
 # were about in the first place.
 LOCK_FILE="/run/lock/pfin/pfin-migrator-orchestrate.lock"
+# ⚠ Sec FLAG on PR #804 (2026-09-18): this script set no umask, so
+# `exec 200>"$LOCK_FILE"` created a first-acquire lock file under
+# whatever umask it inherited -- typically 022, i.e. mode 0644, not the
+# 0600 provision-vps.sh's DESIRED_LOCK_STATE compares for exact equality
+# against. That mismatch is ROUTINE, not an edge case: reboot -> tmpfiles
+# recreates the directory empty -> the next fire creates the lock file
+# 0644 -> the next --apply preflight sees "644 != 600" and `die`s with a
+# message claiming every future run will exit 7 (lock unopenable) --
+# FALSE, since a 0644 file owned by ci-migrate opens for write by
+# ci-migrate perfectly well. The failure direction was safe but the
+# message misdescribed a healthy box as broken. Sec's preferred fix (of
+# three offered): make the 0600 invariant true BY CONSTRUCTION rather
+# than by after-the-fact correction, so provision-vps.sh's strict
+# exact-mode compare stays strict AND stays honest.
+umask 077
 exec 200>"$LOCK_FILE" || { printf '[migrator-orchestrate] FAIL (exit 7): could not open %s for locking\n' "$LOCK_FILE" >&2; exit 7; }
 if ! flock -n 200; then
   printf '[migrator-orchestrate] FAIL (exit 7): another migrator-orchestrate.sh invocation already holds the lock (%s) -- refusing to run concurrently against production. Fail-fast by design (Sec, ADR-072 Amendment 6): a queued second run would assert against a container state that can change while it waits, not a safe serialization. Wait for the other invocation to finish (or fail) and re-fire.\n' "$LOCK_FILE" >&2
