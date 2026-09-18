@@ -66,11 +66,32 @@ status:
   own `ScheduledTaskJob.php` — a non-zero `supabase db push` exit (including
   a mid-file failure on a non-transactional migration) surfaces as `failed`,
   not swallowed the way a `post_deployment_command` failure would be.
-- **Poll, don't assume finished-means-success.** `GET
-  /api/v1/scheduled-tasks/{task-uuid}/executions` (or the dashboard's own
-  execution history) until the latest entry's `status != running`, then
-  branch on `success` vs `failed`. This polling + branch is chunk 2's
-  orchestration script; this task definition is what it polls.
+- **Poll, don't assume finished-means-success — and don't poll "the latest
+  entry," poll THE EXECUTION THIS FIRE CAUSED.** ⚠ **CORRECTED 2026-09-18,
+  same defect on the manual path as the automated one:** Coolify creates
+  the execution row only once a queue worker actually starts processing
+  the dispatched job, never when `POST .../execute` returns — so a poll
+  run right after firing can see only a PREVIOUS execution's row, and
+  "the latest entry" is that previous row, not this fire's. `scripts/
+  migrator-orchestrate.sh` binds this by a **uuid set difference**, and an
+  operator doing this by hand should do the same, not read the list head:
+  1. **Before** executing: `GET /api/v1/scheduled-tasks/{task-uuid}/executions`
+     and note every `uuid` present (or, at minimum, the count).
+  2. `POST /api/v1/scheduled-tasks/{task-uuid}/execute`.
+  3. Poll `GET .../executions` again, repeatedly, until **exactly one**
+     `uuid` appears that was **not** in step 1's set. Zero new uuids
+     means this fire's execution hasn't shown up yet — keep polling; two
+     or more means another execution fired concurrently (e.g. someone
+     else's "Run now") — stop and disambiguate by hand rather than
+     guessing.
+  4. Read `status` (and, on `success`, `message`) from **that uuid's row
+     specifically**, never from the list's head, until `status !=
+     running`, then branch on `success` vs `failed`.
+  This polling + branch is chunk 2's orchestration script
+  (`scripts/migrator-orchestrate.sh`); this task definition is what it
+  polls. (Read-only `curl` via a config file with the API token, never a
+  pasted bearer token on the command line — operator hygiene, not a new
+  rule.)
 - **On `failed`:** the existing Coolify→Discord Scheduled-Task-failure
   routing fires (incumbent — `docs/deployment-runbook.md` §8) with no
   further action from this task; the app deploy must NOT be triggered.
