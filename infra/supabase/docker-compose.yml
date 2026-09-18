@@ -294,22 +294,33 @@ services:
   #
   # Pattern-A resident container (CMD tail -f /dev/null, baked in the
   # Dockerfile) — the Scheduled Task's `command` runs the fixed verb:
-  #   sh -c 'echo "PFIN-BUILD-SHA=$(cat /workspace/.build-sha)"; supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace; rc=$?; echo "PFIN-LEDGER-TOP=$(psql "$PROD_DB_URL" -tAc "select max(version) from supabase_migrations.schema_migrations")"; echo "PFIN-NEWEST-FILE=$(ls /workspace/supabase/migrations | sort -V | tail -1 | cut -d_ -f1)"; exit $rc'
-  # ⚠ ADR-072 Amendment 7 (2026-09-17, draft): this is a FOURTH
-  # hand-maintained copy of the same literal (the other three: Coolify's
-  # own stored Scheduled Task, scripts/migrator-scheduled-task.md's
-  # Command row -- the literal's HOME, Sec FLAG B fix on #802 -- and
-  # MIGRATOR_TASK_COMMAND in /etc/pfin/migrator-trigger.conf written by
-  # scripts/provision-vps.sh). To change the command: edit the Command
-  # row in scripts/migrator-scheduled-task.md first, then follow
+  #   sh /workspace/pfin-task.sh
+  # ⚠ ADR-072 Amendment 8 (2026-09-18, F/CTO-ratified option (B),
+  # Architect's architect-a7-command-length.md): the ORIGINAL inline
+  # literal (357 bytes: three tagged `echo`s + `db push` + the `rc`
+  # capture) did NOT FIT Coolify's `scheduled_tasks.command` column
+  # (`character varying(255)`, measured, never widened -- confirmed by a
+  # real SQLSTATE 22001 save failure). Baked the full logic into the
+  # image instead: infra/supabase/migrator/pfin-task.sh (COPYed in by
+  # this service's own Dockerfile, see its own header for the full
+  # logic, byte-for-byte the same commands this comment used to spell out
+  # inline, and the named prohibition against ever deleting the `rc`
+  # capture there). This comment is still a FOURTH hand-maintained copy
+  # of the same (now 26-byte) invocation string (the other three:
+  # Coolify's own stored Scheduled Task, scripts/migrator-scheduled-
+  # task.md's Command row -- the literal's HOME, Sec FLAG B fix on #802
+  # -- and MIGRATOR_TASK_COMMAND in /etc/pfin/migrator-trigger.conf
+  # written by scripts/provision-vps.sh). To change the command: edit the
+  # Command row in scripts/migrator-scheduled-task.md first, then follow
   # docs/deployment-runbook.md §6.5's propagation procedure to the other
   # three sites and re-run `provision-vps.sh --apply`. migrator-
-  # orchestrate.sh fails closed (exit 10) if Coolify's
+  # orchestrate.sh fails closed (exit 10/11) if Coolify's
   # live task ever drifts from MIGRATOR_TASK_COMMAND, so a stale copy
-  # here is caught, not silent. The three `PFIN-*` tagged lines are how
-  # migrator-orchestrate.sh asserts outcome without ever needing docker
-  # access (ci-migrate has none — measured, Amendment 7): it parses them
-  # out of the execution's own `message` field via the Coolify API. `--yes`
+  # here is caught, not silent. The three `PFIN-*` tagged lines
+  # pfin-task.sh emits are how migrator-orchestrate.sh asserts outcome
+  # without ever needing docker access (ci-migrate has none — measured,
+  # Amendment 7): it parses them out of the execution's own `message`
+  # field via the Coolify API. `--yes`
   # added 2026-09-17 (ADR-072 Amendment 6) so this unattended fire
   # never depends on the CLI's own unversioned non-TTY prompt-default
   # behavior — measured safe on the pinned v2.107.0 binary, but not this

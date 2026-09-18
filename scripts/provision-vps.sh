@@ -104,32 +104,52 @@ APP_UUID="${APP_UUID:-}"
 # runbook §7 step 7, once the migrate leg has been proven live and the
 # deploy leg is deliberately being exercised for the first time.
 DEPLOY_ON_SUCCESS="${DEPLOY_ON_SUCCESS:-}"
-# ⚠ MIGRATOR_TASK_COMMAND (ADR-072 Amendment 7, 2026-09-17) -- the byte-exact
-# literal migrator-orchestrate.sh compares the LIVE Scheduled Task's
-# `command` against before ever firing it (Sec's pre-fire task-command
-# integrity check: a [read,write,deploy] token, or a hand-edit in the
-# Coolify UI, can PATCH this task's command with nothing else stopping it —
-# measured against Coolify v4.3.18's routes/api.php + ScheduledTasksController
-# for this amendment's design). This is NOT read from .env/environment via
+# ⚠ MIGRATOR_TASK_COMMAND (ADR-072 Amendment 7, 2026-09-17; ADDENDUM
+# 2026-09-18, F/CTO-ratified option (B)) -- the byte-exact literal
+# migrator-orchestrate.sh compares the LIVE Scheduled Task's `command`
+# against before ever firing it (Sec's pre-fire task-command integrity
+# check: a [read,write,deploy] token, or a hand-edit in the Coolify UI,
+# can PATCH this task's command with nothing else stopping it — measured
+# against Coolify v4.3.18's routes/api.php + ScheduledTasksController for
+# this amendment's design). This is NOT read from .env/environment via
 # env_or_dotenv() below — that helper's `tr -d '"'"'"' \r\n'` trimming step
-# would destroy the spaces and quote characters this command is made of.
-# It is a fixed literal, matching scripts/migrator-scheduled-task.md's own
-# Command field EXACTLY. (Not a secret: this is the public, documented
-# shape of the migrator apply, not a credential.)
+# would destroy the spaces this command is made of. It is a fixed
+# literal, matching scripts/migrator-scheduled-task.md's own Command
+# field EXACTLY. (Not a secret: this is the public, documented shape of
+# the migrator apply, not a credential.)
 #
-# ⚠ Sec NOTE 1 (2026-09-17, #801 review): this is a FOURTH hand-maintained
-# copy of the same command string — the other three are Coolify's own
-# stored Scheduled Task, scripts/migrator-scheduled-task.md's Command
-# field (the literal's HOME -- Sec FLAG B fix, #802: docs/deployment-
-# runbook.md §6.5 and this file previously each pointed at the other as
-# "edit here first," a loop), and infra/supabase/docker-compose.yml's
-# migrator-service comment. To change the command: edit the Command field
-# in scripts/migrator-scheduled-task.md first, then follow
+# ⚠ CORRECTED 2026-09-18 (Architect's architect-a7-command-length.md,
+# F/CTO-ratified): the ORIGINAL 357-byte inline literal (three tagged
+# `echo`s + the `db push` + the `rc` capture, all inline) does NOT FIT
+# Coolify's `scheduled_tasks.command` column (`character varying(255)`,
+# measured, never widened through v4.3.18 -- confirmed by a real
+# SQLSTATE 22001 save failure). Every rewrite that fits 255 bytes deletes
+# either the `rc=$?` failure-capture (making every FAILED migration
+# report SUCCESS -- Sec VETO) or one of the two ledger-comparison tags
+# (making the delivery assertion one-sided -- Sec VETO). Neither is
+# acceptable. Fixed by BAKING the full logic into the image instead
+# (infra/supabase/migrator/pfin-task.sh, COPYed in by the Dockerfile) --
+# this literal is now just the 26-byte invocation of that script. See
+# pfin-task.sh's own header for the full logic (byte-for-byte the same
+# commands this literal used to spell out inline) and its own named
+# prohibition against ever deleting the `rc` capture there instead.
+#
+# ⚠ Sec NOTE 1 (2026-09-17, #801 review; ADDENDUM 2026-09-18): this
+# short literal is STILL hand-maintained in the same FOUR places as
+# before (Coolify's own stored task, scripts/migrator-scheduled-task.md's
+# Command row -- the literal's HOME, Sec FLAG B fix on #802 --
+# infra/supabase/docker-compose.yml's migrator comment, and this
+# variable) -- the (B) addendum did NOT reduce the number of sites
+# holding the INVOCATION string, it reduced what each one holds from a
+# 357-byte inline logic dump to a 26-byte path. The REAL logic now lives
+# in exactly ONE place, infra/supabase/migrator/pfin-task.sh, never
+# duplicated anywhere. To change the invoked command: edit the Command
+# field in scripts/migrator-scheduled-task.md first, then follow
 # docs/deployment-runbook.md §6.5's propagation procedure to the other
 # three sites and re-run --apply. migrator-orchestrate.sh fails closed
-# (exit 10) if this literal ever drifts from what Coolify's task actually
-# holds.
-MIGRATOR_TASK_COMMAND='sh -c '"'"'echo "PFIN-BUILD-SHA=$(cat /workspace/.build-sha)"; supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace; rc=$?; echo "PFIN-LEDGER-TOP=$(psql "$PROD_DB_URL" -tAc "select max(version) from supabase_migrations.schema_migrations")"; echo "PFIN-NEWEST-FILE=$(ls /workspace/supabase/migrations | sort -V | tail -1 | cut -d_ -f1)"; exit $rc'"'"''
+# (exit 10/11) if this literal ever drifts from what Coolify's task
+# actually holds.
+MIGRATOR_TASK_COMMAND='sh /workspace/pfin-task.sh'
 # Escape hatch: allow an all-passphrase key set. Only for a box a human will
 # ever touch by hand. Nothing scripted will be able to reach it.
 ALLOW_NO_AUTOMATION_KEY="${ALLOW_NO_AUTOMATION_KEY:-0}"
