@@ -234,6 +234,26 @@ COOLIFY_API_TOKEN="$(read_kv "$TOKEN_FILE" "$TOKEN_VAR_NAME")"
 : "${APP_UUID:?$CONF_FILE must set APP_UUID}"
 : "${MIGRATOR_TASK_COMMAND:?$CONF_FILE must set MIGRATOR_TASK_COMMAND}"
 : "${COOLIFY_API_TOKEN:?$TOKEN_FILE must set $TOKEN_VAR_NAME}"
+# ⚠ Sec FLAG 1 on PR #808's GREEN pin (2026-09-18): $MIGRATOR_TASK_UUID gets
+# interpolated directly into a Python string literal inside the jqp
+# heredoc below (`... == '$MIGRATOR_TASK_UUID'`) -- same shape validation
+# discipline MIGRATOR_EXPECT_SHA already gets (its own exit-4/exit-5
+# pair, above) is owed here too, and BEFORE that interpolation, not
+# after. Coolify's own uuid generator (`new_public_id()`,
+# bootstrap/helpers/shared.php:119-124: `Str::lower(Str::random(24))`)
+# is exactly 24 lowercase alphanumeric characters -- measured against
+# the pinned source, not guessed; every real UUID already read on this
+# box or cited anywhere in this repo (MIGRATOR_SERVICE_UUID, APP_UUID,
+# the fail-probe UUID) is 24 chars, matching. A malformed value here is
+# a $CONF_FILE defect (a bad hand-edit, a truncated write, a wrong key
+# pasted in) -- NOT the same diagnosis as a well-formed UUID that simply
+# doesn't match any live task (the tampering-or-drift branch, below) --
+# so it gets its OWN exit code and a message naming $CONF_FILE, not the
+# list-response branch's wording.
+if [[ ! "$MIGRATOR_TASK_UUID" =~ ^[a-z0-9]{24}$ ]]; then
+  log "FAIL (exit 11): MIGRATOR_TASK_UUID ('$MIGRATOR_TASK_UUID') in $CONF_FILE is not a well-formed 24-character lowercase-alphanumeric Coolify UUID. This is a config defect in $CONF_FILE, not a tampering-or-drift finding about the live task -- fix the value there (re-run provision-vps.sh --apply with the correct MIGRATOR_TASK_UUID in .env) before firing. NOT executing the Scheduled Task."
+  exit 11
+fi
 
 api() { # api <METHOD> <PATH>
   curl -fsS -X "$1" -H "Authorization: Bearer $COOLIFY_API_TOKEN" "$COOLIFY_BASE$2"
@@ -339,20 +359,183 @@ fi
 # read_kv) -- so a genuine quoting mismatch is a REAL mismatch, not
 # noise, and must not be stripped away either.
 strip_ws() { printf '%s' "$1" | sed -E $'s/^[ \t\r]+//; s/[ \t\r]+$//'; }
-TASK_GET_JSON="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID" || true)"
-if [[ -z "$TASK_GET_JSON" ]]; then
-  log "FAIL (exit 10): could not GET the Scheduled Task definition to verify its command before firing. Refusing to fire against an unverifiable task. See the task definition directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID. NOT executing the Scheduled Task."
+# ⚠ CORRECTED 2026-09-18 (F/CTO's real Phase D fire, first execution of
+# this check as ci-migrate on the box): the route this used to call --
+# `GET /applications/{uuid}/scheduled-tasks/{task_uuid}` -- DOES NOT
+# EXIST in Coolify 4.3.18. Measured against the pinned tag's own
+# routes/api.php (:406-417): the only routes under
+# `/applications/{uuid}/scheduled-tasks/...` are the bare LIST
+# (`:411`, GET, no task_uuid segment), POST create (`:412`), PATCH
+# `{task_uuid}` (`:413`), DELETE `{task_uuid}` (`:414`), GET
+# `{task_uuid}/executions` (`:415`), and POST `{task_uuid}/execute`
+# (`:416`) -- there is NO bare `GET {task_uuid}`. The prior version of
+# this check inferred that route from the PATCH route's shape; it was
+# never independently measured, and the real fire correctly refused
+# (exit 10, "could not GET") against the resulting 404 -- the CONTROL
+# failed closed on a route defect, not on the task. Same absence on the
+# `/services/{uuid}/scheduled-tasks/...` family (`:418-423`), which this
+# script does not use (Item 15 fix, below, already established this task
+# is application-attached) -- noted here, not built here, because it is
+# relevant to BACKLOG.md item 52's audit arm (any future audit of every
+# scheduled task the trigger token's team owns, including SERVICE-
+# attached ones, will hit the identical no-single-task-GET absence and
+# needs the same list-and-filter shape, not a route this script has no
+# reason to call itself).
+#
+# Fixed: use the LIST route (`ScheduledTasksController::
+# scheduled_tasks_by_application_uuid`, `:294-307`, which calls
+# `listTasks()` at `:38-47`) and select the ONE element whose `uuid`
+# equals $MIGRATOR_TASK_UUID -- EXACTLY one match required, zero or two-
+# or-more both fail closed (same "exactly one, never resolved by
+# position" discipline as extract_one_tag() above). `listTasks()` returns
+# a BARE JSON ARRAY (`response()->json($tasks)` where `$tasks` is a
+# Collection -- Laravel serializes that directly to a top-level `[...]`,
+# never a `{"data": [...]}` envelope) of each task's fields after
+# `removeSensitiveData()` (`:16-26`) hides only `id`/`team_id`/
+# `application_id`/`service_id` -- `uuid` and `command` are untouched,
+# confirmed by reading `serializeApiResponse()`
+# (bootstrap/helpers/api.php:38+), which only reorders keys, strips
+# nothing. Still defends the bare-array-vs-`data`-envelope ambiguity the
+# same way the executions-poll jqp calls already do (`rows=d if
+# isinstance(d, list) else d.get('data', d)`) -- no jq on the box, this
+# script has never used it; reusing the same `jqp()`/python3 pattern
+# already established for the executions parsing above, not introducing
+# a new dependency.
+#
+# ⚠ Sec's four "same evidence, not weaker" conditions (2026-09-18,
+# pre-position on this fix) -- all four measured against Coolify 4.3.18
+# source, not assumed, before this route swap was trusted:
+#   (1) SAME COLUMN. `updateTask()`'s actual write
+#       (`ScheduledTasksController.php:172`, `$task->update($request->
+#       only($allowedFields))`) persists to the SAME Eloquent `command`
+#       attribute this list route reads back via
+#       `$resource->scheduled_tasks->map(...)` -- one column, one store,
+#       read through a different envelope, not a different value.
+#   (2) NO TRANSFORM, checked in the direction that matters. `command`
+#       carries NO Eloquent accessor/mutator/cast of any kind
+#       (`app/Models/ScheduledTask.php`: `casts()` touches only
+#       `enabled`/`timeout`; `HasSafeStringAttribute`
+#       (`app/Traits/HasSafeStringAttribute.php`) defines mutators for
+#       `name`/`description` ONLY -- `command` is untouched by either).
+#       `serializeApiResponse()` (`bootstrap/helpers/api.php:38-95`,
+#       read in full) only reorders keys (`sortKeys()`, then prepends
+#       `name`/`description`/`uuid`/`id` and re-appends
+#       `created_at`/`updated_at`) -- no truncation (which would fail
+#       CLOSED, loud) and no whitespace normalisation (which would NOT
+#       fail closed -- it would make this byte-exact compare pass
+#       against a stored command that actually differs, compounding
+#       with `strip_ws`'s own leading/trailing strip rather than being
+#       caught by it). Confirmed absent, not merely unmentioned.
+#   (3) NO PAGINATION. `Application::scheduled_tasks()`
+#       (`app/Models/Application.php:1090-1092`) is a bare
+#       `hasMany(ScheduledTask::class)->orderBy('name','asc')` -- no
+#       `->paginate()`, `->take()`, or `->limit()` anywhere in this
+#       relation or in `listTasks()`
+#       (`ScheduledTasksController.php:38-47`), which accesses it as a
+#       plain Eloquent collection property (always the FULL related set,
+#       never a paginator) and `->map()`s over the whole thing. A
+#       page-one-only read with the migrator task off page one would be
+#       a permanent exit-10 wedge indistinguishable from tampering --
+#       ruled out by construction, not by assumption.
+#   (4) FIELD MATCH, NOT SUBSTRING. The uuid selection below is
+#       `(r or {}).get('uuid') == '$MIGRATOR_TASK_UUID'` on PARSED JSON
+#       -- a field-equality test against each element's own `uuid` key,
+#       never a substring search over the raw response body (which
+#       would be an injection surface of the same shape as the tagged-
+#       line parse this script already guards against with
+#       extract_one_tag()'s anchored, exactly-one-match discipline).
+# All four hold: this route change is the same evidence the (never-
+# existent) single-task GET would have offered, not weaker evidence
+# through a different envelope.
+# ⚠ Sec build criterion, #807 pin: "the list call itself failed" (an
+# HTTP-level failure -- curl error, or a 404 that could mean the ROUTE
+# isn't registered on this Coolify version, or the APP UUID doesn't
+# resolve for this token's TEAM, or a generic not-found -- Coolify
+# returns the same bare 404 for all three) is a DIFFERENT diagnosis than
+# "the list call SUCCEEDED and returned a 200 with zero (or duplicate)
+# matches for MIGRATOR_TASK_UUID" (the task itself was deleted, its UUID
+# drifted, or -- for a duplicate, which should be impossible for a real
+# UUID -- something is actively wrong). The first says "something about
+# THIS SCRIPT'S OWN ACCESS to the API is broken" (team-scope, route
+# registration, token, network); the second says "the API answered fine,
+# but the TASK ISN'T WHERE EXPECTED" (tampering-or-drift on the resource
+# itself). Those demand opposite operator responses -- re-provision or
+# re-check the token/route in the first case, investigate the task/UUID
+# in the second -- so they get TWO DISTINCT MESSAGES below, split at
+# exactly the same boundary `curl -fsS`'s own empty-output-on-failure
+# behavior already draws (a 4xx/5xx with `-f` exits non-zero and prints
+# no body, which is why the `|| true` above yields an EMPTY
+# `$TASK_LIST_JSON` for every HTTP-level failure and a real JSON body
+# for every successful-but-wrong-content response).
+#
+# ⚠ EXIT CODE KEPT AS 10 FOR BOTH, DELIBERATELY, NOT SPLIT -- both are
+# still "the pre-fire task-command integrity check refused to fire," the
+# same severity and the same caller-facing action (do not deploy, do not
+# retry blindly); splitting the exit code would only duplicate
+# information the MESSAGE TEXT already carries more precisely (which
+# exact branch fired, and why) without changing what the caller (GitHub
+# Actions' own step-red / a human reading stderr) needs to do next. The
+# distinction Sec's criterion requires is diagnostic, not dispatch --
+# exactly the same reasoning that already gives exit 8's two sub-causes
+# (absent vs. ambiguous tag match) one shared code with two distinct
+# messages, below.
+TASK_LIST_JSON="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks" || true)"
+if [[ -z "$TASK_LIST_JSON" ]]; then
+  log "FAIL (exit 10): the Scheduled Task LIST CALL ITSELF FAILED (empty response from an HTTP-level failure, not a successful-but-empty list) -- could not verify the migrator task's command before firing. This means something about THIS SCRIPT'S OWN ACCESS is broken, not the task: Coolify returns an identical bare 404 whether the route isn't registered on this Coolify version, MIGRATOR_SERVICE_UUID doesn't resolve for this token's team, or (less likely, already measured stable) a genuine not-found -- check the token's abilities/team scope and MIGRATOR_SERVICE_UUID in $CONF_FILE before assuming a route regression. See GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks directly. Refusing to fire against an unverifiable task. NOT executing the Scheduled Task."
   exit 10
 fi
-LIVE_TASK_COMMAND="$(printf '%s' "$TASK_GET_JSON" | jqp "
+# ⚠ Sec FLAG 2 on PR #808's GREEN pin (2026-09-18): under this script's
+# own `set -euo pipefail` (top of file), a jqp/python3 failure (a
+# traceback -- e.g. TASK_LIST_JSON is present but not valid JSON, an
+# HTTP error page that slipped past the `-z` check above, or any other
+# parse exception) would otherwise either (a) abort the WHOLE SCRIPT
+# silently via `-e`/`pipefail` with no exit-10-family message at all, or
+# (b) if caught, leave `$TASK_MATCH_COUNT` empty -- which then falls
+# into the `!= "1"` branch below and gets reported as "zero matches,"
+# a TAMPERING-OR-DRIFT diagnosis. Neither is correct: a parse failure
+# means the response couldn't be READ at all, which is closer to the
+# access-failure branch above than to a real zero-match result. Guard
+# the assignment with `if !` (the standard bash idiom that does NOT
+# trigger `-e` on a failing command substitution used as a condition)
+# and give it a THIRD, distinct message -- kept at exit 10, same
+# reasoning as the two messages above: same severity and caller action,
+# distinguished by text, not by code.
+JQP_ERR_FILE="$(mktemp)"
+if ! TASK_MATCH_COUNT="$(printf '%s' "$TASK_LIST_JSON" | jqp "
 d=json.load(sys.stdin)
-row=d.get('data', d) if isinstance(d, dict) else d
-print((row or {}).get('command','') if row else '')
-")"
+rows=d if isinstance(d, list) else d.get('data', d)
+print(sum(1 for r in (rows or []) if (r or {}).get('uuid') == '$MIGRATOR_TASK_UUID'))
+" 2>"$JQP_ERR_FILE")"; then
+  JQP_ERR="$(tail -1 "$JQP_ERR_FILE" 2>/dev/null || true)"
+  rm -f "$JQP_ERR_FILE"
+  log "FAIL (exit 10): could not PARSE the Scheduled Task list response -- the list call itself succeeded (non-empty response) but the JSON parser failed ('${JQP_ERR:-<no error captured>}'). This is neither an access failure nor a tampering-or-drift finding -- the response body itself is not valid/parseable JSON. Investigate what Coolify actually returned before re-firing. NOT executing the Scheduled Task."
+  exit 10
+fi
+rm -f "$JQP_ERR_FILE"
+if [[ "$TASK_MATCH_COUNT" != "1" ]]; then
+  log "FAIL (exit 10): the Scheduled Task LIST CALL SUCCEEDED but returned $TASK_MATCH_COUNT entries matching MIGRATOR_TASK_UUID ($MIGRATOR_TASK_UUID), not exactly one -- this is a TAMPERING-OR-DRIFT diagnosis, distinct from an access failure: the API answered fine, the task itself is not where expected (zero means the task was deleted or the UUID drifted; two-or-more should be impossible for a UUID but is refused rather than resolved by position, same discipline as the tagged-line extraction below). See the task list directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks. NOT executing the Scheduled Task."
+  exit 10
+fi
+# Same jqp-failure guard as above -- a parse failure here must not be
+# read as "command is empty" (which would otherwise fall into the
+# mismatch branch below and be misreported as a differing command).
+JQP_ERR_FILE="$(mktemp)"
+if ! LIVE_TASK_COMMAND="$(printf '%s' "$TASK_LIST_JSON" | jqp "
+d=json.load(sys.stdin)
+rows=d if isinstance(d, list) else d.get('data', d)
+matches=[r for r in (rows or []) if (r or {}).get('uuid') == '$MIGRATOR_TASK_UUID']
+print((matches[0] or {}).get('command','') if matches else '')
+" 2>"$JQP_ERR_FILE")"; then
+  JQP_ERR="$(tail -1 "$JQP_ERR_FILE" 2>/dev/null || true)"
+  rm -f "$JQP_ERR_FILE"
+  log "FAIL (exit 10): could not PARSE the Scheduled Task list response while extracting the matched task's command ('${JQP_ERR:-<no error captured>}'). This is a parse failure, not a command mismatch -- do not treat an empty read as evidence the command differs. Investigate before re-firing. NOT executing the Scheduled Task."
+  exit 10
+fi
+rm -f "$JQP_ERR_FILE"
 LIVE_TASK_COMMAND="$(strip_ws "$LIVE_TASK_COMMAND")"
 EXPECTED_TASK_COMMAND="$(strip_ws "$MIGRATOR_TASK_COMMAND")"
 if [[ -z "$LIVE_TASK_COMMAND" || "$LIVE_TASK_COMMAND" != "$EXPECTED_TASK_COMMAND" ]]; then
-  log "FAIL (exit 10): the Scheduled Task's command in Coolify differs from MIGRATOR_TASK_COMMAND in /etc/pfin/migrator-trigger.conf -- change it in ONE place per docs/deployment-runbook.md §6.5 (byte-exact comparison; leading/trailing space, tab, CR, LF stripped from both sides, nothing else). NOT executing the Scheduled Task. Re-run provision-vps.sh --apply after confirming which side is stale, or investigate an unauthorized edit -- do not just re-fire. (Live and expected command text withheld from this log line by design -- Sec's own instruction is that this script logs only extracted PFIN-* tag values, never a raw command/message blob. See the live task definition directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID and compare against \$CONF_FILE's MIGRATOR_TASK_COMMAND by hand.)"
+  log "FAIL (exit 10): the Scheduled Task's command in Coolify differs from MIGRATOR_TASK_COMMAND in /etc/pfin/migrator-trigger.conf -- change it in ONE place per docs/deployment-runbook.md §6.5 (byte-exact comparison; leading/trailing space, tab, CR, LF stripped from both sides, nothing else). NOT executing the Scheduled Task. Re-run provision-vps.sh --apply after confirming which side is stale, or investigate an unauthorized edit -- do not just re-fire. (Live and expected command text withheld from this log line by design -- Sec's own instruction is that this script logs only extracted PFIN-* tag values, never a raw command/message blob. See the live task list directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks and compare the matching entry's \`command\` against \$CONF_FILE's MIGRATOR_TASK_COMMAND by hand.)"
   exit 10
 fi
 log "task command integrity check OK: live Scheduled Task command matches MIGRATOR_TASK_COMMAND in $CONF_FILE"
