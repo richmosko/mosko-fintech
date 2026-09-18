@@ -293,29 +293,39 @@ services:
   # bootstrapping open question (flagged for Architect).
   #
   # Pattern-A resident container (CMD tail -f /dev/null, baked in the
-  # Dockerfile) — the Scheduled Task's `command` runs the fixed verb:
-  #   sh -c 'echo "PFIN-BUILD-SHA=$(cat /workspace/.build-sha)"; supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace; rc=$?; echo "PFIN-LEDGER-TOP=$(psql "$PROD_DB_URL" -tAc "select max(version) from supabase_migrations.schema_migrations")"; echo "PFIN-NEWEST-FILE=$(ls /workspace/supabase/migrations | sort -V | tail -1 | cut -d_ -f1)"; exit $rc'
-  # ⚠ ADR-072 Amendment 7 (2026-09-17, draft): this is a FOURTH
-  # hand-maintained copy of the same literal (the other three: Coolify's
-  # own stored Scheduled Task, scripts/migrator-scheduled-task.md's
-  # Command row -- the literal's HOME, Sec FLAG B fix on #802 -- and
-  # MIGRATOR_TASK_COMMAND in /etc/pfin/migrator-trigger.conf written by
-  # scripts/provision-vps.sh). To change the command: edit the Command
-  # row in scripts/migrator-scheduled-task.md first, then follow
-  # docs/deployment-runbook.md §6.5's propagation procedure to the other
-  # three sites and re-run `provision-vps.sh --apply`. migrator-
-  # orchestrate.sh fails closed (exit 10) if Coolify's
-  # live task ever drifts from MIGRATOR_TASK_COMMAND, so a stale copy
-  # here is caught, not silent. The three `PFIN-*` tagged lines are how
-  # migrator-orchestrate.sh asserts outcome without ever needing docker
-  # access (ci-migrate has none — measured, Amendment 7): it parses them
-  # out of the execution's own `message` field via the Coolify API. `--yes`
-  # added 2026-09-17 (ADR-072 Amendment 6) so this unattended fire
-  # never depends on the CLI's own unversioned non-TTY prompt-default
-  # behavior — measured safe on the pinned v2.107.0 binary, but not this
-  # repo's to keep relying on across a future CLI bump. See
-  # scripts/migrator-scheduled-task.md's Command row for the full
-  # citation and measurement.
+  # Dockerfile) — the Scheduled Task's `command` runs `sh
+  # /workspace/pfin-task.sh`.
+  # ⚠ POINTER, NOT A COPY (Sec's refinement on #811, 2026-09-18) — this
+  # comment DELIBERATELY does not restate the invocation string as its
+  # own hand-maintained literal. ADR-072 Amendment 8 (F/CTO-ratified
+  # option (B), Architect's architect-a7-command-length.md) baked the
+  # migrator task's full logic into the image instead of Coolify's
+  # `scheduled_tasks.command` column (`character varying(255)`, measured,
+  # never widened -- the ORIGINAL 357-byte inline literal did not fit,
+  # confirmed by a real SQLSTATE 22001 save failure). **The command
+  # literal's home is `scripts/migrator-scheduled-task.md`'s Command
+  # row; the real logic lives in exactly one file,
+  # `infra/supabase/migrator/pfin-task.sh`** (see that file's own header
+  # for the full logic and its named prohibition against ever deleting
+  # the `rc=$?`/`exit $rc` capture — load-bearing for ADR-072 Decision 3,
+  # `sh -c 'false; echo TAG=x'` exits `0` without it). This keeps the
+  # hand-maintained-copy count at exactly TWO (the task-doc Command row,
+  # and `MIGRATOR_TASK_COMMAND` in `/etc/pfin/migrator-trigger.conf`
+  # written by `scripts/provision-vps.sh`) — see
+  # `docs/deployment-runbook.md` §6.5 for the propagation procedure
+  # between those two and Coolify's own stored task.
+  # `migrator-orchestrate.sh` fails closed (exit 10/11) if Coolify's live
+  # task ever drifts from `MIGRATOR_TASK_COMMAND`. The three `PFIN-*`
+  # tagged lines `pfin-task.sh` emits are how `migrator-orchestrate.sh`
+  # asserts outcome without ever needing docker access (`ci-migrate` has
+  # none — measured, Amendment 7): it parses them out of the execution's
+  # own `message` field via the Coolify API. `--yes` (inside
+  # `pfin-task.sh`, added 2026-09-17, ADR-072 Amendment 6) means this
+  # unattended fire never depends on the CLI's own unversioned non-TTY
+  # prompt-default behavior — measured safe on the pinned v2.107.0
+  # binary, but not this repo's to keep relying on across a future CLI
+  # bump. See `scripts/migrator-scheduled-task.md`'s Command row for the
+  # full citation and measurement.
   # See docs/deployment-runbook.md §6 for the full trigger/fail-closed
   # sequencing and the Coolify Scheduled Task config this service expects.
   migrator:

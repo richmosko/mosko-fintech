@@ -1219,7 +1219,47 @@ select has_table_privilege('pfin_owner', 'vault.decrypted_secrets', 'SELECT');
 **Phase A — Coolify resources & migrator container**
 
 1. Create the V1 web-app Coolify resource; note its `APP_UUID`. **Gap:** §7 is still a STUB for this step — it names the web-app as the 3rd fleet container but does not yet carry concrete Coolify resource-creation instructions. Until §7 is filled in, this step has no home to point at beyond the Coolify dashboard itself.
-2. Create the migrator Coolify Scheduled Task (`scripts/migrator-scheduled-task.md` — task fields, resource attachment, the fail-closed `status` semantics); note the `MIGRATOR_SERVICE_UUID` (the Supabase-stack resource) and `MIGRATOR_TASK_UUID` (the task itself). **⚠ ADR-072 Amendment 7 (2026-09-17) — the command's literal lives in `scripts/migrator-scheduled-task.md`'s Command row; this section (§6.5) is the ONE place that describes how to change it everywhere (Sec FLAG B fix, #802: the two documents previously each pointed at the other as "edit here first," a loop).** The literal is hand-maintained in FOUR places — `scripts/migrator-scheduled-task.md`'s Command row (its home), Coolify's own stored task, `infra/supabase/docker-compose.yml`'s `migrator` service comment, and `MIGRATOR_TASK_COMMAND` in `/etc/pfin/migrator-trigger.conf` (written by `scripts/provision-vps.sh`) — and `migrator-orchestrate.sh` fails closed (exit 10) if the live Coolify task ever drifts from the `provision-vps.sh` copy. To change the command: edit `scripts/migrator-scheduled-task.md`'s Command row first, propagate the identical literal to the other three sites, update the Scheduled Task in the Coolify UI to match, then re-run `provision-vps.sh --apply`. Do not edit any one site in isolation.
+2. Create the migrator Coolify Scheduled Task (`scripts/migrator-scheduled-task.md` — task fields, resource attachment, the fail-closed `status` semantics); note the `MIGRATOR_SERVICE_UUID` (the Supabase-stack resource) and `MIGRATOR_TASK_UUID` (the task itself). **⚠ ADR-072 Amendment 8 (2026-09-18, F/CTO-ratified option (B)) — the command's literal lives in `scripts/migrator-scheduled-task.md`'s Command row; this section (§6.5) is the ONE place that describes how to change it everywhere.** The literal is hand-maintained in exactly **TWO** places — `scripts/migrator-scheduled-task.md`'s Command row (its home) and `MIGRATOR_TASK_COMMAND` in `/etc/pfin/migrator-trigger.conf` (written by `scripts/provision-vps.sh`) — plus the live **target** it is compared against, Coolify's own stored task (`infra/supabase/docker-compose.yml`'s comment is a pointer, not a third copy). The command itself is now just `sh /workspace/pfin-task.sh` (26 bytes) — the real logic lives in exactly one file, `infra/supabase/migrator/pfin-task.sh`, baked into the migrator image (never duplicated in Coolify, which is why it exists at all: Coolify's `scheduled_tasks.command` column is `character varying(255)`, too narrow for the tagged logic that used to live here inline). `migrator-orchestrate.sh` fails closed (exit 10/11/12) if the live Coolify task ever drifts from the `provision-vps.sh` copy.
+
+2a. **⚠ The propagation procedure — rewritten 2026-09-18 for the short (B) literal. Order matters: the IMAGE must carry the script BEFORE the command is switched, or the first fire execs a missing file.** Run these steps in order, every time the command literal or the script's logic changes:
+    1. **If the script's logic changed:** edit `infra/supabase/migrator/pfin-task.sh` directly (it is the ONLY copy of the logic — nothing else to update for a logic-only change). Commit. **Never remove the `rc=$?`/`exit $rc` capture inside it** — see that file's own named prohibition.
+    2. **If the invocation path changed** (rare — e.g. the script is renamed or moved): edit `scripts/migrator-scheduled-task.md`'s Command row (the literal's home) to the new short invocation. Commit.
+    3. **Edit `MIGRATOR_TASK_COMMAND` in `scripts/provision-vps.sh`** to match step 2's row exactly, then run `BOX_IP=<box-ip> scripts/provision-vps.sh --apply` — this writes the new value into `/etc/pfin/migrator-trigger.conf` on the box.
+    4. **Redeploy the Supabase-stack resource (Coolify UI → Deploy) FIRST — before touching the Coolify UI's Command field.** This rebuilds the migrator image so `/workspace/pfin-task.sh` actually carries whatever changed in step 1. Wait for the build to finish.
+    5. **Confirm the image actually carries the change, before switching the command:**
+       ```sh
+       ssh root@<box-ip> \
+         "docker compose --project-name <MIGRATOR_SERVICE_UUID> exec -T migrator cat /workspace/.build-sha"
+       git rev-parse origin/main
+       ssh root@<box-ip> \
+         "docker compose --project-name <MIGRATOR_SERVICE_UUID> exec -T migrator test -x /workspace/pfin-task.sh && echo PRESENT"
+       ```
+       The first two must match (the redeploy built from the commit you expect); the third must print `PRESENT`. **STOP and do not proceed to step 6 if either check fails** — switching the Coolify command now would point the task at a script that either doesn't exist yet or is the wrong version.
+    6. **Only now, edit Coolify's own stored Scheduled Task** — Coolify UI → the Supabase-stack resource → **Scheduled Tasks** tab → the `migrator-db-push` task → **Command** field → set it to exactly `sh /workspace/pfin-task.sh` (or the new invocation from step 2, if it changed) → **Save**.
+    7. **Pass criterion — a read-back diff, not a visual check (the "B2" check).** From a root session on the box:
+        ```sh
+        grep -m1 '^MIGRATOR_TASK_COMMAND=' /etc/pfin/migrator-trigger.conf | cut -d= -f2- > /tmp/expected_cmd.txt
+        COOLIFY_API_TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /etc/pfin/migrator-coolify-token.env | cut -d= -f2-)"
+        umask 077
+        CURL_CFG="$(mktemp)"
+        printf 'header = "Authorization: Bearer %s"\n' "$COOLIFY_API_TOKEN" > "$CURL_CFG"
+        chmod 0600 "$CURL_CFG"
+        curl -fsS --config "$CURL_CFG" \
+          "http://localhost:8000/api/v1/applications/<MIGRATOR_SERVICE_UUID>/scheduled-tasks" \
+          | python3 -c "
+        import json, sys
+        d = json.load(sys.stdin)
+        rows = d if isinstance(d, list) else d.get('data', d)
+        m = [r for r in (rows or []) if r.get('uuid') == '<MIGRATOR_TASK_UUID>']
+        print(m[0].get('command','') if m else '<TASK NOT FOUND>')
+        " > /tmp/live_cmd.txt
+        diff /tmp/expected_cmd.txt /tmp/live_cmd.txt && echo "B2: MATCH" || echo "B2: MISMATCH"
+        rm -f "$CURL_CFG" /tmp/expected_cmd.txt /tmp/live_cmd.txt
+        unset COOLIFY_API_TOKEN
+        ```
+        **`B2: MATCH` is the only acceptable pass condition.**
+    8. **Only after `B2: MATCH` — fire.** A propagation that "looks done" in the Coolify UI, or an image redeploy that "looks like it worked," neither is confirmed until this read-back passes. This is the exact gap a real box measurement found on 2026-09-18: the box-resident conf had already moved to the tagged literal while Coolify's own stored task still held the old bare command, silently, because this ordering and this read-back didn't exist yet as a written procedure.
+
 3. Redeploy the Supabase stack so the `migrator` sibling service comes up and `provision-supabase-stack.sh`'s `MINT_SECRETS` mints `MIGRATOR_DB_PASSWORD` (§6's credential bullet; §5).
 3a. **Verify line, added 2026-09-17 (ADR-072 Amendment 6, PR #791) — confirm which build-arg name Coolify 4.3.18 actually injects.** `infra/supabase/migrator/Dockerfile` accepts BOTH `GIT_SHA` and `SOURCE_COMMIT` because this was never confirmed live (no network egress in the session that wrote it) — this step is where that gets resolved on evidence instead of staying open forever:
     ```
