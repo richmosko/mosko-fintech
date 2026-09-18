@@ -146,9 +146,8 @@ jobs:
     # PROD_SSH_HOST steps in this file's own header comment.
     #
     # ⚠ WHAT HAPPENS IF `production-migrator` DOES NOT EXIST YET —
-    # documented GitHub Actions behavior, NOT verified live this session
-    # (zero network egress): referencing an environment name in a
-    # workflow that has no matching entry in Settings -> Environments
+    # documented GitHub Actions behavior: referencing an environment name
+    # in a workflow that has no matching entry in Settings -> Environments
     # causes GitHub to auto-create that environment on the run that first
     # references it, with ZERO protection rules (no required reviewer)
     # unless and until one is configured. That means an undefined
@@ -157,10 +156,15 @@ jobs:
     # configures the required-reviewer rule by hand. There is no YAML-only
     # construct in Actions that can assert "this environment has a
     # required reviewer configured" and refuse to run otherwise -- that
-    # gate lives entirely in repo settings, not in this file. Confirm
-    # against the live GitHub UI/API before relying on this, since this
-    # comment's claim about auto-creation is drawn from documentation, not
-    # a measurement against this repo.
+    # gate lives entirely in repo settings, not in this file.
+    #
+    # ✅ CONFIRMED LIVE, 2026-09-18 (premise B10, `trigger-chain-premises.md`
+    # -- CLOSED, no longer "not verified live"): `production-migrator`
+    # DOES carry a required reviewer and IS armed, not auto-created with
+    # zero protection. Run `35392806793` (the sitting-sheet step 4
+    # sha-mismatch strike, dispatched on `95b8fc92`) paused at this gate
+    # and required an explicit approval before the SSH step ran -- an
+    # observed behavioral gate, not an inference from repo settings alone.
     environment: production-migrator
     steps:
       - uses: actions/checkout@v4
