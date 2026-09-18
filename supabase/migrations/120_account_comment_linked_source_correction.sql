@@ -46,9 +46,15 @@
 --
 -- PROVENANCE OF THE LITERAL - regenerated, never retyped (skill Step 1.6 (A)).
 --   The string below was produced from 003's literal by ONE anchored substitution
---   asserted to match exactly once, with a containment proof that the 283-byte prefix
---   and the 176-byte suffix are byte-identical to 003's and that exactly one contiguous
---   span changed. The literal contains no single quote, so there is no '' doubling and
+--   asserted to match exactly once, with a containment proof that the prefix before the
+--   replaced span and the suffix after it are byte-identical to 003's, and that exactly
+--   ONE contiguous span changed. The lengths are deliberately NOT stated: they are
+--   derivable from the two files, a stated figure is a maintenance obligation this
+--   comment cannot honour, and the paired battery's (t3)/(t4) pin both ends by content
+--   rather than by count. This line previously carried two figures labelled as byte
+--   counts; they were CHARACTER counts, and a re-derivation from a different span
+--   boundary did not reproduce them either - which is the argument for the property
+--   over the number. The literal contains no single quote, so there is no '' doubling and
 --   no divergence between source and rendered catalog text.
 --
 -- ADR-011 Decision 4's §10 catalogued-instance ledger: read verbatim and live at draft
