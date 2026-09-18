@@ -339,20 +339,67 @@ fi
 # read_kv) -- so a genuine quoting mismatch is a REAL mismatch, not
 # noise, and must not be stripped away either.
 strip_ws() { printf '%s' "$1" | sed -E $'s/^[ \t\r]+//; s/[ \t\r]+$//'; }
-TASK_GET_JSON="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID" || true)"
-if [[ -z "$TASK_GET_JSON" ]]; then
-  log "FAIL (exit 10): could not GET the Scheduled Task definition to verify its command before firing. Refusing to fire against an unverifiable task. See the task definition directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID. NOT executing the Scheduled Task."
+# ⚠ CORRECTED 2026-09-18 (F/CTO's real Phase D fire, first execution of
+# this check as ci-migrate on the box): the route this used to call --
+# `GET /applications/{uuid}/scheduled-tasks/{task_uuid}` -- DOES NOT
+# EXIST in Coolify 4.3.18. Measured against the pinned tag's own
+# routes/api.php (:406-417): the only routes under
+# `/applications/{uuid}/scheduled-tasks/...` are the bare LIST
+# (`:411`, GET, no task_uuid segment), POST create (`:412`), PATCH
+# `{task_uuid}` (`:413`), DELETE `{task_uuid}` (`:414`), GET
+# `{task_uuid}/executions` (`:415`), and POST `{task_uuid}/execute`
+# (`:416`) -- there is NO bare `GET {task_uuid}`. The prior version of
+# this check inferred that route from the PATCH route's shape; it was
+# never independently measured, and the real fire correctly refused
+# (exit 10, "could not GET") against the resulting 404 -- the CONTROL
+# failed closed on a route defect, not on the task. Same absence on the
+# `/services/{uuid}/scheduled-tasks/...` family (`:418-423`), which this
+# script does not use (Item 15 fix, below, already established this task
+# is application-attached).
+#
+# Fixed: use the LIST route (`ScheduledTasksController::
+# scheduled_tasks_by_application_uuid`, `:294-307`, which calls
+# `listTasks()` at `:38-47`) and select the ONE element whose `uuid`
+# equals $MIGRATOR_TASK_UUID -- EXACTLY one match required, zero or two-
+# or-more both fail closed (same "exactly one, never resolved by
+# position" discipline as extract_one_tag() above). `listTasks()` returns
+# a BARE JSON ARRAY (`response()->json($tasks)` where `$tasks` is a
+# Collection -- Laravel serializes that directly to a top-level `[...]`,
+# never a `{"data": [...]}` envelope) of each task's fields after
+# `removeSensitiveData()` (`:16-26`) hides only `id`/`team_id`/
+# `application_id`/`service_id` -- `uuid` and `command` are untouched,
+# confirmed by reading `serializeApiResponse()`
+# (bootstrap/helpers/api.php:38+), which only reorders keys, strips
+# nothing. Still defends the bare-array-vs-`data`-envelope ambiguity the
+# same way the executions-poll jqp calls already do (`rows=d if
+# isinstance(d, list) else d.get('data', d)`) -- no jq on the box, this
+# script has never used it; reusing the same `jqp()`/python3 pattern
+# already established for the executions parsing above, not introducing
+# a new dependency.
+TASK_LIST_JSON="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks" || true)"
+if [[ -z "$TASK_LIST_JSON" ]]; then
+  log "FAIL (exit 10): could not GET the Scheduled Task list to verify the migrator task's command before firing. Refusing to fire against an unverifiable task. See the task list directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks. NOT executing the Scheduled Task."
   exit 10
 fi
-LIVE_TASK_COMMAND="$(printf '%s' "$TASK_GET_JSON" | jqp "
+TASK_MATCH_COUNT="$(printf '%s' "$TASK_LIST_JSON" | jqp "
 d=json.load(sys.stdin)
-row=d.get('data', d) if isinstance(d, dict) else d
-print((row or {}).get('command','') if row else '')
+rows=d if isinstance(d, list) else d.get('data', d)
+print(sum(1 for r in (rows or []) if (r or {}).get('uuid') == '$MIGRATOR_TASK_UUID'))
+")"
+if [[ "$TASK_MATCH_COUNT" != "1" ]]; then
+  log "FAIL (exit 10): the Scheduled Task list returned $TASK_MATCH_COUNT entries matching MIGRATOR_TASK_UUID ($MIGRATOR_TASK_UUID) -- expected exactly one (zero means the task was deleted or the UUID is wrong; two-or-more should be impossible for a UUID but is refused rather than resolved by position, same discipline as the tagged-line extraction below). See the task list directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks. NOT executing the Scheduled Task."
+  exit 10
+fi
+LIVE_TASK_COMMAND="$(printf '%s' "$TASK_LIST_JSON" | jqp "
+d=json.load(sys.stdin)
+rows=d if isinstance(d, list) else d.get('data', d)
+matches=[r for r in (rows or []) if (r or {}).get('uuid') == '$MIGRATOR_TASK_UUID']
+print((matches[0] or {}).get('command','') if matches else '')
 ")"
 LIVE_TASK_COMMAND="$(strip_ws "$LIVE_TASK_COMMAND")"
 EXPECTED_TASK_COMMAND="$(strip_ws "$MIGRATOR_TASK_COMMAND")"
 if [[ -z "$LIVE_TASK_COMMAND" || "$LIVE_TASK_COMMAND" != "$EXPECTED_TASK_COMMAND" ]]; then
-  log "FAIL (exit 10): the Scheduled Task's command in Coolify differs from MIGRATOR_TASK_COMMAND in /etc/pfin/migrator-trigger.conf -- change it in ONE place per docs/deployment-runbook.md §6.5 (byte-exact comparison; leading/trailing space, tab, CR, LF stripped from both sides, nothing else). NOT executing the Scheduled Task. Re-run provision-vps.sh --apply after confirming which side is stale, or investigate an unauthorized edit -- do not just re-fire. (Live and expected command text withheld from this log line by design -- Sec's own instruction is that this script logs only extracted PFIN-* tag values, never a raw command/message blob. See the live task definition directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks/$MIGRATOR_TASK_UUID and compare against \$CONF_FILE's MIGRATOR_TASK_COMMAND by hand.)"
+  log "FAIL (exit 10): the Scheduled Task's command in Coolify differs from MIGRATOR_TASK_COMMAND in /etc/pfin/migrator-trigger.conf -- change it in ONE place per docs/deployment-runbook.md §6.5 (byte-exact comparison; leading/trailing space, tab, CR, LF stripped from both sides, nothing else). NOT executing the Scheduled Task. Re-run provision-vps.sh --apply after confirming which side is stale, or investigate an unauthorized edit -- do not just re-fire. (Live and expected command text withheld from this log line by design -- Sec's own instruction is that this script logs only extracted PFIN-* tag values, never a raw command/message blob. See the live task list directly at GET /applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks and compare the matching entry's \`command\` against \$CONF_FILE's MIGRATOR_TASK_COMMAND by hand.)"
   exit 10
 fi
 log "task command integrity check OK: live Scheduled Task command matches MIGRATOR_TASK_COMMAND in $CONF_FILE"
