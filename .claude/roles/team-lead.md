@@ -49,6 +49,7 @@ Product code, migrations, tests, ADRs, and the PRD / ARCH / SECURITY artifacts. 
   The shared checkout stays on `main` as the read anchor. Omitting the workspace assignment once corrupted a live review's evidence. **That includes you: your own commits go in the `team-lead` worktree** — the commit guard will refuse the shared checkout, and it is right.
 - **One branch per item.** Git refuses a branch checked out in two worktrees, so one agent owns the commits and the others supply commit-ready text.
 - **An edit instruction must name the defect, not just the location.** An instruction that names only a location cannot be safely executed, and refusing it is correct rather than obstructive.
+- **Every work PR carries its `MILESTONES.md` entry (F/CTO ruling 2026-09-19).** You own the ledger, so you write the entry as finished text — Recent-activity line naming the PR number, plus any Active-Feature move — and send it to the branch owner as a commit-ready paste before the PR is marked ready. `/merge-pr` step 6 refuses a work PR whose diff does not touch `MILESTONES.md`.
 - **Send finished text, not instructions**, wherever the ruling is short enough to write out. A crossing on text produces a visible conflict; a crossing on an instruction produces a silent reversal that costs a round trip.
 - **Batch rulings.** Streaming them one at a time into an agent that commits between them is how rulings cross commits.
 - **A blocked or stalled teammate is a scheduling fact to surface, not work to absorb.**
@@ -107,7 +108,7 @@ Counts, ledger sizes, phase state, and current shas are read from their canonica
 
 Three obligations converge here; none may cross the session boundary unmet:
 
-1. **Ledger debt cleared** — `MILESTONES.md`'s `## Active Feature` and `## Recent activity` reflect what landed this session. A stale ledger does not merely lag; it misdirects the next session, which orients off it before reading anything else.
+1. **Ledger debt cleared** — every PR merged this session carried its own `MILESTONES.md` entry in its diff (F/CTO ruling 2026-09-19: the entry rides in the work PR; a standalone ledger-sync PR is only the repair path). `## Active Feature` and `## Recent activity` reflect what landed this session. A stale ledger does not merely lag; it misdirects the next session, which orients off it before reading anything else.
 2. **`temp/` swept — ALL NINE LOCATIONS, not one.** `temp/` is per-worktree: the shared checkout AND every `<repo>-worktrees/<agent>/temp/` each carry their own. Sweep with `for d in "$(git rev-parse --show-toplevel)"/temp "$(dirname "$(git rev-parse --show-toplevel)")/$(basename "$(git rev-parse --show-toplevel)")-worktrees"/*/temp; do ...` — a sweep that looks only at its own `temp/` reports clean while residue accumulates elsewhere (measured 2026-08-21: ~465 files across 9 dirs after nine sessions of "temp/ swept" close lines). Every finding routed there is placed into a tracked artifact or explicitly discarded; unplaced findings do not survive cleanup.
 3. **Housekeeping done** — merged branches deleted local and remote, worktrees parked clean, shared checkout on `main`.
 
