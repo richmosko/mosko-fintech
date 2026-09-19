@@ -160,16 +160,17 @@ git log --merges --oneline <ledger-sha>..main | wc -l        # how many merges b
 
 ⚠ **The ledger is stale BY CONSTRUCTION the instant any PR merges — an entry cannot name its own merge SHA.** So "equal" is not the test and never will be; **the gap size is. Exactly 1 is the floor and means current; ≥ 2 is debt.**
 
-**The rule:**
+**The rule — RULED by F/CTO 2026-09-19: the ledger entry RIDES IN THE WORK PR.**
 
-- **Bookkeeping MAY batch across a working block.** A companion PR per PR would double the PR count, and the companion would itself need one — the regress is real, not pedantry.
-- **It MUST NOT batch across a session boundary.** ⚠ `MILESTONES.md` is the SessionStart auto-load anchor: a stale ledger does not merely lag, it **actively misdirects the next session**, which orients off it before reading anything else.
-- **If you are not clearing it now, say the gap out loud** — *"ledger is 3 merges behind; clearing at end of block."* **Silent lag is the failure; recorded lag is fine.**
-- **A session must not end with it owed.** That is the hard edge.
+- **Every PR that lands work carries its own `MILESTONES.md` update in the same diff** — `## Recent activity` prepend (trim to five) and, where the next deliverable moved, `## Active Feature`. The team-lead owns `MILESTONES.md`, so the team-lead writes the entry as finished text and sends it to the branch owner as a commit-ready paste (one branch, one committer); the entry names the PR number, not its merge sha, which it cannot know.
+- **A standalone ledger-sync PR is the EXCEPTION, not the pattern.** It exists only to repair a PR that merged without its entry. ⚠ Why: a ledger-only diff cannot change any CI outcome, yet it re-runs the whole unfiltered battery (~3 min measured on #820/#823) — and the only thing the separate-PR pattern ever bought was lag, which is the actual cost (F/CTO, 2026-09-19: *"the actual downside is the ledger is always behind by multiple PRs"*). Batching across a working block is therefore retired; there is nothing left to batch.
+- **Pre-merge check on a work PR:** `git diff --stat main...<head> -- MILESTONES.md` is non-empty, or the PR is not merge-ready. Doc-only PRs that change no project state (typo, comment, a fixture) are exempt; if in doubt, the entry is one line.
+- **Concurrent PRs both prepend to Recent activity and conflict at merge** — expected, two-line resolution: keep both entries, newest first, re-trim to five. The branch owner resolves it on `git merge origin/main` (a merge commit, never a rebase, so a reviewed sha stays in history).
+- **A session must not end with a merged PR lacking its entry.** That is the hard edge, unchanged.
 
 **Measured twice on 2026-08-11, which is why this step exists.** At session start the ledger read `main = 024e474` while `main` was two merges past it, and the "next" item it named — the PM product question — had already landed at PR #391; time was spent re-opening settled work. It then went three merges stale again **within hours of being fixed**.
 
-**To clear it:** `MILESTONES.md`'s `## Current Phase` + `## Active Feature` + `## Recent activity` (prepend, trim to five per [ADR-017](../../../DECISIONS.md#adr-017)). Doc-only, so it lands under the pre-cleared merge class. ⚠ **No `CHANGELOG.md` entry — that file is frozen and unmaintained** (see `WORKFLOW.md` § Artifact list).
+**To repair a PR that merged without its entry (the exception path):** `MILESTONES.md`'s `## Current Phase` + `## Active Feature` + `## Recent activity` (prepend, trim to five per [ADR-017](../../../DECISIONS.md#adr-017)). Doc-only, so it lands under the pre-cleared merge class. ⚠ **No `CHANGELOG.md` entry — that file is frozen and unmaintained** (see `WORKFLOW.md` § Artifact list).
 
 ⚠ **There is no `## Pending` block to update — the section was removed deliberately and nothing replaces it.** It had no defined purpose, no size bound and no owner, and it grew to ~90% of a 141 KB auto-load that the session-start channel then truncated to ~2 KB, so the head was arriving empty while looking fine. **Do not re-create it, and do not park "just this one thing" in the head.** Every kind of content it held now has a home:
 
