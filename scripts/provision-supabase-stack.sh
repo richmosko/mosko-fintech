@@ -489,7 +489,7 @@ NEED_MINT="$(sshx_in <<REMOTE
 docker exec coolify php artisan tinker --execute="
 (function () {
 \\\$app = \\App\\Models\\Application::where('uuid','$APP_UUID')->firstOrFail();
-\\\$check = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','MIGRATOR_DB_USER','MIGRATOR_DB_PASSWORD','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
+\\\$check = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
 foreach (\\\$check as \\\$key) {
   \\\$env = \\\$app->environment_variables()->where('key', \\\$key)->first();
   \\\$nonEmpty = \\\$env && strlen((string) \\\$env->value) > 0;
@@ -610,20 +610,26 @@ def api(method, path, body=None):
 # constant for all of MINT_SECRETS.
 MINT_SECRETS = {"POSTGRES_PASSWORD": 32, "JWT_SECRET": 32, "SECRET_KEY_BASE": 32,
                 "VAULT_ENC_KEY": 16, "SERVICE_ROLE_KEY": 32, "ANON_KEY": 32,
-                "DASHBOARD_PASSWORD": 32, "PG_META_CRYPTO_KEY": 32,
-                # ADR-072 (Option E) Decision 4 / Sec C7/C8 -- the `migrator`
-                # service's own bounded DDL credential. Minted HERE, not by
-                # push-production-secrets.sh: `migrator` is a SIBLING service
-                # in THIS SAME infra/supabase/docker-compose.yml Compose
-                # resource (one Coolify app UUID, one shared env store),
-                # exactly like POSTGRES_PASSWORD/JWT_SECRET above -- it is
-                # NOT a standalone Coolify application the way
-                # etl/pdf-render/provider-sync are. secrets-manifest.yml is
-                # the canonical rationale; this is that entry's provisioning
-                # side. Mint-if-absent (never overwrites an already-set
-                # value) -- same idempotence contract as every other key
-                # here.
-                "MIGRATOR_DB_PASSWORD": 32}
+                "DASHBOARD_PASSWORD": 32, "PG_META_CRYPTO_KEY": 32}
+# ADR-072 Amendment 4 (2026-09-16, F/CTO-ratified) / BACKLOG.md §7.36 item
+# 29 -- MIGRATOR_DB_PASSWORD (and MIGRATOR_DB_USER in NONSECRET_DEFAULTS
+# below) REMOVED from this dict, 2026-09-18. `migrator` moved OFF this
+# Coolify Compose resource to its OWN standalone application -- see
+# infra/supabase/migrator/docker-compose.yaml and
+# scripts/provision-migrator-app.sh (the new resource's own mint-if-absent
+# path). Amendment 1's premise ("migrator is a SIBLING service in THIS SAME
+# Compose resource") was FALSIFIED by Amendment 3 (2026-09-14): Coolify
+# gives every service in a multi-service application the WHOLE env store
+# via `env_file:`, so minting this credential HERE put it in every
+# sibling's environment too, not just migrator's. ⚠ Leaving these two names
+# out of this dict is NOT itself the remedy -- MINT_SECRETS is
+# mint-if-ABSENT, so simply removing them here would silently leave a
+# PRE-EXISTING value in this resource's store untouched forever. The
+# removal half of the remedy is the POST-MOVE ABSENCE ASSERTION below
+# (`assert_migrator_names_absent`), which is what actually enforces that
+# neither name is present in THIS store going forward -- see that
+# function's own header for why it is strike-proven rather than merely
+# asserted once.
 # Measured 2026-09-11 against a genuinely fresh scratch box: this script's
 # own header claims its scope is "exactly the Supabase-stack secrets ...
 # plus the two non-secret Studio vars" -- that was never actually
@@ -674,13 +680,14 @@ NONSECRET_DEFAULTS = {"STUDIO_DEFAULT_ORGANIZATION": "mosko-fintech",
                        "POSTGRES_DB": "postgres",
                        "POSTGRES_HOST": "db",
                        "POSTGRES_PORT": "5432",
-                       # ADR-072 -- non-secret login-role name for the
-                       # `migrator` service (see MIGRATOR_DB_PASSWORD in
-                       # MINT_SECRETS above for the secret half). Distinct
-                       # from every other login identity in this stack
-                       # (postgres / authenticator / pfin_etl /
-                       # pfin_provider_sync).
-                       "MIGRATOR_DB_USER": "migrator",
+                       # ADR-072 Amendment 4 / BACKLOG.md §7.36 item 29 --
+                       # MIGRATOR_DB_USER REMOVED from this dict, 2026-09-18.
+                       # `migrator` moved to its OWN Coolify application --
+                       # see scripts/provision-migrator-app.sh for its own
+                       # mint-if-absent NONSECRET_DEFAULTS entry of the same
+                       # name. See MINT_SECRETS above for the full removal
+                       # rationale (Amendment 3's falsification of Amendment
+                       # 1's confinement premise).
                        # NON-FUNCTIONAL PLACEHOLDERS (Supabase's own
                        # reference docker/.env.example values, read live
                        # 2026-09-11) -- mint-if-absent means these NEVER
@@ -785,7 +792,7 @@ chmod 600 /root/.pfin/supabase.env 2>/dev/null || true
 ASSERT_OUT="$(docker exec coolify php artisan tinker --execute="
 (function () {
 \$app = \App\Models\Application::where('uuid','$APP_UUID')->firstOrFail();
-\$required = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','MIGRATOR_DB_USER','MIGRATOR_DB_PASSWORD','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
+\$required = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
 foreach (\$required as \$key) {
   \$env = \$app->environment_variables()->where('key', \$key)->first();
   \$nonEmpty = \$env && strlen((string) \$env->value) > 0;
@@ -913,6 +920,52 @@ elif sshx "docker compose --project-name $APP_UUID ps rest --format '{{.Health}}
 else
   die "rest is unhealthy for a DIFFERENT reason than the expected pre-§6 schema gap -- check the log, this is a real failure: $(echo "$REST_LOG" | tail -5)"
 fi
+
+step "Post-move: MIGRATOR_DB_* absence assertion (ADR-072 Amendment 4 / BACKLOG.md §7.36 item 29)"
+# Sec's own words on why this must be a WATCHER, not a one-time check at
+# migration time: "A remedy that a routine operation reverts, with no
+# watcher, is not a remedy." MINT_SECRETS is mint-if-ABSENT -- removing
+# MIGRATOR_DB_USER/MIGRATOR_DB_PASSWORD from that dict (see above) stops
+# THIS script from re-minting them, but it does not by itself prove the
+# stack's shared env store no longer holds them (a value minted before this
+# PR landed would survive silently forever otherwise). This step runs on
+# EVERY --apply, not just the cutover run, so a future regression -- a
+# hand-edit, a rollback, a copy-paste from an old runbook page -- is caught
+# the next time this script runs, not left for someone to notice by
+# accident.
+#
+# Proof predicate is NAMES, not values, and NOT a declared `environment:`
+# block (Amendment 4, quoted exactly: "A declared `environment:` block is
+# not evidence and must not be offered again -- it is exactly what failed
+# at Amendment 1"). Runs `docker compose ... exec -T meta env` against a
+# container INSIDE the stack's own compose project (Sec's own
+# falsification used `meta`; this script uses the same container for
+# continuity) and hands its raw KEY=VALUE output to
+# scripts/ci/check-migrator-names-absent.sh, which reduces to names via
+# `cut -d= -f1` -- a BLANKED key still carries its name and correctly
+# FAILS this check; only a DELETED key passes it.
+#
+# ⚠ TWO DIFFERENT STRIKES, TWO DIFFERENT PLACES -- do not conflate them.
+# The NAME-vs-VALUE PREDICATE (does an env dump containing this key fail
+# closed?) is strikeable OFFLINE and IS strike-proven, in CI, against the
+# tests/fixtures/ci/migrator-names-absent-*.env fixtures wired into
+# security-scan.yml's fence-migrator-bind job -- see
+# scripts/ci/check-migrator-names-absent.sh's own header for why it was
+# extracted into a separate script specifically so that strike could exist
+# without a live box. What is NOT strike-proven until it is actually run
+# is the END-TO-END property that THIS LIVE BOX's real store is clean --
+# that live strike (re-add a name to the real store, confirm this step
+# goes RED naming the real box, remove it, confirm GREEN) is
+# docs/deployment-runbook.md §6.8 CUTOVER PROCEDURE step 10, a numbered
+# operator step, not run by this PR.
+STACK_ENV_RAW="$(sshx "docker compose --project-name $APP_UUID exec -T meta env" 2>/dev/null || true)"
+if [[ -z "$STACK_ENV_RAW" ]]; then
+  die "could not read env off the 'meta' container in project $APP_UUID -- cannot confirm MIGRATOR_DB_* absence. Failing closed rather than skipping this assertion."
+fi
+if ! printf '%s\n' "$STACK_ENV_RAW" | "$REPO_ROOT/scripts/ci/check-migrator-names-absent.sh"; then
+  die "the Supabase-stack's own env store still carries MIGRATOR_DB_USER and/or MIGRATOR_DB_PASSWORD (measured on the 'meta' container, names-only -- see the FAIL line above for which). ADR-072 Amendment 4's remedy is NOT complete until neither name is present -- a blanked value does not pass this check, only a deleted one does. Remove the offending key(s) from this Coolify application's env store by hand (or via the Coolify API) and re-run this script."
+fi
+ok "MIGRATOR_DB_USER and MIGRATOR_DB_PASSWORD both absent from the stack's own env store (measured on 'meta', names-only)"
 
 step "External exposure -- must publish nothing but the one Studio loopback"
 HOST_PORTS="$(sshx "docker ps --filter 'label=com.docker.compose.project=$APP_UUID' --format '{{.Ports}}'" | grep -oE '[0-9.]+:[0-9]+->' | sort -u || true)"

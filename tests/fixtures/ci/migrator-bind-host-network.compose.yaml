@@ -1,0 +1,18 @@
+# fence-migrator-private-bind: target
+# GOLDEN FIXTURE — VECTOR 3 (network_mode: host → fence FAILS, exit 1).
+#
+# `network_mode: host` drops the service onto the host's own network
+# namespace, bypassing the project Docker network entirely. Exercised by
+# the fence-migrator-bind CI job, asserting exit 1 AND the vector-3 token.
+
+services:
+  migrator:
+    container_name: supabase-migrator
+    build:
+      context: ../../..
+      dockerfile: infra/supabase/migrator/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PROD_DB_URL: postgres://user:pass@db:5432/postgres?sslmode=disable
+      PGSSLMODE: disable

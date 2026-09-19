@@ -1177,23 +1177,26 @@ jobs:
     # Run-always (no paths filter), matching the admission fence's own
     # reasoning: a path-trigger leaves a trigger-drift meta-risk.
     #
-    # ADR-072 C9 (2026-09-12, DevOps determination, Sec review pending):
-    # the `migrator` service (ADR-072 Option E) landed as a SIBLING SERVICE
-    # inside THIS SAME FILE (infra/supabase/docker-compose.yml), not a
-    # separate compose. scripts/ci/fence-datastore-private-bind.sh's three
-    # vectors are NOT service-scoped — Vector 1 walks every `ports:` key at
-    # any service-nesting indent in the whole file, Vector 2/3 grep the
-    # whole file for a proxy label / `network_mode: host` line, with no
-    # per-service allow/deny list anywhere in the script (read live,
-    # scripts/ci/fence-datastore-private-bind.sh lines 116-289). A future
-    # `ports:`/Domain/`network_mode: host` on `migrator` therefore ALREADY
-    # trips this fence with zero code change — C9 is satisfied by the
-    # fence's existing whole-file scope, not by a migrator-specific
-    # extension. The "migrator canary" steps below EMPIRICALLY prove this
-    # against the REAL migrator block (not a synthetic fixture asserting
-    # the same code path a golden fixture above already exercises),
-    # mirroring the Studio-loopback canary's own "bites on the real file,
-    # not just a fixture shaped to be caught" discipline.
+    # ADR-072 C9 — SUPERSEDED, 2026-09-18 (Amendment 4 / BACKLOG.md §7.36
+    # item 29): the `migrator` service LEFT this file. It is no longer a
+    # sibling service inside infra/supabase/docker-compose.yml — it moved to
+    # its own Coolify application, its own committed compose
+    # (infra/supabase/migrator/docker-compose.yaml), and its OWN sibling
+    # fence with its OWN sentinel (`fence-migrator-bind` job, below/see the
+    # job of that name in this file) — NOT this fence's whole-file scope,
+    # which was the C9 "already covered" determination this comment
+    # recorded before the move. That determination is now moot: there is no
+    # migrator block left in THIS file for this fence to walk. The two
+    # "migrator canary" steps that used to empirically prove the
+    # whole-file-scope claim against the real migrator block are REMOVED —
+    # their anchors (the migrator service's `container_name:`/`PROD_DB_URL:`
+    # lines) no longer exist in this file, and asserting against a block
+    # that isn't there would either false-negative-pass (if the anchor grep
+    # returns nothing without failing) or false-positive-fail for the wrong
+    # reason. The migrator application's own exposure posture is now proven
+    # by `fence-migrator-bind`'s own canary-equivalent golden fixtures
+    # against `infra/supabase/migrator/docker-compose.yaml` instead — see
+    # that job.
     steps:
       - uses: actions/checkout@v4
 
@@ -1528,70 +1531,287 @@ jobs:
           fi
           echo "OK: fence catches a widened Studio bind on the REAL compose file, not just on a fixture (exit $rc)."
 
-      - name: "Canary — migrator gets a published port (ADR-072 C9; expects violation, exit 1, vector-1 token)"
-        # Proves C9's "already covered" determination (see job header) empirically
-        # rather than by reading the fence's code and trusting the read. Corrupts a
-        # scratch copy of the REAL infra/supabase/docker-compose.yml by inserting a
-        # `ports:` block under the migrator service's `container_name:` line (a
-        # unique anchor — no other service shares this exact string) and asserts
-        # the fence catches it via Vector 1, same as any other service in this file.
+  fence-migrator-bind:
+    name: migrator private-bind config-lint (standalone application compose)
+    runs-on: ubuntu-latest
+    # ADR-072 Amendment 4 (2026-09-16, F/CTO-ratified sentinel shape (1)) /
+    # BACKLOG.md §7.36 item 29. `migrator` moved out of
+    # infra/supabase/docker-compose.yml (the fence-datastore-bind job above)
+    # into its own Coolify application, its own committed compose
+    # (infra/supabase/migrator/docker-compose.yaml), and its OWN sentinel —
+    # deliberately NOT RT-32's (`fence-datastore-private-bind: target`
+    # asserts a DATASTORE manifest; this one asserts a one-service
+    # APPLICATION manifest with no legitimate inbound reason of any kind —
+    # reusing RT-32's sentinel would be the layer-attribution drift
+    # ADR-011 Decision 4 catalogues; see DECISIONS.md's ADR-072 entry, the
+    # "ONE-WAY DOOR" paragraph, for the full choice). Ships UNLABELED (no
+    # RT-NN — an F/CTO ADR-011 Decision-4 ratify act on a Sec proposal, not
+    # taken by this PR, same precedent RT-32 itself followed).
+    #
+    # Run-always (no paths filter), matching the sibling fences' own
+    # reasoning: a path-trigger leaves a trigger-drift meta-risk.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Production-mode — real compose (expects zero-inbound; exit 0)
+        run: bash scripts/ci/fence-migrator-private-bind.sh infra/supabase/migrator/docker-compose.yaml
+
+      - name: "Canary — corrupts the REAL compose, not a fixture (expects violation, exit 1, vector-1 token)"
+        # Sec F1 (PR #819 joint review, 2026-09-18): a fixture-only battery
+        # proves the script works; this proves it bites on the file it is
+        # actually deployed to protect. Mirrors fence-datastore-bind's own
+        # "corrupts the REAL compose" canary, retired from THAT job when
+        # the migrator block left infra/supabase/docker-compose.yml — this
+        # is that canary's replacement, now aimed at the migrator's own
+        # real file. Copies the real infra/supabase/migrator/docker-compose.yaml
+        # to a scratch path, inserts a `ports:` block under the migrator
+        # service's `container_name:` line (a unique anchor), and asserts
+        # the fence catches it there too -- not just in a synthetic
+        # fixture shaped to be caught.
         run: |
           set -e
           SCRATCH="$(mktemp)"
           awk '{ print } /container_name: supabase-migrator/ { print "    ports:"; print "      - \"9999:9999\"" }' \
-            infra/supabase/docker-compose.yml > "$SCRATCH"
+            infra/supabase/migrator/docker-compose.yaml > "$SCRATCH"
           if ! grep -q '9999:9999' "$SCRATCH"; then
-            echo "FATAL: canary setup didn't find the migrator container_name anchor to insert ports: after — either the migrator service hasn't landed yet or its container_name changed out from under this canary. Update the canary, don't skip it."
+            echo "FATAL: canary setup didn't find the migrator container_name anchor to insert ports: after -- either the migrator service moved or its container_name changed out from under this canary. Update the canary, don't skip it."
             rm -f "$SCRATCH"
             exit 1
           fi
           set +e
-          out="$(bash scripts/ci/fence-datastore-private-bind.sh "$SCRATCH" 2>&1)"
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh "$SCRATCH" 2>&1)"
           rc=$?
           set -e
           rm -f "$SCRATCH"
           echo "$out"
           if [ "$rc" -ne 1 ]; then
-            echo "FATAL: canary expected exit 1 against the migrator-with-ports corrupted REAL compose but got $rc — ADR-072 C9's 'already covered' determination is WRONG; the fence does not bite on migrator."
+            echo "FATAL: canary expected exit 1 against the corrupted REAL migrator compose but got $rc -- the fence does not bite on its actual protection target."
             exit 1
           fi
-          if ! echo "$out" | grep -q 'vector 1:'; then
-            echo "FATAL: canary exited 1 but no vector-1 token is present — failing closed."
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: canary exited 1 but no vector-1 'ports:' token is present -- failing closed."
             exit 1
           fi
-          echo "OK: fence catches a published port on the migrator service on the REAL compose file (exit $rc) — ADR-072 C9 confirmed."
+          echo "OK: fence catches a published port on the migrator service on the REAL compose file, not just on a fixture (exit $rc)."
 
-      - name: "Canary — migrator gets a Coolify Domain (ADR-072 C9; expects violation, exit 1, vector-2 token)"
-        # Same discipline as the ports canary above, targeting Vector 2 instead:
-        # inserts a Coolify SERVICE_FQDN_* magic var (the real mechanism Coolify
-        # uses to request a public domain for a compose service) into the
-        # migrator service's `environment:` block, anchored on its unique
-        # PROD_DB_URL line.
+      - name: Inversion — negative control fixture (correct config; expects exit 0)
+        run: bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-private.compose.yaml
+
+      - name: "Inversion — golden 1: published ports (expects violation, exit 1, vector-1 'ports:' token)"
+        # Sec F-2 lesson (mirrored from the sibling fences): assert the
+        # SPECIFIC vector token, not just a non-zero exit — a structural
+        # error (missing sentinel, non-compose file) also exits non-zero (2)
+        # and would print "OK: caught..." having proven nothing.
         run: |
-          set -e
-          SCRATCH="$(mktemp)"
-          awk '{ print } /PROD_DB_URL:/ { print "      SERVICE_FQDN_MIGRATOR: ${SERVICE_FQDN_MIGRATOR}" }' \
-            infra/supabase/docker-compose.yml > "$SCRATCH"
-          if ! grep -q 'SERVICE_FQDN_MIGRATOR' "$SCRATCH"; then
-            echo "FATAL: canary setup didn't find the migrator PROD_DB_URL anchor to insert SERVICE_FQDN_MIGRATOR after — either the migrator service hasn't landed yet or its env var changed out from under this canary. Update the canary, don't skip it."
-            rm -f "$SCRATCH"
-            exit 1
-          fi
           set +e
-          out="$(bash scripts/ci/fence-datastore-private-bind.sh "$SCRATCH" 2>&1)"
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-public-ports.compose.yaml 2>&1)"
           rc=$?
           set -e
-          rm -f "$SCRATCH"
           echo "$out"
           if [ "$rc" -ne 1 ]; then
-            echo "FATAL: canary expected exit 1 against the migrator-with-Domain corrupted REAL compose but got $rc — ADR-072 C9's 'already covered' determination is WRONG; the fence does not bite on migrator."
+            echo "FATAL: migrator-bind fence expected exit 1 on the published-ports golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: the published-ports golden exited 1 but the vector-1 'ports:' token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: migrator-bind fence caught a published port via its own token (exit $rc)."
+
+      - name: "Inversion — golden 2: expose: present (expects violation, exit 1, vector-1 'expose:' token)"
+        # This fence's own divergence from fence-datastore-private-bind.sh —
+        # `expose:` is ALLOWED there (sibling-container reach) but FORBIDDEN
+        # here: migrator takes zero inbound connections of any kind, not
+        # even from sibling containers on its own project network.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-expose.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: migrator-bind fence expected exit 1 on the expose: golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'expose:'"; then
+            echo "FATAL: the expose: golden exited 1 but the vector-1 'expose:' token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: migrator-bind fence caught an expose: key via its own token (exit $rc)."
+
+      - name: "Inversion — golden 3: reverse-proxy Domain / public-FQDN request (expects violation, exit 1, vector-2 token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-public-domain.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: migrator-bind fence expected exit 1 on the public-domain golden but got $rc — failing closed."
             exit 1
           fi
           if ! echo "$out" | grep -q 'vector 2:'; then
-            echo "FATAL: canary exited 1 but no vector-2 token is present — failing closed."
+            echo "FATAL: the public-domain golden exited 1 but no vector-2 token is present — failing closed."
             exit 1
           fi
-          echo "OK: fence catches a Coolify Domain request on the migrator service on the REAL compose file (exit $rc) — ADR-072 C9 confirmed."
+          echo "OK: migrator-bind fence caught a Coolify Domain request via its own token (exit $rc)."
+
+      - name: "Inversion — golden 4: network_mode: host (expects violation, exit 1, vector-3 token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-host-network.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: migrator-bind fence expected exit 1 on the host-network golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 3:'; then
+            echo "FATAL: the host-network golden exited 1 but no vector-3 token is present — failing closed."
+            exit 1
+          fi
+          echo "OK: migrator-bind fence caught network_mode: host via its own token (exit $rc)."
+
+      - name: "Inversion — golden 5: sentinel absent (expects structural refusal, exit 2)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-no-sentinel.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: migrator-bind fence expected exit 2 (structural refusal) on the no-sentinel golden but got $rc."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'sentinel not found'; then
+            echo "FATAL: no-sentinel golden exited 2 but the expected structural message is absent — failing closed."
+            exit 1
+          fi
+          echo "OK: fence refused a file with no confirmed migrator-application sentinel, failing closed (exit $rc)."
+
+      - name: "Inversion — golden 6: ports: key with zero value lines (expects structural refusal, exit 2)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-ports-empty-block.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: migrator-bind fence expected exit 2 (structural refusal) on the empty-ports-block golden but got $rc."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'collected zero value lines'; then
+            echo "FATAL: empty-ports-block golden exited 2 but the expected structural message is absent — failing closed."
+            exit 1
+          fi
+          echo "OK: fence refused a 'ports:' block it could not read, failing closed (exit $rc)."
+
+      - name: "Inversion — golden 7: inline flow-list ports (expects violation, exit 1, vector-1 'ports:' token)"
+        # QA strike-proof, BACKLOG.md §7.36 item 29 close-gate, 2026-09-18:
+        # the original vector-1 regex only opened a block on a BARE
+        # `ports:` key — a one-line flow-sequence form silently bypassed it
+        # entirely, a measured false CLEAN PASS on a real published port.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-ports-flowlist.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: migrator-bind fence expected exit 1 on the flow-list golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: the flow-list golden exited 1 but the vector-1 'ports:' token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: migrator-bind fence caught an inline flow-list ports: via its own token (exit $rc)."
+
+      - name: "Inversion — golden 8: quoted ports key (expects violation, exit 1, vector-1 'ports:' token)"
+        # QA strike-proof: a quoted key ("ports":) is valid Compose/YAML and
+        # silently bypassed the bare-literal regex — measured false CLEAN PASS.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-ports-quotedkey.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: migrator-bind fence expected exit 1 on the quoted-key golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: the quoted-key golden exited 1 but the vector-1 'ports:' token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: migrator-bind fence caught a quoted \"ports\": key via its own token (exit $rc)."
+
+      - name: "Inversion — golden 9: YAML alias ports (expects violation, exit 1, vector-1 'ports:' token)"
+        # QA strike-proof: a YAML anchor/alias resolves (verified with
+        # pyyaml) to a real published-port mapping but the literal `ports:`
+        # line carries an inline alias token — measured false CLEAN PASS.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-ports-alias.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: migrator-bind fence expected exit 1 on the YAML-alias golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: the YAML-alias golden exited 1 but the vector-1 'ports:' token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: migrator-bind fence caught a ports: *alias reference via its own token (exit $rc)."
+
+      # ── scripts/ci/check-migrator-names-absent.sh — ADR-072 Amendment 4
+      # Condition 2's OFFLINE-strikeable predicate (Sec B4, PR #819 joint
+      # review, 2026-09-18). Extracted out of
+      # scripts/provision-supabase-stack.sh's post-move absence assertion
+      # so the NAME-vs-VALUE predicate has its own committed strike-proof,
+      # independent of a live Coolify resource — see that script's own
+      # header for what this DOES and does NOT prove (the live, end-to-end
+      # strike against a real box's real store stays at
+      # docs/deployment-runbook.md §6.8 CUTOVER PROCEDURE step 10).
+      - name: "Predicate — check-migrator-names-absent: clean env (expects exit 0)"
+        run: bash scripts/ci/check-migrator-names-absent.sh tests/fixtures/ci/migrator-names-absent-clean.env
+
+      - name: "Predicate — check-migrator-names-absent: MIGRATOR_DB_PASSWORD present (expects exit 1, offender named)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/check-migrator-names-absent.sh tests/fixtures/ci/migrator-names-absent-present.env 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: check-migrator-names-absent expected exit 1 on the 'present' fixture but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'MIGRATOR_DB_PASSWORD present'; then
+            echo "FATAL: the 'present' fixture exited 1 but did not name MIGRATOR_DB_PASSWORD as the offender — failing closed."
+            exit 1
+          fi
+          echo "OK: check-migrator-names-absent caught MIGRATOR_DB_PASSWORD by name (exit $rc)."
+
+      - name: "Predicate — check-migrator-names-absent: blanked MIGRATOR_DB_USER= (expects exit 1, proves names-not-values)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/check-migrator-names-absent.sh tests/fixtures/ci/migrator-names-absent-blanked.env 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: check-migrator-names-absent expected exit 1 on the blanked-value fixture but got $rc — a blanked value must not pass this check, only a deleted name does. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'MIGRATOR_DB_USER present'; then
+            echo "FATAL: the blanked-value fixture exited 1 but did not name MIGRATOR_DB_USER as the offender — failing closed."
+            exit 1
+          fi
+          echo "OK: check-migrator-names-absent caught a BLANKED MIGRATOR_DB_USER= by name, not value (exit $rc)."
 
   fence-entity-grep:
     name: entity-grep — HTML-entity-obscured §/# in doc artifacts

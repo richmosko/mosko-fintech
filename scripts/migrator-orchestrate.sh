@@ -675,10 +675,20 @@ log "pre-fire execution uuid snapshot recorded"
 
 log "executing migrator Scheduled Task ($MIGRATOR_TASK_UUID) on application $MIGRATOR_SERVICE_UUID"
 # Item 15 fix (Sec-gated, booked BACKLOG.md §7.36 #15): the migrator
-# Scheduled Task is attached to an APPLICATION resource (the Supabase-stack
-# Coolify app, standup-log.md Phase A.2 — created via
+# Scheduled Task is attached to an APPLICATION resource — ⚠ CHANGED,
+# ADR-072 Amendment 4 / BACKLOG.md §7.36 item 29 (2026-09-18): that
+# application is now migrator's OWN standalone Coolify application
+# (infra/supabase/migrator/docker-compose.yaml), NOT the Supabase-stack
+# application this comment originally named (standup-log.md Phase A.2's
+# "created via" citation below describes how the task was FIRST created,
+# under the old topology; the route/controller-method distinction it
+# documents is unchanged by the move — only WHICH application UUID
+# $MIGRATOR_SERVICE_UUID now resolves to changed, and this script needed
+# no code change for that, since it already treats
+# $MIGRATOR_SERVICE_UUID as an opaque config value read from
+# $CONF_FILE). The task itself is (re-)created via
 # `POST /applications/{uuid}/scheduled-tasks`, i.e.
-# ScheduledTasksController::create_scheduled_task_by_application_uuid), not
+# ScheduledTasksController::create_scheduled_task_by_application_uuid, not
 # a Service resource. Coolify 4.3.18's routes/api.php defines TWO separate
 # route families for scheduled tasks, each bound to its own controller
 # method and resource table: `/applications/{uuid}/scheduled-tasks/...`

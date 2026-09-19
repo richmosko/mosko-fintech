@@ -1,0 +1,30 @@
+# fence-migrator-private-bind: target
+# GOLDEN FIXTURE — VECTOR 1e (`ports:` key set via a YAML ALIAS reference
+# → fence FAILS, exit 1).
+#
+# QA-found gap (BACKLOG.md §7.36 item 29 close-gate, 2026-09-18): a YAML
+# anchor/alias (`ports: *portslist`, anchor defined elsewhere in the same
+# file as `x-ports-list: &portslist`) resolves to a real published-port
+# mapping (verified with pyyaml: `services.migrator.ports == ["9999:9999"]`)
+# but the literal `ports:` line carries an inline alias token, which the
+# original bare-key-only regex silently skipped — a false CLEAN PASS
+# (exit 0). Closed by the same inline-value check that closes the
+# flow-list gap: any content after `ports:`/`expose:` on the same line,
+# alias or otherwise, is an immediate violation. Exercised by the
+# fence-migrator-bind CI job, asserting exit 1 AND the vector-1 `ports:`
+# token.
+
+x-ports-list: &portslist
+  - "9999:9999"
+
+services:
+  migrator:
+    container_name: supabase-migrator
+    build:
+      context: ../../..
+      dockerfile: infra/supabase/migrator/Dockerfile
+    restart: unless-stopped
+    ports: *portslist
+    environment:
+      PROD_DB_URL: postgres://user:pass@db:5432/postgres?sslmode=disable
+      PGSSLMODE: disable

@@ -1,0 +1,23 @@
+# fence-migrator-private-bind: target
+# GOLDEN FIXTURE — VECTOR 1b (`expose:` key present → fence FAILS, exit 1).
+#
+# This is the fence's OWN divergence from fence-datastore-private-bind.sh,
+# which allows `expose:` (sibling-container reach). The migrator
+# application takes ZERO inbound connections of any kind, not even from
+# sibling containers on its own project network — it is invoked solely by
+# a Coolify Scheduled Task `docker exec`ing into it. Exercised by the
+# fence-migrator-bind CI job, asserting exit 1 AND the vector-1 `expose:`
+# token.
+
+services:
+  migrator:
+    container_name: supabase-migrator
+    build:
+      context: ../../..
+      dockerfile: infra/supabase/migrator/Dockerfile
+    restart: unless-stopped
+    expose:
+      - "5432"
+    environment:
+      PROD_DB_URL: postgres://user:pass@db:5432/postgres?sslmode=disable
+      PGSSLMODE: disable

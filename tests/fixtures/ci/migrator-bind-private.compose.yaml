@@ -1,0 +1,24 @@
+# fence-migrator-private-bind: target
+# GOLDEN FIXTURE — NEGATIVE CONTROL (correct zero-inbound config → fence
+# PASSES, exit 0).
+#
+# Proves fence-migrator-private-bind does NOT false-positive the correct
+# shape: no `ports:`, no `expose:`, no proxy Domain / Traefik Host() label /
+# Coolify SERVICE_FQDN magic, no network_mode: host. Mirrors the real
+# infra/supabase/migrator/docker-compose.yaml shape. Exercised in
+# production-mode (expects exit 0) by the fence-migrator-bind CI job.
+
+services:
+  migrator:
+    container_name: supabase-migrator
+    build:
+      context: ../../..
+      dockerfile: infra/supabase/migrator/Dockerfile
+    restart: unless-stopped
+    environment:
+      PROD_DB_URL: postgres://user:pass@db:5432/postgres?sslmode=disable
+      PGSSLMODE: disable
+    networks:
+      default:
+        name: some-stack-network
+        external: true
