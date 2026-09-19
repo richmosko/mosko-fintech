@@ -177,6 +177,10 @@ The team-lead reviews the diff, confirms it reads correctly, and either:
 
 **There's no QA / Validate phase for doc-only PRs.** The lead's read of the diff is the only gate beyond GitHub's own branch-protection rules.
 
+## The MILESTONES entry rides in THIS PR (F/CTO ruling 2026-09-19)
+
+If this PR changes project state — a phase step, a locked decision, a landed build, a ruling — its `MILESTONES.md` `## Recent activity` entry (and any `## Active Feature` move) is part of THIS diff, not a follow-up. Standalone ledger-sync PRs are retired except to repair a PR that merged without its entry (see `/merge-pr` step 6). A doc-only PR that changes no project state (typo, comment, fixture) needs no entry.
+
 ## After-merge follow-up
 
 If the merged change was tied to a phase transition (e.g. "PRD v1 approved → move to Plan"), the team-lead should still:
