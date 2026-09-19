@@ -1,0 +1,10 @@
+{
+  "uuid": "anz4uzfdumcfgc92wnfpov4i",
+  "name": "pfin-migrator",
+  "git_repository": "richmosko/mosko-fintech",
+  "git_branch": "main",
+  "settings": {
+    "include_source_commit_in_build": false,
+    "is_static": false
+  }
+}

@@ -201,6 +201,27 @@ else
   info "application '$MIGRATOR_APP_NAME' does not exist — would create with build_pack=dockercompose, base_directory=$BASE_DIRECTORY, docker_compose_location=$DOCKER_COMPOSE_LOCATION, branch=$GIT_BRANCH, SAME project/environment as the stack"
 fi
 
+step "Preflight — Source commit availability (docs/deployment-runbook.md §4, ADR-072 Amendment 6)"
+# ASSERTED on EVERY run, preflight included -- MEASURED 2026-09-19: this
+# application's first real deploy FATALed at the migrator Dockerfile's
+# GIT_SHA/SOURCE_COMMIT build-arg guard because it was created with
+# include_source_commit_in_build=false. Preflight only PRINTS the current
+# value (read-only mode fixes nothing); --apply's own step below PATCHes
+# and re-reads, and is the one that fails closed before a deploy is
+# triggered. scripts/ci/check-source-commit-in-build.sh is the strike-proven
+# predicate both this script and provision-supabase-stack.sh call.
+if [[ -n "${APP_UUID:-}" ]]; then
+  SOURCE_COMMIT_JSON="$(api GET "/applications/$APP_UUID")"
+  if echo "$SOURCE_COMMIT_JSON" | "$REPO_ROOT/scripts/ci/check-source-commit-in-build.sh" >/tmp/source-commit-check.$$ 2>&1; then
+    ok "settings.include_source_commit_in_build — true"
+  else
+    info "settings.include_source_commit_in_build — NOT true ($(cat /tmp/source-commit-check.$$ | tr -d '\n')) — --apply will PATCH this before deploying"
+  fi
+  rm -f /tmp/source-commit-check.$$
+else
+  info "application does not exist yet — will be created with include_source_commit_in_build=true"
+fi
+
 step "Plan"
 cat <<PLAN
       project        $PROJECT_NAME  $PROJECT_UUID
@@ -233,10 +254,40 @@ print(json.dumps({
   'base_directory': '$BASE_DIRECTORY',
   'docker_compose_location': '$DOCKER_COMPOSE_LOCATION',
   'instant_deploy': False,
+  # include_source_commit_in_build -- top-level on create, per
+  # docs/deployment-runbook.md §4's source-verified API field note.
+  # MEASURED 2026-09-19: omitting this left the resource created with it
+  # false (Coolify's own default), which FATALed the first real deploy at
+  # the migrator Dockerfile's GIT_SHA/SOURCE_COMMIT guard. Set it here so
+  # a fresh create never needs the --apply PATCH path below at all; the
+  # ASSERT step below still re-reads and PATCHes as a watcher in case this
+  # ever drifts (a Coolify default change, a hand-edit on the box, etc).
+  'include_source_commit_in_build': True,
 }))")"
   APP_UUID="$(api POST /applications/public "$CREATE_BODY" | jqp "print(json.load(sys.stdin)['uuid'])")"
   ok "application created — $APP_UUID (compose parse queued, not deployed yet)"
 fi
+
+step "Assert — settings.include_source_commit_in_build == true (BEFORE deploying)"
+# Re-read fresh (not the preflight snapshot -- that was taken before this
+# application may have just been created above) and PATCH+re-read if false.
+# FAILS CLOSED, by name, before the "Deploying" step below ever runs --
+# this is the fix for the live finding, 2026-09-19: pfin-migrator's first
+# deploy FATALed at the Dockerfile's sha guard because this setting was
+# false and nothing asserted it before triggering that deploy.
+SOURCE_COMMIT_JSON="$(api GET "/applications/$APP_UUID")"
+if ! echo "$SOURCE_COMMIT_JSON" | "$REPO_ROOT/scripts/ci/check-source-commit-in-build.sh" >/tmp/source-commit-assert.$$ 2>&1; then
+  info "settings.include_source_commit_in_build is not true — PATCHing to true"
+  api PATCH "/applications/$APP_UUID" '{"include_source_commit_in_build": true}' >/dev/null
+  SOURCE_COMMIT_JSON="$(api GET "/applications/$APP_UUID")"
+  if ! echo "$SOURCE_COMMIT_JSON" | "$REPO_ROOT/scripts/ci/check-source-commit-in-build.sh" >/tmp/source-commit-assert.$$ 2>&1; then
+    cat /tmp/source-commit-assert.$$ >&2
+    rm -f /tmp/source-commit-assert.$$
+    die "settings.include_source_commit_in_build is still not true after PATCH -- refusing to deploy. This is the exact field that caused the 2026-09-19 FATAL at the migrator Dockerfile's GIT_SHA/SOURCE_COMMIT guard (docs/deployment-runbook.md §4)."
+  fi
+fi
+rm -f /tmp/source-commit-assert.$$
+ok "settings.include_source_commit_in_build — true (asserted before deploy)"
 
 step "Secrets: mint-if-absent into THIS application's OWN env store -- never the stack's"
 # Same non-echoing tinker mechanism as provision-supabase-stack.sh's own
