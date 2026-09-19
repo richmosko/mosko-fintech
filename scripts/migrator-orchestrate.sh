@@ -717,7 +717,28 @@ if [[ -z "$LIVE_APP_NAME" || "$LIVE_APP_NAME" != "$MIGRATOR_APP_NAME" ]]; then
   log "FAIL (exit 16): the application at MIGRATOR_SERVICE_UUID ($MIGRATOR_SERVICE_UUID) is named '$LIVE_APP_NAME', not the expected '$MIGRATOR_APP_NAME' -- refusing to deploy. \$CONF_FILE's MIGRATOR_SERVICE_UUID may have drifted onto a DIFFERENT resource -- the Supabase-stack application is the specific hazard this guard exists for: the trigger token's deploy ability reaches it too (ADR-072 Amendment 2), and redeploying it restarts production Postgres. NOT deploying, NOT executing the Scheduled Task. Investigate MIGRATOR_SERVICE_UUID in $CONF_FILE before re-firing -- do not just retry."
   exit 16
 fi
-log "name guard OK: MIGRATOR_SERVICE_UUID ($MIGRATOR_SERVICE_UUID) resolves to application '$LIVE_APP_NAME'"
+# Defence-in-depth (Sec, PR #831 joint review): the name guard above is one
+# field deep -- a two-field conf edit (uuid AND name) defeats it, though
+# $CONF_FILE is root-only-writable so that already requires box-root. This
+# second field costs nothing extra to check (same $APP_RECORD_JSON already
+# fetched, no new API call) and turns a two-field coordinated drift into a
+# three-field one: the SAME field scripts/provision-migrator-app.sh
+# compares to decide whether a live application matches its own file
+# (`:184`, `base_directory`), which is `/infra/supabase/migrator` for the
+# real `pfin-migrator` resource and something else entirely for the
+# Supabase-stack application this guard exists to rule out.
+if ! LIVE_BASE_DIR="$(printf '%s' "$APP_RECORD_JSON" | jqp "
+d=json.load(sys.stdin)
+print(d.get('base_directory','') if isinstance(d, dict) else '')
+" 2>/dev/null)"; then
+  log "FAIL (exit 16): could not PARSE the application record while verifying its base_directory. NOT deploying the migrator resource, NOT executing the Scheduled Task."
+  exit 16
+fi
+if [[ "$LIVE_BASE_DIR" != "/infra/supabase/migrator" ]]; then
+  log "FAIL (exit 16): the application at MIGRATOR_SERVICE_UUID ($MIGRATOR_SERVICE_UUID) is named '$LIVE_APP_NAME' (matches) but its base_directory is '$LIVE_BASE_DIR', not the expected '/infra/supabase/migrator' -- refusing to deploy. NOT deploying, NOT executing the Scheduled Task. Investigate MIGRATOR_SERVICE_UUID in $CONF_FILE before re-firing -- do not just retry."
+  exit 16
+fi
+log "name guard OK: MIGRATOR_SERVICE_UUID ($MIGRATOR_SERVICE_UUID) resolves to application '$LIVE_APP_NAME' (base_directory $LIVE_BASE_DIR)"
 
 log "deploying the migrator resource (rebuild -> run task -> deploy app, ADR-072 Decision 5(1))"
 # POST, not GET -- measured against Coolify v4.3.18's routes/api.php:144-145:
@@ -824,7 +845,7 @@ case "$DEPLOY_STATUS" in
     fail "migrator deploy reached a non-finished TERMINAL state (status=$DEPLOY_STATUS, deployment $DEPLOY_UUID) -- NOT executing the Scheduled Task. See the deployment log in the Coolify dashboard."
     ;;
   *)
-    fail "gave up after $((DEPLOY_POLL_MAX_ATTEMPTS * DEPLOY_POLL_INTERVAL_S))s waiting for the migrator deploy to reach a terminal state (last seen: '${DEPLOY_STATUS:-<empty>}', deployment $DEPLOY_UUID) -- this is a poll timeout, not a confirmed deploy failure. NOT executing the Scheduled Task. Check the Coolify dashboard directly before retriggering."
+    fail "gave up after $((DEPLOY_POLL_MAX_ATTEMPTS * DEPLOY_POLL_INTERVAL_S))s waiting for the migrator deploy to reach a terminal state (last seen: '${DEPLOY_STATUS:-<empty>}', deployment $DEPLOY_UUID) -- this is a poll timeout, not a confirmed deploy failure (if that value is non-empty and not one of queued/in_progress, this is NOT a timeout -- Coolify returned a status this script does not know, and re-firing will not help). NOT executing the Scheduled Task. Check the Coolify dashboard directly before retriggering."
     ;;
 esac
 

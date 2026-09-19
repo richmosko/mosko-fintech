@@ -25,10 +25,22 @@
 #                      simulated time).
 #   commit-mismatch -- the deploy FINISHES but its own `commit` field never
 #                      equals $MIGRATOR_EXPECT_SHA.
+#   deploy-cancelled -- the migrator deploy reaches a TERMINAL
+#                      'cancelled-by-user' (an operator hitting Cancel in
+#                      the Coolify UI mid-build) -- Sec F-review, PR #831:
+#                      distinct from 'failed', must not be misdiagnosed as
+#                      a poll timeout.
 #   happy           -- every leg succeeds; the run proceeds PAST the new
 #                      deploy-then-execute section into the pre-existing
 #                      execute leg and completes (DEPLOY_ON_SUCCESS
 #                      suppressed -- exit 0).
+#   happy (with the fixture conf's DEPLOY_ON_SUCCESS flipped to 1 by the
+#   fence, not by this file) -- exercises the app-deploy-on-success call
+#   this PR also fixed GET -> POST at (Sec F-review, PR #831: this line
+#   was otherwise going to stay unexercised by any offline leg until the
+#   runbook's own DEPLOY_ON_SUCCESS flip). No FAKE_MODE change needed
+#   here: the SAME 'happy' canned responses answer the extra
+#   POST /deploy?uuid=<app-uuid> call this mode triggers.
 #
 # $FAKE_STATE_DIR (a throwaway dir the harness creates) counts calls to the
 # executions endpoint, since migrator-orchestrate.sh polls it twice for
@@ -120,6 +132,9 @@ case "$URL" in
       deploy-timeout)
         echo '{"status":"in_progress","commit":""}'
         ;;
+      deploy-cancelled)
+        echo '{"status":"cancelled-by-user","commit":""}'
+        ;;
       commit-mismatch)
         printf '{"status":"finished","commit":"%s"}' "$WRONG_SHA"
         ;;
@@ -130,11 +145,22 @@ case "$URL" in
     exit 0
     ;;
   */applications/*)
-    if [[ "$MODE" == "name-mismatch" ]]; then
-      printf '{"name":"pfin-supabase-stack","uuid":"%s"}' "$SVC_UUID"
-    else
-      printf '{"name":"pfin-migrator-test","uuid":"%s"}' "$SVC_UUID"
-    fi
+    # base_directory added on Sec's defence-in-depth ask, PR #831 joint
+    # review -- the real /infra/supabase/migrator value for every mode
+    # EXCEPT base-dir-mismatch, which keeps the correct NAME (proving the
+    # base_directory check is a SECOND, independent field, not a restated
+    # name check under another key).
+    case "$MODE" in
+      name-mismatch)
+        printf '{"name":"pfin-supabase-stack","uuid":"%s","base_directory":"/"}' "$SVC_UUID"
+        ;;
+      base-dir-mismatch)
+        printf '{"name":"pfin-migrator-test","uuid":"%s","base_directory":"/"}' "$SVC_UUID"
+        ;;
+      *)
+        printf '{"name":"pfin-migrator-test","uuid":"%s","base_directory":"/infra/supabase/migrator"}' "$SVC_UUID"
+        ;;
+    esac
     exit 0
     ;;
 esac

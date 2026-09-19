@@ -35,10 +35,14 @@
 # expected to execute; a bash -n syntax check is the extent of what a
 # non-Linux/non-root dev machine can verify locally.
 #
-# Five scenarios (BACKLOG.md §7.36 item 59's four new legs, plus the
-# happy path proving a clean hand-off into the pre-existing execute leg):
+# Eight scenarios (BACKLOG.md §7.36 item 59's four new legs, the three
+# added on Sec's PR #831 joint review, plus the happy path proving a
+# clean hand-off into the pre-existing execute leg):
 #   name-mismatch   -- exit 16, the application at MIGRATOR_SERVICE_UUID
 #                      is named something other than MIGRATOR_APP_NAME.
+#   base-dir-mismatch -- exit 16, the application's `base_directory` is
+#                      not `/infra/supabase/migrator` even though its
+#                      name matches (Sec's defence-in-depth ask, PR #831).
 #   deploy-failed   -- generic exit 1 (fail()), same convention this
 #                      script already uses for the Scheduled Task's own
 #                      `failed` status -- the migrator deploy reaches a
@@ -46,18 +50,28 @@
 #   deploy-timeout  -- generic exit 1 (fail()), same convention as the
 #                      Scheduled Task's own poll-timeout branch -- the
 #                      migrator deploy never reaches a terminal state.
+#   deploy-cancelled -- generic exit 1 (fail()) -- the migrator deploy
+#                      reaches a terminal 'cancelled-by-user', distinct
+#                      from 'failed' and must not be misdiagnosed as a
+#                      timeout (Sec, PR #831 joint review).
 #   commit-mismatch -- exit 18, the deploy FINISHES but its own `commit`
 #                      field never equals $MIGRATOR_EXPECT_SHA.
 #   happy           -- exit 0, proceeding all the way through the
 #                      pre-existing execute leg (DEPLOY_ON_SUCCESS
 #                      suppressed).
+#   happy-deploy-on-success -- exit 0, same as happy but with the fixture
+#                      conf's DEPLOY_ON_SUCCESS flipped to 1, exercising
+#                      the GET -> POST fix on the app-deploy-on-success
+#                      call (Sec, PR #831 joint review: otherwise
+#                      unexercised by any offline leg until the runbook's
+#                      own flag flip).
 #
 # Each scenario is also INVERSION-tested at the harness level implicitly:
 # every non-happy scenario is asserted to STOP before the tagged-line
 # "outcome verified" log line ever appears, proving the new section
 # actually gates rather than merely logging a warning and continuing.
 #
-# Exit 0 only if all five scenarios behave exactly as specified. Any
+# Exit 0 only if all eight scenarios behave exactly as specified. Any
 # other outcome (wrong exit code, wrong/missing message text, or the fake
 # Coolify API token leaking into a logged curl argv) fails closed.
 
@@ -69,12 +83,30 @@ ORCHESTRATE_SH="$REPO_ROOT/scripts/migrator-orchestrate.sh"
 
 [[ -x "$FIXTURE_DIR/fake-curl" ]] || { echo "FATAL: $FIXTURE_DIR/fake-curl missing or not executable" >&2; exit 2; }
 [[ -f "$ORCHESTRATE_SH" ]] || { echo "FATAL: $ORCHESTRATE_SH not found" >&2; exit 2; }
-command -v sudo >/dev/null 2>&1 || { echo "FATAL: sudo not available -- this fence only runs where migrator-orchestrate.sh's real hard-coded paths (/etc/pfin, /run/lock/pfin) can be materialized (GitHub Actions ubuntu-latest). See this file's own header." >&2; exit 2; }
 
 CONF_FILE="/etc/pfin/migrator-trigger.conf"
 TOKEN_FILE="/etc/pfin/migrator-coolify-token.env"
 LOCK_DIR="/run/lock/pfin"
 LOCK_FILE="$LOCK_DIR/pfin-migrator-orchestrate.lock"
+
+# ⚠⚠ SEC MERGE CONDITION (F1, PR #831 joint review) — THIS FENCE SUDO-WRITES
+# AND THEN EXIT-TRAP-DELETES THE REAL PRODUCTION PATHS. Run anywhere but a
+# throwaway CI VM, it destroys the box's real trigger conf and Coolify
+# token file. `command -v sudo` alone (this file's previous only gate) is
+# not a host check -- a developer's own machine can have sudo too. Two
+# independent guards, both fail closed, in the order Sec required:
+[[ "${GITHUB_ACTIONS:-}" == "true" ]] || { echo "FATAL: GITHUB_ACTIONS is not 'true' -- this fence sudo-writes and then deletes the REAL $CONF_FILE and $TOKEN_FILE. Refusing to run anywhere but a GitHub Actions runner. See this file's own header." >&2; exit 2; }
+# The host-independent, load-bearing guard: even ON a GitHub Actions
+# runner, a file already present at either path means something else put
+# it there (this job's own retry, a prior step, a misconfigured runner
+# image) -- and this fence's EXIT trap unconditionally deletes both paths.
+# Refuse rather than adopt-and-later-destroy a file this fence did not
+# create itself.
+if [[ -e "$CONF_FILE" || -e "$TOKEN_FILE" ]]; then
+  echo "FATAL: $CONF_FILE or $TOKEN_FILE already exists -- refusing to overwrite it or clean it up later. This fence only ever touches a path it created itself in THIS run." >&2
+  exit 2
+fi
+command -v sudo >/dev/null 2>&1 || { echo "FATAL: sudo not available -- this fence only runs where migrator-orchestrate.sh's real hard-coded paths (/etc/pfin, /run/lock/pfin) can be materialized (GitHub Actions ubuntu-latest). See this file's own header." >&2; exit 2; }
 
 FAKE_TOKEN="fake-migrator-orchestrate-token-$(date +%s)-do-not-leak"
 SVC_UUID="aaaaaaaaaaaaaaaaaaaaaaaa"
@@ -131,7 +163,13 @@ chmod +x "$FAKE_BIN/sleep"
 FAILURES=0
 
 run_scenario() {
-  local name="$1" want_exit="$2" want_grep="$3"
+  # 4th arg (fake_mode) is OPTIONAL and defaults to $name -- added so the
+  # DEPLOY_ON_SUCCESS=1 leg can carry its own scenario NAME (for its own
+  # state dir / log file / PASS-FAIL line) while still selecting
+  # fake-curl's existing 'happy' canned responses (no fake-curl change
+  # needed: the SAME responses answer the one extra call that mode
+  # triggers).
+  local name="$1" want_exit="$2" want_grep="$3" fake_mode="${4:-$1}"
   local state_dir log_file out rc
   state_dir="$WORK/state-$name"
   mkdir -p "$state_dir"
@@ -142,7 +180,7 @@ run_scenario() {
   out="$(env -i \
     PATH="$FAKE_BIN:/usr/bin:/bin:/usr/local/bin" \
     HOME="$HOME" \
-    FAKE_MODE="$name" \
+    FAKE_MODE="$fake_mode" \
     FAKE_STATE_DIR="$state_dir" \
     FAKE_CURL_LOG="$log_file" \
     MIGRATOR_EXPECT_SHA="$EXPECT_SHA" \
@@ -168,7 +206,9 @@ run_scenario() {
   fi
   # Every non-happy scenario must stop BEFORE the tagged-line outcome
   # assertion ever runs -- proving the new section gates, not merely logs.
-  if [[ "$name" != "happy" ]] && printf '%s' "$out" | grep -qF "outcome verified via the execution's own message"; then
+  # (Matches "happy" and "happy-deploy-on-success" -- both are expected to
+  # reach it; every failure leg is not.)
+  if [[ "$name" != happy* ]] && printf '%s' "$out" | grep -qF "outcome verified via the execution's own message"; then
     echo "FAIL [$name]: reached the post-execute tagged-line assertion -- the new deploy-then-execute section did not actually stop the run" >&2
     ok=0
   fi
@@ -181,13 +221,44 @@ run_scenario() {
 }
 
 run_scenario "name-mismatch"   16 "is named 'pfin-supabase-stack', not the expected 'pfin-migrator-test'"
+# Sec joint review, PR #831 (defence-in-depth, F/CTO's call, taken): the
+# name guard alone is one field deep -- base_directory is a SECOND,
+# independent field this leg proves is actually checked, not merely
+# declared in a comment. Correct NAME, wrong base_directory.
+run_scenario "base-dir-mismatch" 16 "but its base_directory is '/', not the expected '/infra/supabase/migrator'"
 run_scenario "deploy-failed"   1  "reached a non-finished TERMINAL state (status=failed"
-run_scenario "deploy-timeout"  1  "gave up after"
+# Sec F3, PR #831 joint review: "gave up after" is NOT a unique anchor --
+# it appears twice in migrator-orchestrate.sh (this deploy-poll timeout at
+# one site, the pre-existing execution-poll timeout at another), so this
+# leg could pass on the wrong branch. Anchor on the deploy-poll's own
+# unique clause instead.
+run_scenario "deploy-timeout"  1  "waiting for the migrator deploy to reach a terminal state"
+# Sec joint review, PR #831: a cancelled deployment (an operator hitting
+# Cancel in the Coolify UI mid-build) is a DISTINCT terminal state from
+# 'failed' and must not be misdiagnosed as a poll timeout -- the poll
+# loop's own `case` breaks on ANY non-queued/non-in_progress status, so
+# this is the leg proving 'cancelled-by-user' takes the same fail-closed
+# branch as 'failed', not the (wrong) generic-timeout branch.
+run_scenario "deploy-cancelled" 1 "reached a non-finished TERMINAL state (status=cancelled-by-user"
 run_scenario "commit-mismatch" 18 "not the sha this fire was triggered for"
 run_scenario "happy"           0  "app deploy SUPPRESSED"
+
+# Sec joint review, PR #831 (Q9): the app-deploy-on-success call was fixed
+# GET -> POST in this same PR, but DEPLOY_ON_SUCCESS defaults to 0 in
+# production (the runbook's own §6.4 step 3 note), so nothing exercises
+# that line until an operator flips the flag at runbook §7 step 7 -- add
+# the leg BEFORE that flip, not after. Flips the fixture conf's own
+# DEPLOY_ON_SUCCESS to 1 (sudo, in place -- this fence already owns this
+# file) for this ONE scenario; nothing runs after it in this script, so no
+# restore is needed. FAKE_MODE stays "happy" (4th arg) -- the same canned
+# responses answer the one extra POST /deploy?uuid=<app-uuid> call this
+# mode triggers; only the scenario's own NAME (and therefore its state
+# dir / log file / PASS-FAIL line) differs.
+sudo sed -i 's/^DEPLOY_ON_SUCCESS=.*/DEPLOY_ON_SUCCESS=1/' "$CONF_FILE"
+run_scenario "happy-deploy-on-success" 0 "app deploy triggered" "happy"
 
 if [[ "$FAILURES" -gt 0 ]]; then
   echo "FATAL: $FAILURES scenario(s) failed -- see above." >&2
   exit 1
 fi
-echo "OK: all 5 migrator-orchestrate.sh deploy-then-execute scenarios behaved as specified."
+echo "OK: all 8 migrator-orchestrate.sh deploy-then-execute scenarios behaved as specified."
