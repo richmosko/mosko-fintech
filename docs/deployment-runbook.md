@@ -1499,13 +1499,24 @@ BOX_IP=<box-ip> scripts/provision-vps.sh --apply
 
 11. **Prove the OLD credential fails to authenticate.** ⚠ **CORRECTED 2026-09-18 (Sec joint review, PR #819) — this step previously said to keep the retiring value in "a supervised scratch note," naming no command and creating an undocumented new plaintext location.** No new location is needed: the retiring value already exists on the box, in `/root/.pfin/supabase.env` — the append-only file `provision-supabase-stack.sh` wrote `MIGRATOR_DB_PASSWORD=...` into on every prior run, before this PR removed that name from its `MINT_SECRETS`. Source it the same way this runbook's own §6 bootstrap block sources `POSTGRES_PASSWORD` from the same file, and pipe it over stdin into the NEW migrator container's own `psql` (added to the image at Amendment 7) — never as a command-line argument, never re-typed by hand:
     ```sh
-    set -a; . /root/.pfin/supabase.env; set +a
-    printf '%s' "$MIGRATOR_DB_PASSWORD" | docker compose --project-name <pfin-migrator-app-uuid> \
+    # The retiring value is the LAST MIGRATOR_DB_PASSWORD= line in this file, not the
+    # first: provision-supabase-stack.sh appends (never truncates), so earlier lines are
+    # stale values from prior runs. Do NOT `source` this file -- that exports the whole
+    # stack secret set into your shell for the rest of this procedure, and a parse error
+    # would print a secret-bearing line.
+    OLDPW="$(grep '^MIGRATOR_DB_PASSWORD=' /root/.pfin/supabase.env | tail -1 | cut -d= -f2-)"
+    # POSITIVE CONTROL -- without this the proof below is vacuous: an EMPTY password also
+    # produces "password authentication failed", so an absent name would read as a PASS.
+    [ -n "$OLDPW" ] || { echo "STOP: no MIGRATOR_DB_PASSWORD in /root/.pfin/supabase.env -- this proof would pass vacuously on an empty value. Recover the retiring value before continuing."; return 1 2>/dev/null || exit 1; }
+    printf '%s' "$OLDPW" | docker compose --project-name <pfin-migrator-app-uuid> \
       exec -T migrator sh -c '
         IFS= read -r OLDPW
         PGPASSWORD="$OLDPW" psql "postgres://migrator@db:5432/postgres?sslmode=disable" -c "select 1" 2>&1 | tail -3'
+    unset OLDPW
     ```
     **Expect an authentication failure specifically** (`password authentication failed for user "migrator"`) — a connection-refused or timeout instead would mean the network hop itself is broken and proves nothing about the credential; re-check step 6's own successful connection before concluding the credential failed for the right reason. This is the condition that makes step 5's ROTATE meaningful rather than cosmetic (Sec's condition, [ADR-072](../DECISIONS.md#adr-072) Amendment 4: *"confirm the OLD credential FAILS to authenticate — not merely that the new one succeeds"*).
+
+    ⚠ **The empty-value trap, stated because it makes this proof self-passing:** an empty or unset `$OLDPW` produces the *same* `password authentication failed` message as a genuinely retired credential. The non-empty guard above is what distinguishes "the old credential was rejected" from "nothing was tested." Do not remove it to simplify the step.
 
 12. **Re-run §6.5 Phase A step 2 and Phase C steps 8–9 so the box conf carries the new UUIDs.** `scripts/provision-vps.sh --apply` picks up the `.env` values `record-coolify-uuids.sh` wrote in step 4 above and rewrites `/etc/pfin/migrator-trigger.conf` on the box. **STOP condition:** any `sshd -t` rejection or non-zero exit (same discipline as §6.6 Step 5).
 
