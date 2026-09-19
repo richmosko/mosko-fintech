@@ -318,6 +318,22 @@ else
   info "application '$APP_NAME' does not exist — would create with build_pack=dockercompose, base_directory=$BASE_DIRECTORY, docker_compose_location=$DOCKER_COMPOSE_LOCATION, branch=$GIT_BRANCH"
 fi
 
+step "Preflight — Source commit availability (docs/deployment-runbook.md §4, ADR-072 Amendment 6)"
+# Read-only print, same as scripts/provision-migrator-app.sh's own preflight
+# step -- --apply's own assert step below is the one that PATCHes and fails
+# closed.
+if [[ -n "${APP_UUID:-}" ]]; then
+  SOURCE_COMMIT_JSON="$(api GET "/applications/$APP_UUID")"
+  if echo "$SOURCE_COMMIT_JSON" | "$REPO_ROOT/scripts/ci/check-source-commit-in-build.sh" >/tmp/stack-source-commit-check.$$ 2>&1; then
+    ok "settings.include_source_commit_in_build — true"
+  else
+    info "settings.include_source_commit_in_build — NOT true ($(cat /tmp/stack-source-commit-check.$$ | tr -d '\n')) — --apply will PATCH this before deploying"
+  fi
+  rm -f /tmp/stack-source-commit-check.$$
+else
+  info "application does not exist yet — will be created with include_source_commit_in_build=true"
+fi
+
 step "Plan"
 cat <<PLAN
       project      $PROJECT_NAME  ${PROJECT_UUID:-<to be created>}
@@ -398,10 +414,38 @@ print(json.dumps({
   'base_directory': '$BASE_DIRECTORY',
   'docker_compose_location': '$DOCKER_COMPOSE_LOCATION',
   'instant_deploy': False,
+  # include_source_commit_in_build -- same field, same reasoning as
+  # scripts/provision-migrator-app.sh's own create body (docs/deployment-runbook.md
+  # §4, ADR-072 Amendment 6). This stack application has carried true since
+  # 2026-09-17 (set by hand, per §4's note); setting it here too means a
+  # from-scratch re-create of this application never depends on that
+  # by-hand step. The ASSERT step below is the watcher either way.
+  'include_source_commit_in_build': True,
 }))")"
   APP_UUID="$(api POST /applications/public "$CREATE_BODY" | jqp "print(json.load(sys.stdin)['uuid'])")"
   ok "application created — $APP_UUID (compose parse queued, not deployed yet)"
 fi
+
+step "Assert — settings.include_source_commit_in_build == true (BEFORE deploying)"
+# Watcher, per docs/deployment-runbook.md §4 (ADR-072 Amendment 6): this
+# has been true on the live resource since 2026-09-17 (set by hand), but
+# nothing previously asserted it on a re-run. Same PATCH+re-read+die-closed
+# shape as scripts/provision-migrator-app.sh's own assert step; see that
+# script's header comment and scripts/ci/check-source-commit-in-build.sh
+# for the strike-proven predicate both scripts call.
+SOURCE_COMMIT_JSON="$(api GET "/applications/$APP_UUID")"
+if ! echo "$SOURCE_COMMIT_JSON" | "$REPO_ROOT/scripts/ci/check-source-commit-in-build.sh" >/tmp/stack-source-commit-assert.$$ 2>&1; then
+  info "settings.include_source_commit_in_build is not true — PATCHing to true"
+  api PATCH "/applications/$APP_UUID" '{"include_source_commit_in_build": true}' >/dev/null
+  SOURCE_COMMIT_JSON="$(api GET "/applications/$APP_UUID")"
+  if ! echo "$SOURCE_COMMIT_JSON" | "$REPO_ROOT/scripts/ci/check-source-commit-in-build.sh" >/tmp/stack-source-commit-assert.$$ 2>&1; then
+    cat /tmp/stack-source-commit-assert.$$ >&2
+    rm -f /tmp/stack-source-commit-assert.$$
+    die "settings.include_source_commit_in_build is still not true after PATCH -- refusing to deploy. See docs/deployment-runbook.md §4."
+  fi
+fi
+rm -f /tmp/stack-source-commit-assert.$$
+ok "settings.include_source_commit_in_build — true (asserted before deploy)"
 
 step "Waiting for the queued compose parse (LoadComposeFile) to create local_file_volumes rows"
 # Source-verified: ApplicationsController dispatches LoadComposeFile::dispatch
