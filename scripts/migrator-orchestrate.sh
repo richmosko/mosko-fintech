@@ -722,7 +722,7 @@ fi
 # $CONF_FILE is root-only-writable so that already requires box-root. This
 # second field costs nothing extra to check (same $APP_RECORD_JSON already
 # fetched, no new API call) and turns a two-field coordinated drift into a
-# three-field one. ⚠ MEASURED by Sec, 2026-09-19, `GET /api/v1/applications/<uuid>`
+# three-field one. ⚠ MEASURED by team-lead, 2026-09-19, `GET /api/v1/applications/<uuid>`
 # on Coolify 4.3.18 (the DETAIL route this call itself uses, not
 # provision-migrator-app.sh's LIST route at `:184` -- a first measurement
 # of this route in this repo, not an inference carried from that list-route
