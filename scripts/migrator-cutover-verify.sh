@@ -6,6 +6,14 @@
 # except for leg 3's own connection attempt (which is EXPECTED to fail --
 # that is the proof) -- this script mutates nothing.
 #
+# Shares scripts/coolify-env.sh's api() shape: the Coolify token is never
+# on curl's own argv (`-K -` stdin config). ⚠ The box-side `python3 -
+# "$TOKEN"` driver invocation (not curl) still passes the token as that
+# process's own argv[1], `ps`-visible on the box for the call's lifetime
+# -- a pre-existing convention, not closed here; see scripts/coolify-
+# env.sh's own header ("ONE EXPOSURE REMAINS") and BACKLOG.md §7.36 item
+# 60 (Sec, PR #825 review, V3).
+#
 # WHAT IT DOES NOT REPLACE
 #   Step 7 (delete MIGRATOR_DB_* from the stack's store + redeploy) is
 #   scripts/coolify-env.sh's job, and must have ALREADY run before this
@@ -74,6 +82,11 @@ sshx true >/dev/null 2>&1 || die "box at $BOX_IP not reachable over SSH with $AU
 sshx 'test -s /root/.pfin/coolify.env' >/dev/null 2>&1 \
   || die "no /root/.pfin/coolify.env on the box -- run scripts/provision-vps.sh --apply first"
 
+# Token on `curl -K -` (stdin config, never touches disk -- matches
+# scripts/coolify-env.sh's own F5-fixed shape). This script never sends
+# a request BODY (read-only against the box, leg 3's own connection
+# attempt aside), so there is no body-vs-token channel conflict to
+# resolve here.
 read -r -d '' PY_API_HELPER <<'PY' || true
 import json, os, subprocess, sys
 
@@ -84,22 +97,12 @@ def die(msg):
 def api(token, method, path, body=None):
     if '"' in token or "\n" in token:
         die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
-    cfg_path = f"/root/.pfin/.curlcfg.{os.getpid()}.{path.__hash__() & 0xffffff}"
-    old_umask = os.umask(0o077)
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    cmd = ["curl", "-fsS", "-K", "-", "-X", method, f"http://localhost:8000/api/v1{path}"]
     try:
-        with open(cfg_path, "w") as f:
-            f.write('header = "Authorization: Bearer ' + token + '"\n')
-        cmd = ["curl", "-fsS", "-K", cfg_path, "-X", method, f"http://localhost:8000/api/v1{path}"]
-        try:
-            result = subprocess.run(cmd, capture_output=True, check=True)
-        except subprocess.CalledProcessError as exc:
-            die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.decode(errors='replace').strip()[:200]})")
-    finally:
-        os.umask(old_umask)
-        try:
-            os.unlink(cfg_path)
-        except OSError:
-            pass
+        result = subprocess.run(cmd, input=config.encode(), capture_output=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.decode(errors='replace').strip()[:200]})")
     out = result.stdout.decode()
     return json.loads(out) if out.strip() else None
 PY
@@ -110,17 +113,22 @@ resolve_uuid() {
     printf '%s' "$query"
     return 0
   fi
-  sshx_in <<REMOTE
+  # $query is OPERATOR argv (--migrator-app/--stack-app), unbounded
+  # shape -- crosses via `env` on the ssh command line (shell-escaped
+  # with printf %q), never by direct heredoc interpolation (Sec, PR #825
+  # review, F4 -- same fix as scripts/coolify-env.sh's $APP_QUERY).
+  local query_env="query=$(printf '%q' "$query")"
+  sshx "env $query_env bash -s" <<REMOTE
 set -e
 TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-python3 - "\$TOKEN" "$query" <<'PYEOF'
+python3 - "\$TOKEN" "\$query" <<'PYEOF'
 $PY_API_HELPER
 import sys
 token, name = sys.argv[1], sys.argv[2]
 apps = api(token, "GET", "/applications")
 matches = [a for a in apps if a.get("name") == name]
-if not matches:
-    die(f"no application named '{name}' found")
+if len(matches) != 1:
+    die(f"expected exactly one application named '{name}', found {len(matches)}")
 print(matches[0]["uuid"])
 PYEOF
 REMOTE
@@ -131,6 +139,14 @@ MIGRATOR_UUID="$(resolve_uuid "$MIGRATOR_APP")"
 STACK_UUID="$(resolve_uuid "$STACK_APP")"
 [[ -n "$MIGRATOR_UUID" ]] || die "could not resolve --migrator-app '$MIGRATOR_APP'"
 [[ -n "$STACK_UUID" ]] || die "could not resolve --stack-app '$STACK_APP'"
+# Re-validate: resolve_uuid's name-resolution branch returns Coolify API
+# output, not necessarily the operator's own UUID-shaped input -- do not
+# trust it to be metacharacter-free just because it came back non-empty
+# (Sec, PR #825 review, F4). Every heredoc below interpolates these two
+# directly; this is what makes that safe.
+UUID_RE='^[a-z0-9]{20,32}$'
+[[ "$MIGRATOR_UUID" =~ $UUID_RE ]] || die "resolved migrator UUID '$MIGRATOR_UUID' is not uuid-shaped -- refusing to interpolate API output into a remote shell"
+[[ "$STACK_UUID" =~ $UUID_RE ]] || die "resolved stack UUID '$STACK_UUID' is not uuid-shaped -- refusing to interpolate API output into a remote shell"
 ok "migrator app -> $MIGRATOR_UUID, stack app -> $STACK_UUID"
 
 FAIL=0
@@ -154,11 +170,24 @@ fi
 
 # --- Leg 10 ------------------------------------------------------------------
 step "Leg 10 -- stack's meta container carries neither MIGRATOR_DB_* name"
-LEG10_OUT="$(sshx "docker compose --project-name $STACK_UUID exec -T meta env" 2>&1 | cut -d= -f1 | sort -u) || true"
+# NAMES ONLY: the cut/sort run ON THE BOX, inside the remote command string
+# (Sec, PR #825 review, V1). `meta` holds the whole stack env store (ADR-072
+# Amendment 3), so a local `cut` would land POSTGRES_PASSWORD / JWT_SECRET /
+# SERVICE_ROLE_KEY / VAULT_ENC_KEY / ANON_KEY / SECRET_KEY_BASE in the
+# operator's terminal -- the runbook's own §6.9 rule ("filter before the
+# value leaves the container") and Sec's #822 F1.
+LEG10_OUT="$(sshx "docker compose --project-name $STACK_UUID exec -T meta env | cut -d= -f1 | sort -u" 2>/dev/null)" || LEG10_OUT=""
 LEG10_BAD=0
-for offender in MIGRATOR_DB_USER MIGRATOR_DB_PASSWORD; do
-  printf '%s\n' "$LEG10_OUT" | grep -qx "$offender" && { echo "FAIL: leg 10 -- stack's meta container still carries '$offender' (blanked, not deleted? re-check §6.8 step 7)" >&2; LEG10_BAD=1; }
-done
+# POSITIVE CONTROL -- without it an empty/failed read passes this leg
+# vacuously: absence-of-name is exactly what a broken read also looks like.
+if ! printf '%s\n' "$LEG10_OUT" | grep -qx PATH; then
+  echo "FAIL: leg 10 -- could not read 'meta' env under project $STACK_UUID (no PATH in the result) -- refusing to read an absent/failed env read as an absence proof" >&2
+  LEG10_BAD=1
+else
+  for offender in MIGRATOR_DB_USER MIGRATOR_DB_PASSWORD; do
+    printf '%s\n' "$LEG10_OUT" | grep -qx "$offender" && { echo "FAIL: leg 10 -- stack's meta container still carries '$offender' (blanked, not deleted? re-check §6.8 step 7)" >&2; LEG10_BAD=1; }
+  done
+fi
 if [[ $LEG10_BAD -eq 1 ]]; then FAIL=1; else ok "leg 10 PASS -- both names absent from meta"; fi
 
 # --- Leg 11 ------------------------------------------------------------------

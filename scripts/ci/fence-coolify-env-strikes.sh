@@ -64,7 +64,7 @@ mkdir -p "$FAKE_BIN"
 # command name `curl` -- symlink it under that name in OUR throwaway bin
 # dir, never renaming the fixture itself.
 ln -s "$FIXTURE_DIR/fake-curl" "$FAKE_BIN/curl"
-# Three distinct call shapes coolify-env.sh's sshx()/sshx_in() produce,
+# Four distinct call shapes coolify-env.sh's sshx()/sshx_in() produce,
 # all of which this fake `ssh` must handle DIFFERENTLY, not dispatch to
 # one blanket "read stdin as a script" path (an earlier draft of this
 # fixture did that and silently no-op'd the seed-file write below,
@@ -76,8 +76,16 @@ ln -s "$FIXTURE_DIR/fake-curl" "$FAKE_BIN/curl"
 #      LAST argv element IS the command to run; stdin (if any) is DATA to
 #      pipe through it (coolify-env.sh's own seed-file write), never a
 #      script to execute on its own.
-#   4. `ssh ... root@host bash -s <<HEREDOC`              -- sshx_in():
+#   4. `ssh ... root@host bash -s <<HEREDOC`               -- sshx_in():
 #      stdin IS the remote script.
+#   4b. `ssh ... root@host "env VAR=val bash -s" <<HEREDOC` -- sshx()
+#      carrying an `env NAME=val ... bash -s` command string (Sec, PR
+#      #825 review, F4's env-argv fix): stdin is STILL the remote
+#      script, but the env assignments must take effect first, exactly
+#      as the REAL remote login shell would apply them. `bash -c
+#      "$CMDLINE" <<< "$REWRITTEN"` re-parses the command string as real
+#      shell syntax (so a %q-escaped value survives intact) rather than
+#      this mock's own naive word-splitting on it.
 cat > "$FAKE_BIN/ssh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -87,10 +95,13 @@ fi
 if [[ "\$*" == *"test -s /root/.pfin/coolify.env"* ]]; then
   exit 0
 fi
-if [[ "\$*" == *" bash -s" ]]; then
+LAST="\${@: -1}"
+if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
+  CMDLINE="\$LAST"
+  [[ "\$CMDLINE" == "-s" ]] && CMDLINE="bash -s"
   REWRITTEN="\$(sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
   PATH="$FAKE_BIN:\$PATH" FAKE_CURL_LOG="\$FAKE_CURL_LOG" FAKE_CURL_MODE="\$FAKE_CURL_MODE" \\
-    bash -c "\$REWRITTEN"
+    bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
 CMD="\${@: -1}"
@@ -143,6 +154,24 @@ run_scenario "set --apply fails on read-back mismatch" 1 mismatch \
 #    key present (blanked, not deleted).
 run_scenario "delete --apply fails on blanked-not-deleted read-back" 1 blanked \
   delete abc123def456ghi789jk01 MIGRATOR_DB_USER --apply || FAIL=1
+
+# 4. The manifest refusal is SEPARATE from the allowlist, and scenario 1
+#    does NOT reach it (the allowlist die() fires first). Strike it on
+#    its own: copy the real script, WIDEN SET_ALLOWLIST to admit a
+#    manifest-declared name, and assert it is STILL refused. Without
+#    this leg the belt-and-braces check has no watcher -- measured
+#    (Sec, PR #825 review, F1): deleting the manifest block entirely
+#    leaves scenarios 1-3 green.
+WIDENED="$WORK/coolify-env.widened.sh"
+sed 's/^SET_ALLOWLIST=(\(.*\))$/SET_ALLOWLIST=(\1 SUPABASE_SERVICE_ROLE_KEY)/' \
+  "$COOLIFY_ENV_SH" > "$WIDENED"
+grep -q 'SUPABASE_SERVICE_ROLE_KEY' "$WIDENED" \
+  || { echo "FATAL: SET_ALLOWLIST widening did not apply -- has the array line moved?" >&2; exit 2; }
+COOLIFY_ENV_SH_SAVED="$COOLIFY_ENV_SH"
+COOLIFY_ENV_SH="$WIDENED"
+run_scenario "manifest refusal holds even with a WIDENED SET_ALLOWLIST" 1 ok \
+  set abc123def456ghi789jk01 SUPABASE_SERVICE_ROLE_KEY=x || FAIL=1
+COOLIFY_ENV_SH="$COOLIFY_ENV_SH_SAVED"
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

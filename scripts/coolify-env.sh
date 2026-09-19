@@ -39,27 +39,33 @@
 #   value-origin discipline (operator .env, mint-if-absent, etc.) this
 #   script does not reproduce and must not be extended to reproduce.
 #
-#   No secret value, and no Coolify API token, is ever placed in this
-#   script's own OR the box's on-box process argv, at any point --
-#   BACKLOG.md §7.36 item 25's class ("a credential in a ps-visible argv
-#   on the production box," Sec-ruled BLOCKING at PR #752 C-1). The token
-#   crosses into curl via a `-K <temp-config-file>` directive (file mode
-#   0600 under /root/.pfin/, unlinked in a `finally` immediately after the
-#   call -- never a command-line argument, the #734/#735 pattern already
-#   proven in provision-supabase-stack.sh / push-production-secrets.sh's
-#   own api()), and every request BODY (which, for `set`, carries the env
-#   VALUE) crosses via `--data-binary @-` fed through the subprocess's
-#   stdin pipe -- neither appears in `ps` / `/proc/*/cmdline` on the box.
-#   This is a step PAST push-production-secrets.sh's own api(), which
-#   still puts its JSON body on `-d '<json>'` argv (item 25 named the
-#   TOKEN half of that script's exposure, not the body half -- left
-#   standing there as a separate, smaller-blast-radius gap since that
-#   script's whole job is pushing real secret values and closing it is
-#   that script's own follow-up, not this PR's). Reusing the `-d`-in-argv
-#   shape here, in a script landing specifically to close by-hand secret
-#   handling, would reintroduce item 25's exact defect as new code in the
-#   same PR that removes it from the runbook -- so the bar here is the
-#   full stdin-body pattern from the start, not the partial one.
+#   No secret value, and no Coolify API token, is ever placed in CURL's
+#   argv on either machine -- BACKLOG.md §7.36 item 25's class ("a
+#   credential in a ps-visible argv on the production box," Sec-ruled
+#   BLOCKING at PR #752 C-1). The token crosses into curl via a `-K -`
+#   stdin config directive (never a command-line argument -- the
+#   #734/#735 pattern already proven in push-production-secrets.sh's own
+#   api()), and every request BODY (which, for `set`, carries the env
+#   VALUE) crosses via a 0600 temp file under /root/.pfin/ (unlinked in a
+#   `finally` immediately after the call), read by `--data-binary
+#   @<path>` -- neither the token nor the body ever appears in curl's own
+#   argv, so neither can appear in `ps` / `/proc/*/cmdline` on the box
+#   for curl's invocation, and neither appears in a raised
+#   CalledProcessError's default str(argv) representation either. This is
+#   a step PAST push-production-secrets.sh's own api() on the body half,
+#   which still puts its JSON body on `-d '<json>'` argv (item 25 named
+#   only the TOKEN half of that script's exposure) -- while matching, not
+#   exceeding, that script's own `-K -` convention on the token half.
+#
+#   ⚠ ONE EXPOSURE REMAINS, NAMED RATHER THAN GLOSSED (Sec, PR #825
+#   review, V3): the box-side `python3 - "$TOKEN"` invocations (the
+#   driver script itself, not curl) pass the token as that process's OWN
+#   argv[1], so it IS `ps`-visible on the box for the lifetime of each
+#   call. That is a pre-existing convention copied from
+#   push-production-secrets.sh:606 / provision-supabase-stack.sh:547 /
+#   provision-migrator-app.sh:267, booked against all of them together at
+#   BACKLOG.md §7.36 item 60 so no copy is left as the stale one. It is
+#   NOT closed here, and this header must not be read as claiming it is.
 #
 # WHAT THIS DOES NOT PROTECT
 #   The VALUE half of a `set` argv (`NAME=VALUE` on THIS command's own
@@ -95,17 +101,29 @@ DELETE_ALLOWLIST=(PGRST_DB_SCHEMAS MIGRATOR_DB_USER MIGRATOR_DB_PASSWORD)
 #   --deploy (only meaningful with --apply): after a verified set/delete,
 #   POST /deploy and wait for a terminal state (same 90x4s ceiling as
 #   scripts/provision-migrator-app.sh's own deploy wait) before returning.
+#   ⚠ THIS IS A PRECONDITION WAIT, NOT A SUCCESS CRITERION (Sec, PR #825
+#   review, F7) -- a `finished` deploy means the rebuild completed, never
+#   that the new value reached the running process. The outcome assertion
+#   is --post-check's job (§6.9) or the next runbook step's own
+#   measurement (§6.8 step 7 -> scripts/migrator-cutover-verify.sh leg
+#   10). Same distinction ADR-072 Amendment 6 consequence 3 draws for the
+#   migration path, named here so the two polls are not simplified to
+#   one. If --deploy is given with no --post-check, this script prints a
+#   NOTE rather than silently treating the deploy alone as proof.
 #   --post-check '<cmd>': after a successful (optionally deployed) apply,
 #   run <cmd> via `bash -c` on THIS machine, with BOX_IP, AUTOMATION_KEY
 #   and POST_CHECK_APP_UUID exported for it to use -- this script never
 #   dumps a container's raw `env` itself (that risks carrying OTHER
 #   secrets past this tool's own hygiene boundary, exactly the mistake
 #   docs/deployment-runbook.md §6.9 step 5 warns against by name); the
-#   caller's own command does its own scoped, filtered read, e.g. for
-#   §6.9:
+#   caller's own command does its own scoped, filtered read, INSIDE the
+#   remote command string -- the grep must run ON THE BOX, not after the
+#   ssh hop, or the unfiltered container env (PGRST_DB_URI, the
+#   authenticator password; PGRST_JWT_SECRET) crosses the wire before
+#   it's filtered. E.g. for §6.9:
 #     --post-check 'ssh -o BatchMode=yes -i "$AUTOMATION_KEY" root@"$BOX_IP" \
-#       "docker compose --project-name $POST_CHECK_APP_UUID exec -T rest env" \
-#       | grep "^PGRST_DB_SCHEMAS=" | scripts/ci/fence-pgrst-schemas-live.sh'
+#       "docker compose --project-name $POST_CHECK_APP_UUID exec -T rest env | grep \"^PGRST_DB_SCHEMAS=\"" \
+#       | scripts/ci/fence-pgrst-schemas-live.sh'
 
 set -euo pipefail
 
@@ -228,6 +246,16 @@ with open(sys.argv[1]) as f:
 print("\n".join(sorted(names)))
 PY
 )"
+# POSITIVE CONTROL (Sec, PR #825 review, F2) -- a parseable-but-empty
+# manifest (a renamed top-level key, a reflowed list) would silently void
+# the refusal below rather than fail: is_manifest_secret() returns false
+# for every name over an empty MANIFEST_NAMES, same as a genuinely clean
+# manifest. A missing FILE fails closed already (the command substitution
+# aborts under `set -e`); this catches the parseable-but-wrong-shape case.
+# Anchor on a name this file has carried since v1, whose removal is
+# itself a joint-review event.
+printf '%s\n' "$MANIFEST_NAMES" | grep -qx SUPABASE_SERVICE_ROLE_KEY \
+  || die "secrets-manifest.yml parsed to $(printf '%s\n' "$MANIFEST_NAMES" | grep -c .) name(s) and does NOT contain SUPABASE_SERVICE_ROLE_KEY -- the manifest's shape has changed and this script's refusal cannot be trusted. Fix the parser above (REPO_ROOT=$REPO_ROOT); do not proceed."
 is_manifest_secret() {
   local k="$1"
   printf '%s\n' "$MANIFEST_NAMES" | grep -qx "$k"
@@ -242,17 +270,26 @@ if [[ "$OP" == "set" ]]; then
 fi
 
 # --- Step 3: resolve the application UUID ---------------------------------
-# api() -- identical hardened shape to provision-supabase-stack.sh /
-# push-production-secrets.sh's own 2026-09-11 fix (#734/#735): the token
-# crosses via a `curl -K <tempfile>` directive, a real on-disk file
-# (0600, under /root/.pfin/, unlinked in a `finally`) rather than a `-K -`
-# stdin config -- freeing stdin for the request BODY, which crosses via
-# `--data-binary @-` fed through subprocess `input=`. Neither the token
-# nor the body ever appears in this process's own argv, so neither can
-# appear in `ps` / `/proc/*/cmdline` on the box, and neither appears in a
-# raised CalledProcessError's default str(argv) representation either.
+# api() -- token on `curl -K -` (stdin config, never touches disk --
+# matches push-production-secrets.sh:617's own convention exactly, and
+# is a STRICTER guarantee than a 0600 tempfile: on a SIGKILL or power
+# loss mid-call there is no live token-bearing file left behind). The
+# request BODY (which, for `set`, carries the env value -- non-secret by
+# SET_ALLOWLIST construction, but held to the same discipline regardless)
+# crosses via a 0600 temp file under /root/.pfin/ (unlinked in a
+# `finally` immediately after the call), read by `--data-binary @<path>`
+# -- stdin is single-owner (the token config), so the body cannot also
+# use `@-` and gets the on-disk channel instead (Sec, PR #825 review,
+# F5: "the two are on the wrong sides" against the prior draft, which had
+# this backwards -- token on disk, body on stdin). Neither the token nor
+# the body ever appears in curl's own argv, so neither can appear in
+# `ps` / `/proc/*/cmdline` on the box for curl's invocation, and neither
+# appears in a raised CalledProcessError's default str(argv)
+# representation either. ⚠ This does NOT cover the box-side `python3 -
+# "$TOKEN"` driver invocations below -- see this file's own header
+# ("ONE EXPOSURE REMAINS") and BACKLOG.md §7.36 item 60.
 read -r -d '' PY_API_HELPER <<'PY' || true
-import json, os, subprocess, sys
+import json, os, subprocess, sys, tempfile
 
 def die(msg):
     print(f"FAIL: {msg}", file=sys.stderr)
@@ -261,29 +298,29 @@ def die(msg):
 def api(token, method, path, body=None):
     if '"' in token or "\n" in token:
         die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
-    cfg_path = f"/root/.pfin/.curlcfg.{os.getpid()}.{path.__hash__() & 0xffffff}"
-    old_umask = os.umask(0o077)
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    body_path = None
     try:
-        with open(cfg_path, "w") as f:
-            f.write('header = "Authorization: Bearer ' + token + '"\n')
-            if body is not None:
-                f.write('header = "Content-Type: application/json"\n')
-        cmd = ["curl", "-fsS", "-K", cfg_path, "-X", method]
-        stdin_input = None
+        cmd = ["curl", "-fsS", "-K", "-", "-X", method]
         if body is not None:
-            cmd += ["--data-binary", "@-"]
-            stdin_input = json.dumps(body).encode()
+            config += 'header = "Content-Type: application/json"\n'
+            old_umask = os.umask(0o077)
+            fd, body_path = tempfile.mkstemp(dir="/root/.pfin", prefix=".curlbody.")
+            os.umask(old_umask)
+            with os.fdopen(fd, "wb") as f:
+                f.write(json.dumps(body).encode())
+            cmd += ["--data-binary", f"@{body_path}"]
         cmd += [f"http://localhost:8000/api/v1{path}"]
         try:
-            result = subprocess.run(cmd, input=stdin_input, capture_output=True, check=True)
+            result = subprocess.run(cmd, input=config.encode(), capture_output=True, check=True)
         except subprocess.CalledProcessError as exc:
             die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.decode(errors='replace').strip()[:200]})")
     finally:
-        os.umask(old_umask)
-        try:
-            os.unlink(cfg_path)
-        except OSError:
-            pass
+        if body_path is not None:
+            try:
+                os.unlink(body_path)
+            except OSError:
+                pass
     out = result.stdout.decode()
     return json.loads(out) if out.strip() else None
 PY
@@ -292,23 +329,37 @@ UUID_RE='^[a-z0-9]{20,32}$'
 if [[ "$APP_QUERY" =~ $UUID_RE ]]; then
   APP_UUID="$APP_QUERY"
 else
-  APP_UUID="$(sshx_in <<REMOTE
+  # APP_QUERY is OPERATOR argv, unbounded shape -- crosses via `env` on
+  # the ssh command line (shell-escaped with printf %q), never by direct
+  # heredoc interpolation, so it cannot be locally re-parsed while this
+  # unquoted heredoc is built (Sec, PR #825 review, F4). The heredoc
+  # itself stays unquoted only because $PY_API_HELPER needs local
+  # substitution; $app_query is read from the REMOTE process's own
+  # environment, not from this heredoc's text.
+  APP_QUERY_ENV="app_query=$(printf '%q' "$APP_QUERY")"
+  APP_UUID="$(sshx "env $APP_QUERY_ENV bash -s" <<REMOTE
 set -e
 TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-python3 - "\$TOKEN" "$APP_QUERY" <<'PYEOF'
+python3 - "\$TOKEN" "\$app_query" <<'PYEOF'
 $PY_API_HELPER
 import sys
 token, name = sys.argv[1], sys.argv[2]
 apps = api(token, "GET", "/applications")
 matches = [a for a in apps if a.get("name") == name]
-if not matches:
-    die(f"no application named '{name}' found")
+if len(matches) != 1:
+    die(f"expected exactly one application named '{name}', found {len(matches)}")
 print(matches[0]["uuid"])
 PYEOF
 REMOTE
 )"
 fi
 [[ -n "$APP_UUID" ]] || die "could not resolve application '$APP_QUERY' to a UUID"
+# Re-validate: $APP_UUID may be Coolify API output (the name-resolution
+# branch above) rather than the operator's own UUID-shaped argv -- do not
+# trust it to be metacharacter-free just because it came back non-empty
+# (Sec, PR #825 review, F4). Every heredoc below interpolates $APP_UUID
+# directly; this is what makes that safe.
+[[ "$APP_UUID" =~ $UUID_RE ]] || die "resolved UUID '$APP_UUID' is not uuid-shaped -- refusing to interpolate API output into a remote shell"
 ok "application '$APP_QUERY' -> $APP_UUID"
 
 # --- Step 4: preflight read of current store state -------------------------
@@ -481,6 +532,7 @@ print("FINISHED")
 PYEOF
 REMOTE
   ok "deploy finished"
+  [[ -n "$POST_CHECK" ]] || info "NOTE: --deploy without --post-check -- the deploy finished, but nothing here has observed the new value in the running container. The caller owns that assertion."
 fi
 
 # --- Step 7: optional caller-supplied post-check ----------------------------

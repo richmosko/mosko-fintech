@@ -56,11 +56,21 @@
 #   Enabled    false (the automatic scheduler never fires it; the trigger
 #              always addresses it directly by UUID -- ADR-072 Decision 2)
 #
-# No secret value or API token is ever placed in this script's own OR the
-# box's on-box process argv -- same `-K <temp-config-file>` + stdin-body
-# curl pattern as scripts/coolify-env.sh (BACKLOG.md §7.36 item 25's
-# class). This script's own request bodies (task name/command/container)
-# are none of them secrets, but the token itself always is.
+# No secret value or API token is ever placed in CURL's argv on either
+# machine -- same `-K -` stdin-token + temp-file-body pattern as
+# scripts/coolify-env.sh (BACKLOG.md §7.36 item 25's class). This
+# script's own request bodies (task name/command/container) are none of
+# them secrets, but the token itself always is.
+#
+# ⚠ ONE EXPOSURE REMAINS, NAMED RATHER THAN GLOSSED (Sec, PR #825 review,
+# V3): the box-side `python3 - "$TOKEN"` invocations (the driver script
+# itself, not curl) pass the token as that process's OWN argv[1], so it
+# IS `ps`-visible on the box for the lifetime of each call. That is a
+# pre-existing convention copied from push-production-secrets.sh:606 /
+# provision-supabase-stack.sh:547 / provision-migrator-app.sh:267,
+# booked against all of them together at BACKLOG.md §7.36 item 60 so no
+# copy is left as the stale one. It is NOT closed here, and this header
+# must not be read as claiming it is.
 #
 # USAGE
 #   BOX_IP=<box-ip> scripts/migrator-scheduled-task.sh            # preflight
@@ -127,12 +137,12 @@ sshx true >/dev/null 2>&1 || die "box at $BOX_IP not reachable over SSH with $AU
 sshx 'test -s /root/.pfin/coolify.env' >/dev/null 2>&1 \
   || die "no /root/.pfin/coolify.env on the box -- run scripts/provision-vps.sh --apply first"
 
-# Same hardened api() shape as scripts/coolify-env.sh -- token via a real
-# on-disk `-K <tempfile>` (0600, unlinked in `finally`), request body (if
-# any) via `--data-binary @-` fed through subprocess stdin. Neither ever
-# touches this process's own argv.
+# Same hardened api() shape as scripts/coolify-env.sh -- token on
+# `curl -K -` (stdin config, never touches disk), request body (if any)
+# via a 0600 temp file under /root/.pfin/ (unlinked in `finally`), read
+# by `--data-binary @<path>`. Neither ever touches curl's own argv.
 read -r -d '' PY_API_HELPER <<'PY' || true
-import json, os, subprocess, sys
+import json, os, subprocess, sys, tempfile
 
 def die(msg):
     print(f"FAIL: {msg}", file=sys.stderr)
@@ -141,29 +151,29 @@ def die(msg):
 def api(token, method, path, body=None):
     if '"' in token or "\n" in token:
         die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
-    cfg_path = f"/root/.pfin/.curlcfg.{os.getpid()}.{path.__hash__() & 0xffffff}"
-    old_umask = os.umask(0o077)
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    body_path = None
     try:
-        with open(cfg_path, "w") as f:
-            f.write('header = "Authorization: Bearer ' + token + '"\n')
-            if body is not None:
-                f.write('header = "Content-Type: application/json"\n')
-        cmd = ["curl", "-fsS", "-K", cfg_path, "-X", method]
-        stdin_input = None
+        cmd = ["curl", "-fsS", "-K", "-", "-X", method]
         if body is not None:
-            cmd += ["--data-binary", "@-"]
-            stdin_input = json.dumps(body).encode()
+            config += 'header = "Content-Type: application/json"\n'
+            old_umask = os.umask(0o077)
+            fd, body_path = tempfile.mkstemp(dir="/root/.pfin", prefix=".curlbody.")
+            os.umask(old_umask)
+            with os.fdopen(fd, "wb") as f:
+                f.write(json.dumps(body).encode())
+            cmd += ["--data-binary", f"@{body_path}"]
         cmd += [f"http://localhost:8000/api/v1{path}"]
         try:
-            result = subprocess.run(cmd, input=stdin_input, capture_output=True, check=True)
+            result = subprocess.run(cmd, input=config.encode(), capture_output=True, check=True)
         except subprocess.CalledProcessError as exc:
             die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.decode(errors='replace').strip()[:200]})")
     finally:
-        os.umask(old_umask)
-        try:
-            os.unlink(cfg_path)
-        except OSError:
-            pass
+        if body_path is not None:
+            try:
+                os.unlink(body_path)
+            except OSError:
+                pass
     out = result.stdout.decode()
     return json.loads(out) if out.strip() else None
 
@@ -186,20 +196,36 @@ import sys
 token, name = sys.argv[1], sys.argv[2]
 apps = api(token, "GET", "/applications")
 matches = [a for a in apps if a.get("name") == name]
-if not matches:
-    die(f"no application named '{name}' found -- run scripts/provision-migrator-app.sh --apply first")
+if len(matches) != 1:
+    die(f"expected exactly one application named '{name}', found {len(matches)} -- run scripts/provision-migrator-app.sh --apply first if zero")
 print(matches[0]["uuid"])
 PYEOF
 REMOTE
 )"
 [[ -n "$APP_UUID" ]] || die "could not resolve '$MIGRATOR_APP_NAME' to a UUID"
+# Re-validate: $APP_UUID is Coolify API output, not the operator's own
+# UUID-shaped input -- do not trust it to be metacharacter-free just
+# because it came back non-empty (Sec, PR #825 review, F4, same fix as
+# scripts/coolify-env.sh). Every heredoc below interpolates $APP_UUID
+# directly; this is what makes that safe.
+UUID_RE='^[a-z0-9]{20,32}$'
+[[ "$APP_UUID" =~ $UUID_RE ]] || die "resolved UUID '$APP_UUID' is not uuid-shaped -- refusing to interpolate API output into a remote shell"
 ok "application '$MIGRATOR_APP_NAME' -> $APP_UUID"
 
+# $TASK_COMMAND is FILE-derived (read from provision-vps.sh), unbounded
+# shape -- crosses via `env` on the ssh command line (shell-escaped with
+# printf %q), never by direct heredoc interpolation, so a future
+# metacharacter in that literal cannot be locally re-parsed while this
+# unquoted heredoc is built (Sec, PR #825 review, F4). TASK_NAME/
+# TASK_CONTAINER are this script's own fixed literals, not operator/file
+# input, and stay interpolated directly.
+TASK_COMMAND_ENV="task_command=$(printf '%q' "$TASK_COMMAND")"
+
 step "Checking for an existing '$TASK_NAME' Scheduled Task"
-CHECK_OUT="$(sshx_in <<REMOTE
+CHECK_OUT="$(sshx "env $TASK_COMMAND_ENV bash -s" <<REMOTE
 set -e
 TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-python3 - "\$TOKEN" "$APP_UUID" "$TASK_NAME" "$TASK_CONTAINER" "$TASK_COMMAND" <<'PYEOF'
+python3 - "\$TOKEN" "$APP_UUID" "$TASK_NAME" "$TASK_CONTAINER" "\$task_command" <<'PYEOF'
 $PY_API_HELPER
 import sys
 token, app_uuid, name, container, command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
@@ -208,6 +234,8 @@ matches = [t for t in tasks if t.get("name") == name]
 if not matches:
     print("ABSENT")
     sys.exit(0)
+if len(matches) > 1:
+    die(f"found {len(matches)} Scheduled Tasks named '{name}' -- ambiguous, refusing to guess which one is authoritative. Resolve by hand (Coolify dashboard) before re-running.")
 t = matches[0]
 mismatches = []
 if strip_ws(str(t.get("command", ""))) != strip_ws(command):
@@ -247,10 +275,10 @@ else
   fi
 
   step "Creating '$TASK_NAME'"
-  TASK_UUID="$(sshx_in <<REMOTE
+  TASK_UUID="$(sshx "env $TASK_COMMAND_ENV bash -s" <<REMOTE
 set -e
 TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-python3 - "\$TOKEN" "$APP_UUID" "$TASK_NAME" "$TASK_CONTAINER" "$TASK_COMMAND" "$TASK_FREQUENCY" <<'PYEOF'
+python3 - "\$TOKEN" "$APP_UUID" "$TASK_NAME" "$TASK_CONTAINER" "\$task_command" "$TASK_FREQUENCY" <<'PYEOF'
 $PY_API_HELPER
 import sys
 token, app_uuid, name, container, command, frequency = sys.argv[1:7]
@@ -267,8 +295,8 @@ created = api(token, "POST", f"/applications/{app_uuid}/scheduled-tasks", {
 # declaring success -- do not trust the create response alone.
 tasks = api(token, "GET", f"/applications/{app_uuid}/scheduled-tasks")
 matches = [t for t in tasks if t.get("name") == name]
-if not matches:
-    die("task creation returned success but a re-list does not show it")
+if len(matches) != 1:
+    die(f"expected exactly one Scheduled Task named '{name}' after creation, found {len(matches)}")
 t = matches[0]
 if strip_ws(str(t.get("command", ""))) != strip_ws(command):
     die(f"post-create read-back MISMATCH on command: live={t.get('command')!r} want={command!r}")
