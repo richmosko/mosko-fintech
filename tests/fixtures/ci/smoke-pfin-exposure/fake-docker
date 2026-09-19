@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# fake-docker -- offline stand-in for `docker`, used by
+# scripts/ci/fence-smoke-pfin-exposure-strikes.sh. Never actually runs
+# scripts/smoke-pfin-exposure.sh's node one-liner -- returns a canned
+# "STATUS CODE" line selected by $FAKE_DOCKER_MODE, matching the exact
+# output shape the real node one-liner prints (`console.log(status+" "+code)`).
+
+set -euo pipefail
+
+if [[ "$*" == *"ps"* && "$*" == *"status=running"* ]]; then
+  echo "app-abc123def456ghi789jk01-000000000000"
+  exit 0
+fi
+
+if [[ "$*" == *"exec"* ]]; then
+  case "${FAKE_DOCKER_MODE:-anon-pass}" in
+    anon-pass)         echo "401 42501" ;;
+    anon-fail-200)      echo "200 " ;;
+    anon-fail-pgrst106) echo "406 PGRST106" ;;
+    anon-fail-3f000)    echo "401 3F000" ;;
+    jwt-pass)          echo "200 " ;;
+    jwt-fail)          echo "401 42501" ;;
+    *) echo "999 UNKNOWN_MODE" ;;
+  esac
+  exit 0
+fi
+
+exit 0

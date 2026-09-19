@@ -9,7 +9,8 @@
 # responses -- deploy-app.sh itself is never modified or made aware this
 # exists). Same strike shape as scripts/ci/fence-coolify-env-strikes.sh.
 #
-# Proves the ONE claim deploy-app.sh's header makes about its own safety:
+# Proves the TWO claims deploy-app.sh's header makes about its own safety
+# (the identity guard, and the --require-env names-only presence guard):
 #   1. MATCH -- a resolved application whose base_directory equals the
 #      caller's --expect-base-directory proceeds through preflight AND
 #      (in --apply) through a full deploy+poll to "finished".
@@ -23,6 +24,9 @@
 #   3. MISMATCH-WITH-APPLY -- same refusal holds when --apply IS given
 #      (the guard fires before the deploy branch is reached at all, not
 #      merely under the lighter preflight code path).
+#   4. REQUIRE-ENV-MATCH -- all required names present -> passes.
+#   5. REQUIRE-ENV-MISSING -- one required name absent -> refuses, same
+#      before-any-/deploy-call proof as scenarios 2/3.
 #
 # Exit 0 only if all three scenarios behave exactly as specified above.
 
@@ -132,6 +136,31 @@ run_scenario "match: preflight passes" 0 match \
 # 2. MATCH -- --apply drives a full deploy+poll to a running container.
 run_scenario "match: --apply deploys clean" 0 match \
   pfin-app --expect-base-directory /api --apply >/dev/null || FAIL=1
+
+# 2b. MATCH + --require-env, all three present -- preflight passes.
+run_scenario "match: --require-env passes when all names present" 0 match \
+  pfin-app --expect-base-directory /api \
+  --require-env PUBLIC_SUPABASE_URL,PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY >/dev/null || FAIL=1
+
+# 2c. MISSING-ENV -- base_directory matches, but one required name is
+#     absent from the env store -- must refuse BEFORE any /deploy call,
+#     same vacuous-refusal check as the identity-guard scenarios below.
+MISSING_ENV_LOG="$(run_scenario "missing-env: --require-env refuses" 1 missing-env \
+  pfin-app --expect-base-directory /api \
+  --require-env PUBLIC_SUPABASE_URL,PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY)" || FAIL=1
+if [[ -n "${MISSING_ENV_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$MISSING_ENV_LOG" 2>/dev/null; then
+  echo "FAIL: [missing-env: --require-env refuses] the required-env guard did NOT prevent a /deploy call -- vacuous refusal." >&2
+  FAIL=1
+fi
+
+# 2d. MISSING-ENV-WITH-APPLY -- same refusal holds with --apply given.
+MISSING_ENV_APPLY_LOG="$(run_scenario "missing-env: --require-env refuses even with --apply" 1 missing-env \
+  pfin-app --expect-base-directory /api --apply \
+  --require-env PUBLIC_SUPABASE_URL,PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY)" || FAIL=1
+if [[ -n "${MISSING_ENV_APPLY_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$MISSING_ENV_APPLY_LOG" 2>/dev/null; then
+  echo "FAIL: [missing-env: --require-env refuses even with --apply] the required-env guard did NOT prevent a /deploy call -- vacuous refusal." >&2
+  FAIL=1
+fi
 
 # 3. MISMATCH -- preflight refuses, and the deploy endpoint is NEVER hit.
 MISMATCH_LOG="$(run_scenario "mismatch: preflight refuses" 1 mismatch \

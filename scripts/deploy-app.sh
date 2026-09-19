@@ -48,11 +48,23 @@
 #   §7.36 item 60).
 #
 # USAGE
-#   BOX_IP=<box-ip> scripts/deploy-app.sh <APP_NAME|uuid> --expect-base-directory <dir> [--apply] [--health-path </path>]
+#   BOX_IP=<box-ip> scripts/deploy-app.sh <APP_NAME|uuid> --expect-base-directory <dir> [--require-env NAME[,NAME...]] [--apply] [--health-path </path>]
 #
 #   Without --apply: preflight only -- resolves the app, prints its
-#   current name/base_directory/fqdn, asserts the identity guard, writes
-#   nothing, deploys nothing.
+#   current name/base_directory/fqdn, asserts the identity guard AND (if
+#   given) the required-env-names guard below, writes nothing, deploys
+#   nothing.
+#   --require-env NAME[,NAME...]: a names-only presence check against the
+#   resolved application's OWN Coolify env store (GET
+#   /applications/<uuid>/envs, keys only -- no value is ever read,
+#   printed, or compared) -- refuses (before any /deploy call, in BOTH
+#   preflight and --apply) if any named key is absent. This is the guard
+#   against deploying a container that will throw at its first request
+#   for a missing required env var (docs/deployment-runbook.md §7.1 step
+#   1 uses this for PUBLIC_SUPABASE_URL / PUBLIC_SUPABASE_ANON_KEY /
+#   SUPABASE_SERVICE_ROLE_KEY, run AFTER scripts/mint-supabase-jwt-keys.sh
+#   has propagated the real anon/service-role values onto the app
+#   resource) -- generic across any application, not app-specific code.
 #   --apply: deploys for real (POST /deploy, wait for terminal state),
 #   then reads back the resulting container's RUNNING state on the box.
 #   --health-path <path>: after a successful deploy, also curl this path
@@ -66,8 +78,9 @@
 # EXIT CODES
 #   0  clean run (preflight or --apply)
 #   1  a real failure (missing BOX_IP, unreachable box, resource not
-#      found, identity-guard mismatch, deploy failed, no running
-#      container after a 'finished' deploy, Coolify API error)
+#      found, identity-guard mismatch, a required env name absent,
+#      deploy failed, no running container after a 'finished' deploy,
+#      Coolify API error)
 
 set -euo pipefail
 
@@ -79,15 +92,17 @@ ok()   { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
 info() { printf '      %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
-[[ $# -ge 1 ]] || die "usage: $0 <APP_NAME|uuid> --expect-base-directory <dir> [--apply] [--health-path </path>]"
+[[ $# -ge 1 ]] || die "usage: $0 <APP_NAME|uuid> --expect-base-directory <dir> [--require-env NAME[,NAME...]] [--apply] [--health-path </path>]"
 APP_QUERY="$1"; shift
 
 EXPECT_BASE_DIR=""
+REQUIRE_ENV_RAW=""
 APPLY=0
 HEALTH_PATH=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --expect-base-directory) [[ $# -ge 2 ]] || die "--expect-base-directory requires an argument"; EXPECT_BASE_DIR="$2"; shift 2 ;;
+    --require-env) [[ $# -ge 2 ]] || die "--require-env requires an argument"; REQUIRE_ENV_RAW="$2"; shift 2 ;;
     --apply) APPLY=1; shift ;;
     --health-path) [[ $# -ge 2 ]] || die "--health-path requires an argument"; HEALTH_PATH="$2"; shift 2 ;;
     --*) die "unknown flag: $1" ;;
@@ -164,6 +179,37 @@ ok "resolved '$APP_QUERY' -> $APP_UUID (name=$APP_NAME_LIVE, base_directory=$APP
 [[ "$APP_BASE_DIR_LIVE" == "$EXPECT_BASE_DIR" ]] \
   || die "IDENTITY GUARD FAILED: resolved application '$APP_NAME_LIVE' ($APP_UUID) has base_directory='$APP_BASE_DIR_LIVE', expected '$EXPECT_BASE_DIR' -- refusing to deploy a resource that does not match what the caller expects. This is the exact failure class this script exists to catch (a typo'd/stale name resolving to the wrong application)."
 ok "identity guard passed: base_directory matches '$EXPECT_BASE_DIR'"
+
+# --- Step 2.5: required-env-names guard (names only, no values read) -------
+if [[ -n "$REQUIRE_ENV_RAW" ]]; then
+  step "Required env-name presence check"
+  REQUIRE_ENV_LIST="$(tr ',' ' ' <<<"$REQUIRE_ENV_RAW")"
+  set +e
+  ENV_CHECK_OUT="$(sshx_in <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "$APP_UUID" "$REQUIRE_ENV_LIST" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, app_uuid, required_s = sys.argv[1], sys.argv[2], sys.argv[3]
+required = required_s.split()
+envs = api(token, "GET", f"/applications/{app_uuid}/envs")
+present = {e["key"] for e in envs if not e.get("is_preview", False)}
+missing = [n for n in required if n not in present]
+for n in required:
+    print(f"{n}: {'PRESENT' if n not in missing else 'MISSING'}")
+if missing:
+    sys.exit(1)
+PYEOF
+REMOTE
+)"
+  ENV_CHECK_RC=$?
+  set -e
+  printf '%s\n' "$ENV_CHECK_OUT" | while IFS= read -r line; do info "$line"; done
+  [[ $ENV_CHECK_RC -eq 0 ]] \
+    || die "REQUIRED-ENV GUARD FAILED: one or more of [$REQUIRE_ENV_LIST] is absent from '$APP_NAME_LIVE' ($APP_UUID)'s env store -- refusing to deploy a container that will throw at its first request for a missing env var. Run whatever step is supposed to have set it (see the caller's own procedure) before retrying."
+  ok "required env names present: $REQUIRE_ENV_LIST"
+fi
 
 if [[ $APPLY -eq 0 ]]; then
   printf '\n\033[33mPREFLIGHT ONLY.\033[0m Nothing deployed. Re-run with --apply to execute.\n'

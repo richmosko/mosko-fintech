@@ -2646,6 +2646,23 @@ jobs:
       - name: offline strike-proofs (identity-guard match / mismatch, pre- and post-deploy)
         run: bash scripts/ci/fence-deploy-app-strikes.sh
 
+  fence-smoke-pfin-exposure-strikes:
+    name: smoke-pfin-exposure.sh — anon-vs-jwt mode-classification strike-proofs
+    runs-on: ubuntu-latest
+    # Unlabeled, same posture as the sibling fences above. DevOps-owned.
+    # scripts/smoke-pfin-exposure.sh (BACKLOG.md §7.36 item 64's standing
+    # smoke, reused at docs/deployment-runbook.md §7.1 step 1(vi)) has two
+    # modes with DIFFERENT expected outcomes (anon-bearer 401/42501 vs.
+    # --jwt 200) that must not accept each other's success shape --
+    # scripts/ci/fence-smoke-pfin-exposure-strikes.sh proves a 200 in
+    # anon-mode is treated as a security-anomaly FAILURE, not a pass, and
+    # a 401 in jwt-mode fails even though the identical status would pass
+    # in anon-mode. Offline via a PATH-shadowed fake ssh/curl/docker.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (anon-pass, anon-fail x3, jwt-pass, jwt-fail)
+        run: bash scripts/ci/fence-smoke-pfin-exposure-strikes.sh
+
   fence-migrator-orchestrate-strikes:
     name: migrator-orchestrate.sh — deploy-then-execute strike-proofs (BACKLOG §7.36 item 59)
     runs-on: ubuntu-latest

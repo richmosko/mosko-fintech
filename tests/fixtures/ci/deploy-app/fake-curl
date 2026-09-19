@@ -14,12 +14,18 @@
 # deploy attempt, not merely report the mismatch after the fact.
 #
 # Behaviour selected by $FAKE_CURL_MODE:
-#   match    -- GET /applications returns one app with base_directory
-#               "/api" (matches the strike's --expect-base-directory),
-#               deploy succeeds, deployment status "finished".
-#   mismatch -- GET /applications returns base_directory "/wrong" --
-#               deploy-app.sh's identity guard must die() before any
-#               /deploy call is ever made.
+#   match       -- GET /applications returns one app with base_directory
+#                  "/api" (matches the strike's --expect-base-directory),
+#                  GET .../envs returns all three names the require-env
+#                  strike checks for, deploy succeeds, deployment status
+#                  "finished".
+#   mismatch    -- GET /applications returns base_directory "/wrong" --
+#                  deploy-app.sh's identity guard must die() before any
+#                  /deploy call is ever made.
+#   missing-env -- base_directory matches ("/api"), but GET .../envs
+#                  omits one required name -- deploy-app.sh's
+#                  required-env-names guard must die() before any
+#                  /deploy call is ever made.
 
 set -euo pipefail
 
@@ -39,6 +45,17 @@ BASE_DIR="/api"
 
 if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
   printf '[{"uuid":"abc123def456ghi789jk01","name":"pfin-app","base_directory":"%s","fqdn":"http://test.example.sslip.io"}]' "$BASE_DIR"
+  exit 0
+fi
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/envs" ]]; then
+  if [[ "${FAKE_CURL_MODE:-match}" == "missing-env" ]]; then
+    # Omits SUPABASE_SERVICE_ROLE_KEY -- the strike checks all three are
+    # required and this one is deliberately absent.
+    echo '[{"key":"PUBLIC_SUPABASE_URL","value":"http://api-gw:8000","is_preview":false},{"key":"PUBLIC_SUPABASE_ANON_KEY","value":"x","is_preview":false}]'
+  else
+    echo '[{"key":"PUBLIC_SUPABASE_URL","value":"http://api-gw:8000","is_preview":false},{"key":"PUBLIC_SUPABASE_ANON_KEY","value":"x","is_preview":false},{"key":"SUPABASE_SERVICE_ROLE_KEY","value":"y","is_preview":false}]'
+  fi
   exit 0
 fi
 
