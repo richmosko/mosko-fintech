@@ -2565,6 +2565,26 @@ jobs:
           print(f"OK: active, last run {a:.1f}d ago (max {max_gap}d).")
           PY
 
+  fence-coolify-env-strikes:
+    name: coolify-env — set/delete allowlist + read-back strike-proofs
+    runs-on: ubuntu-latest
+    # Unlabeled (not in .github/required-contexts.tsv) -- same posture as
+    # fence-migrator-bind / fence-datastore-bind / fence-pgrst-schemas-pfin
+    # at the time this job landed (BACKLOG.md §7.36 item 25's own
+    # addendum names this gap; not this job's to close). DevOps-owned.
+    # scripts/coolify-env.sh (set/delete on a committed non-secret
+    # allowlist, replacing docs/deployment-runbook.md §6.8/§6.9's by-hand
+    # Coolify UI steps) is entirely offline-testable via
+    # scripts/ci/fence-coolify-env-strikes.sh, which fakes `ssh`/`curl`
+    # rather than requiring a live box -- see that script's own header for
+    # what each of the three strikes proves and why an earlier draft of
+    # its own fixture was silently vacuous (caught by an inversion strike
+    # against the fixture itself, not against coolify-env.sh).
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (allowlist refusal, read-back mismatch, blanked-not-deleted)
+        run: bash scripts/ci/fence-coolify-env-strikes.sh
+
   required-unfiltered:
     name: required-unfiltered — required contexts cannot be skipped
     runs-on: ubuntu-latest
