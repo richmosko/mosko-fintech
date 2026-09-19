@@ -84,6 +84,16 @@ AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
 die()  { printf '\n\033[31mFAIL\033[0m  %s\n' "$*" >&2; exit 1; }
 info() { printf '      %s\n' "$*"; }
 
+# Shape-guard for any .env-derived value that gets interpolated into a REMOTE
+# shell below. Same control, same refusal wording as
+# scripts/migrator-cutover-verify.sh:147-149, scripts/coolify-env.sh:362 and
+# scripts/migrator-scheduled-task.sh:212 (Sec, PR #825 review, F4). Both UUIDs
+# arrive from .env, written there UNVALIDATED from the Coolify API by
+# record-coolify-uuids.sh -- without this guard a value carrying shell
+# metacharacters reaches `ssh root@$BOX_IP "... --project-name $VALUE ..."`
+# whole, and the remote shell evaluates it as root.
+UUID_RE='^[a-z0-9]{20,32}$'
+
 read_env_var() { grep -m1 "^$1=" "$REPO_ROOT/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r\n' || true; }
 
 AS_ROLE="supabase_admin"
@@ -120,6 +130,7 @@ if [[ $MIGRATOR_URL -eq 1 ]]; then
   # MIGRATOR_SERVICE_UUID. See the header's "TWO DIFFERENT UUIDs" note.
   MIGRATOR_SERVICE_UUID="$(read_env_var MIGRATOR_SERVICE_UUID)"
   [[ -n "$MIGRATOR_SERVICE_UUID" ]] || die "MIGRATOR_SERVICE_UUID not set in .env — run scripts/record-coolify-uuids.sh --apply first (queries the Coolify API by resource name), or set it by hand"
+  [[ "$MIGRATOR_SERVICE_UUID" =~ $UUID_RE ]] || die "MIGRATOR_SERVICE_UUID ('$MIGRATOR_SERVICE_UUID') is not uuid-shaped -- refusing to interpolate API-derived .env output into a remote shell"
   CMD=(ssh -t "root@$BOX_IP" "docker compose --project-name $MIGRATOR_SERVICE_UUID exec -T migrator sh -c \"echo \\\$PROD_DB_URL\"")
   if [[ $PRINT_ONLY -eq 1 ]]; then
     printf '%s\n' "${CMD[*]}"
@@ -140,6 +151,7 @@ esac
 # (live finding, 2026-09-19, §6.8 step 5).
 SUPABASE_STACK_UUID="$(read_env_var SUPABASE_STACK_UUID)"
 [[ -n "$SUPABASE_STACK_UUID" ]] || die "SUPABASE_STACK_UUID not set in .env — run scripts/record-coolify-uuids.sh --apply first (queries the Coolify API by resource name), or set it by hand"
+[[ "$SUPABASE_STACK_UUID" =~ $UUID_RE ]] || die "SUPABASE_STACK_UUID ('$SUPABASE_STACK_UUID') is not uuid-shaped -- refusing to interpolate API-derived .env output into a remote shell"
 
 CMD=(ssh -t "root@$BOX_IP" "docker compose --project-name $SUPABASE_STACK_UUID exec -it db psql -U $AS_ROLE -d postgres")
 

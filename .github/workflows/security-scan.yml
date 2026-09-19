@@ -2603,7 +2603,7 @@ jobs:
         run: |
           set +e
           SCRATCH="$(mktemp -d)"
-          printf 'BOX_IP=1.2.3.4\nMIGRATOR_SERVICE_UUID=notthestack\n' > "$SCRATCH/.env"
+          printf 'BOX_IP=1.2.3.4\nMIGRATOR_SERVICE_UUID=aaaanotthestackaaaaaaaaa\n' > "$SCRATCH/.env"
           out="$(REPO_ROOT="$SCRATCH" bash scripts/db-shell.sh --as supabase_admin --print 2>&1)"
           rc=$?
           rm -rf "$SCRATCH"
@@ -2622,28 +2622,58 @@ jobs:
       - name: "SUPABASE_STACK_UUID present -- --as resolves it, not MIGRATOR_SERVICE_UUID (expects exit 0, correct uuid in output)"
         # Positive control for the strike above -- proves the fix actually
         # routes to the new variable, not just that the old path was
-        # removed. Two DIFFERENT uuid values in the fixture .env makes a
-        # silent fall-back-to-the-wrong-one defect visible as a grep miss.
+        # removed. Two DIFFERENT uuid-shaped values in the fixture .env
+        # makes a silent fall-back-to-the-wrong-one defect visible as a
+        # grep miss.
         run: |
+          set +e
           SCRATCH="$(mktemp -d)"
-          printf 'BOX_IP=1.2.3.4\nMIGRATOR_SERVICE_UUID=notthestack\nSUPABASE_STACK_UUID=stackuuid456\n' > "$SCRATCH/.env"
+          printf 'BOX_IP=1.2.3.4\nMIGRATOR_SERVICE_UUID=aaaanotthestackaaaaaaaaa\nSUPABASE_STACK_UUID=bbbbstackuuid456bbbbbbbb\n' > "$SCRATCH/.env"
           out="$(REPO_ROOT="$SCRATCH" bash scripts/db-shell.sh --as supabase_admin --print)"
           rc=$?
           rm -rf "$SCRATCH"
+          set -e
           echo "$out"
           if [ "$rc" -ne 0 ]; then
             echo "FATAL: expected exit 0 with both uuids present, got $rc."
             exit 1
           fi
-          if ! echo "$out" | grep -q 'stackuuid456'; then
-            echo "FATAL: printed command does not contain SUPABASE_STACK_UUID's value (stackuuid456) -- failing closed."
+          if ! echo "$out" | grep -q 'bbbbstackuuid456bbbbbbbb'; then
+            echo "FATAL: printed command does not contain SUPABASE_STACK_UUID's value -- failing closed."
             exit 1
           fi
-          if echo "$out" | grep -q 'notthestack'; then
-            echo "FATAL: printed command contains MIGRATOR_SERVICE_UUID's value (notthestack) -- --as must never resolve the migrator application's uuid for the db service."
+          if echo "$out" | grep -q 'aaaanotthestackaaaaaaaaa'; then
+            echo "FATAL: printed command contains MIGRATOR_SERVICE_UUID's value -- --as must never resolve the migrator application's uuid for the db service."
             exit 1
           fi
           echo "OK: db-shell.sh --as resolves SUPABASE_STACK_UUID, not MIGRATOR_SERVICE_UUID (exit $rc)."
+
+      - name: "non-uuid-shaped SUPABASE_STACK_UUID is REFUSED (shell-metachar injection into the remote command)"
+        # Sec F1, PR #828 review: SUPABASE_STACK_UUID and MIGRATOR_SERVICE_UUID
+        # arrive from .env, written there UNVALIDATED from the Coolify API by
+        # record-coolify-uuids.sh, and are interpolated into a REMOTE ssh
+        # command. Demonstrated: a value carrying shell metacharacters
+        # renders whole into that command and is evaluated by the remote
+        # shell as root. UUID_RE in db-shell.sh is the guard; this leg
+        # proves it fires before any ssh is attempted.
+        run: |
+          set +e
+          SCRATCH="$(mktemp -d)"
+          printf 'BOX_IP=1.2.3.4\nSUPABASE_STACK_UUID=x; id > /tmp/pwned; echo y\n' > "$SCRATCH/.env"
+          out="$(REPO_ROOT="$SCRATCH" bash scripts/db-shell.sh --as supabase_admin --print 2>&1)"
+          rc=$?
+          rm -rf "$SCRATCH"
+          set -e
+          echo "$out"
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: a SUPABASE_STACK_UUID carrying shell metacharacters was accepted -- it would be interpolated whole into 'ssh root@<box> \"docker compose --project-name <value> ...\"' and evaluated by the remote shell as root."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'not uuid-shaped'; then
+            echo "FATAL: refused, but not on the shape predicate -- the refusal must come from UUID_RE, not from some unrelated failure."
+            exit 1
+          fi
+          echo "OK: non-uuid-shaped SUPABASE_STACK_UUID refused before any ssh (exit $rc)."
 
   required-unfiltered:
     name: required-unfiltered — required contexts cannot be skipped
