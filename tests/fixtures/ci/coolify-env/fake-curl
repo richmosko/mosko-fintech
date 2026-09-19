@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-coolify-env-strikes.sh to drive scripts/coolify-env.sh's
+# remote python driver against CANNED Coolify API responses instead of a
+# live box. Selected by PATH precedence inside the fence's fake `ssh`
+# wrapper -- coolify-env.sh itself is never modified to know this exists.
+#
+# Logs its OWN ARGV (never the -K config FILE's contents, which is exactly
+# the distinction the strike-proof cares about: coolify-env.sh's api()
+# passes the token via a `-K <tempfile>` directive, never a `-H` argv
+# element) to $FAKE_CURL_LOG, so the fence can assert the fake token string
+# never appears there.
+#
+# Behaviour selected by $FAKE_CURL_MODE:
+#   mismatch -- GET .../envs (any call) returns a value that will never
+#               equal whatever coolify-env.sh just PATCHed, so its own
+#               byte-exact read-back assertion must fail.
+#   blanked  -- GET .../envs (any call, before or after a DELETE) still
+#               shows the target key present, so coolify-env.sh's own
+#               absence assertion must fail (the "blanked, not deleted"
+#               shape docs/deployment-runbook.md §6.8 step 10 names).
+#   ok       -- canned success responses throughout (happy path).
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+METHOD="GET"
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  prev="$a"
+done
+URL="${*: -1}"
+
+case "${FAKE_CURL_MODE:-ok}" in
+  mismatch)
+    if [[ "$METHOD" == "GET" && "$URL" == *"/envs" ]]; then
+      echo '[{"key":"PGRST_DB_SCHEMAS","value":"WRONG_VALUE","is_preview":false,"uuid":"env-uuid-1"}]'
+      exit 0
+    fi
+    if [[ "$URL" == *"/envs/bulk"* ]]; then
+      echo '{"message":"ok"}'
+      exit 0
+    fi
+    ;;
+  blanked)
+    if [[ "$METHOD" == "GET" && "$URL" == *"/envs" ]]; then
+      echo '[{"key":"MIGRATOR_DB_USER","value":"x","is_preview":false,"uuid":"env-uuid-2"}]'
+      exit 0
+    fi
+    if [[ "$METHOD" == "DELETE" && "$URL" == *"/envs/"* ]]; then
+      echo '{"message":"Environment variable deleted."}'
+      exit 0
+    fi
+    ;;
+  ok)
+    if [[ "$METHOD" == "GET" && "$URL" == *"/envs" ]]; then
+      echo '[]'
+      exit 0
+    fi
+    echo '{"message":"ok"}'
+    exit 0
+    ;;
+esac
+
+echo '{}'
+exit 0
