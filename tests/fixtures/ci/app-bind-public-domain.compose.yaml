@@ -17,3 +17,10 @@ services:
       - "3000"
     environment:
       SERVICE_FQDN_APP: ${SERVICE_FQDN_APP}
+    networks:
+      - default
+
+networks:
+  default:
+    name: ${APP_STACK_NETWORK_NAME:?APP_STACK_NETWORK_NAME must be set}
+    external: true

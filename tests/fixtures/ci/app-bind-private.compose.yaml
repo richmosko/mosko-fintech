@@ -4,9 +4,12 @@
 #
 # Proves fence-app-private-bind does NOT false-positive the correct shape:
 # no `ports:`, no proxy Domain / Traefik Host() label / Coolify
-# SERVICE_FQDN magic, no network_mode: host. `expose:` IS present, and is
-# NOT a violation here (unlike the migrator's zero-tolerance fence).
-# Mirrors the real api/docker-compose.yaml shape. Exercised in
+# SERVICE_FQDN magic, no network_mode: host, and the top-level external-
+# network reference is exactly ${APP_STACK_NETWORK_NAME:?...} (vector 4).
+# `expose:` IS present, and is NOT a violation here (unlike the migrator's
+# zero-tolerance fence). Mirrors the real api/docker-compose.yaml shape,
+# including its two `networks:` keys (service-level list form + the
+# top-level external-network definition vector 4 inspects). Exercised in
 # production-mode (expects exit 0) by the fence-app-bind CI job.
 
 services:
@@ -20,6 +23,9 @@ services:
     environment:
       PUBLIC_SUPABASE_URL: ${PUBLIC_SUPABASE_URL}
     networks:
-      default:
-        name: some-stack-network
-        external: true
+      - default
+
+networks:
+  default:
+    name: ${APP_STACK_NETWORK_NAME:?APP_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name.}
+    external: true

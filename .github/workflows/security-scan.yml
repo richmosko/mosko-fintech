@@ -1960,7 +1960,24 @@ jobs:
           fi
           echo "OK: app-bind fence caught network_mode: host via its own token (exit $rc)."
 
-      - name: "Inversion — golden 4: sentinel absent (expects structural refusal, exit 2)"
+      - name: "Inversion — golden 4: foreign/mistyped external-network reference (expects violation, exit 1, vector-4 token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-foreign-network.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: app-bind fence expected exit 1 on the foreign-network golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 4:'; then
+            echo "FATAL: the foreign-network golden exited 1 but no vector-4 token is present — failing closed."
+            exit 1
+          fi
+          echo "OK: app-bind fence caught a mistyped/foreign external-network reference via its own token (exit $rc)."
+
+      - name: "Inversion — golden 5: sentinel absent (expects structural refusal, exit 2)"
         run: |
           set +e
           out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-no-sentinel.compose.yaml 2>&1)"
@@ -1977,7 +1994,7 @@ jobs:
           fi
           echo "OK: fence refused a file with no confirmed app-application sentinel, failing closed (exit $rc)."
 
-      - name: "Inversion — golden 5: ports: key with zero value lines (expects structural refusal, exit 2)"
+      - name: "Inversion — golden 6: ports: key with zero value lines (expects structural refusal, exit 2)"
         run: |
           set +e
           out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-ports-empty-block.compose.yaml 2>&1)"

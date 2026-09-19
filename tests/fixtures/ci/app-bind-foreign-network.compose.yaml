@@ -1,0 +1,28 @@
+# fence-app-private-bind: target
+# GOLDEN FIXTURE — VECTOR 4 (top-level networks.default.name references a
+# mistyped/foreign/literal network name, NOT ${APP_STACK_NETWORK_NAME:?...}
+# → fence FAILS, exit 1).
+#
+# Otherwise clean (no ports:, no proxy Domain, no network_mode: host) so
+# this fixture isolates vector 4 alone. Proves the fence catches a
+# config-lint-shaped misattachment BEFORE it ever reaches a live deploy:
+# a hardcoded network name, or a variable that happens to resolve to some
+# OTHER resource's network, would otherwise pass this fence cleanly while
+# attaching `app` to the wrong Docker network entirely. Exercised by the
+# fence-app-bind CI job, asserting exit 1 AND the vector-4 token.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3000"
+    networks:
+      - default
+
+networks:
+  default:
+    name: some-other-resources-network
+    external: true

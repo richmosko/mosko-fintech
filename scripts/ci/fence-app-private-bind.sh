@@ -51,6 +51,17 @@
 # │   `expose:` IS PERMITTED and EXPECTED — not checked by this fence at    │
 # │   all, unlike the migrator's fence (which forbids it outright).         │
 # │                                                                          │
+# │ ALSO ENFORCED — vector 4 (Sec, PR #833 joint review, via team-lead):    │
+# │   the top-level `networks.default.name` MUST reference EXACTLY          │
+# │   `${APP_STACK_NETWORK_NAME:?...}` — never a literal network name and   │
+# │   never a different variable. Permitting `expose:` + a Domain leaves    │
+# │   only two OTHER predicates (ports:, host-network); without this        │
+# │   fourth one, a mistyped/foreign attachment (a hardcoded network name,  │
+# │   or a variable that happens to resolve to some OTHER resource's        │
+# │   network) would pass this fence cleanly while attaching `app` to the   │
+# │   wrong Docker network entirely — a config-lint gap this predicate      │
+# │   closes structurally, before it ever reaches a live deploy.            │
+# │                                                                          │
 # │ This fence covers the COMMITTED-CONFIG exposure vector ONLY — a UI-     │
 # │ added Domain or a UI-toggled published port is invisible to a compose-  │
 # │ file grep; that vector needs a live/deploy-time check, not this one     │
@@ -70,6 +81,18 @@
 # Domain request; `network_mode: host`) — same structural fail-closed
 # guards, same discipline, different sentinel and subject.
 #
+# VECTOR-4 PREDICATE (external-network reference, this fence's own —
+# fence-migrator-private-bind.sh has no equivalent, since the migrator's
+# network name has no fixed variable-name contract the way `app`'s does):
+#   1. Locate the top-level `networks:` key (column 0) and everything after
+#      it in the file.
+#   2. No top-level `networks:` key at all, or no `name:` line inside it ->
+#      exit 2 (structural, fail closed — cannot confirm the reference).
+#   3. The `name:` line's value must contain the literal substring
+#      `${APP_STACK_NETWORK_NAME:?` -- any other value (a bare literal, a
+#      different `${VAR}` reference, a `${VAR:-default}` fallback form
+#      instead of the fail-loud `:?` form) is a violation (exit 1).
+#
 # TARGET-LOCATION FAIL-CLOSED: the target file MUST carry the sentinel line
 #   `# fence-app-private-bind: target`
 # proving it is an intended `app`-application manifest. A file missing the
@@ -80,11 +103,14 @@
 #   bash fence-app-private-bind.sh <compose-file-path>
 #
 # Exit codes:
-#   0  — clean: no ports:, no public FQDN, no host network mode.
-#   1  — one or more committed exposure vectors found (fail-closed).
+#   0  — clean: no ports:, no public FQDN, no host network mode, and the
+#        external network reference is exactly ${APP_STACK_NETWORK_NAME:?...}.
+#   1  — one or more committed exposure/misattachment vectors found
+#        (fail-closed).
 #   2  — argument / structural error: missing/empty/non-compose file, the
-#        target sentinel is absent, or a `ports:` key's value block could
-#        not be read (manifest cannot be confirmed — fail closed).
+#        target sentinel is absent, a `ports:` key's value block could not
+#        be read, or the top-level `networks:`/`name:` reference could not
+#        be located (manifest cannot be confirmed — fail closed).
 
 set -euo pipefail
 
@@ -238,14 +264,41 @@ if [ -n "$HOSTNET_HITS" ]; then
   done <<< "$HOSTNET_HITS"
 fi
 
+# --- Vector 4: top-level networks.default.name must be exactly
+#     ${APP_STACK_NETWORK_NAME:?...} -- never a literal, never another var --
+TOPLEVEL_NETWORKS_LINE="$(grep -n '^networks:[[:space:]]*$' "$TARGET" | head -1 | cut -d: -f1 || true)"
+if [ -z "$TOPLEVEL_NETWORKS_LINE" ]; then
+  echo "FATAL: no top-level 'networks:' key found in $TARGET — cannot confirm the external network reference; failing closed." >&2
+  exit 2
+fi
+NETWORKS_BLOCK="$(awk -v start="$TOPLEVEL_NETWORKS_LINE" '
+  NR==start { found=1; next }
+  found {
+    if ($0 ~ /^[^[:space:]]/) { exit }
+    print
+  }
+' "$TARGET")"
+NAME_LINE="$(printf '%s\n' "$NETWORKS_BLOCK" | grep -E '^[[:space:]]*name:' | head -1)"
+if [ -z "$NAME_LINE" ]; then
+  echo "FATAL: top-level 'networks:' block in $TARGET has no 'name:' key — cannot confirm the external network reference; failing closed." >&2
+  exit 2
+fi
+if ! printf '%s' "$NAME_LINE" | grep -qF '${APP_STACK_NETWORK_NAME:?'; then
+  STRIPPED_NAME_LINE="$(printf '%s' "$NAME_LINE" | sed 's/^[[:space:]]*//')"
+  echo "VIOLATION (vector 4: top-level networks block's name: does not reference \${APP_STACK_NETWORK_NAME:?...} — found: $STRIPPED_NAME_LINE):" >&2
+  echo "  $TARGET" >&2
+  VIOLATIONS=$((VIOLATIONS+1))
+fi
+
 if [ "$VIOLATIONS" -gt 0 ]; then
   echo "" >&2
-  echo "FAILED: $VIOLATIONS committed exposure vector(s) in $TARGET." >&2
+  echo "FAILED: $VIOLATIONS committed exposure/misattachment vector(s) in $TARGET." >&2
   echo "The app application must never publish a host port, commit a public-Domain" >&2
-  echo "label, or use host network mode. See scripts/ci/fence-app-private-bind.sh" >&2
+  echo "label, use host network mode, or attach to any network other than exactly" >&2
+  echo "\${APP_STACK_NETWORK_NAME:?...}. See scripts/ci/fence-app-private-bind.sh" >&2
   echo "header (expose: IS allowed here, unlike the migrator's fence)." >&2
   exit 1
 fi
 
-echo "OK: $TARGET — app application commits no host-port publish, no public-Domain label, no host network mode (expose: permitted, not checked)."
+echo "OK: $TARGET — app application commits no host-port publish, no public-Domain label, no host network mode (expose: permitted, not checked), and attaches to exactly \${APP_STACK_NETWORK_NAME:?...}."
 exit 0
