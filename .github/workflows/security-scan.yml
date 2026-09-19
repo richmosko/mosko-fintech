@@ -1972,6 +1972,33 @@ jobs:
           fi
           echo "OK: absent runbook example fails closed distinctly from a wrong value (exit $rc)."
 
+      - name: "Golden — runbook has a correct example PLUS quoted wrong values (expects exit 1, TOKEN-CHECKED)"
+        # Sec re-confirm on PR #822 (6976c45e): the F5 fix's *-to-+ regex
+        # tightening made subject 3 blind to a QUOTED wrong value when a
+        # valid unquoted example is ALSO present -- a bare `[A-Za-z0-9_,]+`
+        # right after `=` never matches `="pfin"` or `='public,graphql_public'`
+        # at all (the quote isn't in the char class), so those lines are
+        # silently skipped rather than flagged, while the correct example
+        # elsewhere in the file makes RUNBOOK_MATCHES non-empty and the
+        # fence reports clean. The regex now allows one optional leading
+        # quote character right after `=`, and the comparison loop strips it
+        # before checking the value.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-clean.py tests/fixtures/ci/pgrst-schemas-pfin-compose-clean.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-quoted.md 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on the runbook-quoted golden but got $rc — a quoted wrong value must not hide behind a correct example elsewhere in the same file. Failing closed."
+            exit 1
+          fi
+          if ! printf '%s' "$out" | grep -q 'pgrst-schemas-pfin-runbook-quoted.md'; then
+            echo "FATAL: exit 1 came from a DIFFERENT subject than the runbook-quoted fixture this golden isolates — the golden is passing for the wrong reason."
+            exit 1
+          fi
+          echo "OK: caught both quoted wrong values despite a correct example being present in the same file (exit $rc)."
+
       # ── scripts/ci/fence-pgrst-schemas-live.sh — the production-observable
       # half's own predicate, strike-proofed offline the same way
       # check-migrator-names-absent.sh is (see that script's header for the
