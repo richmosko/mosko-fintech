@@ -351,11 +351,13 @@ Not for the liaison: the operator allowlist (BACKLOG §7.36) is **staged, not cr
 
 ## I. Round 4 — BACKLOG §7.36 items 22 & 24: production/dev config reconciliation (DevOps ruling paper)
 
-**Status: AWAITING F/CTO.** Baseline `main` @ `90420b38`. Author: DevOps; Sec position pasted verbatim under each question below (Security Engineer, read-only measurement, same baseline). Sec's item-22 measurement sharpens this paper's premise from "an open architectural choice" to "a live functional defect against a ratified ADR" — see I.1 below, reshaped accordingly.
+**Status: RULED by F/CTO 2026-09-19 — Q-22: Option B (`public,graphql_public,pfin`) with Sec's B-1..B-5 and both fence halves as conditions; Q-24: Option 1 (stock GoTrue emails for V1), with Sec's config.toml comment-line condition. Ruled together, shipped as separate stage 2a / 2b PRs.** Baseline `main` @ `90420b38`. Author: DevOps; Sec position pasted verbatim under each question below (Security Engineer, read-only measurement, same baseline). Sec's item-22 measurement sharpened this paper's premise from "an open architectural choice" to "a live functional defect against a ratified ADR" — see I.1 below.
 
 **Cross-reference (BACKLOG §7.36 item 22 AC, quoted verbatim):** *"Sec-consult mandatory: this determines whether `pfin`'s RLS is a defense-in-depth layer or the Data API's only control."* Item 24's AC adds: *"Sec wants items 22 and 24 RULED together before step 7, not resolved by mechanically copying dev values into prod."*
 
 ### I.1 Q-22 — `PGRST_DB_SCHEMAS`: does `pfin` belong in production's Data-API-exposed schema list?
+
+**RULED (F/CTO, 2026-09-19): Option B — the exact literal `public,graphql_public,pfin`, `public` first — with Sec's B-1 through B-5 and both fence halves (I.1 below) as binding conditions on the flip, not advice. Ships as stage 2a, its own PR, Sec joint-review mandatory.**
 
 **Measured facts (repo-side; no production box access used).**
 
@@ -424,6 +426,8 @@ Not for the liaison: the operator allowlist (BACKLOG §7.36) is **staged, not cr
 
 ### I.2 Q-24 — GoTrue email templates: ship stock copy, wire the branded templates, or defer past step 7?
 
+**RULED (F/CTO, 2026-09-19): Option 1 — stock GoTrue emails for V1, with Sec's `config.toml` comment-line condition. Not a step-7 blocker. Ships as stage 2b, its own PR; the branded-template wire-up (Option B) is booked as a follow-on, not built now.**
+
 **Measured facts.**
 
 1. **Vendor mechanism, confirmed against GoTrue's own docs:** `GOTRUE_MAILER_TEMPLATES_*` (per-type: `_INVITE`, `_CONFIRMATION`, `_RECOVERY`, `_MAGIC_LINK`, `_EMAIL_CHANGE`, plus several notification variants) each take **"URL path to an email template ... (e.g. `https://www.example.com/path-to-email-template.html`)"** — GoTrue fetches the template over HTTP at send time; it is not a file-mount mechanism. There is no `GOTRUE_MAILER_TEMPLATES_*` key anywhere in `infra/supabase/docker-compose.yml`'s `auth` service block (`:150-192`) today, confirming BACKLOG item 24's source claim.
@@ -474,7 +478,7 @@ Not for the liaison: the operator allowlist (BACKLOG §7.36) is **staged, not cr
 
 ### I.3 What follows this ruling
 
-Stage 1 (this PR) is the ruling paper only — no carrier edits, no ADR edits, no `DECISIONS.md` changes. Once F/CTO rules Q-22 and Q-24 above (Sec's position is already recorded, pasted verbatim in each section), stage 2 is separate DevOps work — and, per Sec's explicit instruction, **rule together, ship separately: two PRs, not one.**
+Stage 1 (this PR) is the ruling paper only — no carrier edits, no ADR edits, no `DECISIONS.md` changes. **F/CTO ruled both questions 2026-09-19** (recorded above, under each question). Stage 2 is separate DevOps work — and, per Sec's explicit instruction, **rule together, ship separately: two PRs, not one.**
 
 - **Stage 2a (Q-22, gates step 7).** (i) Measure ADR-023 C2 against the **production** database (B-1) — VETO trigger if `anon` holds any `pfin` grant; record the applied-migration-count parity (B-2) and `025`'s presence (B-3) alongside it. (ii) Flip production `PGRST_DB_SCHEMAS` to the exact literal `public,graphql_public,pfin` (`public` first). (iii) Correct the three carriers — `deployment-runbook.md:495`, `standup-log.md:272` §5f **and its Departures row**, `provision-supabase-stack.sh:672` + `:912-921` — framed as a restoration per B-5. (iv) Land both fence halves: the CI-lane literal-match fence (own sentinel, four strike-proven fixtures incl. the reorder case) and the production-observable post-deploy assertion on the running `rest` container's env — the CI half alone does not discharge this, since `NONSECRET_DEFAULTS` is mint-if-absent. (v) Re-affirm item 26's `sslmode=disable` ruling in the same PR per B-4. Sec joint-review mandatory (this touches a fenced surface + ADR-023's exposure). Fence label stays unminted pending F/CTO Decision-4 ratify.
 - **Stage 2b (Q-24, does not gate step 7).** Land the `config.toml` scope-comment (Sec's Option-1 condition) now, cheaply. Book the branded-template wire-up (Option B's full five-var scope, HTTPS-only, send-test-in-smoke-checklist) as a BACKLOG §7.36 follow-up tied to the same allowlist milestone Q5 gates signup behind — or sooner, at F/CTO's discretion, once the DNS cutover gives `app` its public domain.
