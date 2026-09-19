@@ -52,14 +52,20 @@ BASE_DIR="/api"
 [[ "${FAKE_CURL_MODE:-match}" == "mismatch" ]] && BASE_DIR="/wrong"
 
 # Network-guard fields for the two applications -- defaults describe the
-# happy path (network-match); the other two modes flip exactly one field.
+# happy path (network-match); the other modes flip one or more fields.
+# network-live-measured reproduces team-lead's exact 2026-09-19 live
+# measurement (docs/deployment-runbook.md §7.1 step 2's MEASURED note):
+# different environment_id AND connect_to_docker_network false on BOTH
+# sides simultaneously -- the guard must report every problem, not just
+# the first one it finds.
 APP_ENV_ID=5
 STACK_ENV_ID=5
 APP_NET=true
 STACK_NET=true
 case "${FAKE_CURL_MODE:-match}" in
-  network-diff-env) STACK_ENV_ID=6 ;;
-  network-off)      STACK_NET=false ;;
+  network-diff-env)     STACK_ENV_ID=6 ;;
+  network-off)          STACK_NET=false ;;
+  network-live-measured) STACK_ENV_ID=6; APP_NET=false; STACK_NET=false ;;
 esac
 
 if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then

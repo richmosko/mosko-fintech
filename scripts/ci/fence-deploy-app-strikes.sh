@@ -12,9 +12,9 @@
 # Proves the FOUR claims deploy-app.sh's header makes about its own safety
 # (the identity guard, the --require-env names-only presence guard, the
 # --require-network-with cross-application guard, and the ambiguous-
-# running-container refusal) -- eight scenarios in total (N4, PR #833 Sec
+# running-container refusal) -- nine scenarios in total (N4, PR #833 Sec
 # joint review: this comment previously said "three", there are now
-# eight; keep this count current, it is read, not decorative):
+# nine; keep this count current, it is read, not decorative):
 #   1. MATCH -- a resolved application whose base_directory equals the
 #      caller's --expect-base-directory proceeds through preflight AND
 #      (in --apply) through a full deploy+poll to "finished".
@@ -38,6 +38,11 @@
 #   7. NETWORK-DIFF-ENV -- different environment_id -> refuses.
 #   8. NETWORK-OFF -- connect_to_docker_network=false on the OTHER side
 #      -> refuses, naming which side.
+#   9. NETWORK-LIVE-MEASURED -- team-lead's exact 2026-09-19 live
+#      measurement (docs/deployment-runbook.md §7.1 step 2's MEASURED
+#      note): different environment_id AND connect_to_docker_network
+#      false on BOTH sides at once -> refuses, reporting ALL THREE
+#      problems, not just the first one found.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -226,6 +231,32 @@ NETWORK_OFF_LOG="$(run_scenario "network-off: --require-network-with refuses" 1 
 if [[ -n "${NETWORK_OFF_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$NETWORK_OFF_LOG" 2>/dev/null; then
   echo "FAIL: [network-off: --require-network-with refuses] the network guard did NOT prevent a /deploy call -- vacuous refusal." >&2
   FAIL=1
+fi
+
+# 8. NETWORK-LIVE-MEASURED -- team-lead's exact 2026-09-19 live
+#    measurement: different environment_id AND connect_to_docker_network
+#    false on BOTH sides at once. Must refuse, reporting ALL THREE
+#    problems (not just the first found) -- proves the guard says why,
+#    not merely that it refuses.
+set +e
+NETWORK_LIVE_OUT="$(BOX_IP=127.0.0.1 AUTOMATION_KEY=/dev/null PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$WORK/network-live-measured.log" FAKE_CURL_MODE=network-live-measured \
+  bash "$DEPLOY_APP_SH" pfin-app --expect-base-directory /api --require-network-with pfin-stack 2>&1)"
+NETWORK_LIVE_RC=$?
+set -e
+if [[ "$NETWORK_LIVE_RC" != 1 ]]; then
+  echo "FAIL: [network-live-measured: refuses] expected exit 1, got $NETWORK_LIVE_RC" >&2
+  echo "$NETWORK_LIVE_OUT" >&2
+  FAIL=1
+else
+  MISSING_PROBLEM=0
+  for needle in "different environment_id" "connect_to_docker_network for this app is not true" "connect_to_docker_network for other app"; do
+    grep -qF "$needle" <<<"$NETWORK_LIVE_OUT" || { echo "FAIL: [network-live-measured: refuses] missing expected PROBLEM text: $needle" >&2; MISSING_PROBLEM=1; }
+  done
+  if [[ $MISSING_PROBLEM -eq 0 ]]; then
+    echo "OK: [network-live-measured: refuses, reports all three problems] exit 1 as expected." >&2
+  else
+    FAIL=1
+  fi
 fi
 
 if [[ $FAIL -ne 0 ]]; then
