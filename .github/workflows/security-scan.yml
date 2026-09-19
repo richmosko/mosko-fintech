@@ -1813,6 +1813,49 @@ jobs:
           fi
           echo "OK: check-migrator-names-absent caught a BLANKED MIGRATOR_DB_USER= by name, not value (exit $rc)."
 
+      # ── scripts/ci/check-source-commit-in-build.sh — the "Source commit
+      # availability" gate (docs/deployment-runbook.md §4, ADR-072
+      # Amendment 6, PR #794) is now ASSERTED on every run of
+      # scripts/provision-migrator-app.sh and
+      # scripts/provision-supabase-stack.sh, not just documented as a
+      # by-hand UI step. MEASURED, 2026-09-19: pfin-migrator's first real
+      # deploy FATALed at the migrator Dockerfile's GIT_SHA/SOURCE_COMMIT
+      # build-arg guard because this setting was false at creation — this
+      # predicate is what both provisioning scripts now call, on every
+      # read, before triggering a deploy.
+      - name: "Predicate — check-source-commit-in-build: true (expects exit 0)"
+        run: bash scripts/ci/check-source-commit-in-build.sh tests/fixtures/ci/source-commit-in-build-true.json
+
+      - name: "Predicate — check-source-commit-in-build: false (expects exit 1, field named)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/check-source-commit-in-build.sh tests/fixtures/ci/source-commit-in-build-false.json 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: check-source-commit-in-build expected exit 1 on the 'false' fixture but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'include_source_commit_in_build is False'; then
+            echo "FATAL: the 'false' fixture exited 1 but did not name include_source_commit_in_build as the offending field — failing closed."
+            exit 1
+          fi
+          echo "OK: check-source-commit-in-build caught include_source_commit_in_build=false by name (exit $rc)."
+
+      - name: "Predicate — check-source-commit-in-build: missing field (expects exit 2)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/check-source-commit-in-build.sh tests/fixtures/ci/source-commit-in-build-missing.json 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: check-source-commit-in-build expected exit 2 on the 'missing' fixture but got $rc — a missing field must fail closed, not pass by default."
+            exit 1
+          fi
+          echo "OK: check-source-commit-in-build failed closed on a missing field (exit $rc)."
+
   fence-pgrst-schemas-pfin:
     name: pgrst-schemas-pfin — PGRST_DB_SCHEMAS committed-default literal (BACKLOG.md §7.36 item 22)
     runs-on: ubuntu-latest
