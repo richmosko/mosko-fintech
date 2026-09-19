@@ -935,30 +935,35 @@ step "Post-move: MIGRATOR_DB_* absence assertion (ADR-072 Amendment 4 / BACKLOG.
 # accident.
 #
 # Proof predicate is NAMES, not values, and NOT a declared `environment:`
-# block (Amendment 4: "A declared environment: block is exactly the
-# evidence that failed here and must not be offered again"). Reads
-# `docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}'`
-# against a container INSIDE the stack's own compose project (Sec's own
+# block (Amendment 4, quoted exactly: "A declared `environment:` block is
+# not evidence and must not be offered again -- it is exactly what failed
+# at Amendment 1"). Runs `docker compose ... exec -T meta env` against a
+# container INSIDE the stack's own compose project (Sec's own
 # falsification used `meta`; this script uses the same container for
-# continuity) and reduces to names via `cut -d= -f1` -- a BLANKED key still
-# carries its name and correctly FAILS this check; only a DELETED key
-# passes it. See docs/deployment-runbook.md §6.6 CUTOVER PROCEDURE for the
-# STRIKE-PROOF of this exact assertion (re-add a name to the stack's store,
-# confirm this step goes RED, remove it, confirm it goes GREEN again) --
-# that strike can only be run against a live Coolify resource and is
-# recorded there as a numbered operator step, not here.
-STACK_ENV_NAMES="$(sshx "docker compose --project-name $APP_UUID exec -T meta env" 2>/dev/null | cut -d= -f1 | sort -u || true)"
-if [[ -z "$STACK_ENV_NAMES" ]]; then
-  die "could not read env names off the 'meta' container in project $APP_UUID -- cannot confirm MIGRATOR_DB_* absence. Failing closed rather than skipping this assertion."
+# continuity) and hands its raw KEY=VALUE output to
+# scripts/ci/check-migrator-names-absent.sh, which reduces to names via
+# `cut -d= -f1` -- a BLANKED key still carries its name and correctly
+# FAILS this check; only a DELETED key passes it.
+#
+# ⚠ TWO DIFFERENT STRIKES, TWO DIFFERENT PLACES -- do not conflate them.
+# The NAME-vs-VALUE PREDICATE (does an env dump containing this key fail
+# closed?) is strikeable OFFLINE and IS strike-proven, in CI, against the
+# tests/fixtures/ci/migrator-names-absent-*.env fixtures wired into
+# security-scan.yml's fence-migrator-bind job -- see
+# scripts/ci/check-migrator-names-absent.sh's own header for why it was
+# extracted into a separate script specifically so that strike could exist
+# without a live box. What is NOT strike-proven until it is actually run
+# is the END-TO-END property that THIS LIVE BOX's real store is clean --
+# that live strike (re-add a name to the real store, confirm this step
+# goes RED naming the real box, remove it, confirm GREEN) is
+# docs/deployment-runbook.md §6.8 CUTOVER PROCEDURE step 10, a numbered
+# operator step, not run by this PR.
+STACK_ENV_RAW="$(sshx "docker compose --project-name $APP_UUID exec -T meta env" 2>/dev/null || true)"
+if [[ -z "$STACK_ENV_RAW" ]]; then
+  die "could not read env off the 'meta' container in project $APP_UUID -- cannot confirm MIGRATOR_DB_* absence. Failing closed rather than skipping this assertion."
 fi
-MIGRATOR_LEAK=""
-for offender in MIGRATOR_DB_USER MIGRATOR_DB_PASSWORD; do
-  if echo "$STACK_ENV_NAMES" | grep -qx "$offender"; then
-    MIGRATOR_LEAK="$MIGRATOR_LEAK $offender"
-  fi
-done
-if [[ -n "$MIGRATOR_LEAK" ]]; then
-  die "the Supabase-stack's own env store still carries:$MIGRATOR_LEAK (measured on the 'meta' container, names-only). ADR-072 Amendment 4's remedy is NOT complete until neither name is present -- a blanked value does not pass this check, only a deleted one does. Remove the offending key(s) from this Coolify application's env store by hand (or via the Coolify API) and re-run this script."
+if ! printf '%s\n' "$STACK_ENV_RAW" | "$REPO_ROOT/scripts/ci/check-migrator-names-absent.sh"; then
+  die "the Supabase-stack's own env store still carries MIGRATOR_DB_USER and/or MIGRATOR_DB_PASSWORD (measured on the 'meta' container, names-only -- see the FAIL line above for which). ADR-072 Amendment 4's remedy is NOT complete until neither name is present -- a blanked value does not pass this check, only a deleted one does. Remove the offending key(s) from this Coolify application's env store by hand (or via the Coolify API) and re-run this script."
 fi
 ok "MIGRATOR_DB_USER and MIGRATOR_DB_PASSWORD both absent from the stack's own env store (measured on 'meta', names-only)"
 

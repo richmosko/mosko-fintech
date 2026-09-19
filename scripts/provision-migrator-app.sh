@@ -369,10 +369,16 @@ fi
 ok "deployment finished"
 
 step "Verification -- proof predicate is NAMES, per ADR-072 Amendment 4"
+# Instrument: `docker compose ... exec -T migrator env`, reduced to names
+# via `cut -d= -f1` -- names-equivalent to `docker inspect
+# --format '{{range .Config.Env}}...'` in practice (a blanked key still
+# prints `KEY=`, so either instrument observes the same NAME set), but
+# this is the instrument the code below actually runs -- say what it does,
+# not a different-but-equivalent one (Sec F4, PR #819 joint review).
 CONTAINER_ENV_NAMES="$(sshx "docker compose --project-name $APP_UUID exec -T migrator env" 2>/dev/null | cut -d= -f1 | sort -u || true)"
 [[ -n "$CONTAINER_ENV_NAMES" ]] || die "could not read env names off the new migrator container -- deploy may not have produced a running container yet."
 for required in MIGRATOR_DB_USER MIGRATOR_DB_PASSWORD PROD_DB_URL PGSSLMODE; do
-  echo "$CONTAINER_ENV_NAMES" | grep -qx "$required" || die "new migrator container is missing '$required' -- see docker inspect on the box."
+  echo "$CONTAINER_ENV_NAMES" | grep -qx "$required" || die "new migrator container is missing '$required' -- re-run 'docker compose --project-name $APP_UUID exec -T migrator env' on the box to investigate."
 done
 STACK_ONLY_LEAK=""
 for offender in POSTGRES_PASSWORD JWT_SECRET SERVICE_ROLE_KEY VAULT_ENC_KEY ANON_KEY SECRET_KEY_BASE; do
@@ -387,4 +393,4 @@ ok "new migrator container carries MIGRATOR_DB_USER/MIGRATOR_DB_PASSWORD/PROD_DB
 
 step "Done"
 info "Deploy $DEPLOY_UUID finished. Record MIGRATOR_SERVICE_UUID with scripts/record-coolify-uuids.sh --apply (it now resolves by MIGRATOR_APP_NAME, not the stack's own name)."
-info "Next: re-create the Scheduled Task under THIS application (scripts/migrator-scheduled-task.md), then run docs/deployment-runbook.md §6.6's CUTOVER PROCEDURE for the credential rotation and stack-side removal."
+info "Next: re-create the Scheduled Task under THIS application (scripts/migrator-scheduled-task.md), then run docs/deployment-runbook.md §6.8's CUTOVER PROCEDURE for the credential rotation and stack-side removal."

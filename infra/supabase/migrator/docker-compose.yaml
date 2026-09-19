@@ -72,9 +72,9 @@
 # that changed by this move, only WHICH Coolify application hosts the
 # container and WHICH env store the credential lands in.
 #
-# See docs/deployment-runbook.md §6 / §6.5 / §6.6 for the full trigger/
-# fail-closed sequencing and the CUTOVER PROCEDURE that moves a live box
-# from the old (sibling-service) topology to this one.
+# See docs/deployment-runbook.md §6 / §6.5 for the full trigger/fail-closed
+# sequencing, and §6.8 for the CUTOVER PROCEDURE that moves a live box from
+# the old (sibling-service) topology to this one.
 
 services:
   migrator:
@@ -115,7 +115,7 @@ services:
       # across the EXTERNAL network this file's own `networks:` block
       # attaches to (the Supabase-stack application's Docker network,
       # measured/selected at cutover — see the `networks:` block below and
-      # docs/deployment-runbook.md §6.6's CUTOVER PROCEDURE) — still never
+      # docs/deployment-runbook.md §6.8's CUTOVER PROCEDURE) — still never
       # off-host, so the Sec ruling at item 26 stands, but the network the
       # traffic crosses is a shared attachment between two Coolify
       # applications, not a single application's own internal project
@@ -150,58 +150,79 @@ services:
 
     # ── NETWORK ATTACHMENT (ADR-072 Amendment 4 Decision A / "Network
     #    reachability" section) ──────────────────────────────────────────
-    # Mechanism (b) — RECOMMENDED, ACTIVE BELOW: an `external:` network
-    # naming the Supabase-stack application's own Docker network. Attaches
-    # exactly ONE new member (this container) rather than widening a
-    # predefined network shared by every resource toggled onto it (see
-    # mechanism (a), commented out below, and what it widens).
-    #
-    # ⚠⚠ UNMEASURED, STATED PLAINLY PER AMENDMENT 4: whether Coolify
-    # 4.3.18's `dockercompose` build pack PERMITS an `external:` network
-    # declaration at all has NOT been measured against a live Coolify
-    # instance as of this PR. This must be measured ON THE BOX FIRST, as
-    # the opening step of the CUTOVER PROCEDURE (docs/deployment-runbook.md
-    # §6.6) — before any credential migration or DNS-affecting step. If
-    # Coolify rejects this shape (parse error, or the network fails to
-    # attach), fall back to mechanism (a) below and RECORD, in the runbook's
-    # cutover log, the explicit widening statement mechanism (a) requires —
-    # do not silently swap shapes without that record.
-    #
-    # STACK_NETWORK_NAME is NOT a secret — it is a Coolify-generated Docker
-    # network name, environment-specific (derived from the stack
-    # application's UUID), and is populated into this application's env
-    # store by scripts/provision-migrator-app.sh at cutover time (read off
-    # the box via `docker network ls` / `docker compose ... config` against
-    # the running stack resource — see that script's own header for the
-    # exact lookup). The `:?` form fails the compose interpolation closed
-    # (refuses to start) rather than silently falling back to Coolify's own
-    # per-application default network, which would leave `migrator`
-    # unable to reach `db` at all — a loud failure here is preferable to a
-    # silent one at first `db push`.
+    # This service joins the network the TOP-LEVEL `networks:` block below
+    # defines under the name `default` — Compose's own top-level/service
+    # split, not a stylistic choice: a service-level `networks:` key takes
+    # a LIST of network names (or a mapping of per-network settings like
+    # aliases), never `name:`/`external:` directly — those belong on the
+    # top-level network definition. ⚠ CORRECTED 2026-09-18 (Sec joint
+    # review, PR #819): an earlier revision of this file nested
+    # `name:`/`external:` directly under this service's own `networks:`
+    # key, which `docker compose config` rejects outright ("additional
+    # properties 'name', 'external' not allowed") — a YAML-shape bug that
+    # would have made THIS FILE's own deploy fail before Amendment 4's
+    # external-network question was ever actually tested, manufacturing a
+    # false "mechanism (b) unavailable" reading. See the top-level
+    # `networks:` block at the end of this file for the real declaration
+    # and the mechanism (a)/(b) choice this file makes.
     networks:
-      default:
-        name: ${MIGRATOR_STACK_NETWORK_NAME:?MIGRATOR_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at cutover, see docs/deployment-runbook.md §6.6 CUTOVER PROCEDURE step 3. Do NOT default this to a guessed value.}
-        external: true
+      - default
 
     # ── FALLBACK MECHANISM (a) — Coolify's predefined-network toggle,
     #    enabled on BOTH this resource and the Supabase-stack resource via
     #    the Coolify dashboard (`connect_to_docker_network`), matching the
     #    existing `app`↔`provider-sync`/`api-gw` precedent
     #    (docs/deployment-runbook.md §4 (1d) / §7). USE ONLY IF mechanism
-    #    (b) above is measured unavailable on this Coolify version.
+    #    (b), declared at the top-level `networks:` block below, is
+    #    measured unavailable on this Coolify version.
     #
     #    ⚠ WHAT THIS WIDENS, STATED EXPLICITLY PER AMENDMENT 4 (never adopt
     #    silently): `connect_to_docker_network`'s toggle attaches a
     #    resource to a network shared with EVERY OTHER resource also
     #    toggled onto it — not exclusively with the Supabase-stack
     #    application. `db`'s reachable-from set widens to that whole set,
-    #    on an axis the RT-32 / fence-migrator-private-bind fences CANNOT
-    #    see (they read host-publish, Domain and `network_mode`, not
-    #    network membership). If this fallback is adopted, remove the
-    #    `networks:` block above, delete this comment block's leading `#`
-    #    on the two lines below, and record in the runbook's cutover log
-    #    exactly which other resources share that network at the time of
-    #    adoption.
-    #
-    # networks:
-    #   - <predefined-network-name-shared-with-the-stack-resource>
+    #    on an axis the RT-32 fence cannot see (an axis RT-32's own fence
+    #    was never built to see — it reads host-publish, Domain and
+    #    `network_mode`, not network membership; `fence-migrator-private-bind`
+    #    is the same layer and has the same blind spot). If this fallback
+    #    is adopted: remove this service's `networks: - default` list
+    #    above AND the top-level `networks:` block below entirely (Coolify's
+    #    dashboard toggle needs no compose-level network declaration at
+    #    all — same shape as the existing `app`↔`provider-sync` precedent),
+    #    and record in the runbook's cutover log exactly which other
+    #    resources share that predefined network at the time of adoption.
+
+# Top-level network definition for the `default` name this service's own
+# `networks:` list (above) joins — see ADR-072 Amendment 4 Decision A,
+# mechanism (b): an `external:` network naming the Supabase-stack
+# application's own Docker network. Attaches exactly ONE new member (this
+# container) rather than widening a predefined network shared by every
+# resource toggled onto it (see the FALLBACK MECHANISM (a) comment above,
+# and what it widens).
+#
+# ⚠⚠ UNMEASURED, STATED PLAINLY PER AMENDMENT 4: whether Coolify 4.3.18's
+# `dockercompose` build pack PERMITS an `external:` network declaration at
+# all has NOT been measured against a live Coolify instance as of this PR.
+# This must be measured ON THE BOX FIRST, as the opening step of the
+# CUTOVER PROCEDURE (docs/deployment-runbook.md §6.8) — before any
+# credential migration or DNS-affecting step. If Coolify rejects this
+# shape (parse error, or the network fails to attach), fall back to
+# mechanism (a) above and RECORD, in the runbook's cutover log, the
+# explicit widening statement mechanism (a) requires — do not silently
+# swap shapes without that record.
+#
+# MIGRATOR_STACK_NETWORK_NAME is NOT a secret — it is a Coolify-generated
+# Docker network name, environment-specific (derived from the stack
+# application's UUID), and is populated into this application's env store
+# by scripts/provision-migrator-app.sh at cutover time (read off the box
+# via `docker network ls` / `docker compose ... config` against the
+# running stack resource — see that script's own header for the exact
+# lookup). The `:?` form fails the compose interpolation closed (refuses
+# to start) rather than silently falling back to Coolify's own
+# per-application default network, which would leave `migrator` unable to
+# reach `db` at all — a loud failure here is preferable to a silent one at
+# first `db push`.
+networks:
+  default:
+    name: ${MIGRATOR_STACK_NETWORK_NAME:?MIGRATOR_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at cutover, see docs/deployment-runbook.md §6.8 CUTOVER PROCEDURE step 3. Do NOT default this to a guessed value.}
+    external: true

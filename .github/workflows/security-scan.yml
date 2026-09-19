@@ -1556,6 +1556,44 @@ jobs:
       - name: Production-mode — real compose (expects zero-inbound; exit 0)
         run: bash scripts/ci/fence-migrator-private-bind.sh infra/supabase/migrator/docker-compose.yaml
 
+      - name: "Canary — corrupts the REAL compose, not a fixture (expects violation, exit 1, vector-1 token)"
+        # Sec F1 (PR #819 joint review, 2026-09-18): a fixture-only battery
+        # proves the script works; this proves it bites on the file it is
+        # actually deployed to protect. Mirrors fence-datastore-bind's own
+        # "corrupts the REAL compose" canary, retired from THAT job when
+        # the migrator block left infra/supabase/docker-compose.yml — this
+        # is that canary's replacement, now aimed at the migrator's own
+        # real file. Copies the real infra/supabase/migrator/docker-compose.yaml
+        # to a scratch path, inserts a `ports:` block under the migrator
+        # service's `container_name:` line (a unique anchor), and asserts
+        # the fence catches it there too -- not just in a synthetic
+        # fixture shaped to be caught.
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          awk '{ print } /container_name: supabase-migrator/ { print "    ports:"; print "      - \"9999:9999\"" }' \
+            infra/supabase/migrator/docker-compose.yaml > "$SCRATCH"
+          if ! grep -q '9999:9999' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the migrator container_name anchor to insert ports: after -- either the migrator service moved or its container_name changed out from under this canary. Update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-migrator-private-bind.sh "$SCRATCH" 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: canary expected exit 1 against the corrupted REAL migrator compose but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: canary exited 1 but no vector-1 'ports:' token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a published port on the migrator service on the REAL compose file, not just on a fixture (exit $rc)."
+
       - name: Inversion — negative control fixture (correct config; expects exit 0)
         run: bash scripts/ci/fence-migrator-private-bind.sh tests/fixtures/ci/migrator-bind-private.compose.yaml
 
@@ -1728,6 +1766,52 @@ jobs:
             exit 1
           fi
           echo "OK: migrator-bind fence caught a ports: *alias reference via its own token (exit $rc)."
+
+      # ── scripts/ci/check-migrator-names-absent.sh — ADR-072 Amendment 4
+      # Condition 2's OFFLINE-strikeable predicate (Sec B4, PR #819 joint
+      # review, 2026-09-18). Extracted out of
+      # scripts/provision-supabase-stack.sh's post-move absence assertion
+      # so the NAME-vs-VALUE predicate has its own committed strike-proof,
+      # independent of a live Coolify resource — see that script's own
+      # header for what this DOES and does NOT prove (the live, end-to-end
+      # strike against a real box's real store stays at
+      # docs/deployment-runbook.md §6.8 CUTOVER PROCEDURE step 10).
+      - name: "Predicate — check-migrator-names-absent: clean env (expects exit 0)"
+        run: bash scripts/ci/check-migrator-names-absent.sh tests/fixtures/ci/migrator-names-absent-clean.env
+
+      - name: "Predicate — check-migrator-names-absent: MIGRATOR_DB_PASSWORD present (expects exit 1, offender named)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/check-migrator-names-absent.sh tests/fixtures/ci/migrator-names-absent-present.env 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: check-migrator-names-absent expected exit 1 on the 'present' fixture but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'MIGRATOR_DB_PASSWORD present'; then
+            echo "FATAL: the 'present' fixture exited 1 but did not name MIGRATOR_DB_PASSWORD as the offender — failing closed."
+            exit 1
+          fi
+          echo "OK: check-migrator-names-absent caught MIGRATOR_DB_PASSWORD by name (exit $rc)."
+
+      - name: "Predicate — check-migrator-names-absent: blanked MIGRATOR_DB_USER= (expects exit 1, proves names-not-values)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/check-migrator-names-absent.sh tests/fixtures/ci/migrator-names-absent-blanked.env 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: check-migrator-names-absent expected exit 1 on the blanked-value fixture but got $rc — a blanked value must not pass this check, only a deleted name does. Failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'MIGRATOR_DB_USER present'; then
+            echo "FATAL: the blanked-value fixture exited 1 but did not name MIGRATOR_DB_USER as the offender — failing closed."
+            exit 1
+          fi
+          echo "OK: check-migrator-names-absent caught a BLANKED MIGRATOR_DB_USER= by name, not value (exit $rc)."
 
   fence-entity-grep:
     name: entity-grep — HTML-entity-obscured §/# in doc artifacts
