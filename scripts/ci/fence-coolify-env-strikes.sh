@@ -165,8 +165,8 @@ run_scenario "delete --apply fails on blanked-not-deleted read-back" 1 blanked \
 WIDENED="$WORK/coolify-env.widened.sh"
 sed 's/^SET_ALLOWLIST=(\(.*\))$/SET_ALLOWLIST=(\1 SUPABASE_SERVICE_ROLE_KEY)/' \
   "$COOLIFY_ENV_SH" > "$WIDENED"
-grep -q 'SUPABASE_SERVICE_ROLE_KEY' "$WIDENED" \
-  || { echo "FATAL: SET_ALLOWLIST widening did not apply -- has the array line moved?" >&2; exit 2; }
+grep -qE '^SET_ALLOWLIST=\(.*SUPABASE_SERVICE_ROLE_KEY' "$WIDENED" \
+  || { echo "FATAL: SET_ALLOWLIST widening did not apply -- has the array line moved or been reformatted? (A bare grep for the NAME is vacuous here: coolify-env.sh carries SUPABASE_SERVICE_ROLE_KEY in its own secrets-manifest positive-control anchor, so anchor the check to the ARRAY LINE.)" >&2; exit 2; }
 COOLIFY_ENV_SH_SAVED="$COOLIFY_ENV_SH"
 COOLIFY_ENV_SH="$WIDENED"
 run_scenario "manifest refusal holds even with a WIDENED SET_ALLOWLIST" 1 ok \
