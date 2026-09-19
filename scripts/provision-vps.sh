@@ -99,6 +99,17 @@ CI_MIGRATE_SSH_PUBKEY="${CI_MIGRATE_SSH_PUBKEY:-}"
 MIGRATOR_SERVICE_UUID="${MIGRATOR_SERVICE_UUID:-}"
 MIGRATOR_TASK_UUID="${MIGRATOR_TASK_UUID:-}"
 APP_UUID="${APP_UUID:-}"
+# BACKLOG.md §7.36 item 59 (ADR-072 Amendment 6 consequence (i)) --
+# migrator-orchestrate.sh's name guard compares the live application at
+# MIGRATOR_SERVICE_UUID against this name BEFORE ever deploying at it (the
+# trigger token's deploy ability is team-wide, not scoped to this one
+# resource -- ADR-072 Amendment 2 -- so a drifted MIGRATOR_SERVICE_UUID
+# pointing at the Supabase-stack application instead would otherwise
+# restart production Postgres on the next fire). Same default as
+# scripts/provision-migrator-app.sh's own MIGRATOR_APP_NAME -- keep both
+# in sync if this default ever changes, same discipline as
+# MIGRATOR_APP_NAME's other reader, scripts/record-coolify-uuids.sh.
+MIGRATOR_APP_NAME="${MIGRATOR_APP_NAME:-pfin-migrator}"
 # DEPLOY_ON_SUCCESS gate (Sec-ruled, Phase D deploy-gate consult) -- default
 # 0 (withhold the app deploy on a successful migration apply); flip to 1 at
 # runbook §7 step 7, once the migrate leg has been proven live and the
@@ -1536,7 +1547,8 @@ DESIRED_TRIGGER_CONF="MIGRATOR_SERVICE_UUID=$MIGRATOR_SERVICE_UUID
 MIGRATOR_TASK_UUID=$MIGRATOR_TASK_UUID
 APP_UUID=$APP_UUID
 DEPLOY_ON_SUCCESS=$DEPLOY_ON_SUCCESS
-MIGRATOR_TASK_COMMAND=$MIGRATOR_TASK_COMMAND"
+MIGRATOR_TASK_COMMAND=$MIGRATOR_TASK_COMMAND
+MIGRATOR_APP_NAME=$MIGRATOR_APP_NAME"
 CURRENT_TRIGGER_CONF="$(sshx 'cat /etc/pfin/migrator-trigger.conf 2>/dev/null' || true)"
 if [[ "$CURRENT_TRIGGER_CONF" == "$DESIRED_TRIGGER_CONF" ]]; then
   ok "/etc/pfin/migrator-trigger.conf already matches"
