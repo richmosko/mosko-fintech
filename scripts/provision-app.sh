@@ -1,0 +1,306 @@
+#!/usr/bin/env bash
+#
+# provision-app.sh — recreate the `pfin-app` Coolify resource as a
+# `dockercompose` application (F/CTO ruling 2026-09-19,
+# docs/deployment-runbook.md Open Flags #12, option A). DevOps-owned.
+# Sibling to scripts/provision-migrator-app.sh — same conventions, same
+# sshx/api helper shape, copied deliberately rather than shared (this
+# repo's existing precedent: provision-vps.sh / provision-supabase-
+# stack.sh / provision-migrator-app.sh don't share code with each other
+# either).
+#
+# WHY THIS SCRIPT EXISTS
+#   MEASURED (team-lead, 2026-09-19): the existing `pfin-app` resource is
+#   a plain-Dockerfile-pack application, in a DIFFERENT Coolify project/
+#   environment than the Supabase stack, with `connect_to_docker_network`
+#   FALSE on both sides -- it has never had a working path to
+#   `api-gw:8000`. F/CTO ruled option A: recreate it as a `dockercompose`
+#   application with an `external:` network attachment to the stack's own
+#   Docker network (the migrator's own proven shape, ADR-072 Amendment 4).
+#   `pfin-app` has ZERO deployments and ZERO env names in its store as of
+#   this ruling (measured 2026-09-19) -- recreating it loses nothing.
+#
+# WHAT THIS SCRIPT DOES
+#   1. DELETE the existing `pfin-app` resource, IF one exists AND it is
+#      NOT already a `dockercompose` application (idempotent re-run: if
+#      it's already the target shape, this step is a no-op) -- but ONLY
+#      after asserting it has zero deployments and zero env-store names.
+#      Refuses (does not delete) if either count is non-zero: this script
+#      must never be the vehicle that silently destroys a resource that
+#      turned out to hold real state.
+#   2. Create `pfin-app` as `dockercompose` (base_directory `/api`,
+#      compose location `/docker-compose.yaml`, branch `main`), in the
+#      SAME project/environment as the Supabase-stack application --
+#      resolved from the stack's OWN live resource, never a hardcoded
+#      project/environment name (see the PROJECT/ENVIRONMENT RESOLUTION
+#      note below for the exact mechanism and its stated uncertainty).
+#   3. Read the stack's live Docker network (same `docker inspect`
+#      lookup provision-migrator-app.sh already uses) and set
+#      `APP_STACK_NETWORK_NAME` on `pfin-app`'s own env store,
+#      unconditionally overwritten on every run (non-secret,
+#      environment-specific -- a stale value here would silently point
+#      `app` at a network the stack no longer uses after any stack-side
+#      network change; same discipline as MIGRATOR_STACK_NETWORK_NAME).
+#   4. Report `settings.include_source_commit_in_build`'s current value
+#      -- NOT forced either way. Unlike the migrator Dockerfile, `api/
+#      Dockerfile` has NO `SOURCE_COMMIT`/`GIT_SHA` build-arg guard
+#      (confirmed by grep, docs/deployment-runbook.md §7.1 step 1's own
+#      measured flag), so this setting does not gate a successful deploy
+#      here the way it does for the migrator -- reported for visibility
+#      only.
+#   Does NOT deploy. scripts/deploy-app.sh is the deploy vehicle,
+#   invoked separately (docs/deployment-runbook.md §7.1 step 1) after
+#   this script has created the resource SKELETON and the secrets-
+#   pushing steps have populated its env store.
+#
+# PROJECT/ENVIRONMENT RESOLUTION — provenance stated, not overclaimed
+#   Team-lead's directive: "resolve by the stack's environment_id, never
+#   hard-code." This script reads the Supabase-stack application's OWN
+#   `GET /applications/<uuid>` response and tries, in order: (a) a nested
+#   `environment` object carrying its own `uuid` field (the Eloquent
+#   `->load('environment')` shape Laravel's API commonly returns
+#   alongside a bare numeric `environment_id` FK); (b) if that shape is
+#   absent, falls back to the BY-NAME project/environment lookup
+#   provision-migrator-app.sh already uses (PROJECT_NAME/ENVIRONMENT_NAME
+#   env-var overrides, same defaults). Which path actually fires is
+#   PRINTED, not silently chosen -- this has NOT been independently
+#   measured against a live Coolify response as of this script's
+#   authoring (DevOps does not touch the box); if the live shape differs
+#   from either guess, fix the python here, do not silently trust
+#   whichever path happened to return something.
+#
+# USAGE
+#   BOX_IP=<box-ip> scripts/provision-app.sh          # preflight: read-only
+#   BOX_IP=<box-ip> scripts/provision-app.sh --apply  # delete-if-needed + create + set network var
+#
+set -euo pipefail
+
+if [[ -n "${REPO_ROOT:-}" ]]; then
+  :
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ "$SCRIPT_DIR" == *"/.claude/worktrees/"* ]]; then
+    printf '\n\033[31mFAIL\033[0m  running from an agent worktree (%s) -- set REPO_ROOT=<main checkout path> to override, or run this script from the main checkout.\n' "$SCRIPT_DIR" >&2
+    exit 1
+  fi
+  GIT_COMMON_DIR="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || GIT_COMMON_DIR=""
+  if [[ -z "$GIT_COMMON_DIR" ]]; then
+    printf '\n\033[31mFAIL\033[0m  could not resolve the repo root via git rev-parse --git-common-dir from %s (not inside a git checkout?). Set REPO_ROOT explicitly.\n' "$SCRIPT_DIR" >&2
+    exit 1
+  fi
+  REPO_ROOT="$(cd "$(dirname "$GIT_COMMON_DIR")" && pwd)"
+fi
+
+BOX_IP="${BOX_IP:-}"
+AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
+PROJECT_NAME="${PROJECT_NAME:-pfin-supabase}"
+ENVIRONMENT_NAME="${ENVIRONMENT_NAME:-production}"
+SUPABASE_STACK_APP_NAME="${SUPABASE_STACK_APP_NAME:-pfin-supabase-stack}"
+APP_NAME="${APP_NAME:-pfin-app}"
+GIT_REPOSITORY="${GIT_REPOSITORY:-https://github.com/richmosko/mosko-fintech}"
+GIT_BRANCH="${GIT_BRANCH:-main}"
+BASE_DIRECTORY="/api"
+DOCKER_COMPOSE_LOCATION="/docker-compose.yaml"
+
+APPLY=0
+for arg in "$@"; do
+  case "$arg" in
+    --apply) APPLY=1 ;;
+    *) echo "unknown flag: $arg" >&2; echo "usage: $0 [--apply]" >&2; exit 2 ;;
+  esac
+done
+
+die()  { printf '\n\033[31mFAIL\033[0m  %s\n' "$*" >&2; exit 1; }
+ok()   { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
+info() { printf '      %s\n' "$*"; }
+step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+[[ -n "$BOX_IP" ]] || die "BOX_IP is required, not defaulted -- set it explicitly (same discipline as every other scripts/provision-*.sh)."
+
+SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=6 -i "$AUTOMATION_KEY")
+sshx() { ssh "${SSH_OPTS[@]}" "root@$BOX_IP" "$@"; }
+sshx_in() { ssh "${SSH_OPTS[@]}" "root@$BOX_IP" bash -s; }
+
+sshx true >/dev/null 2>&1 || die "box at $BOX_IP not reachable over SSH with $AUTOMATION_KEY -- run scripts/provision-vps.sh first"
+sshx 'test -s /root/.pfin/coolify.env' >/dev/null 2>&1 \
+  || die "no /root/.pfin/coolify.env on the box -- run scripts/provision-vps.sh --apply first"
+
+api() {
+  local method="$1" path="$2" body="${3:-}"
+  if [[ -n "$body" ]]; then
+    sshx "TOKEN=\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-); curl -fsS -X $method -H \"Authorization: Bearer \$TOKEN\" -H 'Content-Type: application/json' -d '$body' http://localhost:8000/api/v1$path"
+  else
+    sshx "TOKEN=\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-); curl -fsS -X $method -H \"Authorization: Bearer \$TOKEN\" http://localhost:8000/api/v1$path"
+  fi
+}
+jqp() { python3 -c "import json,sys;$1"; }
+
+step "Preflight — the Supabase-stack application must already be deployed"
+STACK_APP_JSON="$(api GET /applications | jqp "
+d=json.load(sys.stdin)
+m=[a for a in d if a['name']=='$SUPABASE_STACK_APP_NAME']
+print(json.dumps(m[0]) if m else '')")"
+[[ -n "$STACK_APP_JSON" ]] || die "no application named '$SUPABASE_STACK_APP_NAME' -- run scripts/provision-supabase-stack.sh --apply first. This script needs the stack's live Docker network and project/environment identity."
+STACK_APP_UUID="$(echo "$STACK_APP_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
+ok "Supabase-stack application '$SUPABASE_STACK_APP_NAME' exists — $STACK_APP_UUID"
+
+step "Resolving project/environment from the stack's own resource (never hard-coded)"
+# See this script's own header "PROJECT/ENVIRONMENT RESOLUTION" note for
+# the full provenance statement. Path (a) tried first; path (b) is the
+# provision-migrator-app.sh-precedented fallback.
+RESOLVE_OUT="$(echo "$STACK_APP_JSON" | jqp "
+d=json.load(sys.stdin)
+env_obj = d.get('environment')
+if isinstance(env_obj, dict) and env_obj.get('uuid'):
+    print('PATH_A')
+    print(env_obj['uuid'])
+else:
+    print('PATH_B')
+")"
+RESOLVE_PATH="$(sed -n 1p <<<"$RESOLVE_OUT")"
+
+if [[ "$RESOLVE_PATH" == "PATH_A" ]]; then
+  ENV_UUID="$(sed -n 2p <<<"$RESOLVE_OUT")"
+  info "resolved via path (a): stack's own nested 'environment.uuid' field — $ENV_UUID"
+  # PROJECT_UUID is not separately needed by the create call once ENV_UUID
+  # is known (Coolify's create endpoint accepts environment_uuid alone
+  # alongside server_uuid, per provision-migrator-app.sh's own create
+  # body) -- left unresolved on this path; the Plan printout says so
+  # rather than fabricating a value.
+  PROJECT_UUID="<not resolved on path (a) -- not required for creation>"
+else
+  info "path (a) unavailable (no stack.environment.uuid) — falling back to BY-NAME lookup (PROJECT_NAME='$PROJECT_NAME', ENVIRONMENT_NAME='$ENVIRONMENT_NAME')"
+  PROJECT_JSON="$(api GET /projects | jqp "
+d=json.load(sys.stdin)
+m=[p for p in d if p['name']=='$PROJECT_NAME']
+print(json.dumps(m[0]) if m else '')")"
+  [[ -n "$PROJECT_JSON" ]] || die "path (b) fallback failed too: project '$PROJECT_NAME' does not exist. Fix PROJECT_NAME/ENVIRONMENT_NAME, or fix path (a)'s field-path guess in this script against the stack's actual live JSON shape."
+  PROJECT_UUID="$(echo "$PROJECT_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
+  ENV_JSON="$(api GET "/projects/$PROJECT_UUID/environments" | jqp "
+d=json.load(sys.stdin)
+m=[e for e in d if e['name']=='$ENVIRONMENT_NAME']
+print(json.dumps(m[0]) if m else '')")"
+  [[ -n "$ENV_JSON" ]] || die "path (b) fallback failed too: environment '$ENVIRONMENT_NAME' does not exist under project $PROJECT_UUID."
+  ENV_UUID="$(echo "$ENV_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
+fi
+ok "environment resolved — $ENV_UUID (project: $PROJECT_UUID)"
+
+step "Looking up the stack's live Docker network (for APP_STACK_NETWORK_NAME)"
+# Same mechanism as provision-migrator-app.sh's own MIGRATOR_STACK_NETWORK_NAME
+# lookup -- see that script's header for the full "UNMEASURED MECHANISM"
+# citation this reuses verbatim (Coolify's per-project network naming is
+# not documented; read empirically off a live container, fail closed if
+# not exactly one non-default network is found).
+STACK_NETWORKS="$(sshx "docker inspect --format '{{range \$k, \$v := .NetworkSettings.Networks}}{{println \$k}}{{end}}' \$(docker compose --project-name $STACK_APP_UUID ps -q meta)" 2>/dev/null | grep -Ev '^(bridge|host|none)$' || true)"
+NETWORK_COUNT="$(echo "$STACK_NETWORKS" | grep -c . || true)"
+if [[ "$NETWORK_COUNT" -ne 1 ]]; then
+  die "expected exactly ONE non-default Docker network on the stack's 'meta' container, found $NETWORK_COUNT: [$STACK_NETWORKS]. Cannot safely pick which network 'app' should join -- investigate by hand (docker inspect on the box) rather than guessing."
+fi
+APP_STACK_NETWORK_NAME="$STACK_NETWORKS"
+ok "stack network — $APP_STACK_NETWORK_NAME"
+
+step "Preflight — existing '$APP_NAME' resource (delete-if-stale-shape check)"
+OLD_APP_JSON="$(api GET /applications | jqp "
+d=json.load(sys.stdin)
+m=[a for a in d if a['name']=='$APP_NAME']
+print(json.dumps(m[0]) if m else '')")"
+DELETE_NEEDED=0
+if [[ -n "$OLD_APP_JSON" ]]; then
+  OLD_APP_UUID="$(echo "$OLD_APP_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
+  OLD_BUILD_PACK="$(echo "$OLD_APP_JSON" | jqp "print(json.load(sys.stdin).get('build_pack',''))")"
+  if [[ "$OLD_BUILD_PACK" == "dockercompose" ]]; then
+    info "'$APP_NAME' ($OLD_APP_UUID) already exists as build_pack=dockercompose — treating as already-migrated, no delete needed."
+    APP_UUID="$OLD_APP_UUID"
+  else
+    info "'$APP_NAME' ($OLD_APP_UUID) exists with build_pack='$OLD_BUILD_PACK' — needs replacement with a dockercompose resource."
+    DEPLOY_COUNT="$(api GET "/applications/$OLD_APP_UUID/deployments" | jqp "
+d=json.load(sys.stdin)
+lst = d if isinstance(d, list) else d.get('data', [])
+print(len(lst))" 2>/dev/null || echo "unknown")"
+    ENV_COUNT="$(api GET "/applications/$OLD_APP_UUID/envs" | jqp "
+d=json.load(sys.stdin)
+print(len(d))" 2>/dev/null || echo "unknown")"
+    info "measured on '$OLD_APP_UUID': deployments=$DEPLOY_COUNT, env-store names=$ENV_COUNT"
+    if [[ "$DEPLOY_COUNT" != "0" || "$ENV_COUNT" != "0" ]]; then
+      die "REFUSING TO DELETE '$APP_NAME' ($OLD_APP_UUID): deployments=$DEPLOY_COUNT, env-store names=$ENV_COUNT -- expected both zero (the ruling's own stated precondition, measured 2026-09-19). This resource may hold real state now; investigate by hand before deleting anything. This script only deletes a genuinely empty shell."
+    fi
+    DELETE_NEEDED=1
+  fi
+else
+  info "'$APP_NAME' does not exist — will be created fresh."
+fi
+
+step "Plan"
+cat <<PLAN
+      project        $PROJECT_UUID
+      environment    $ENV_UUID
+      application    $APP_NAME  ${APP_UUID:-<to be created>}
+      delete-first   $([[ $DELETE_NEEDED -eq 1 ]] && echo "YES — old build_pack='$OLD_BUILD_PACK', ${OLD_APP_UUID:-}" || echo "no")
+      network        $APP_STACK_NETWORK_NAME (external, attached to the stack's own network)
+      env-var        unconditional overwrite (non-secret): APP_STACK_NETWORK_NAME
+PLAN
+
+if [[ $APPLY -eq 0 ]]; then
+  printf '\n\033[33mPREFLIGHT ONLY.\033[0m Nothing was deleted, created, or set. Re-run with --apply to execute.\n'
+  exit 0
+fi
+
+if [[ $DELETE_NEEDED -eq 1 ]]; then
+  step "Deleting stale '$APP_NAME' ($OLD_APP_UUID) — zero deployments, zero env names, confirmed above"
+  api DELETE "/applications/$OLD_APP_UUID" >/dev/null
+  STILL_PRESENT="$(api GET /applications | jqp "
+d=json.load(sys.stdin)
+m=[a for a in d if a['uuid']=='$OLD_APP_UUID']
+print('yes' if m else 'no')")"
+  [[ "$STILL_PRESENT" == "no" ]] || die "deleted '$OLD_APP_UUID' but it is still present in /applications -- investigate before proceeding."
+  ok "deleted — absence confirmed by re-read, not inferred from the DELETE call's own reported success"
+fi
+
+if [[ -z "${APP_UUID:-}" ]]; then
+  step "Applying — application creation (dockercompose)"
+  SERVER_UUID="$(api GET /servers | jqp "
+d=json.load(sys.stdin)
+m=[s for s in d if s['name']=='localhost']
+print(m[0]['uuid'] if m else '')")"
+  [[ -n "$SERVER_UUID" ]] || die "no server named 'localhost' -- expected Coolify's own auto-registered entry for this box"
+  CREATE_BODY="$(python3 -c "
+import json
+print(json.dumps({
+  'environment_uuid': '$ENV_UUID',
+  'server_uuid': '$SERVER_UUID',
+  'git_repository': '$GIT_REPOSITORY', 'git_branch': '$GIT_BRANCH',
+  'build_pack': 'dockercompose', 'name': '$APP_NAME',
+  'base_directory': '$BASE_DIRECTORY',
+  'docker_compose_location': '$DOCKER_COMPOSE_LOCATION',
+  'instant_deploy': False,
+}))")"
+  APP_UUID="$(api POST /applications/public "$CREATE_BODY" | jqp "print(json.load(sys.stdin)['uuid'])")"
+  ok "application created — $APP_UUID (compose parse queued, not deployed — scripts/deploy-app.sh handles the deploy separately)"
+fi
+
+step "Reporting settings.include_source_commit_in_build (NOT forced — see header)"
+SOURCE_COMMIT_JSON="$(api GET "/applications/$APP_UUID")"
+if echo "$SOURCE_COMMIT_JSON" | "$REPO_ROOT/scripts/ci/check-source-commit-in-build.sh" >/tmp/app-source-commit-check.$$ 2>&1; then
+  info "settings.include_source_commit_in_build — true (harmless here; api/Dockerfile has no SOURCE_COMMIT/GIT_SHA guard)"
+else
+  info "settings.include_source_commit_in_build — not true ($(cat /tmp/app-source-commit-check.$$ | tr -d '\n')) — not a blocker, api/Dockerfile has no such guard"
+fi
+rm -f /tmp/app-source-commit-check.$$
+
+step "Setting APP_STACK_NETWORK_NAME (non-secret, unconditional overwrite)"
+api PATCH "/applications/$APP_UUID/envs/bulk" "$(python3 -c "
+import json
+print(json.dumps({'data': [{'key': 'APP_STACK_NETWORK_NAME', 'value': '$APP_STACK_NETWORK_NAME'}]}))")" >/dev/null
+ENVS_AFTER="$(api GET "/applications/$APP_UUID/envs")"
+READBACK="$(echo "$ENVS_AFTER" | jqp "
+d=json.load(sys.stdin)
+m=[e for e in d if e['key']=='APP_STACK_NETWORK_NAME']
+print(m[0]['value'] if m else '')")"
+[[ "$READBACK" == "$APP_STACK_NETWORK_NAME" ]] \
+  || die "wrote APP_STACK_NETWORK_NAME='$APP_STACK_NETWORK_NAME' but read back '$READBACK' -- byte-exact mismatch, refusing to trust the store."
+ok "APP_STACK_NETWORK_NAME set and byte-exact read-back verified — $APP_STACK_NETWORK_NAME"
+
+step "Done"
+info "Resource '$APP_NAME' ($APP_UUID) is a dockercompose application, network var set, NOT yet deployed."
+info "Record APP_UUID with scripts/record-coolify-uuids.sh --apply (it resolves by name, confirm it still does after this recreation)."
+info "Next: docs/deployment-runbook.md §7.1 step 1's remaining steps (push secrets, coolify-env.sh set, mint, then scripts/deploy-app.sh)."

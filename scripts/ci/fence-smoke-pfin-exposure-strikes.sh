@@ -23,8 +23,12 @@
 #      would PASS in anon mode must NOT pass in jwt mode)
 #   7. ambiguous       (2 RUNNING containers match)  -> exit 1 (Sec F4 --
 #      must refuse, never silently `head -1` a stale/pre-deploy container)
+#   8. compose-service resolution, single container  -> exit 0 (pfin-app
+#      is now dockercompose, F/CTO topology ruling 2026-09-19)
+#   9. compose-service resolution, 2 containers       -> exit 1 (F4
+#      discipline applied to this mechanism too, a distinct code path)
 #
-# Exit 0 only if all seven scenarios behave exactly as specified above.
+# Exit 0 only if all nine scenarios behave exactly as specified above.
 
 set -euo pipefail
 
@@ -114,6 +118,16 @@ run_scenario "jwt mode: 401/42501 (would pass in anon mode) FAILS here" 1 jwt-fa
 # 7. AMBIGUOUS -- two RUNNING containers match the app uuid (Sec F4).
 #    Must refuse, never silently pick one via a bare `| head -1`.
 FAKE_DOCKER_CONTAINERS=2 run_scenario "ambiguous: 2 running containers refuses" 1 anon-pass pfin-app || FAIL=1
+
+# 8. COMPOSE-SERVICE resolution -- --compose-service given, exactly one
+#    RUNNING container resolves via `docker compose ... ps -q` -> passes
+#    (F/CTO topology ruling 2026-09-19, pfin-app is now dockercompose).
+run_scenario "compose-service: single container passes" 0 anon-pass pfin-app --compose-service app || FAIL=1
+
+# 9. COMPOSE-SERVICE ambiguous -- 2 RUNNING containers resolve via the
+#    compose mechanism -> refuses (F4 discipline applied to this
+#    mechanism too, a distinct code path from scenario 7's).
+FAKE_DOCKER_COMPOSE_CONTAINERS=2 run_scenario "compose-service: ambiguous (2 containers) refuses" 1 anon-pass pfin-app --compose-service app || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

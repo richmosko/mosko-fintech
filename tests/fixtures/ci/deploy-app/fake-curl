@@ -14,26 +14,24 @@
 # deploy attempt, not merely report the mismatch after the fact.
 #
 # Behaviour selected by $FAKE_CURL_MODE:
-#   match       -- GET /applications returns one app with base_directory
-#                  "/api" (matches the strike's --expect-base-directory),
-#                  GET .../envs returns all three names the require-env
-#                  strike checks for, deploy succeeds, deployment status
-#                  "finished".
-#   mismatch    -- GET /applications returns base_directory "/wrong" --
-#                  deploy-app.sh's identity guard must die() before any
-#                  /deploy call is ever made.
-#   missing-env -- base_directory matches ("/api"), but GET .../envs
-#                  omits one required name -- deploy-app.sh's
-#                  required-env-names guard must die() before any
-#                  /deploy call is ever made.
-#   network-match     -- a second app ("pfin-stack") shares environment_id
-#                         and both carry connect_to_docker_network=true --
-#                         --require-network-with must pass.
-#   network-diff-env  -- the two apps have DIFFERENT environment_id --
-#                         --require-network-with must refuse.
-#   network-off       -- same environment_id, but the OTHER app carries
-#                         connect_to_docker_network=false --
-#                         --require-network-with must refuse.
+#   match              -- GET /applications returns one app with
+#                          base_directory "/api" and build_pack
+#                          "dockercompose" (matches the strike's
+#                          --expect-base-directory/--expect-build-pack),
+#                          GET .../envs returns all three names the
+#                          require-env strike checks for, deploy
+#                          succeeds, deployment status "finished".
+#   mismatch           -- GET /applications returns base_directory
+#                          "/wrong" -- deploy-app.sh's identity guard
+#                          must die() before any /deploy call.
+#   build-pack-mismatch -- base_directory matches, but build_pack is
+#                          "dockerfile" instead of "dockercompose" --
+#                          the --expect-build-pack guard must die()
+#                          before any /deploy call.
+#   missing-env        -- base_directory/build_pack match, but GET
+#                          .../envs omits one required name -- the
+#                          required-env-names guard must die() before
+#                          any /deploy call.
 
 set -euo pipefail
 
@@ -50,36 +48,11 @@ URL="${*: -1}"
 
 BASE_DIR="/api"
 [[ "${FAKE_CURL_MODE:-match}" == "mismatch" ]] && BASE_DIR="/wrong"
-
-# Network-guard fields for the two applications -- defaults describe the
-# happy path (network-match); the other modes flip one or more fields.
-# network-live-measured reproduces team-lead's exact 2026-09-19 live
-# measurement (docs/deployment-runbook.md §7.1 step 2's MEASURED note):
-# different environment_id AND connect_to_docker_network false on BOTH
-# sides simultaneously -- the guard must report every problem, not just
-# the first one it finds.
-APP_ENV_ID=5
-STACK_ENV_ID=5
-APP_NET=true
-STACK_NET=true
-case "${FAKE_CURL_MODE:-match}" in
-  network-diff-env)     STACK_ENV_ID=6 ;;
-  network-off)          STACK_NET=false ;;
-  network-live-measured) STACK_ENV_ID=6; APP_NET=false; STACK_NET=false ;;
-esac
+BUILD_PACK="dockercompose"
+[[ "${FAKE_CURL_MODE:-match}" == "build-pack-mismatch" ]] && BUILD_PACK="dockerfile"
 
 if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
-  printf '[{"uuid":"abc123def456ghi789jk01","name":"pfin-app","base_directory":"%s","fqdn":"http://test.example.sslip.io"},{"uuid":"stack000000000000000001","name":"pfin-stack","base_directory":"/infra/supabase"}]' "$BASE_DIR"
-  exit 0
-fi
-
-if [[ "$METHOD" == "GET" && "$URL" == *"/applications/abc123def456ghi789jk01" ]]; then
-  printf '{"uuid":"abc123def456ghi789jk01","environment_id":%s,"settings":{"connect_to_docker_network":%s}}' "$APP_ENV_ID" "$APP_NET"
-  exit 0
-fi
-
-if [[ "$METHOD" == "GET" && "$URL" == *"/applications/stack000000000000000001" ]]; then
-  printf '{"uuid":"stack000000000000000001","environment_id":%s,"settings":{"connect_to_docker_network":%s}}' "$STACK_ENV_ID" "$STACK_NET"
+  printf '[{"uuid":"abc123def456ghi789jk01","name":"pfin-app","base_directory":"%s","build_pack":"%s","fqdn":"http://test.example.sslip.io"}]' "$BASE_DIR" "$BUILD_PACK"
   exit 0
 fi
 

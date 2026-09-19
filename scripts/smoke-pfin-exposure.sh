@@ -11,15 +11,17 @@
 #
 # MECHANISM
 #   Resolves <APP_NAME|uuid> via the Coolify API (same api()/-K- shape as
-#   scripts/deploy-app.sh), finds its RUNNING container on the box by
-#   uuid-substring name match. This app is a plain-Dockerfile-pack
-#   resource, not a `dockercompose` one -- there is no compose PROJECT to
-#   address with `docker compose --project-name ... exec`, only a single
-#   container, so `docker exec <container>` is the correct primitive
-#   here (the same one scripts/deploy-app.sh's own on-box health read
-#   already uses for this exact resource shape; `docker compose exec`
-#   would simply fail against a Dockerfile-pack app -- no compose project
-#   exists for it to address).
+#   scripts/deploy-app.sh), finds its RUNNING container on the box using
+#   the SAME two container-resolution mechanisms scripts/deploy-app.sh
+#   supports, selected the same way: `--compose-service <name>` resolves
+#   via `docker compose --project-name <uuid> ps -q <name>` (the correct
+#   primitive for a `dockercompose`-pack application -- `pfin-app` moved
+#   to this build pack, F/CTO ruling 2026-09-19, Open Flags #12 option A,
+#   an `external:` network attachment to the Supabase stack); omitted,
+#   falls back to the plain-Dockerfile-pack uuid-substring name match
+#   (`docker ps --filter name=<uuid>`) for any application still on that
+#   build pack. Both mechanisms refuse on >1 RUNNING match (Sec F4),
+#   never silently picking one.
 #   Then runs a `node -e` one-liner INSIDE that container issuing the
 #   HTTP request to `api-gw:8000` -- proving the request crosses exactly
 #   the path the app's own server code dials, from exactly where it runs.
@@ -64,7 +66,7 @@
 #   actual tenant row data).
 #
 # USAGE
-#   BOX_IP=<box-ip> scripts/smoke-pfin-exposure.sh <APP_NAME|uuid> [--jwt <user-jwt>]
+#   BOX_IP=<box-ip> scripts/smoke-pfin-exposure.sh <APP_NAME|uuid> [--compose-service <name>] [--jwt <user-jwt>]
 #
 # EXIT CODES
 #   0  the mode-appropriate expected outcome (401/42501 default,
@@ -94,13 +96,15 @@ ok()   { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
 info() { printf '      %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
-[[ $# -ge 1 ]] || die "usage: $0 <APP_NAME|uuid> [--jwt <user-jwt>]"
+[[ $# -ge 1 ]] || die "usage: $0 <APP_NAME|uuid> [--compose-service <name>] [--jwt <user-jwt>]"
 APP_QUERY="$1"; shift
 
 USER_JWT=""
+COMPOSE_SERVICE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --jwt) [[ $# -ge 2 ]] || die "--jwt requires an argument"; USER_JWT="$2"; shift 2 ;;
+    --compose-service) [[ $# -ge 2 ]] || die "--compose-service requires an argument"; COMPOSE_SERVICE="$2"; shift 2 ;;
     --*) die "unknown flag: $1" ;;
     *) die "unexpected argument: $1" ;;
   esac
@@ -161,23 +165,33 @@ REMOTE
 [[ "$APP_UUID" =~ $UUID_RE ]] || die "could not resolve '$APP_QUERY' to a uuid-shaped application id"
 ok "resolved '$APP_QUERY' -> $APP_UUID"
 
-# --- Step 2: find the running container (plain-Dockerfile-pack -- no ------
-#     compose project to address, `docker exec` by uuid-substring name
-#     match, same primitive scripts/deploy-app.sh's own health read uses).
-# ⚠ Fixed (Sec, PR #833 joint review, F4): a bare `| head -1` asserted
-# non-empty, not unique -- during a Coolify redeploy the pre-deploy and
-# post-deploy containers can both be RUNNING, and `head -1` can silently
-# smoke-test the STALE one. Refuse on >1 match, naming both, matching
-# scripts/deploy-app.sh's own fix for the identical resolution.
+# --- Step 2: find the running container -------------------------------------
+# Two resolution mechanisms, same as scripts/deploy-app.sh (kept in sync
+# deliberately -- both scripts must target the SAME container for the
+# same application). ⚠ Fixed (Sec, PR #833 joint review, F4): a bare
+# `| head -1` asserted non-empty, not unique -- during a Coolify redeploy
+# the pre-deploy and post-deploy containers can both be RUNNING. Refuse
+# on >1 match, naming all of them, in BOTH mechanisms.
 step "Finding the running container"
-RUNNING_LIST="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.Names}}\t{{.CreatedAt}}'")"
-[[ -n "$RUNNING_LIST" ]] || die "no running container found matching '$APP_UUID' -- is the app deployed and healthy? (scripts/deploy-app.sh)"
-RUNNING_COUNT="$(printf '%s\n' "$RUNNING_LIST" | grep -c .)"
-[[ "$RUNNING_COUNT" -eq 1 ]] \
-  || die "AMBIGUOUS: $RUNNING_COUNT running containers match '$APP_UUID' -- refusing to silently pick one (a Coolify redeploy can leave the pre-deploy container still RUNNING alongside the new one). Matches:
+if [[ -n "$COMPOSE_SERVICE" ]]; then
+  RUNNING_LIST="$(sshx "docker compose --project-name $APP_UUID ps -q $COMPOSE_SERVICE | xargs -r -I{} docker inspect --format '{{.State.Running}}\t{{.Id}}\t{{.Created}}' {} | awk -F'\t' '\$1==\"true\"{print \$2\"\t\"\$3}'")"
+  [[ -n "$RUNNING_LIST" ]] || die "no running container found for compose service '$COMPOSE_SERVICE' under project '$APP_UUID' -- is the app deployed and healthy? (scripts/deploy-app.sh)"
+  RUNNING_COUNT="$(printf '%s\n' "$RUNNING_LIST" | grep -c .)"
+  [[ "$RUNNING_COUNT" -eq 1 ]] \
+    || die "AMBIGUOUS: $RUNNING_COUNT running containers match compose service '$COMPOSE_SERVICE' under project '$APP_UUID' -- refusing to silently pick one. Matches:
+$RUNNING_LIST
+Investigate on the box (docker compose --project-name $APP_UUID ps -a) before trusting which one this smoke should target."
+  CONTAINER_NAME="$(awk -F'\t' '{print $1}' <<<"$RUNNING_LIST")"
+else
+  RUNNING_LIST="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.Names}}\t{{.CreatedAt}}'")"
+  [[ -n "$RUNNING_LIST" ]] || die "no running container found matching '$APP_UUID' -- is the app deployed and healthy? (scripts/deploy-app.sh)"
+  RUNNING_COUNT="$(printf '%s\n' "$RUNNING_LIST" | grep -c .)"
+  [[ "$RUNNING_COUNT" -eq 1 ]] \
+    || die "AMBIGUOUS: $RUNNING_COUNT running containers match '$APP_UUID' -- refusing to silently pick one (a Coolify redeploy can leave the pre-deploy container still RUNNING alongside the new one). Matches:
 $RUNNING_LIST
 Investigate on the box (docker ps -a) before trusting which one this smoke should target."
-CONTAINER_NAME="$(awk -F'\t' '{print $1}' <<<"$RUNNING_LIST")"
+  CONTAINER_NAME="$(awk -F'\t' '{print $1}' <<<"$RUNNING_LIST")"
+fi
 ok "running container: $CONTAINER_NAME"
 
 # --- Step 3: the smoke request, executed INSIDE the container --------------

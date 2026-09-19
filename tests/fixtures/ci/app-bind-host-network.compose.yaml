@@ -1,0 +1,16 @@
+# fence-app-private-bind: target
+# GOLDEN FIXTURE — VECTOR 3 (network_mode: host → fence FAILS, exit 1).
+#
+# `network_mode: host` drops the service onto the host's own network
+# namespace, bypassing the project Docker network — including this file's
+# own `external:` attachment to the Supabase-stack network — entirely.
+# Exercised by the fence-app-bind CI job, asserting exit 1 AND the
+# vector-3 token.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    network_mode: host

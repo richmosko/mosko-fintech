@@ -18,6 +18,23 @@ if [[ "$*" == *"ps"* && "$*" == *"status=running"* ]]; then
   exit 0
 fi
 
+# Compose-pack resolution mechanism -- same shape as
+# tests/fixtures/ci/deploy-app/fake-curl's own sibling fixture.
+# $FAKE_DOCKER_COMPOSE_CONTAINERS controls row count (default 1; "2"
+# exercises the SAME F4 discipline on this mechanism).
+if [[ "$*" == "compose "*"ps -q"* ]]; then
+  echo "cid1"
+  if [[ "${FAKE_DOCKER_COMPOSE_CONTAINERS:-1}" == "2" ]]; then
+    echo "cid2"
+  fi
+  exit 0
+fi
+if [[ "$*" == *"inspect"* && "$*" == *"State.Running"* ]]; then
+  cid="${*: -1}"
+  echo -e "true\t$cid\t2026-09-19T12:00:00Z"
+  exit 0
+fi
+
 if [[ "$*" == *"exec"* ]]; then
   # The mode name encodes which CREDENTIAL the scenario exercises. A jwt-*
   # mode arriving with no JWT actually delivered means the script

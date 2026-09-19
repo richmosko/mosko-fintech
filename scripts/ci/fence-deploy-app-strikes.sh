@@ -9,40 +9,46 @@
 # responses -- deploy-app.sh itself is never modified or made aware this
 # exists). Same strike shape as scripts/ci/fence-coolify-env-strikes.sh.
 #
-# Proves the FOUR claims deploy-app.sh's header makes about its own safety
-# (the identity guard, the --require-env names-only presence guard, the
-# --require-network-with cross-application guard, and the ambiguous-
-# running-container refusal) -- nine scenarios in total (N4, PR #833 Sec
-# joint review: this comment previously said "three", there are now
-# nine; keep this count current, it is read, not decorative):
-#   1. MATCH -- a resolved application whose base_directory equals the
-#      caller's --expect-base-directory proceeds through preflight AND
-#      (in --apply) through a full deploy+poll to "finished".
-#   1b. AMBIGUOUS -- 2 RUNNING containers match the app uuid (Sec F4) --
-#      must refuse, never silently `head -1` a stale/pre-deploy container.
-#   2. MISMATCH -- a resolved application whose base_directory does NOT
-#      match refuses (non-zero exit) in PREFLIGHT ONLY, before --apply is
-#      even given -- proving the guard is not merely "checked, then
-#      deployed anyway." A bare rc!=0 would be vacuous if the script
-#      failed for some unrelated reason, so this also asserts the fake
-#      curl log contains NO "/deploy" call in the mismatch case --
-#      the deploy path must never even be attempted.
-#   3. MISMATCH-WITH-APPLY -- same refusal holds when --apply IS given
-#      (the guard fires before the deploy branch is reached at all, not
-#      merely under the lighter preflight code path).
-#   4. REQUIRE-ENV-MATCH -- all required names present -> passes.
-#   5. REQUIRE-ENV-MISSING -- one required name absent -> refuses, same
-#      before-any-/deploy-call proof as scenarios 2/3.
-#   6. NETWORK-MATCH (Sec F3) -- both applications share environment_id
-#      and connect_to_docker_network=true on both -> passes.
-#   7. NETWORK-DIFF-ENV -- different environment_id -> refuses.
-#   8. NETWORK-OFF -- connect_to_docker_network=false on the OTHER side
-#      -> refuses, naming which side.
-#   9. NETWORK-LIVE-MEASURED -- team-lead's exact 2026-09-19 live
-#      measurement (docs/deployment-runbook.md §7.1 step 2's MEASURED
-#      note): different environment_id AND connect_to_docker_network
-#      false on BOTH sides at once -> refuses, reporting ALL THREE
-#      problems, not just the first one found.
+# Proves the claims deploy-app.sh's header makes about its own safety --
+# the identity guard (base_directory AND build_pack), the --require-env
+# names-only presence guard, the ambiguous-running-container refusal
+# (BOTH container-resolution mechanisms), and the post-deploy network-
+# attachment / hostname-resolve checks that replaced the earlier
+# --require-network-with guard (F/CTO topology ruling 2026-09-19, Open
+# Flags #12 -- `pfin-app` becomes a `dockercompose` resource with an
+# `external:` network, making a pre-deploy declared-settings check
+# irrelevant; the new checks verify the DEPLOYED reality instead). Keep
+# this count current, it is read, not decorative (N4, PR #833 Sec joint
+# review) -- fifteen scenarios in total:
+#   1. MATCH -- a resolved application whose base_directory AND
+#      build_pack equal the caller's --expect-* flags proceeds through
+#      preflight AND (in --apply) through a full deploy+poll to
+#      "finished".
+#   2. AMBIGUOUS (non-compose) -- 2 RUNNING containers match the app uuid
+#      (Sec F4) -- must refuse, never silently `head -1` a stale/pre-
+#      deploy container.
+#   3. REQUIRE-ENV-MATCH -- all required names present -> passes.
+#   4. MISSING-ENV -- one required name absent -> refuses BEFORE any
+#      /deploy call.
+#   5. MISSING-ENV-WITH-APPLY -- same refusal holds with --apply given.
+#   6. MISMATCH (base_directory) -- refuses in PREFLIGHT ONLY, before
+#      --apply is even given -- proving the guard is not merely "checked,
+#      then deployed anyway." Also asserts the fake curl log contains NO
+#      "/deploy" call -- the deploy path must never even be attempted.
+#   7. MISMATCH-WITH-APPLY -- same refusal holds when --apply IS given.
+#   8. BUILD-PACK-MISMATCH -- --expect-build-pack given, live build_pack
+#      disagrees -> refuses BEFORE any /deploy call.
+#   9. COMPOSE-RESOLUTION-MATCH -- --compose-service given, exactly one
+#      RUNNING container resolves via `docker compose ... ps -q` -> the
+#      on-box health read passes.
+#   10. COMPOSE-RESOLUTION-AMBIGUOUS -- --compose-service given, 2
+#      RUNNING containers resolve -> refuses, same F4 discipline applied
+#      to the compose-ps mechanism.
+#   11. NETWORK-ATTACHMENT-FAIL -- --require-network given, the resolved
+#      container is NOT attached to the named network -> refuses,
+#      post-deploy.
+#   12. RESOLVE-HOST-FAIL -- --resolve-host given, `getent hosts` fails
+#      inside the container -> refuses, post-deploy.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -67,13 +73,26 @@ FAKE_BIN="$WORK/bin"
 mkdir -p "$FAKE_BIN"
 ln -s "$FIXTURE_DIR/fake-curl" "$FAKE_BIN/curl"
 
-# Fake `docker` -- deploy-app.sh's on-box health read shells out to
-# `docker ps --filter name=<uuid> --filter status=running --format ...`
-# on the box. Stand in with a canned single-row match so the strike
-# exercises the full script, not just the guard + deploy halves.
-# $FAKE_DOCKER_CONTAINERS controls how many RUNNING rows `docker ps`
-# reports -- default 1 (the normal case); "2" exercises Sec's F4 fix
-# (ambiguous match must refuse, never silently pick one via `head -1`).
+# Fake `docker` -- stands in for BOTH container-resolution mechanisms
+# deploy-app.sh supports, plus the post-deploy network/resolve probes.
+#   plain `docker ps --filter name=... --filter status=running ...` --
+#     the non-compose resolution path. $FAKE_DOCKER_CONTAINERS controls
+#     row count (default 1; "2" exercises Sec's F4 ambiguous-match fix).
+#   `docker compose --project-name <uuid> ps -q <service>` -- the
+#     compose-pack resolution path. $FAKE_DOCKER_COMPOSE_CONTAINERS
+#     controls row count (default 1; "2" exercises the SAME F4 fix on
+#     this mechanism).
+#   `docker inspect --format '...State.Running...' <id>` -- reports every
+#     id it's given as RUNNING (the xargs/awk pipeline in deploy-app.sh
+#     filters on this field; canned true here since the compose-ps mock
+#     above already only returns the ids meant to look running).
+#   `docker inspect --format '...NetworkSettings.Networks...' <container>`
+#     -- $FAKE_DOCKER_NETWORKS selects which network name(s) are reported
+#     (default "stack-net"; "none" reports only "bridge", exercising the
+#     network-attachment guard's refusal).
+#   `docker exec <container> getent hosts <hostname>` -- $FAKE_DOCKER_RESOLVE
+#     selects success ("ok", default) or failure ("fail", exit 2, no
+#     output), exercising the hostname-resolve guard's refusal.
 cat > "$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$*" == *"ps"* && "$*" == *"status=running"* ]]; then
@@ -82,6 +101,34 @@ if [[ "$*" == *"ps"* && "$*" == *"status=running"* ]]; then
     echo -e "app-abc123def456ghi789jk01-111111111111\tUp 2 seconds\t2026-09-19 12:05:00"
   fi
   exit 0
+fi
+if [[ "$*" == "compose "*"ps -q"* ]]; then
+  echo "cid1"
+  if [[ "${FAKE_DOCKER_COMPOSE_CONTAINERS:-1}" == "2" ]]; then
+    echo "cid2"
+  fi
+  exit 0
+fi
+if [[ "$*" == *"inspect"* && "$*" == *"State.Running"* ]]; then
+  cid="${*: -1}"
+  echo -e "true\t$cid\t2026-09-19T12:00:00Z"
+  exit 0
+fi
+if [[ "$*" == *"inspect"* && "$*" == *"NetworkSettings.Networks"* ]]; then
+  if [[ "${FAKE_DOCKER_NETWORKS:-attached}" == "attached" ]]; then
+    echo "stack-net"
+  else
+    echo "bridge"
+  fi
+  exit 0
+fi
+if [[ "$*" == *"exec"* && "$*" == *"getent hosts"* ]]; then
+  if [[ "${FAKE_DOCKER_RESOLVE:-ok}" == "ok" ]]; then
+    echo "10.0.0.5   api-gw"
+    exit 0
+  else
+    exit 2
+  fi
 fi
 exit 0
 EOF
@@ -153,44 +200,45 @@ FAIL=0
 
 # 1. MATCH -- preflight passes (guard satisfied), no --apply given.
 run_scenario "match: preflight passes" 0 match \
-  pfin-app --expect-base-directory /api >/dev/null || FAIL=1
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose >/dev/null || FAIL=1
 
-# 2. MATCH -- --apply drives a full deploy+poll to a running container.
+# 1a. MATCH -- --apply drives a full deploy+poll to a running container.
 run_scenario "match: --apply deploys clean" 0 match \
-  pfin-app --expect-base-directory /api --apply >/dev/null || FAIL=1
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --apply >/dev/null || FAIL=1
 
-# 2a. AMBIGUOUS -- two RUNNING containers match the app uuid (the
-#     Coolify-redeploy overlap window, Sec F4). Must refuse, never
-#     silently pick one via `head -1` / a bare non-empty check.
-FAKE_DOCKER_CONTAINERS=2 run_scenario "ambiguous: 2 running containers refuses" 1 match \
-  pfin-app --expect-base-directory /api --apply >/dev/null || FAIL=1
+# 2. AMBIGUOUS (non-compose) -- two RUNNING containers match the app uuid
+#    (the Coolify-redeploy overlap window, Sec F4). Must refuse, never
+#    silently pick one via `head -1` / a bare non-empty check.
+FAKE_DOCKER_CONTAINERS=2 run_scenario "ambiguous (non-compose): 2 running containers refuses" 1 match \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --apply >/dev/null || FAIL=1
 
-# 2b. MATCH + --require-env, all three present -- preflight passes.
+# 3. MATCH + --require-env, all three present -- preflight passes.
 run_scenario "match: --require-env passes when all names present" 0 match \
-  pfin-app --expect-base-directory /api \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose \
   --require-env PUBLIC_SUPABASE_URL,PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY >/dev/null || FAIL=1
 
-# 2c. MISSING-ENV -- base_directory matches, but one required name is
-#     absent from the env store -- must refuse BEFORE any /deploy call,
-#     same vacuous-refusal check as the identity-guard scenarios below.
+# 4. MISSING-ENV -- base_directory/build_pack match, but one required
+#    name is absent from the env store -- must refuse BEFORE any
+#    /deploy call.
 MISSING_ENV_LOG="$(run_scenario "missing-env: --require-env refuses" 1 missing-env \
-  pfin-app --expect-base-directory /api \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose \
   --require-env PUBLIC_SUPABASE_URL,PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY)" || FAIL=1
 if [[ -n "${MISSING_ENV_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$MISSING_ENV_LOG" 2>/dev/null; then
   echo "FAIL: [missing-env: --require-env refuses] the required-env guard did NOT prevent a /deploy call -- vacuous refusal." >&2
   FAIL=1
 fi
 
-# 2d. MISSING-ENV-WITH-APPLY -- same refusal holds with --apply given.
+# 5. MISSING-ENV-WITH-APPLY -- same refusal holds with --apply given.
 MISSING_ENV_APPLY_LOG="$(run_scenario "missing-env: --require-env refuses even with --apply" 1 missing-env \
-  pfin-app --expect-base-directory /api --apply \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --apply \
   --require-env PUBLIC_SUPABASE_URL,PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY)" || FAIL=1
 if [[ -n "${MISSING_ENV_APPLY_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$MISSING_ENV_APPLY_LOG" 2>/dev/null; then
   echo "FAIL: [missing-env: --require-env refuses even with --apply] the required-env guard did NOT prevent a /deploy call -- vacuous refusal." >&2
   FAIL=1
 fi
 
-# 3. MISMATCH -- preflight refuses, and the deploy endpoint is NEVER hit.
+# 6. MISMATCH (base_directory) -- preflight refuses, and the deploy
+#    endpoint is NEVER hit.
 MISMATCH_LOG="$(run_scenario "mismatch: preflight refuses" 1 mismatch \
   pfin-app --expect-base-directory /api)" || FAIL=1
 if [[ -n "${MISMATCH_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$MISMATCH_LOG" 2>/dev/null; then
@@ -198,7 +246,7 @@ if [[ -n "${MISMATCH_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$MISMATCH_LOG" 2>/d
   FAIL=1
 fi
 
-# 4. MISMATCH-WITH-APPLY -- same refusal holds with --apply given; the
+# 7. MISMATCH-WITH-APPLY -- same refusal holds with --apply given; the
 #    guard runs BEFORE the apply/deploy branch, not only in the lighter
 #    preflight path.
 MISMATCH_APPLY_LOG="$(run_scenario "mismatch: refuses even with --apply" 1 mismatch \
@@ -208,56 +256,51 @@ if [[ -n "${MISMATCH_APPLY_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$MISMATCH_APP
   FAIL=1
 fi
 
-# 5. NETWORK-MATCH -- both apps share environment_id and
-#    connect_to_docker_network=true on both -- --require-network-with
-#    must pass.
-run_scenario "network-match: --require-network-with passes" 0 network-match \
-  pfin-app --expect-base-directory /api --require-network-with pfin-stack >/dev/null || FAIL=1
-
-# 6. NETWORK-DIFF-ENV -- different environment_id -- must refuse BEFORE
-#    any /deploy call.
-NETWORK_DIFF_LOG="$(run_scenario "network-diff-env: --require-network-with refuses" 1 network-diff-env \
-  pfin-app --expect-base-directory /api --require-network-with pfin-stack --apply)" || FAIL=1
-if [[ -n "${NETWORK_DIFF_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$NETWORK_DIFF_LOG" 2>/dev/null; then
-  echo "FAIL: [network-diff-env: --require-network-with refuses] the network guard did NOT prevent a /deploy call -- vacuous refusal." >&2
+# 8. BUILD-PACK-MISMATCH -- base_directory matches, but the live
+#    build_pack disagrees with --expect-build-pack -- must refuse
+#    BEFORE any /deploy call.
+BUILDPACK_LOG="$(run_scenario "build-pack-mismatch: preflight refuses" 1 build-pack-mismatch \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose)" || FAIL=1
+if [[ -n "${BUILDPACK_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$BUILDPACK_LOG" 2>/dev/null; then
+  echo "FAIL: [build-pack-mismatch: preflight refuses] the build-pack guard did NOT prevent a /deploy call -- vacuous refusal." >&2
   FAIL=1
 fi
 
-# 7. NETWORK-OFF -- same environment_id, but the OTHER app has
-#    connect_to_docker_network=false -- must refuse BEFORE any /deploy
-#    call, naming the failing side.
-NETWORK_OFF_LOG="$(run_scenario "network-off: --require-network-with refuses" 1 network-off \
-  pfin-app --expect-base-directory /api --require-network-with pfin-stack --apply)" || FAIL=1
-if [[ -n "${NETWORK_OFF_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$NETWORK_OFF_LOG" 2>/dev/null; then
-  echo "FAIL: [network-off: --require-network-with refuses] the network guard did NOT prevent a /deploy call -- vacuous refusal." >&2
-  FAIL=1
-fi
+# 9. COMPOSE-RESOLUTION-MATCH -- --compose-service given, exactly one
+#    RUNNING container resolves via `docker compose ... ps -q` -- the
+#    on-box health read passes.
+run_scenario "compose-resolution: single container passes" 0 match \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --compose-service app --apply >/dev/null || FAIL=1
 
-# 8. NETWORK-LIVE-MEASURED -- team-lead's exact 2026-09-19 live
-#    measurement: different environment_id AND connect_to_docker_network
-#    false on BOTH sides at once. Must refuse, reporting ALL THREE
-#    problems (not just the first found) -- proves the guard says why,
-#    not merely that it refuses.
-set +e
-NETWORK_LIVE_OUT="$(BOX_IP=127.0.0.1 AUTOMATION_KEY=/dev/null PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$WORK/network-live-measured.log" FAKE_CURL_MODE=network-live-measured \
-  bash "$DEPLOY_APP_SH" pfin-app --expect-base-directory /api --require-network-with pfin-stack 2>&1)"
-NETWORK_LIVE_RC=$?
-set -e
-if [[ "$NETWORK_LIVE_RC" != 1 ]]; then
-  echo "FAIL: [network-live-measured: refuses] expected exit 1, got $NETWORK_LIVE_RC" >&2
-  echo "$NETWORK_LIVE_OUT" >&2
-  FAIL=1
-else
-  MISSING_PROBLEM=0
-  for needle in "different environment_id" "connect_to_docker_network for this app is not true" "connect_to_docker_network for other app"; do
-    grep -qF "$needle" <<<"$NETWORK_LIVE_OUT" || { echo "FAIL: [network-live-measured: refuses] missing expected PROBLEM text: $needle" >&2; MISSING_PROBLEM=1; }
-  done
-  if [[ $MISSING_PROBLEM -eq 0 ]]; then
-    echo "OK: [network-live-measured: refuses, reports all three problems] exit 1 as expected." >&2
-  else
-    FAIL=1
-  fi
-fi
+# 10. COMPOSE-RESOLUTION-AMBIGUOUS -- --compose-service given, 2 RUNNING
+#    containers resolve -- refuses, same F4 discipline applied to the
+#    compose-ps mechanism (distinct code path from scenario 2's plain
+#    `docker ps` mechanism -- both must be struck independently).
+FAKE_DOCKER_COMPOSE_CONTAINERS=2 run_scenario "compose-resolution: ambiguous (2 containers) refuses" 1 match \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --compose-service app --apply >/dev/null || FAIL=1
+
+# 10a. NETWORK-ATTACHMENT-PASS -- positive control: --require-network
+#    given, the resolved container IS attached -- must pass, not just
+#    "the failure case correctly fails."
+run_scenario "network-attachment: attached passes" 0 match \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --compose-service app --require-network stack-net --apply >/dev/null || FAIL=1
+
+# 10b. RESOLVE-HOST-PASS -- positive control: --resolve-host given,
+#    `getent hosts` succeeds -- must pass.
+run_scenario "resolve-host: getent success passes" 0 match \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --compose-service app --resolve-host api-gw --apply >/dev/null || FAIL=1
+
+# 11. NETWORK-ATTACHMENT-FAIL -- --require-network given, the resolved
+#    container is NOT attached to the named network -- post-deploy
+#    refusal (this check cannot run pre-deploy; there is no running
+#    container to inspect yet).
+FAKE_DOCKER_NETWORKS=none run_scenario "network-attachment: not attached refuses" 1 match \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --compose-service app --require-network stack-net --apply >/dev/null || FAIL=1
+
+# 12. RESOLVE-HOST-FAIL -- --resolve-host given, `getent hosts` fails
+#    inside the container -- post-deploy refusal.
+FAKE_DOCKER_RESOLVE=fail run_scenario "resolve-host: getent failure refuses" 1 match \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --compose-service app --resolve-host api-gw --apply >/dev/null || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

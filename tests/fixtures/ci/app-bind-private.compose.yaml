@@ -1,0 +1,25 @@
+# fence-app-private-bind: target
+# GOLDEN FIXTURE — NEGATIVE CONTROL (correct private-app config → fence
+# PASSES, exit 0).
+#
+# Proves fence-app-private-bind does NOT false-positive the correct shape:
+# no `ports:`, no proxy Domain / Traefik Host() label / Coolify
+# SERVICE_FQDN magic, no network_mode: host. `expose:` IS present, and is
+# NOT a violation here (unlike the migrator's zero-tolerance fence).
+# Mirrors the real api/docker-compose.yaml shape. Exercised in
+# production-mode (expects exit 0) by the fence-app-bind CI job.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      PUBLIC_SUPABASE_URL: ${PUBLIC_SUPABASE_URL}
+    networks:
+      default:
+        name: some-stack-network
+        external: true

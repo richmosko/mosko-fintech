@@ -1,0 +1,19 @@
+# fence-app-private-bind: target
+# GOLDEN FIXTURE — VECTOR 2 (reverse-proxy Domain / public-FQDN request
+# COMMITTED IN THE MANIFEST → fence FAILS, exit 1).
+#
+# `app`'s public Domain is a Coolify-dashboard-managed resource setting
+# (docs/deployment-runbook.md §2/§9's DNS cutover), never compose-committed
+# — a label here would be a second, unreviewed route. Exercised by the
+# fence-app-bind CI job, asserting exit 1 AND the vector-2 token.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      SERVICE_FQDN_APP: ${SERVICE_FQDN_APP}

@@ -1856,6 +1856,144 @@ jobs:
           fi
           echo "OK: check-source-commit-in-build failed closed on a missing field (exit $rc)."
 
+  fence-app-bind:
+    name: app private-bind config-lint (V1 web-app compose)
+    runs-on: ubuntu-latest
+    # F/CTO ruling, 2026-09-19 (docs/deployment-runbook.md Open Flags #12,
+    # option A) / PR #833. `app` moves from a plain-Dockerfile build pack
+    # to `dockercompose` with an `external:` network attachment to the
+    # Supabase stack — the migrator's own proven shape (ADR-072 Amendment
+    # 4). Sibling job to fence-migrator-bind above: SAME layer, DIFFERENT
+    # subject, and a DELIBERATELY DIFFERENT sentinel/predicate — `expose:`
+    # is ALLOWED here (see scripts/ci/fence-app-private-bind.sh's own
+    # header for why this is a separate fence, not a widened one).
+    #
+    # Run-always (no paths filter), matching the sibling fences' own
+    # reasoning: a path-trigger leaves a trigger-drift meta-risk.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Production-mode — real compose (expects clean; exit 0)
+        run: bash scripts/ci/fence-app-private-bind.sh api/docker-compose.yaml
+
+      - name: "Canary — corrupts the REAL compose, not a fixture (expects violation, exit 1, vector-1 token)"
+        # Same discipline as fence-migrator-bind's own canary (Sec F1, PR
+        # #819 joint review): a fixture-only battery proves the script
+        # works; this proves it bites on the file it actually protects.
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          awk '{ print } /dockerfile: Dockerfile/ { print "    ports:"; print "      - \"9999:3000\"" }' \
+            api/docker-compose.yaml > "$SCRATCH"
+          if ! grep -q '9999:3000' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the app 'dockerfile: Dockerfile' anchor to insert ports: after -- either the app service moved or its build block changed out from under this canary. Update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh "$SCRATCH" 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: canary expected exit 1 against the corrupted REAL app compose but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: canary exited 1 but no vector-1 'ports:' token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a published port on the app service on the REAL compose file, not just on a fixture (exit $rc)."
+
+      - name: "Inversion — negative control fixture (correct config, expose: present; expects exit 0)"
+        run: bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-private.compose.yaml
+
+      - name: "Inversion — golden 1: published ports (expects violation, exit 1, vector-1 'ports:' token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-public-ports.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: app-bind fence expected exit 1 on the published-ports golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: the published-ports golden exited 1 but the vector-1 'ports:' token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: app-bind fence caught a published port via its own token (exit $rc)."
+
+      - name: "Inversion — golden 2: reverse-proxy Domain / public-FQDN request (expects violation, exit 1, vector-2 token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-public-domain.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: app-bind fence expected exit 1 on the public-domain golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 2:'; then
+            echo "FATAL: the public-domain golden exited 1 but no vector-2 token is present — failing closed."
+            exit 1
+          fi
+          echo "OK: app-bind fence caught a compose-committed Domain request via its own token (exit $rc)."
+
+      - name: "Inversion — golden 3: network_mode: host (expects violation, exit 1, vector-3 token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-host-network.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: app-bind fence expected exit 1 on the host-network golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 3:'; then
+            echo "FATAL: the host-network golden exited 1 but no vector-3 token is present — failing closed."
+            exit 1
+          fi
+          echo "OK: app-bind fence caught network_mode: host via its own token (exit $rc)."
+
+      - name: "Inversion — golden 4: sentinel absent (expects structural refusal, exit 2)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-no-sentinel.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: app-bind fence expected exit 2 (structural refusal) on the no-sentinel golden but got $rc."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'sentinel not found'; then
+            echo "FATAL: no-sentinel golden exited 2 but the expected structural message is absent — failing closed."
+            exit 1
+          fi
+          echo "OK: fence refused a file with no confirmed app-application sentinel, failing closed (exit $rc)."
+
+      - name: "Inversion — golden 5: ports: key with zero value lines (expects structural refusal, exit 2)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-ports-empty-block.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: app-bind fence expected exit 2 (structural refusal) on the empty-ports-block golden but got $rc."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'collected zero value lines'; then
+            echo "FATAL: empty-ports-block golden exited 2 but the expected structural message is absent — failing closed."
+            exit 1
+          fi
+          echo "OK: fence refused a 'ports:' block it could not read, failing closed (exit $rc)."
+
   fence-pgrst-schemas-pfin:
     name: pgrst-schemas-pfin — PGRST_DB_SCHEMAS committed-default literal (BACKLOG.md §7.36 item 22)
     runs-on: ubuntu-latest
