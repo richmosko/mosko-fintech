@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-migrator-orchestrate-strikes.sh to drive the REAL
+# scripts/migrator-orchestrate.sh against CANNED Coolify-API-shaped
+# responses instead of a live box. Selected by PATH precedence --
+# migrator-orchestrate.sh itself is never modified to know this exists
+# (same discipline as tests/fixtures/ci/coolify-env/fake-curl).
+#
+# Logs its OWN ARGV (never response bodies) to $FAKE_CURL_LOG so the fence
+# can assert the fake Coolify API token never appears there -- migrator-
+# orchestrate.sh's own `api()` passes the token via `--config <tempfile>`,
+# never a `-H` argv element (Sec FLAG 2 on PR #814's GREEN pin); this
+# fixture exists to drive the LEGS this PR adds, not to re-litigate that
+# already-shipped control, but the same discipline costs nothing to keep.
+#
+# Behaviour selected by $FAKE_MODE (BACKLOG.md §7.36 item 59's four new
+# legs, plus the happy path proving the new section hands off cleanly into
+# the pre-existing execute leg):
+#   name-mismatch   -- GET /applications/<svc> returns the WRONG name.
+#   deploy-failed   -- the migrator deploy reaches a TERMINAL 'failed'.
+#   deploy-timeout  -- the migrator deploy stays 'in_progress' forever
+#                      (the fence also PATH-shadows `sleep` as a no-op, so
+#                      DEPLOY_POLL_MAX_ATTEMPTS exhausts in real time, not
+#                      simulated time).
+#   commit-mismatch -- the deploy FINISHES but its own `commit` field never
+#                      equals $MIGRATOR_EXPECT_SHA.
+#   deploy-cancelled -- the migrator deploy reaches a TERMINAL
+#                      'cancelled-by-user' (an operator hitting Cancel in
+#                      the Coolify UI mid-build) -- Sec F-review, PR #831:
+#                      distinct from 'failed', must not be misdiagnosed as
+#                      a poll timeout.
+#   happy           -- every leg succeeds; the run proceeds PAST the new
+#                      deploy-then-execute section into the pre-existing
+#                      execute leg and completes (DEPLOY_ON_SUCCESS
+#                      suppressed -- exit 0).
+#   happy (with the fixture conf's DEPLOY_ON_SUCCESS flipped to 1 by the
+#   fence, not by this file) -- exercises the app-deploy-on-success call
+#   this PR also fixed GET -> POST at (Sec F-review, PR #831: this line
+#   was otherwise going to stay unexercised by any offline leg until the
+#   runbook's own DEPLOY_ON_SUCCESS flip). No FAKE_MODE change needed
+#   here: the SAME 'happy' canned responses answer the extra
+#   POST /deploy?uuid=<app-uuid> call this mode triggers.
+#
+# $FAKE_STATE_DIR (a throwaway dir the harness creates) counts calls to the
+# executions endpoint, since migrator-orchestrate.sh polls it twice for
+# two DIFFERENT reasons -- once for the pre-fire uuid snapshot, once (or
+# more) for the post-fire read -- and must get a different answer each
+# time regardless of which scenario is running.
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+METHOD="GET"
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  prev="$a"
+done
+URL="${*: -1}"
+
+MODE="${FAKE_MODE:-happy}"
+STATE="${FAKE_STATE_DIR:?FAKE_STATE_DIR must be set}"
+
+# Fixture identities -- shared with scripts/ci/fence-migrator-orchestrate-strikes.sh.
+SVC_UUID="aaaaaaaaaaaaaaaaaaaaaaaa"
+TASK_UUID="bbbbbbbbbbbbbbbbbbbbbbbb"
+DEPLOY_UUID="dddddddddddddddddddddddd"
+TASK_COMMAND="sh /workspace/pfin-task.sh"
+EXPECT_SHA="111111111111111111111111111111111111aaaa"
+WRONG_SHA="222222222222222222222222222222222222bbbb"
+
+# Verb assertion -- a regression tripwire, not incidental to this
+# fixture's job. The GET-vs-POST /deploy defect this PR fixes (migrator-
+# orchestrate.sh used to call `api GET "/deploy?uuid=..."`, which Coolify
+# v4.3.18 answers with 405) would otherwise pass silently against a fake
+# that answers any verb the same way. Refuse to answer a call made with
+# the wrong verb, the same way the REAL Coolify API would (measured:
+# GET /deploy -> 405; the scheduled-task execute/deploy routes are
+# POST-only, routes/api.php).
+case "$URL" in
+  */deploy\?uuid=*|*/scheduled-tasks/*/execute)
+    if [[ "$METHOD" != "POST" ]]; then
+      echo '{"message":"This endpoint has changed to a POST request."}' >&2
+      exit 22
+    fi
+    ;;
+  */applications/*|*/scheduled-tasks|*/scheduled-tasks/*/executions|*/deployments/*)
+    if [[ "$METHOD" != "GET" ]]; then
+      echo '{"message":"unexpected verb for this fixture path"}' >&2
+      exit 22
+    fi
+    ;;
+esac
+
+case "$URL" in
+  */scheduled-tasks/*/executions)
+    # Called twice for two DIFFERENT reasons -- see header comment.
+    COUNT_FILE="$STATE/exec_calls"
+    N="$(cat "$COUNT_FILE" 2>/dev/null || echo 0)"
+    N=$((N + 1))
+    echo "$N" > "$COUNT_FILE"
+    if [[ "$N" -eq 1 ]]; then
+      # Pre-fire snapshot: one pre-existing, unrelated execution only.
+      echo '[{"uuid":"eeeeeeeeeeeeeeeeeeeeeeee","status":"success","message":""}]'
+    else
+      # Post-fire poll: the pre-existing row PLUS exactly one NEW row,
+      # carrying the three tagged lines the tag-extraction logic requires.
+      printf '%s' '[{"uuid":"eeeeeeeeeeeeeeeeeeeeeeee","status":"success","message":""},{"uuid":"ffffffffffffffffffffffff","status":"success","message":"PFIN-BUILD-SHA=111111111111111111111111111111111111aaaa\nPFIN-LEDGER-TOP=120\nPFIN-NEWEST-FILE=120\n"}]'
+    fi
+    exit 0
+    ;;
+  */scheduled-tasks/*/execute)
+    echo '{"message":"Task started."}'
+    exit 0
+    ;;
+  */scheduled-tasks)
+    printf '[{"uuid":"%s","command":"%s"}]' "$TASK_UUID" "$TASK_COMMAND"
+    exit 0
+    ;;
+  */deploy\?uuid=*)
+    printf '{"deployments":[{"message":"Application deployment queued.","resource_uuid":"%s","deployment_uuid":"%s"}]}' "$SVC_UUID" "$DEPLOY_UUID"
+    exit 0
+    ;;
+  */deployments/*)
+    case "$MODE" in
+      deploy-failed)
+        echo '{"status":"failed","commit":""}'
+        ;;
+      deploy-timeout)
+        echo '{"status":"in_progress","commit":""}'
+        ;;
+      deploy-cancelled)
+        echo '{"status":"cancelled-by-user","commit":""}'
+        ;;
+      commit-mismatch)
+        printf '{"status":"finished","commit":"%s"}' "$WRONG_SHA"
+        ;;
+      *)
+        printf '{"status":"finished","commit":"%s"}' "$EXPECT_SHA"
+        ;;
+    esac
+    exit 0
+    ;;
+  */applications/*)
+    # base_directory added on Sec's defence-in-depth ask, PR #831 joint
+    # review -- the real /infra/supabase/migrator value for every mode
+    # EXCEPT base-dir-mismatch, which keeps the correct NAME (proving the
+    # base_directory check is a SECOND, independent field, not a restated
+    # name check under another key).
+    case "$MODE" in
+      name-mismatch)
+        printf '{"name":"pfin-supabase-stack","uuid":"%s","base_directory":"/"}' "$SVC_UUID"
+        ;;
+      base-dir-mismatch)
+        printf '{"name":"pfin-migrator-test","uuid":"%s","base_directory":"/"}' "$SVC_UUID"
+        ;;
+      *)
+        printf '{"name":"pfin-migrator-test","uuid":"%s","base_directory":"/infra/supabase/migrator"}' "$SVC_UUID"
+        ;;
+    esac
+    exit 0
+    ;;
+esac
+
+echo '{}'
+exit 0

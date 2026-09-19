@@ -22,7 +22,13 @@
 #   on comes from the box-resident config file below, never from the
 #   invoking SSH session.
 #
-# WHAT IT DOES (ADR-072 Decision 2 + Decision 3 + Amendment 7 draft)
+# WHAT IT DOES (ADR-072 Decision 2 + Decision 3 + Amendment 6/7/8 + BACKLOG
+# §7.36 item 59)
+#   0. DEPLOY (rebuild) the migrator resource FIRST and assert the finished
+#      deployment's own `commit` field equals MIGRATOR_EXPECT_SHA — ADR-072
+#      Decision 5(1)'s "rebuild -> run task -> deploy app" sequencing,
+#      built by item 59 (see that section's own header comment, below the
+#      pre-fire task-command integrity check, for the full design).
 #   1. Execute the migrator Coolify Scheduled Task (the `supabase db push`
 #      apply, scripts/migrator-scheduled-task.md).
 #   2. Poll that task's own execution status to a terminal state — NEVER
@@ -63,18 +69,26 @@
 #      routing fires on its own for a `failed` status; this script's own
 #      log line (including a tail of the execution's raw `message`, for a
 #      `failed` status) is the record otherwise.
-#   ⚠ DRAFT — NOT TO MERGE BEFORE ADR-072 AMENDMENT 7 IS RATIFIED. The sha
-#   and delivery checks below no longer gate BEFORE the Scheduled Task
-#   fires (they can't — nothing here can read the container's state
-#   without docker access) — they are asserted AFTER a successful run,
-#   against that same run's own self-reported output. If the assertions
-#   ever fail, the `db push` this run fired has ALREADY executed against
-#   whatever image/state existed at fire time; the app deploy is withheld,
-#   but the migration apply itself is not undone. This is a deliberate,
-#   named tradeoff of Amendment 7's design (the alternative being no
-#   outcome assertion at all, since ci-migrate cannot reach the socket to
-#   check anything beforehand) — Architect/Sec/F/CTO's call, not mine to
-#   soften or work around here.
+#   ⚠ STATUS: Amendment 7 is RATIFIED (F/CTO, 2026-09-18) and its design is
+#   BUILT (this file, #801/#802/#808/#814) — this paragraph previously read
+#   "DRAFT — NOT TO MERGE BEFORE ADR-072 AMENDMENT 7 IS RATIFIED"; that line
+#   is corrected here rather than left to mislead a future reader into
+#   thinking the sha/delivery checks below are still provisional. The sha
+#   and delivery checks below do NOT gate BEFORE the Scheduled Task fires
+#   (they can't — nothing here can read the container's state without
+#   docker access) — they are asserted AFTER a successful run, against
+#   that same run's own self-reported output. If the assertions ever fail,
+#   the `db push` this run fired has ALREADY executed against whatever
+#   image/state existed at fire time; the app deploy is withheld, but the
+#   migration apply itself is not undone. This is a deliberate, named
+#   tradeoff of Amendment 7's design (the alternative being no outcome
+#   assertion at all, since ci-migrate cannot reach the socket to check
+#   anything beforehand) — Architect/Sec/F/CTO's call, not mine to soften
+#   or work around here. ⚠ Item 59's new deploy-then-execute step (below)
+#   narrows how OFTEN this tradeoff can bite — a fresh image at fire time
+#   is now the common case, not an accident of timing — but does not
+#   remove it: the deploy's own commit assertion happens before execute,
+#   the tag-based assertions here still happen after it, by necessity.
 #
 #   The calling GitHub Actions workflow gates on THIS script's own SSH exit
 #   code — GHA's native step-sequencing is the fail-closed gate (ADR-072
@@ -257,6 +271,15 @@ MIGRATOR_SERVICE_UUID="$(read_kv "$CONF_FILE" MIGRATOR_SERVICE_UUID)"
 MIGRATOR_TASK_UUID="$(read_kv "$CONF_FILE" MIGRATOR_TASK_UUID)"
 APP_UUID="$(read_kv "$CONF_FILE" APP_UUID)"
 DEPLOY_ON_SUCCESS="$(read_kv "$CONF_FILE" DEPLOY_ON_SUCCESS)"
+# ⚠ BACKLOG.md §7.36 item 59 (ADR-072 Amendment 6 consequence (i)) — the
+# name guard in the new "deploy the migrator resource" section below.
+# Defaulted, not required-or-die: a box provisioned before this variable
+# existed in provision-vps.sh's conf writer still gets the correct value
+# (matching scripts/provision-migrator-app.sh's own MIGRATOR_APP_NAME
+# default), so this guard activates immediately on every existing box
+# without a re-provision being a precondition for it to fail closed.
+MIGRATOR_APP_NAME="$(read_kv "$CONF_FILE" MIGRATOR_APP_NAME)"
+: "${MIGRATOR_APP_NAME:=pfin-migrator}"
 # ⚠ Sec FLAG on Amendment 7 (2026-09-17), measured against Coolify v4.3.18
 # source for this amendment's design (see that amendment's own record):
 # `PATCH /applications/{uuid}/scheduled-tasks/{task_uuid}` is gated ONLY by
@@ -622,6 +645,250 @@ if [[ -z "$LIVE_TASK_COMMAND" || "$LIVE_TASK_COMMAND" != "$EXPECTED_TASK_COMMAND
 fi
 log "task command integrity check OK: live Scheduled Task command matches MIGRATOR_TASK_COMMAND in $CONF_FILE"
 
+# ═════════════════════════════════════════════════════════════════════
+# BACKLOG.md §7.36 item 59 — DEPLOY-THEN-EXECUTE: deploy (rebuild) the
+# migrator RESOURCE before ever executing the Scheduled Task. This
+# discharges ADR-072 Decision 5(1)'s load-bearing sequencing ("rebuild
+# the migrator image -> run the Scheduled Task -> then deploy the app"),
+# which Amendment 6 (A) found the build had never implemented -- every
+# fire before this PR executed the Scheduled Task against whatever image
+# happened to already be running, with nothing here ever causing a
+# rebuild. Runs AFTER the task-command integrity check above (a drifted
+# command is caught before spending a build on it) and BEFORE the
+# execution-binding snapshot below (nothing here executes the task).
+#
+# ⚠ PRECONDITION THIS SECTION ASSUMES, PER AMENDMENT 6 (B)(i): the
+# migrator is its OWN Coolify resource (ADR-072 Amendment 4), so
+# redeploying it does NOT restart the Supabase-stack resource (and does
+# not bounce production Postgres). That precondition is discharged
+# (migrator moved to its own application, `pfin-migrator`,
+# scripts/provision-migrator-app.sh, 2026-09-19) -- but nothing besides
+# $MIGRATOR_SERVICE_UUID's OWN IDENTITY stands between this section's
+# deploy call and the stack resource if $CONF_FILE's MIGRATOR_SERVICE_UUID
+# ever drifts onto the wrong uuid. The name guard immediately below is
+# that fence, not decoration: the trigger token's `deploy` ability is
+# NOT scoped to this one resource -- it reaches every application/service
+# the team owns (ADR-072 Amendment 2's C4 widening, measured against
+# Coolify v4.3.18's team-scoped-only resolution) -- so the uuid's
+# identity is the only thing standing between a conf drift and a deploy
+# call landing on the stack application instead.
+#
+# ⚠⚠ THE POLL BELOW IS A PRECONDITION-WAIT, NEVER A SUCCESS CRITERION --
+# ADR-072 Amendment 6 consequence 3, verbatim: "If a deployment-status
+# poll is ALSO kept, it is a PRECONDITION -- it waits for the rebuild to
+# finish and its success is NEVER evidence that the migration applied."
+# Three separate claims get made across this script, in order, and none
+# substitutes for another: (1) this poll only proves Coolify's own
+# deployment-status machine reached a terminal state -- Decision 3
+# already ruled that machine unreliable as a SUCCESS signal (it marks
+# FINISHED before a post-deploy command and swallows that command's
+# failure); (2) the pre-execute commit assertion right after it proves
+# the image THIS FIRE JUST BUILT carries the sha this fire was triggered
+# for; (3) the existing tagged-line assertions further below (UNCHANGED
+# by this section) prove the migration actually landed in the database.
+# Losing sight of which claim is which is exactly the failure class that
+# produced the false "Phase D transport proven end-to-end" claim
+# Amendment 6 (A) found and corrected -- named again here so it is not
+# reintroduced one section over.
+DEPLOY_POLL_INTERVAL_S=5
+DEPLOY_POLL_MAX_ATTEMPTS=180   # 180 * 5s = 15 minutes -- a Docker image
+                                # rebuild now runs ahead of every apply
+                                # (Amendment 6 (B)(i) named this wall-clock
+                                # cost and accepted it explicitly).
+
+log "verifying MIGRATOR_SERVICE_UUID ($MIGRATOR_SERVICE_UUID) names the expected application before deploying anything at it"
+APP_RECORD_JSON="$(api GET "/applications/$MIGRATOR_SERVICE_UUID" || true)"
+if [[ -z "$APP_RECORD_JSON" ]]; then
+  log "FAIL (exit 16): could not GET /applications/$MIGRATOR_SERVICE_UUID to verify its name before deploying -- an HTTP-level failure (bad uuid, team-scope mismatch, or a route/token problem), not a name mismatch. NOT deploying the migrator resource, NOT executing the Scheduled Task. Check the token's abilities/team scope and MIGRATOR_SERVICE_UUID in $CONF_FILE."
+  exit 16
+fi
+JQP_ERR_FILE="$(mktemp)"
+if ! LIVE_APP_NAME="$(printf '%s' "$APP_RECORD_JSON" | jqp "
+d=json.load(sys.stdin)
+print(d.get('name','') if isinstance(d, dict) else '')
+" 2>"$JQP_ERR_FILE")"; then
+  JQP_ERR="$(tail -1 "$JQP_ERR_FILE" 2>/dev/null || true)"
+  rm -f "$JQP_ERR_FILE"
+  log "FAIL (exit 16): could not PARSE the application record while verifying its name ('${JQP_ERR:-<no error captured>}'). NOT deploying the migrator resource, NOT executing the Scheduled Task."
+  exit 16
+fi
+rm -f "$JQP_ERR_FILE"
+if [[ -z "$LIVE_APP_NAME" || "$LIVE_APP_NAME" != "$MIGRATOR_APP_NAME" ]]; then
+  log "FAIL (exit 16): the application at MIGRATOR_SERVICE_UUID ($MIGRATOR_SERVICE_UUID) is named '$LIVE_APP_NAME', not the expected '$MIGRATOR_APP_NAME' -- refusing to deploy. \$CONF_FILE's MIGRATOR_SERVICE_UUID may have drifted onto a DIFFERENT resource -- the Supabase-stack application is the specific hazard this guard exists for: the trigger token's deploy ability reaches it too (ADR-072 Amendment 2), and redeploying it restarts production Postgres. NOT deploying, NOT executing the Scheduled Task. Investigate MIGRATOR_SERVICE_UUID in $CONF_FILE before re-firing -- do not just retry."
+  exit 16
+fi
+# Defence-in-depth (Sec, PR #831 joint review): the name guard above is one
+# field deep -- a two-field conf edit (uuid AND name) defeats it, though
+# $CONF_FILE is root-only-writable so that already requires box-root. This
+# second field costs nothing extra to check (same $APP_RECORD_JSON already
+# fetched, no new API call) and turns a two-field coordinated drift into a
+# three-field one. ⚠ MEASURED by team-lead, 2026-09-19, `GET /api/v1/applications/<uuid>`
+# on Coolify 4.3.18 (the DETAIL route this call itself uses, not
+# provision-migrator-app.sh's LIST route at `:184` -- a first measurement
+# of this route in this repo, not an inference carried from that list-route
+# precedent): the detail route serialises `base_directory` as
+# `/infra/supabase/migrator` for `pfin-migrator` and `/infra/supabase` for
+# `pfin-supabase-stack` -- the two values differ, and the guard below
+# checks the one that names the resource this section is about to deploy.
+if ! LIVE_BASE_DIR="$(printf '%s' "$APP_RECORD_JSON" | jqp "
+d=json.load(sys.stdin)
+print(d.get('base_directory','') if isinstance(d, dict) else '')
+" 2>/dev/null)"; then
+  log "FAIL (exit 16): could not PARSE the application record while verifying its base_directory. NOT deploying the migrator resource, NOT executing the Scheduled Task."
+  exit 16
+fi
+if [[ "$LIVE_BASE_DIR" != "/infra/supabase/migrator" ]]; then
+  log "FAIL (exit 16): the application at MIGRATOR_SERVICE_UUID ($MIGRATOR_SERVICE_UUID) is named '$LIVE_APP_NAME' (matches) but its base_directory is '$LIVE_BASE_DIR', not the expected '/infra/supabase/migrator' -- refusing to deploy. NOT deploying, NOT executing the Scheduled Task. Investigate MIGRATOR_SERVICE_UUID in $CONF_FILE before re-firing -- do not just retry."
+  exit 16
+fi
+log "name guard OK: MIGRATOR_SERVICE_UUID ($MIGRATOR_SERVICE_UUID) resolves to application '$LIVE_APP_NAME' (base_directory $LIVE_BASE_DIR)"
+
+log "deploying the migrator resource (rebuild -> run task -> deploy app, ADR-072 Decision 5(1))"
+# POST, not GET -- measured against Coolify v4.3.18's routes/api.php:144-145:
+# `Route::get('/deploy', [OtherController::class, 'post_required'])` returns
+# HTTP 405 ("This endpoint has changed to a POST request."); only
+# `Route::post('/deploy', [DeployController::class, 'deploy'])` is wired to
+# the real handler. ⚠ The APP-deploy call in this script's own `success)`
+# branch below has called `api GET "/deploy?uuid=$APP_UUID"` since this
+# script existed -- the SAME defect, pre-existing, fixed in this PR at
+# that call site too (see its own comment there), not introduced here.
+#
+# `force` (rebuild without cache) is deliberately NOT passed, and is not
+# needed for correctness here -- measured against
+# bootstrap/helpers/applications.php's queue_application_deployment(): the
+# API's by_uuids()/deploy_resource() call site never passes an explicit
+# `commit`, so `$commit` there resolves to `$application->git_commit_sha`,
+# which is EMPTY on this application (measured:
+# scripts/provision-migrator-app.sh's CREATE_BODY never sets
+# git_commit_sha, and nothing in ApplicationDeploymentJob ever writes it
+# back afterward -- only the deployment QUEUE ROW's own `commit` column is
+# updated, never the application's). An empty/'HEAD' commit makes
+# ApplicationDeploymentJob::shouldResolveBranchHeadCommit() true, which
+# runs `git ls-remote` against the configured branch and rebuilds from
+# WHATEVER IS CURRENTLY AT ITS TIP on every single deploy call,
+# unconditionally -- `force` only controls Docker build-cache reuse, and
+# the migrations directory's content is identical either way when the sha
+# is unchanged.
+#
+# ⚠ CONSEQUENCE OF THAT MEASUREMENT, per this PR's own AC (2): because
+# every deploy call rebuilds branch HEAD rather than a pinned commit, a
+# `main` advance BETWEEN this fire's trigger and this deploy call builds a
+# NEWER commit than $MIGRATOR_EXPECT_SHA. The pre-execute commit assertion
+# below WILL then RED on that outcome -- correctly. See that assertion's
+# own comment for why this is accepted, not a defect to route around.
+DEPLOY_RESPONSE_JSON="$(api POST "/deploy?uuid=$MIGRATOR_SERVICE_UUID")" \
+  || fail "could not deploy the migrator resource (deploy call itself failed -- check the token's deploy ability and MIGRATOR_SERVICE_UUID in $CONF_FILE). NOT executing the Scheduled Task."
+JQP_ERR_FILE="$(mktemp)"
+if ! DEPLOY_MATCH_INFO="$(printf '%s' "$DEPLOY_RESPONSE_JSON" | jqp "
+d=json.load(sys.stdin)
+rows=(d.get('deployments') or []) if isinstance(d, dict) else []
+uuids=[r.get('deployment_uuid','') for r in rows if isinstance(r, dict) and r.get('deployment_uuid')]
+print(len(uuids))
+print(uuids[0] if len(uuids) == 1 else '')
+" 2>"$JQP_ERR_FILE")"; then
+  JQP_ERR="$(tail -1 "$JQP_ERR_FILE" 2>/dev/null || true)"
+  rm -f "$JQP_ERR_FILE"
+  log "FAIL (exit 17): could not PARSE the deploy call's response ('${JQP_ERR:-<no error captured>}'). NOT executing the Scheduled Task."
+  exit 17
+fi
+rm -f "$JQP_ERR_FILE"
+DEPLOY_MATCH_COUNT="$(printf '%s' "$DEPLOY_MATCH_INFO" | sed -n '1p')"
+DEPLOY_UUID="$(printf '%s' "$DEPLOY_MATCH_INFO" | sed -n '2p')"
+if [[ "$DEPLOY_MATCH_COUNT" != "1" ]]; then
+  log "FAIL (exit 17): the deploy call's response carried $DEPLOY_MATCH_COUNT deployment_uuid values, not exactly one -- refusing to guess which one is this fire's. NOT executing the Scheduled Task. See POST /deploy?uuid=$MIGRATOR_SERVICE_UUID directly to investigate (a Coolify 'Deployment already queued for this commit' skip -- an existing in-flight deploy for the same resolved commit -- returns a deployment_uuid that resolves to NO real deployment record; that shape surfaces below as exit 17's 'GET itself failed' branch, not this one)."
+  exit 17
+fi
+if [[ ! "$DEPLOY_UUID" =~ ^[a-z0-9]{24}$ ]]; then
+  log "FAIL (exit 17): the deploy call returned a deployment_uuid ('$DEPLOY_UUID') that is not a well-formed 24-character lowercase-alphanumeric Coolify uuid. NOT executing the Scheduled Task."
+  exit 17
+fi
+log "migrator deploy queued -- deployment $DEPLOY_UUID"
+
+DEPLOY_STATUS=""
+DEPLOY_RECORD_JSON=""
+for _ in $(seq 1 "$DEPLOY_POLL_MAX_ATTEMPTS"); do
+  DEPLOY_RECORD_JSON="$(api GET "/deployments/$DEPLOY_UUID" || true)"
+  if [[ -z "$DEPLOY_RECORD_JSON" ]]; then
+    log "FAIL (exit 17): GET /deployments/$DEPLOY_UUID itself failed -- this uuid does not resolve to a real deployment record. The likeliest cause is Coolify's own 'skip' shape (bootstrap/helpers/applications.php's queue_application_deployment(): an existing queued/in_progress deployment for the same resolved commit returns a FRESH, NEVER-PERSISTED deployment_uuid rather than the real in-flight one's) -- investigate via the Coolify dashboard for what is actually running before re-firing. NOT executing the Scheduled Task."
+    exit 17
+  fi
+  JQP_ERR_FILE="$(mktemp)"
+  if ! DEPLOY_STATUS="$(printf '%s' "$DEPLOY_RECORD_JSON" | jqp "
+d=json.load(sys.stdin)
+print(d.get('status','') if isinstance(d, dict) else '')
+" 2>"$JQP_ERR_FILE")"; then
+    JQP_ERR="$(tail -1 "$JQP_ERR_FILE" 2>/dev/null || true)"
+    rm -f "$JQP_ERR_FILE"
+    log "FAIL (exit 17): could not PARSE the deployment record while polling status ('${JQP_ERR:-<no error captured>}'). NOT executing the Scheduled Task."
+    exit 17
+  fi
+  rm -f "$JQP_ERR_FILE"
+  # Terminal states measured from Coolify v4.3.18's own
+  # app/Enums/ApplicationDeploymentStatus.php -- NOT guessed, and NOT the
+  # same two-value set ("finished"/"failed") this repo's own
+  # provision-supabase-stack.sh / provision-migrator-app.sh already
+  # (incorrectly) treat as exhaustive: QUEUED / IN_PROGRESS are the only
+  # non-terminal values; FINISHED / FAILED / CANCELLED_BY_USER
+  # ('cancelled-by-user') are terminal. A cancelled deployment (an
+  # operator hitting Cancel in the Coolify UI mid-build) must fall out of
+  # this loop immediately, not be misdiagnosed as a hang by the timeout
+  # branch below.
+  case "$DEPLOY_STATUS" in
+    queued|in_progress) ;;
+    *) break ;;
+  esac
+  sleep "$DEPLOY_POLL_INTERVAL_S"
+done
+
+case "$DEPLOY_STATUS" in
+  finished)
+    log "migrator deploy finished (deployment $DEPLOY_UUID)"
+    ;;
+  failed|cancelled-by-user)
+    fail "migrator deploy reached a non-finished TERMINAL state (status=$DEPLOY_STATUS, deployment $DEPLOY_UUID) -- NOT executing the Scheduled Task. See the deployment log in the Coolify dashboard."
+    ;;
+  *)
+    fail "gave up after $((DEPLOY_POLL_MAX_ATTEMPTS * DEPLOY_POLL_INTERVAL_S))s waiting for the migrator deploy to reach a terminal state (last seen: '${DEPLOY_STATUS:-<empty>}', deployment $DEPLOY_UUID) -- this is a poll timeout, not a confirmed deploy failure (if that value is non-empty and not one of queued/in_progress, this is NOT a timeout -- Coolify returned a status this script does not know, and re-firing will not help). NOT executing the Scheduled Task. Check the Coolify dashboard directly before retriggering."
+    ;;
+esac
+
+# ⚠⚠ PRE-EXECUTE COMMIT ASSERTION -- THE ACTUAL GATE, per Amendment 6
+# consequence 2: "assert the property we actually need, which is directly
+# observable and fails closed... the container about to run carries the
+# migration set from the merged sha." The poll above only proves Coolify's
+# deployment-status machine said "finished"; this proves the image that
+# status describes is the one this fire was triggered for. Read the field
+# Coolify's own model uses as the deployed-commit authority
+# (docs/deployment-runbook.md's own citation of "Coolify's own API/UI
+# record of the deployed commit") -- `commit` on the deployment record
+# (ApplicationDeploymentQueue's own OA schema field, populated by
+# bootstrap/helpers/applications.php's ls-remote-and-save-to-`commit`
+# logic during the build) -- never `git_commit_sha` on the application
+# itself, which this application never has set (see the deploy-call
+# comment above for why that is what keeps every deploy resolving branch
+# HEAD rather than replaying a stale pinned value).
+JQP_ERR_FILE="$(mktemp)"
+if ! DEPLOYED_COMMIT="$(printf '%s' "$DEPLOY_RECORD_JSON" | jqp "
+d=json.load(sys.stdin)
+print(d.get('commit','') if isinstance(d, dict) else '')
+" 2>"$JQP_ERR_FILE")"; then
+  JQP_ERR="$(tail -1 "$JQP_ERR_FILE" 2>/dev/null || true)"
+  rm -f "$JQP_ERR_FILE"
+  log "FAIL (exit 18): could not PARSE the finished deployment record while reading its commit field ('${JQP_ERR:-<no error captured>}'). NOT executing the Scheduled Task."
+  exit 18
+fi
+rm -f "$JQP_ERR_FILE"
+if [[ ! "$DEPLOYED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  log "FAIL (exit 18): the finished deployment's own 'commit' field ('$DEPLOYED_COMMIT') is not a well-formed 40-character hex sha -- refusing to compare against a malformed value. NOT executing the Scheduled Task. See GET /deployments/$DEPLOY_UUID directly."
+  exit 18
+fi
+if [[ "$DEPLOYED_COMMIT" != "$MIGRATOR_EXPECT_SHA" ]]; then
+  log "FAIL (exit 18): the migrator deploy that JUST FINISHED built sha $DEPLOYED_COMMIT, not the sha this fire was triggered for ($MIGRATOR_EXPECT_SHA). This is EXPECTED and CORRECT when \`main\` advanced between this fire's trigger and this deploy call (Coolify's git-based deploy always rebuilds from the CURRENT branch HEAD, never a pinned commit -- see the deploy-call comment above) -- a newer commit means a new fire is already coming (or queued) under this workflow's own concurrency group, and the ledger is unaffected because this apply would only ever have run against a SUPERSET image. NOT executing the Scheduled Task; let the newer fire behind this one run (or re-fire deliberately) rather than retrying blindly. Deployment $DEPLOY_UUID."
+  exit 18
+fi
+log "pre-execute commit assertion OK: the migrator deploy that just finished built the expected sha ($DEPLOYED_COMMIT)"
+# ═════════════════════════════════════════════════════════════════════
+
 # ⚠ EXECUTION-BINDING SNAPSHOT — taken BEFORE the execute call, per the
 # header comment above. This is the pre-fire half of the uuid set
 # difference: record every execution uuid that already exists so that,
@@ -972,7 +1239,16 @@ case "$STATUS" in
     # succeeded.
     if [[ "${DEPLOY_ON_SUCCESS:-0}" == "1" ]]; then
       log "migration apply SUCCEEDED — triggering app deploy (uuid $APP_UUID)"
-      api GET "/deploy?uuid=$APP_UUID" >/dev/null \
+      # ⚠ FIXED to POST, BACKLOG.md §7.36 item 59 PR (pre-existing defect,
+      # not introduced by that PR): this call used to be `api GET
+      # "/deploy?uuid=$APP_UUID"`. Measured against Coolify v4.3.18's
+      # routes/api.php:144-145: GET /deploy is bound to
+      # OtherController::post_required, which returns HTTP 405 ("This
+      # endpoint has changed to a POST request.") unconditionally — this
+      # call has never been able to succeed. Undetected until now because
+      # DEPLOY_ON_SUCCESS defaults to 0 (the branch above), so this line
+      # has never actually executed against production.
+      api POST "/deploy?uuid=$APP_UUID" >/dev/null \
         || fail "migration succeeded but the app-deploy call itself failed — check the token's deploy ability. THE DB IS MIGRATED; the app was NOT redeployed. Investigate and redeploy manually before assuming this is a full failure."
       log "app deploy triggered"
     else

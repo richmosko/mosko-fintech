@@ -2628,6 +2628,30 @@ jobs:
       - name: offline strike-proofs (allowlist refusal, read-back mismatch, blanked-not-deleted)
         run: bash scripts/ci/fence-coolify-env-strikes.sh
 
+  fence-migrator-orchestrate-strikes:
+    name: migrator-orchestrate.sh — deploy-then-execute strike-proofs (BACKLOG §7.36 item 59)
+    runs-on: ubuntu-latest
+    # Unlabeled, same posture as fence-coolify-env-strikes above. DevOps-owned.
+    # BACKLOG.md §7.36 item 59 (ADR-072 Amendment 6 consequence (i)) added a
+    # deploy-then-execute section to scripts/migrator-orchestrate.sh: deploy
+    # (rebuild) the migrator resource, assert it reaches a terminal Coolify
+    # deployment status (a PRECONDITION, never a success criterion — Decision
+    # 3's ruling on deployment-status reliability is unchanged), then assert
+    # the finished deployment's own `commit` field equals $MIGRATOR_EXPECT_SHA
+    # BEFORE ever executing the Scheduled Task. scripts/ci/fence-migrator-
+    # orchestrate-strikes.sh runs the REAL script (its own hard-coded
+    # /etc/pfin + /run/lock/pfin paths, materialized here with sudo — see
+    # that script's own header for why an env-var override was rejected)
+    # against a PATH-shadowed fake curl (tests/fixtures/ci/migrator-
+    # orchestrate/fake-curl) and a no-op fake sleep, proving five outcomes:
+    # a name-guard refusal, a failed deploy, a deploy that never reaches a
+    # terminal state, a finished deploy whose commit doesn't match, and a
+    # happy path that hands off cleanly into the pre-existing execute leg.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (name guard, deploy failed/timeout, commit mismatch, happy path)
+        run: bash scripts/ci/fence-migrator-orchestrate-strikes.sh
+
   fence-db-shell-strikes:
     name: db-shell.sh — SUPABASE_STACK_UUID fails closed when absent
     runs-on: ubuntu-latest
