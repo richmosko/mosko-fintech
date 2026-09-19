@@ -1841,7 +1841,12 @@ jobs:
       - name: Production-mode — real files (expects clean; exit 0)
         run: bash scripts/ci/fence-pgrst-schemas-pfin.sh scripts/provision-supabase-stack.sh infra/supabase/docker-compose.yml docs/deployment-runbook.md
 
-      - name: "Golden — provision-script default wrong (expects exit 1)"
+      - name: "Golden — provision-script default wrong (expects exit 1, TOKEN-CHECKED)"
+        # Sec joint-review F4 (PR #822): asserting exit code alone cannot tell
+        # WHICH of the fence's three subjects fired -- a regression in a
+        # different subject's parser could still produce exit 1 here and this
+        # golden would go green for the wrong reason. Every leg below greps
+        # the fence's own VIOLATION line for THIS fixture's basename.
         run: |
           set +e
           out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-violation.py tests/fixtures/ci/pgrst-schemas-pfin-compose-clean.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-clean.md 2>&1)"
@@ -1852,9 +1857,33 @@ jobs:
             echo "FATAL: expected exit 1 on the provision-default golden but got $rc — failing closed."
             exit 1
           fi
-          echo "OK: caught the wrong NONSECRET_DEFAULTS literal (exit $rc)."
+          if ! printf '%s' "$out" | grep -q 'pgrst-schemas-pfin-provision-violation.py'; then
+            echo "FATAL: exit 1 came from a DIFFERENT subject than the provision-violation fixture this golden isolates — the golden is passing for the wrong reason."
+            exit 1
+          fi
+          echo "OK: caught the wrong NONSECRET_DEFAULTS literal, on the correct subject (exit $rc)."
 
-      - name: "Golden — compose hardcodes a literal instead of pure interpolation (expects exit 1)"
+      - name: "Golden — provision dict REORDERED, right names wrong order (expects exit 1, TOKEN-CHECKED)"
+        # Sec joint-review F7 (PR #822): order-sensitivity was golden-watched
+        # only on the runbook subject; this is the same property on the
+        # subject that actually feeds a real Coolify resource's default.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-reordered.py tests/fixtures/ci/pgrst-schemas-pfin-compose-clean.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-clean.md 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on the provision-dict-reordered golden but got $rc — a set-membership check would wrongly pass this. Failing closed."
+            exit 1
+          fi
+          if ! printf '%s' "$out" | grep -q 'pgrst-schemas-pfin-provision-reordered.py'; then
+            echo "FATAL: exit 1 came from a DIFFERENT subject than the provision-reordered fixture this golden isolates — the golden is passing for the wrong reason."
+            exit 1
+          fi
+          echo "OK: caught the reordered provision-dict literal, on the correct subject (exit $rc)."
+
+      - name: "Golden — compose hardcodes a literal instead of pure interpolation (expects exit 1, TOKEN-CHECKED)"
         run: |
           set +e
           out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-clean.py tests/fixtures/ci/pgrst-schemas-pfin-compose-hardcoded.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-clean.md 2>&1)"
@@ -1865,9 +1894,13 @@ jobs:
             echo "FATAL: expected exit 1 on the hardcoded-compose golden but got $rc — failing closed."
             exit 1
           fi
-          echo "OK: caught the hardcoded compose literal (exit $rc)."
+          if ! printf '%s' "$out" | grep -q 'pgrst-schemas-pfin-compose-hardcoded.yaml'; then
+            echo "FATAL: exit 1 came from a DIFFERENT subject than the compose-hardcoded fixture this golden isolates — the golden is passing for the wrong reason."
+            exit 1
+          fi
+          echo "OK: caught the hardcoded compose literal, on the correct subject (exit $rc)."
 
-      - name: "Golden — compose carries a silently-diverging :-fallback (expects exit 1)"
+      - name: "Golden — compose carries a silently-diverging :-fallback (expects exit 1, TOKEN-CHECKED)"
         run: |
           set +e
           out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-clean.py tests/fixtures/ci/pgrst-schemas-pfin-compose-fallback.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-clean.md 2>&1)"
@@ -1878,9 +1911,13 @@ jobs:
             echo "FATAL: expected exit 1 on the compose :-fallback golden but got $rc — failing closed."
             exit 1
           fi
-          echo "OK: caught the compose :-fallback default (exit $rc)."
+          if ! printf '%s' "$out" | grep -q 'pgrst-schemas-pfin-compose-fallback.yaml'; then
+            echo "FATAL: exit 1 came from a DIFFERENT subject than the compose-fallback fixture this golden isolates — the golden is passing for the wrong reason."
+            exit 1
+          fi
+          echo "OK: caught the compose :-fallback default, on the correct subject (exit $rc)."
 
-      - name: "Golden — runbook still states the bare-pfin literal item 22 named (expects exit 1)"
+      - name: "Golden — runbook still states the bare-pfin literal item 22 named (expects exit 1, TOKEN-CHECKED)"
         run: |
           set +e
           out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-clean.py tests/fixtures/ci/pgrst-schemas-pfin-compose-clean.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-bare-pfin.md 2>&1)"
@@ -1891,9 +1928,13 @@ jobs:
             echo "FATAL: expected exit 1 on the bare-pfin runbook golden but got $rc — failing closed."
             exit 1
           fi
-          echo "OK: caught the bare-pfin runbook literal (exit $rc)."
+          if ! printf '%s' "$out" | grep -q 'pgrst-schemas-pfin-runbook-bare-pfin.md'; then
+            echo "FATAL: exit 1 came from a DIFFERENT subject than the runbook-bare-pfin fixture this golden isolates — the golden is passing for the wrong reason."
+            exit 1
+          fi
+          echo "OK: caught the bare-pfin runbook literal, on the correct subject (exit $rc)."
 
-      - name: "Golden — runbook reordered, right names wrong order (expects exit 1; LOAD-BEARING)"
+      - name: "Golden — runbook reordered, right names wrong order (expects exit 1, TOKEN-CHECKED; LOAD-BEARING)"
         # This is the fixture that separates this fence from a set-membership
         # check: "pfin,public,graphql_public" has the right three names, but
         # PostgREST would treat pfin as the default Accept-Profile. A
@@ -1908,7 +1949,28 @@ jobs:
             echo "FATAL: expected exit 1 on the reordered-literal golden but got $rc — a set-membership check would wrongly pass this. Failing closed."
             exit 1
           fi
-          echo "OK: caught the reordered literal — order-sensitivity confirmed, not mere set membership (exit $rc)."
+          if ! printf '%s' "$out" | grep -q 'pgrst-schemas-pfin-runbook-reordered.md'; then
+            echo "FATAL: exit 1 came from a DIFFERENT subject than the runbook-reordered fixture this golden isolates — the golden is passing for the wrong reason (this is exactly the case F4 exists to prevent going undetected)."
+            exit 1
+          fi
+          echo "OK: caught the reordered literal on the correct subject — order-sensitivity confirmed, not mere set membership (exit $rc)."
+
+      - name: "Golden — runbook has NO PGRST_DB_SCHEMAS= example at all (expects exit 2)"
+        # Sec joint-review F5 (PR #822): subject 3 previously returned exit 0
+        # when its expected shape was entirely absent, contradicting the
+        # fence's own header ("found zero is not clean"). Subjects 1 and 2
+        # already guarded this; subject 3 now does too.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-clean.py tests/fixtures/ci/pgrst-schemas-pfin-compose-clean.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-none.md 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: expected exit 2 (environment problem — the example is gone, not merely wrong) on the runbook-none golden but got $rc."
+            exit 1
+          fi
+          echo "OK: absent runbook example fails closed distinctly from a wrong value (exit $rc)."
 
       # ── scripts/ci/fence-pgrst-schemas-live.sh — the production-observable
       # half's own predicate, strike-proofed offline the same way
@@ -1918,7 +1980,10 @@ jobs:
       - name: "Predicate — fence-pgrst-schemas-live: clean env (expects exit 0)"
         run: bash scripts/ci/fence-pgrst-schemas-live.sh tests/fixtures/ci/pgrst-schemas-live-clean.env
 
-      - name: "Predicate — fence-pgrst-schemas-live: pfin absent (expects exit 1)"
+      - name: "Predicate — fence-pgrst-schemas-live: pfin absent (expects exit 1, VALUE-CHECKED)"
+        # Sec joint-review F4 (PR #822): exit code alone doesn't confirm the
+        # RIGHT value was rejected -- grep the fence's own FAIL line for the
+        # actual offending value this fixture carries.
         run: |
           set +e
           out="$(bash scripts/ci/fence-pgrst-schemas-live.sh tests/fixtures/ci/pgrst-schemas-live-missing-pfin.env 2>&1)"
@@ -1929,9 +1994,13 @@ jobs:
             echo "FATAL: expected exit 1 on the missing-pfin env golden but got $rc — failing closed."
             exit 1
           fi
-          echo "OK: caught pfin absent from the live value (exit $rc)."
+          if ! printf '%s' "$out" | grep -q "PGRST_DB_SCHEMAS='public,graphql_public'"; then
+            echo "FATAL: exit 1 fired but did not name the missing-pfin fixture's actual value — the golden is passing for the wrong reason."
+            exit 1
+          fi
+          echo "OK: caught pfin absent from the live value, value confirmed (exit $rc)."
 
-      - name: "Predicate — fence-pgrst-schemas-live: reordered, right names wrong order (expects exit 1; LOAD-BEARING)"
+      - name: "Predicate — fence-pgrst-schemas-live: reordered, right names wrong order (expects exit 1, VALUE-CHECKED; LOAD-BEARING)"
         run: |
           set +e
           out="$(bash scripts/ci/fence-pgrst-schemas-live.sh tests/fixtures/ci/pgrst-schemas-live-reordered.env 2>&1)"
@@ -1942,7 +2011,11 @@ jobs:
             echo "FATAL: expected exit 1 on the reordered-live-env golden but got $rc — a set-membership check would wrongly pass this. Failing closed."
             exit 1
           fi
-          echo "OK: caught the reordered live value (exit $rc)."
+          if ! printf '%s' "$out" | grep -q "PGRST_DB_SCHEMAS='pfin,public,graphql_public'"; then
+            echo "FATAL: exit 1 fired but did not name the reordered fixture's actual value — the golden is passing for the wrong reason (this is exactly the case F4 exists to prevent going undetected)."
+            exit 1
+          fi
+          echo "OK: caught the reordered live value, value confirmed (exit $rc)."
 
       - name: "Predicate — fence-pgrst-schemas-live: name entirely absent (expects exit 2)"
         run: |

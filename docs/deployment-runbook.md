@@ -1559,12 +1559,15 @@ BOX_IP=<box-ip> scripts/provision-vps.sh --apply
 
 4. **Flip the store value.** In the Supabase-stack Coolify resource's env store, set `PGRST_DB_SCHEMAS=public,graphql_public,pfin` (the exact literal — `public` first; see the ⚠ two paragraphs above §6.9 for why bare `pfin` is wrong). Redeploy (or restart) the `rest` service so it picks up the new value.
 
-5. **Run the production-observable fence.** `scripts/ci/fence-pgrst-schemas-live.sh` reads the running `rest` container's actual env (`docker compose ... exec -T rest env`) and fails closed on any value but the ruled literal — see that script's header for its own strike-proof. Run it now, by hand, against this box:
+5. **Run the production-observable fence.** `scripts/ci/fence-pgrst-schemas-live.sh` reads the running `rest` container's actual `PGRST_DB_SCHEMAS` and fails closed on any value but the ruled literal — see that script's header for its own strike-proof. Run it now, by hand, against this box:
    ```sh
    docker compose --project-name <supabase-stack-app-uuid> exec -T rest env \
+     | grep '^PGRST_DB_SCHEMAS=' \
      | scripts/ci/fence-pgrst-schemas-live.sh
    ```
-   **STOP condition:** non-zero exit. Do not consider the flip complete until this passes against the live container, not against the Coolify dashboard's stated value — the two have disagreed before (this item's own §I.1 fact 6 finding).
+   The `grep` is deliberate: the `rest` container's full environment also carries `PGRST_DB_URI` (with the authenticator password) and `PGRST_JWT_SECRET`. Filter before the value leaves the container — never run the bare `env` half on its own to "see what's there."
+
+   **STOP condition:** non-zero exit. Do not consider the flip complete until this passes against the live container. The container, not the Coolify dashboard, is the running truth: `NONSECRET_DEFAULTS` is mint-if-**absent**, so the repo default, the store value, and the process environment are three separate facts that can drift apart, and only the last one is what PostgREST actually loaded. (At the 2026-09-14 measurement the store and the container agreed — both wrong. Agreement is not evidence; it is one of the two ways they can both be stale.)
 
 6. **PGRST106-goes-away smoke.** From a shell that can reach `rest` internally (or externally once TLS is up), issue one authenticated read against a `pfin` relation and confirm it no longer 3F000/PGRST106s:
    ```sh

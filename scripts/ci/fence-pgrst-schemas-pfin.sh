@@ -112,16 +112,18 @@ while IFS= read -r line; do
 done <<< "$COMPOSE_LINES"
 
 # ── Subject 3: deployment-runbook.md — every example string ────────────────
-RUNBOOK_MATCHES="$(grep -oE 'PGRST_DB_SCHEMAS=[A-Za-z0-9_,]*' "$RUNBOOK_FILE" || true)"
-if [[ -n "$RUNBOOK_MATCHES" ]]; then
-  while IFS= read -r match; do
-    value="${match#PGRST_DB_SCHEMAS=}"
-    if [[ "$value" != "$RULED_LITERAL" ]]; then
-      echo "VIOLATION ($RUNBOOK_FILE): example \"$match\" does not match the exact ruled literal \"PGRST_DB_SCHEMAS=$RULED_LITERAL\"." >&2
-      VIOLATIONS=1
-    fi
-  done <<< "$RUNBOOK_MATCHES"
+RUNBOOK_MATCHES="$(grep -oE 'PGRST_DB_SCHEMAS=[A-Za-z0-9_,]+' "$RUNBOOK_FILE" || true)"
+if [[ -z "$RUNBOOK_MATCHES" ]]; then
+  echo "FATAL: no PGRST_DB_SCHEMAS=<value> example found in $RUNBOOK_FILE -- the prose that this fence exists to pin is gone. Update this fence's parser (or restore the example); 'found zero' is not 'clean'." >&2
+  exit 2
 fi
+while IFS= read -r match; do
+  value="${match#PGRST_DB_SCHEMAS=}"
+  if [[ "$value" != "$RULED_LITERAL" ]]; then
+    echo "VIOLATION ($RUNBOOK_FILE): example \"$match\" does not match the exact ruled literal \"PGRST_DB_SCHEMAS=$RULED_LITERAL\"." >&2
+    VIOLATIONS=1
+  fi
+done <<< "$RUNBOOK_MATCHES"
 
 if [[ "$VIOLATIONS" -ne 0 ]]; then
   echo "" >&2

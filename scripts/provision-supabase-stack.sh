@@ -935,11 +935,17 @@ else
 fi
 
 step "Production-observable fence: PGRST_DB_SCHEMAS live value (BACKLOG.md §7.36 item 22, Sec's fence half 2)"
-# CI's own literal-match fence (scripts/ci/fence-pgrst-db-schemas-pfin.sh) can only
+# CI's own literal-match fence (scripts/ci/fence-pgrst-schemas-pfin.sh) can only
 # see the REPO'S committed default (NONSECRET_DEFAULTS above), never the live
 # Coolify store -- that default is check-if-absent, so correcting it never
 # corrects an already-set store value. This is the half that observes the box.
-REST_ENV="$(sshx "docker compose --project-name $APP_UUID exec -T rest env" 2>&1 || true)"
+#
+# The grep is deliberate (Sec joint-review, PR #822, F1): the rest container's
+# full environment also carries PGRST_DB_URI (with the authenticator DB
+# password) and PGRST_JWT_SECRET/PGRST_APP_SETTINGS_JWT_SECRET. Filter to the
+# one name this fence needs BEFORE the value leaves the container -- never run
+# the bare `env` half on its own "to see what's there".
+REST_ENV="$(sshx "docker compose --project-name $APP_UUID exec -T rest env | grep '^PGRST_DB_SCHEMAS=' || true" 2>&1 || true)"
 if ! printf '%s\n' "$REST_ENV" | "$REPO_ROOT/scripts/ci/fence-pgrst-schemas-live.sh"; then
   die "fence-pgrst-schemas-live.sh rejected the running rest container's PGRST_DB_SCHEMAS -- see its output above. Fail closed: do not proceed while the live value disagrees with the ruled literal (BACKLOG.md §7.36 item 22)."
 fi
