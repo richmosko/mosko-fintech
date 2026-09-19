@@ -6,12 +6,23 @@
 # again. DevOps-owned. BACKLOG.md §7.36 item 33 ("the runbook must serve
 # a stranger").
 #
-# Reads BOX_IP and MIGRATOR_SERVICE_UUID from the repo-root gitignored
-# .env — written there by scripts/provision-vps.sh --apply (BOX_IP) and
-# scripts/record-coolify-uuids.sh --apply (MIGRATOR_SERVICE_UUID). Both
-# are non-secret (an internal IP and a Coolify resource UUID), so no
-# secret ever passes through this script's own variables for the
-# ordinary --as path.
+# Reads BOX_IP and (depending on the vehicle) SUPABASE_STACK_UUID or
+# MIGRATOR_SERVICE_UUID from the repo-root gitignored .env — written there
+# by scripts/provision-vps.sh --apply (BOX_IP) and
+# scripts/record-coolify-uuids.sh --apply (both UUIDs). All are non-secret
+# (an internal IP and Coolify resource UUIDs), so no secret ever passes
+# through this script's own variables for the ordinary --as path.
+#
+# ⚠ TWO DIFFERENT UUIDs, on purpose — live finding, 2026-09-19 (§6.8 step
+# 5). The ordinary `--as` path execs into the `db` SERVICE, which lives in
+# the Supabase-STACK application (SUPABASE_STACK_UUID) regardless of where
+# `migrator` lives. `--migrator-url` execs into the `migrator` container
+# itself, which (since ADR-072 Amendment 4) is its OWN standalone
+# application (MIGRATOR_SERVICE_UUID). Before this date, `--as` read
+# MIGRATOR_SERVICE_UUID too -- correct before Amendment 4 moved `migrator`
+# off the stack, silently wrong after (execs a project with no `db`
+# service at all). F/CTO hit this live mid-§6.8; see
+# docs/deployment-runbook.md §6.8 step 5 for the incident record.
 #
 # USAGE
 #   scripts/db-shell.sh --as supabase_admin      # open an interactive
@@ -95,9 +106,6 @@ done
 BOX_IP="$(read_env_var BOX_IP)"
 [[ -n "$BOX_IP" ]] || die "BOX_IP not set in .env — run scripts/provision-vps.sh --apply first (it records BOX_IP there), or set it by hand"
 
-MIGRATOR_SERVICE_UUID="$(read_env_var MIGRATOR_SERVICE_UUID)"
-[[ -n "$MIGRATOR_SERVICE_UUID" ]] || die "MIGRATOR_SERVICE_UUID not set in .env — run scripts/record-coolify-uuids.sh --apply first (queries the Coolify API by resource name), or set it by hand"
-
 if [[ $MIGRATOR_URL -eq 1 ]]; then
   # OPERATOR-ONLY GUARD — mechanical, not just a comment. See the header
   # block above and docs/deployment-runbook.md §6.0 Step 0.2.
@@ -107,6 +115,11 @@ if [[ $MIGRATOR_URL -eq 1 ]]; then
   if [[ ! -t 0 || ! -t 1 ]]; then
     die "--migrator-url refuses to run with stdin or stdout not a TTY — this is the guard against an agent (or any non-interactive caller) capturing a live credential into a transcript, log, or pipe. Run this directly at a real terminal."
   fi
+  # This vehicle execs the `migrator` container ITSELF, which (since
+  # ADR-072 Amendment 4) is its own standalone application -- correctly
+  # MIGRATOR_SERVICE_UUID. See the header's "TWO DIFFERENT UUIDs" note.
+  MIGRATOR_SERVICE_UUID="$(read_env_var MIGRATOR_SERVICE_UUID)"
+  [[ -n "$MIGRATOR_SERVICE_UUID" ]] || die "MIGRATOR_SERVICE_UUID not set in .env — run scripts/record-coolify-uuids.sh --apply first (queries the Coolify API by resource name), or set it by hand"
   CMD=(ssh -t "root@$BOX_IP" "docker compose --project-name $MIGRATOR_SERVICE_UUID exec -T migrator sh -c \"echo \\\$PROD_DB_URL\"")
   if [[ $PRINT_ONLY -eq 1 ]]; then
     printf '%s\n' "${CMD[*]}"
@@ -121,7 +134,14 @@ case "$AS_ROLE" in
   *) die "--as must be supabase_admin or postgres, got: $AS_ROLE" ;;
 esac
 
-CMD=(ssh -t "root@$BOX_IP" "docker compose --project-name $MIGRATOR_SERVICE_UUID exec -it db psql -U $AS_ROLE -d postgres")
+# This vehicle execs the `db` SERVICE, which lives in the Supabase-STACK
+# application regardless of where `migrator` lives -- SUPABASE_STACK_UUID,
+# NOT MIGRATOR_SERVICE_UUID. See the header's "TWO DIFFERENT UUIDs" note
+# (live finding, 2026-09-19, §6.8 step 5).
+SUPABASE_STACK_UUID="$(read_env_var SUPABASE_STACK_UUID)"
+[[ -n "$SUPABASE_STACK_UUID" ]] || die "SUPABASE_STACK_UUID not set in .env — run scripts/record-coolify-uuids.sh --apply first (queries the Coolify API by resource name), or set it by hand"
+
+CMD=(ssh -t "root@$BOX_IP" "docker compose --project-name $SUPABASE_STACK_UUID exec -it db psql -U $AS_ROLE -d postgres")
 
 if [[ $PRINT_ONLY -eq 1 ]]; then
   printf '%s\n' "${CMD[*]}"

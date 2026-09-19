@@ -32,6 +32,18 @@
 #     load-bearing in scripts/migrator-orchestrate.sh,
 #     /etc/pfin/migrator-trigger.conf, and scripts/provision-vps.sh, none
 #     of which needed to change for this rename.
+#   SUPABASE_STACK_UUID — ⚠ NEW, 2026-09-19 (live finding, §6.8 step 5):
+#     the Supabase-stack application's OWN uuid (default name
+#     "pfin-supabase-stack", SUPABASE_STACK_APP_NAME below). Before this
+#     date, `scripts/db-shell.sh --as ...` (which execs `db`, a STACK
+#     service) read MIGRATOR_SERVICE_UUID for its project-name — correct
+#     before Amendment 4 (when MIGRATOR_SERVICE_UUID resolved to the
+#     stack), silently wrong after it (MIGRATOR_SERVICE_UUID now resolves
+#     to the migrator application, which has no `db` service at all).
+#     SUPABASE_STACK_UUID is the STACK's uuid, unconditionally, regardless
+#     of where `migrator` lives — db-shell.sh's `--as` path uses this one;
+#     its `--migrator-url` path correctly keeps using MIGRATOR_SERVICE_UUID
+#     (it execs the migrator container itself).
 #   APP_UUID — the V1 web-app Coolify application (default name "pfin-app").
 #   MIGRATOR_TASK_UUID — the "migrator-db-push" Scheduled Task, now attached
 #     to the migrator application (see MIGRATOR_SERVICE_UUID above), NOT
@@ -39,9 +51,9 @@
 #     own "Resource attachment" section).
 #
 # Override the names this script searches for via env vars
-# (MIGRATOR_APP_NAME / WEB_APP_NAME / MIGRATOR_TASK_NAME) if a
-# rebuild ever uses different resource names — never hardcode a second copy
-# of this script's defaults elsewhere.
+# (MIGRATOR_APP_NAME / SUPABASE_STACK_APP_NAME / WEB_APP_NAME /
+# MIGRATOR_TASK_NAME) if a rebuild ever uses different resource names —
+# never hardcode a second copy of this script's defaults elsewhere.
 
 set -euo pipefail
 
@@ -77,6 +89,10 @@ AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
 # MIGRATOR_SERVICE_UUID resolves against — see this file's header comment.
 # Matches scripts/provision-migrator-app.sh's own MIGRATOR_APP_NAME default.
 MIGRATOR_APP_NAME="${MIGRATOR_APP_NAME:-pfin-migrator}"
+# SUPABASE_STACK_APP_NAME -- matches scripts/provision-supabase-stack.sh's
+# and scripts/provision-migrator-app.sh's own SUPABASE_STACK_APP_NAME
+# default. See this file's header for why this lookup exists.
+SUPABASE_STACK_APP_NAME="${SUPABASE_STACK_APP_NAME:-pfin-supabase-stack}"
 WEB_APP_NAME="${WEB_APP_NAME:-pfin-app}"
 MIGRATOR_TASK_NAME="${MIGRATOR_TASK_NAME:-migrator-db-push}"
 
@@ -119,6 +135,13 @@ m=[a for a in d if a['name']=='$MIGRATOR_APP_NAME']
 print(m[0]['uuid'] if m else '')")"
 [[ -n "$MIGRATOR_SERVICE_UUID" ]] || die "no application named '$MIGRATOR_APP_NAME' found -- run scripts/provision-migrator-app.sh --apply first, or override MIGRATOR_APP_NAME"
 ok "MIGRATOR_SERVICE_UUID ($MIGRATOR_APP_NAME) — $MIGRATOR_SERVICE_UUID"
+
+SUPABASE_STACK_UUID="$(api GET /applications | jqp "
+d=json.load(sys.stdin)
+m=[a for a in d if a['name']=='$SUPABASE_STACK_APP_NAME']
+print(m[0]['uuid'] if m else '')")"
+[[ -n "$SUPABASE_STACK_UUID" ]] || die "no application named '$SUPABASE_STACK_APP_NAME' found -- run scripts/provision-supabase-stack.sh --apply first, or override SUPABASE_STACK_APP_NAME"
+ok "SUPABASE_STACK_UUID ($SUPABASE_STACK_APP_NAME) — $SUPABASE_STACK_UUID"
 
 APP_UUID="$(api GET /applications | jqp "
 d=json.load(sys.stdin)
@@ -176,5 +199,6 @@ record_kv() {
 }
 
 record_kv MIGRATOR_SERVICE_UUID "$MIGRATOR_SERVICE_UUID"
+record_kv SUPABASE_STACK_UUID "$SUPABASE_STACK_UUID"
 record_kv APP_UUID "$APP_UUID"
 record_kv MIGRATOR_TASK_UUID "$MIGRATOR_TASK_UUID"
