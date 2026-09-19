@@ -262,7 +262,18 @@ otp_expiry = 3600
 # admin_email = "env(SMTP_ADMIN_EMAIL)"
 # sender_name = "mosko-fintech"
 
-# ── Custom auth-email templates (Auth-1) — plain-text-safe; active locally + prod.
+# ── Custom auth-email templates (Auth-1) — plain-text-safe.
+# ⚠ LOCAL CLI STACK ONLY (corrected 2026-09-19, BACKLOG.md §7.36 item 24, F/CTO-ruled;
+# Sec: this exact misread already produced item 24 once, at PR #755). `content_path`
+# is this CLI's OWN mechanism for `supabase start`; self-hosted production GoTrue
+# does NOT read this file or this key at all. Production wires templates, if it ever
+# does, via GoTrue's own `GOTRUE_MAILER_TEMPLATES_*` env vars (each takes a URL,
+# fetched over HTTP at send time — see infra/supabase/docker-compose.yml's `auth`
+# service, which sets NONE of them today). V1 ships stock GoTrue emails in production
+# (F/CTO-ruled Option 1, docs/records/v1final/standup-preconditions.md §I.2) — this
+# block governs local dev only. Note also: there is no `invite` or `email_change`
+# block below — GoTrue names FIVE template vars total, and any future production
+# wire-up must scope from that five-name list, not from this three-entry block.
 [auth.email.template.confirmation]
 subject = "Confirm your mosko-fintech email"
 content_path = "./supabase/templates/confirmation.html"
