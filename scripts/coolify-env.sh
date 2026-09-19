@@ -80,7 +80,24 @@
 # decision (this script will PATCH/DELETE it against production) --
 # Sec joint-review mandatory per this script's own routing (it edits
 # Coolify env stores directly, same class as provision-*.sh).
-SET_ALLOWLIST=(PGRST_DB_SCHEMAS MIGRATOR_DB_USER)
+#
+# PUBLIC_SUPABASE_URL / PUBLIC_SUPABASE_ANON_KEY -- added for §7.1 step 1
+# (the pfin-app first-deploy procedure). Both non-secret BY SEC RULING
+# (2026-09-09, recorded in docs/deployment-runbook.md §5 "Non-secret
+# runtime config" -- PUBLIC_SUPABASE_URL is the stack's own gateway
+# address, not confidential; PUBLIC_SUPABASE_ANON_KEY is a role:anon JWT,
+# publishable by construction, gated by RLS + the ADR-029 aal2 backstop,
+# not by secrecy). Neither appears in secrets-manifest.yml's ci_only or
+# production_only sets (confirmed live against the manifest at the same
+# PR that added this allowlist entry) -- Step 2 below (the manifest
+# refusal) would independently reject either name if that were ever
+# wrong, so this addition does not weaken that fence.
+#
+# PFIN_DB_SSLMODE -- added for the etl/provider-sync workers' later
+# deploys (BACKLOG.md §7.36 item 26, Sec-ruled non-secret production
+# override; docs/deployment-runbook.md §5/§7). Same non-manifest-name
+# status, same independent-refusal backstop.
+SET_ALLOWLIST=(PGRST_DB_SCHEMAS MIGRATOR_DB_USER PUBLIC_SUPABASE_URL PUBLIC_SUPABASE_ANON_KEY PFIN_DB_SSLMODE)
 # MIGRATOR_DB_PASSWORD is delete-only, never settable here (it is minted
 # ONLY by scripts/provision-migrator-app.sh's own mint-if-absent step,
 # ADR-072 Amendment 4 Decision B -- routing it through this script's

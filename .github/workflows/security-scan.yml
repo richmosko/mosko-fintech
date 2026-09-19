@@ -2628,6 +2628,24 @@ jobs:
       - name: offline strike-proofs (allowlist refusal, read-back mismatch, blanked-not-deleted)
         run: bash scripts/ci/fence-coolify-env-strikes.sh
 
+  fence-deploy-app-strikes:
+    name: deploy-app.sh — identity-guard strike-proofs
+    runs-on: ubuntu-latest
+    # Unlabeled, same posture as fence-coolify-env-strikes above. DevOps-owned.
+    # scripts/deploy-app.sh (the docs/deployment-runbook.md §7.1 step 1
+    # first-deploy vehicle) refuses to deploy a resolved Coolify
+    # application whose base_directory does not match the caller's
+    # --expect-base-directory -- the guard against a typo'd/stale
+    # APP_NAME resolving to the wrong resource. scripts/ci/fence-deploy-
+    # app-strikes.sh proves that refusal fires BEFORE any /deploy call is
+    # made (not merely that the script exits non-zero for some reason),
+    # offline via a PATH-shadowed fake ssh/curl/docker -- see that
+    # script's own header for what each scenario proves.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (identity-guard match / mismatch, pre- and post-deploy)
+        run: bash scripts/ci/fence-deploy-app-strikes.sh
+
   fence-migrator-orchestrate-strikes:
     name: migrator-orchestrate.sh — deploy-then-execute strike-proofs (BACKLOG §7.36 item 59)
     runs-on: ubuntu-latest

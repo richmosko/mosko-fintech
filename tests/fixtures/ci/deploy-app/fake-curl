@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-deploy-app-strikes.sh to drive scripts/deploy-app.sh's
+# remote python driver against CANNED Coolify API responses instead of a
+# live box. Selected by PATH precedence inside the fence's fake `ssh`
+# wrapper -- deploy-app.sh itself is never modified to know this exists.
+#
+# Logs its OWN ARGV (never the -K config FILE's contents -- same
+# distinction scripts/ci/fence-coolify-env-strikes.sh's own fake-curl
+# draws) to $FAKE_CURL_LOG, so the fence can assert both (a) the fake
+# token string never appears there, and (b) in MISMATCH mode, that
+# /deploy is never even called -- the identity guard must fire BEFORE any
+# deploy attempt, not merely report the mismatch after the fact.
+#
+# Behaviour selected by $FAKE_CURL_MODE:
+#   match    -- GET /applications returns one app with base_directory
+#               "/api" (matches the strike's --expect-base-directory),
+#               deploy succeeds, deployment status "finished".
+#   mismatch -- GET /applications returns base_directory "/wrong" --
+#               deploy-app.sh's identity guard must die() before any
+#               /deploy call is ever made.
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+METHOD="GET"
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  prev="$a"
+done
+URL="${*: -1}"
+
+BASE_DIR="/api"
+[[ "${FAKE_CURL_MODE:-match}" == "mismatch" ]] && BASE_DIR="/wrong"
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
+  printf '[{"uuid":"abc123def456ghi789jk01","name":"pfin-app","base_directory":"%s","fqdn":"http://test.example.sslip.io"}]' "$BASE_DIR"
+  exit 0
+fi
+
+if [[ "$METHOD" == "POST" && "$URL" == *"/deploy?uuid="* ]]; then
+  echo '{"deployments":[{"deployment_uuid":"dep-1"}]}'
+  exit 0
+fi
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/deployments/dep-1" ]]; then
+  echo '{"status":"finished","logs":"[]"}'
+  exit 0
+fi
+
+echo '{}'
+exit 0
