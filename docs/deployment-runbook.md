@@ -492,7 +492,7 @@ Confirm the volume is actually gone before redeploying — `down` without `-v` l
 {"code":"3F000","message":"schema \"pfin\" does not exist"}
 ```
 
-— because `PGRST_DB_SCHEMAS=pfin` is correct, but the `pfin` schema does not exist yet: it is created by `supabase/migrations/**`, which run at §6, not here. PostgREST retries its schema-cache load with its own backoff and goes healthy **on its own**, with no restart needed, the moment §6's `supabase db push` lands. **What would make this a real failure instead of the expected wait:** `rest` still unhealthy with this same error *after* §6's migrations have applied cleanly (check `supabase_migrations.schema_migrations` for the expected row count first), or a different error code entirely (anything other than `3F000`/"schema does not exist" on a schema-not-found race). ⚠ **Unconfirmed against the live box (2026-09-14, standup step 6 Phase B, Sec joint-review PR #753 C-1):** the running stack's `PGRST_DB_SCHEMAS` measured `public,graphql_public` — `pfin` absent — contradicting this paragraph's premise. Not reconciled in this PR; booked at `BACKLOG.md` §7.36.
+— because `PGRST_DB_SCHEMAS=public,graphql_public,pfin` is correct (**`public` FIRST** — PostgREST's first listed schema becomes the default `Accept-Profile`; `pfin` alone would un-expose `public`/`graphql_public`, per BACKLOG §7.36 item 22's F/CTO ruling, 2026-09-19), but the `pfin` schema does not exist yet: it is created by `supabase/migrations/**`, which run at §6, not here. PostgREST retries its schema-cache load with its own backoff and goes healthy **on its own**, with no restart needed, the moment §6's `supabase db push` lands. **What would make this a real failure instead of the expected wait:** `rest` still unhealthy with this same error *after* §6's migrations have applied cleanly (check `supabase_migrations.schema_migrations` for the expected row count first), or a different error code entirely (anything other than `3F000`/"schema does not exist" on a schema-not-found race). **Restoration, not a new claim (BACKLOG §7.36 item 22, ruled 2026-09-19):** this paragraph's premise was measured FALSE against the live box on 2026-09-14 (Sec joint-review PR #753 C-1 measured the running stack's `PGRST_DB_SCHEMAS` as `public,graphql_public` — `pfin` absent) because production had never been flipped to the ratified [ADR-023](../DECISIONS.md#adr-023) posture. **§6.9 below** carries the numbered flip procedure (Sec's B-1 through B-4 conditions); once executed, this paragraph's premise is true again for the reason ADR-023 always gave.
 
 **This is the third instance of the same pattern in this section, worth naming once rather than re-discovering per check: §4's verifications assume a post-§6 world, and some of them run before §6 in the natural stand-up order.** §4.1's TimeZone read-back, §5's Sec-gate STUB appearing to block §4's own execution, and this `rest`-unhealthy case are the same shape — a check that is correct, and will read as failing, until a later section's work lands. Reordering §4/§5/§6 is not the fix (§5's secrets-before-deploy gate and §6's role-provisioning ordering are both deliberate, not accidental) — the fix is marking each affected check explicitly, which this section now does at each instance rather than leaving a stranger to rediscover the pattern three separate times.
 
@@ -1525,6 +1525,57 @@ BOX_IP=<box-ip> scripts/provision-vps.sh --apply
 13. **The Amendment 6/7 orchestrator assertions re-fire once.** The next real trigger fire (a migration merge, or a manual dispatch per §6.7) exercises `migrator-orchestrate.sh`'s sha precondition and delivery assertion against the NEW resource for the first time. Expect the same shape as any other clean fire (§6.5's "STATUS UPDATE" entries) — a fire that behaves differently here would mean something about the cutover, not about the orchestrator, changed.
 
 **What this cutover does NOT do — stated so it is not read as more than it is.** No ownership statement belongs in this cutover (BACKLOG.md §7.36 item 32: the `migrator` **role** owns the `supabase_migrations` ledger; moving the container that authenticates as it changes nothing about that ownership). `BACKLOG.md` §7.36 **item 28** — the stack-wide `env_file:` exposure for `db`/`auth`/`rest`/`api-gw`/`supavisor`/`meta`/`studio` — is **not** touched, closed, or narrowed by this cutover; it remains open, gating the §2/§9 DNS cutover, unchanged.
+
+---
+
+### 6.9 `pfin` Data-API exposure flip PROCEDURE — BACKLOG.md §7.36 item 22 (F/CTO-ruled 2026-09-19, Sec joint-review)
+
+**What this does.** Flips production's `PGRST_DB_SCHEMAS` from the live `public,graphql_public` to the ruled literal `public,graphql_public,pfin` — restoring [ADR-023](../DECISIONS.md#adr-023)'s ratified posture, which production has never actually run since first provision. **Every step below is a condition on the flip, not advice** (Security Engineer, §7.36 item 22 review, `main` @ `90420b38`) — do not skip ahead to step 4 without steps 1–3 passing.
+
+1. **B-1 — VETO trigger. Measure the `anon` zero-grant fence against the PRODUCTION database, not CI.** Run against the live `db`:
+   ```sql
+   -- (a) schema-level USAGE
+   select has_schema_privilege('anon', 'pfin', 'USAGE') as anon_schema_usage;
+
+   -- (b) every pfin relation, enumerated dynamically — never a hand-maintained list,
+   -- which silently stops covering a relation added after the list was written.
+   select n.nspname, c.relname, c.relkind
+   from pg_class c
+   join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'pfin'
+     and c.relkind in ('r', 'v', 'm', 'p')  -- table, view, matview, partitioned table
+     and (
+       has_table_privilege('anon', c.oid, 'SELECT')
+       or has_table_privilege('anon', c.oid, 'INSERT')
+       or has_table_privilege('anon', c.oid, 'UPDATE')
+       or has_table_privilege('anon', c.oid, 'DELETE')
+     );
+   ```
+   **STOP condition — VETO, do not proceed to step 4:** `anon_schema_usage` is `true`, OR query (b) returns any row. Sec's C2 fence (ADR-023) requires both to be clean before `pfin` is exposed to the Data API — a CI-green two-tenant battery is not evidence here; it observes CI's own scratch DB, not this box (`supabase/tests/rls/053_cpi_u_index_rls.sql` leg `(h6)` and `063` legs `(h10)`/`(h11)` are the CI-side watchers, not a substitute for this step). Record both query outputs in `standup-log.md` under this section's execution entry.
+
+2. **B-2 — applied migration count.** `select count(*) from supabase_migrations.schema_migrations;` must equal **120** (the count of `supabase/migrations/*.sql` at the ruling's baseline, `main` @ `90420b38` — re-count at execution time if `main` has since advanced past this PR). Record the count.
+
+3. **B-3 — `025` present.** `select version from supabase_migrations.schema_migrations where version like '025%';` must return exactly one row (`025_aal2_step_up_backstop.sql`'s applied version). Its `passkey` step-up arm has no behavioural test yet — that is a standing QA item, not a condition on this flip, named here so its absence is not later read as cleared by this procedure.
+
+4. **Flip the store value.** In the Supabase-stack Coolify resource's env store, set `PGRST_DB_SCHEMAS=public,graphql_public,pfin` (the exact literal — `public` first; see the ⚠ two paragraphs above §6.9 for why bare `pfin` is wrong). Redeploy (or restart) the `rest` service so it picks up the new value.
+
+5. **Run the production-observable fence.** `scripts/ci/fence-pgrst-schemas-live.sh` reads the running `rest` container's actual env (`docker compose ... exec -T rest env`) and fails closed on any value but the ruled literal — see that script's header for its own strike-proof. Run it now, by hand, against this box:
+   ```sh
+   docker compose --project-name <supabase-stack-app-uuid> exec -T rest env \
+     | scripts/ci/fence-pgrst-schemas-live.sh
+   ```
+   **STOP condition:** non-zero exit. Do not consider the flip complete until this passes against the live container, not against the Coolify dashboard's stated value — the two have disagreed before (this item's own §I.1 fact 6 finding).
+
+6. **PGRST106-goes-away smoke.** From a shell that can reach `rest` internally (or externally once TLS is up), issue one authenticated read against a `pfin` relation and confirm it no longer 3F000/PGRST106s:
+   ```sh
+   curl -s -H "apikey: $ANON_KEY" -H "Authorization: Bearer <a valid authenticated JWT>" \
+     "$SUPABASE_URL/rest/v1/user_settings?select=users_id&limit=1"
+   ```
+   Expect `200` with a JSON array (possibly empty, if no row matches that JWT's RLS-visible set) — **not** `{"code":"PGRST106", ...}` or `{"code":"3F000", ...}`. A `401`/`403` here is a JWT problem, not evidence about this flip; re-check the token before concluding the flip failed.
+
+7. **B-4 — re-affirm, do not silently inherit, the item-26 `sslmode=disable` ruling.** With `pfin` now exposed, `rest`↔`db` carries tenant financial rows over the same in-network plaintext hop that ruling accepted (§7.36 item 26). That ruling holds because both containers sit on one host's project network; it is **VOID** the day `db` or `supavisor` becomes reachable off-host. Record this sentence, dated, alongside this section's execution entry — the flip raises the value of what crosses that hop, so the acceptance is re-stated, not merely carried forward.
+
+**What this procedure does NOT do.** It does not touch the `graphql_public` open question (whether `pg_graphql` reflects `pfin` relations once exposed) — that is a separate, booked measurement (`BACKLOG.md` §7.36, this item's follow-on), not a precondition on this flip. It does not touch `secrets-manifest.yml` or any RT/SD-matrix entry — Sec's review confirmed the ledger effects of this flip are none.
 
 ---
 

@@ -669,7 +669,15 @@ NONSECRET_DEFAULTS = {"STUDIO_DEFAULT_ORGANIZATION": "mosko-fintech",
                        "MAILER_URLPATHS_RECOVERY": "/auth/v1/verify",
                        "PGRST_DB_EXTRA_SEARCH_PATH": "public",
                        "PGRST_DB_MAX_ROWS": "1000",
-                       "PGRST_DB_SCHEMAS": "public,graphql_public",
+                       # BACKLOG.md §7.36 item 22 (F/CTO-ruled 2026-09-19): `pfin` belongs
+                       # here per ADR-023's ratified Data-API exposure posture. `public`
+                       # stays FIRST -- PostgREST's first listed schema is its default
+                       # Accept-Profile, so `pfin` alone (or first) would un-expose the
+                       # other two. This is check-if-absent (NONSECRET_DEFAULTS), so
+                       # correcting this line does NOT correct an already-set live store
+                       # value -- see the post-deploy fence-pgrst-schemas-live.sh
+                       # assertion below, which is the production-observable half.
+                       "PGRST_DB_SCHEMAS": "public,graphql_public,pfin",
                        "POOLER_DB_POOL_SIZE": "5",
                        "POOLER_DEFAULT_POOL_SIZE": "20",
                        "POOLER_MAX_CLIENT_CONN": "100",
@@ -911,7 +919,12 @@ ok "GOTRUE_DISABLE_SIGNUP=true"
 
 # rest is EXPECTED unhealthy until §6's migrations create the pfin schema --
 # assert the SPECIFIC expected error, not just "unhealthy" (§4's rest-
-# unhealthy-pre-migrations note).
+# unhealthy-pre-migrations note). This branch's premise -- that PGRST_DB_SCHEMAS
+# actually NAMES pfin, so PostgREST is waiting on the SCHEMA rather than never
+# looking for it at all -- was FALSE in production before BACKLOG.md §7.36 item
+# 22's ruling (2026-09-19); see NONSECRET_DEFAULTS above and the
+# fence-pgrst-schemas-live.sh assertion just below, which is what makes this
+# branch's premise checkable rather than merely stated.
 REST_LOG="$(sshx "docker compose --project-name $APP_UUID logs rest 2>&1 | tail -20")"
 if echo "$REST_LOG" | grep -q 'schema "pfin" does not exist'; then
   ok "rest unhealthy as expected pre-§6 (schema \"pfin\" does not exist) -- not a defect"
@@ -920,6 +933,17 @@ elif sshx "docker compose --project-name $APP_UUID ps rest --format '{{.Health}}
 else
   die "rest is unhealthy for a DIFFERENT reason than the expected pre-§6 schema gap -- check the log, this is a real failure: $(echo "$REST_LOG" | tail -5)"
 fi
+
+step "Production-observable fence: PGRST_DB_SCHEMAS live value (BACKLOG.md §7.36 item 22, Sec's fence half 2)"
+# CI's own literal-match fence (scripts/ci/fence-pgrst-db-schemas-pfin.sh) can only
+# see the REPO'S committed default (NONSECRET_DEFAULTS above), never the live
+# Coolify store -- that default is check-if-absent, so correcting it never
+# corrects an already-set store value. This is the half that observes the box.
+REST_ENV="$(sshx "docker compose --project-name $APP_UUID exec -T rest env" 2>&1 || true)"
+if ! printf '%s\n' "$REST_ENV" | "$REPO_ROOT/scripts/ci/fence-pgrst-schemas-live.sh"; then
+  die "fence-pgrst-schemas-live.sh rejected the running rest container's PGRST_DB_SCHEMAS -- see its output above. Fail closed: do not proceed while the live value disagrees with the ruled literal (BACKLOG.md §7.36 item 22)."
+fi
+ok "rest container's live PGRST_DB_SCHEMAS matches the ruled literal"
 
 step "Post-move: MIGRATOR_DB_* absence assertion (ADR-072 Amendment 4 / BACKLOG.md §7.36 item 29)"
 # Sec's own words on why this must be a WATCHER, not a one-time check at

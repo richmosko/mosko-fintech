@@ -1813,6 +1813,150 @@ jobs:
           fi
           echo "OK: check-migrator-names-absent caught a BLANKED MIGRATOR_DB_USER= by name, not value (exit $rc)."
 
+  fence-pgrst-schemas-pfin:
+    name: pgrst-schemas-pfin — PGRST_DB_SCHEMAS committed-default literal (BACKLOG.md §7.36 item 22)
+    runs-on: ubuntu-latest
+    # F/CTO-ruled 2026-09-19 (BACKLOG.md §7.36 item 22, Sec joint review at
+    # `docs/records/v1final/standup-preconditions.md` §I.1): production must
+    # expose `pfin` to the Data API per ADR-023's ratified posture, as the
+    # EXACT literal "public,graphql_public,pfin" — public FIRST, since
+    # PostgREST's first listed schema is its default Accept-Profile. This is
+    # the CI-lane (repo) half of Sec's two-half fence; the OTHER half
+    # (scripts/ci/fence-pgrst-schemas-live.sh) observes the box's actual
+    # running value inside scripts/provision-supabase-stack.sh's own
+    # Verification battery and cannot run here — see that script's header
+    # for why NONSECRET_DEFAULTS being check-if-absent makes this half
+    # necessary but not sufficient. Ships UNLABELED (no RT-NN — an F/CTO
+    # ADR-011 Decision-4 ratify act on a Sec proposal, not taken by this
+    # PR) with its own sentinel, deliberately not reusing
+    # fence-datastore-private-bind's (a network-exposure property, not a
+    # Data-API schema-exposure property — reusing it would be the
+    # layer-attribution drift ADR-011 Decision 4 catalogues).
+    #
+    # Run-always (no paths filter), matching the sibling fences' own
+    # reasoning: a path-trigger leaves a trigger-drift meta-risk.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Production-mode — real files (expects clean; exit 0)
+        run: bash scripts/ci/fence-pgrst-schemas-pfin.sh scripts/provision-supabase-stack.sh infra/supabase/docker-compose.yml docs/deployment-runbook.md
+
+      - name: "Golden — provision-script default wrong (expects exit 1)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-violation.py tests/fixtures/ci/pgrst-schemas-pfin-compose-clean.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-clean.md 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on the provision-default golden but got $rc — failing closed."
+            exit 1
+          fi
+          echo "OK: caught the wrong NONSECRET_DEFAULTS literal (exit $rc)."
+
+      - name: "Golden — compose hardcodes a literal instead of pure interpolation (expects exit 1)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-clean.py tests/fixtures/ci/pgrst-schemas-pfin-compose-hardcoded.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-clean.md 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on the hardcoded-compose golden but got $rc — failing closed."
+            exit 1
+          fi
+          echo "OK: caught the hardcoded compose literal (exit $rc)."
+
+      - name: "Golden — compose carries a silently-diverging :-fallback (expects exit 1)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-clean.py tests/fixtures/ci/pgrst-schemas-pfin-compose-fallback.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-clean.md 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on the compose :-fallback golden but got $rc — failing closed."
+            exit 1
+          fi
+          echo "OK: caught the compose :-fallback default (exit $rc)."
+
+      - name: "Golden — runbook still states the bare-pfin literal item 22 named (expects exit 1)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-clean.py tests/fixtures/ci/pgrst-schemas-pfin-compose-clean.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-bare-pfin.md 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on the bare-pfin runbook golden but got $rc — failing closed."
+            exit 1
+          fi
+          echo "OK: caught the bare-pfin runbook literal (exit $rc)."
+
+      - name: "Golden — runbook reordered, right names wrong order (expects exit 1; LOAD-BEARING)"
+        # This is the fixture that separates this fence from a set-membership
+        # check: "pfin,public,graphql_public" has the right three names, but
+        # PostgREST would treat pfin as the default Accept-Profile. A
+        # set-equality check would pass this fixture and miss the defect.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-pgrst-schemas-pfin.sh tests/fixtures/ci/pgrst-schemas-pfin-provision-clean.py tests/fixtures/ci/pgrst-schemas-pfin-compose-clean.yaml tests/fixtures/ci/pgrst-schemas-pfin-runbook-reordered.md 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on the reordered-literal golden but got $rc — a set-membership check would wrongly pass this. Failing closed."
+            exit 1
+          fi
+          echo "OK: caught the reordered literal — order-sensitivity confirmed, not mere set membership (exit $rc)."
+
+      # ── scripts/ci/fence-pgrst-schemas-live.sh — the production-observable
+      # half's own predicate, strike-proofed offline the same way
+      # check-migrator-names-absent.sh is (see that script's header for the
+      # end-to-end live-box strike this offline proof does NOT replace —
+      # that stays at docs/deployment-runbook.md §6.9 step 5).
+      - name: "Predicate — fence-pgrst-schemas-live: clean env (expects exit 0)"
+        run: bash scripts/ci/fence-pgrst-schemas-live.sh tests/fixtures/ci/pgrst-schemas-live-clean.env
+
+      - name: "Predicate — fence-pgrst-schemas-live: pfin absent (expects exit 1)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-pgrst-schemas-live.sh tests/fixtures/ci/pgrst-schemas-live-missing-pfin.env 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on the missing-pfin env golden but got $rc — failing closed."
+            exit 1
+          fi
+          echo "OK: caught pfin absent from the live value (exit $rc)."
+
+      - name: "Predicate — fence-pgrst-schemas-live: reordered, right names wrong order (expects exit 1; LOAD-BEARING)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-pgrst-schemas-live.sh tests/fixtures/ci/pgrst-schemas-live-reordered.env 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on the reordered-live-env golden but got $rc — a set-membership check would wrongly pass this. Failing closed."
+            exit 1
+          fi
+          echo "OK: caught the reordered live value (exit $rc)."
+
+      - name: "Predicate — fence-pgrst-schemas-live: name entirely absent (expects exit 2)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-pgrst-schemas-live.sh tests/fixtures/ci/pgrst-schemas-live-absent-name.env 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: expected exit 2 (environment problem, not a caught violation) on the absent-name golden but got $rc."
+            exit 1
+          fi
+          echo "OK: absent name fails closed distinctly from a wrong value (exit $rc)."
+
   fence-entity-grep:
     name: entity-grep — HTML-entity-obscured §/# in doc artifacts
     runs-on: ubuntu-latest
