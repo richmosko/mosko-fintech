@@ -41,19 +41,22 @@
 #   it would mean anon can read `pfin` -- and is treated as a FAILURE.
 #   --jwt <user-jwt>: apikey stays the container's own anon key;
 #   Authorization is OVERRIDDEN to the caller-supplied user JWT (crosses
-#   via `docker exec -e`, never read from the container -- a real session
-#   token is per-user, not baked into image env, and this script has no
-#   way to mint one -- Q5 is invite-only). EXPECTED: 200 with a JSON
-#   array (docs/deployment-runbook.md §6.9 step 6). A 401/42501 in THIS
-#   mode means the JWT is invalid/expired, not that pfin is unexposed --
-#   also a FAILURE for this mode, never silently accepted as the anon
-#   mode's success.
-#   ⚠ RESIDUAL, named not glossed: with --jwt, the token crosses via
-#   `docker exec -e SMOKE_JWT_OVERRIDE=<jwt> ...`, which puts it in that
-#   `docker` invocation's own argv, `ps`-visible on the box for the
-#   call's lifetime -- same pre-existing class already tracked at
-#   BACKLOG.md §7.36 item 60 for every sibling script's `python3 -
-#   "$TOKEN"` pattern, not a new exposure this script introduces.
+#   via a 0600 seed file over SSH stdin + `docker exec --env-file`,
+#   never read from the container's own env -- a real session token is
+#   per-user, not baked into image env, and this script has no way to
+#   mint one -- Q5 is invite-only). EXPECTED: 200 with a JSON array
+#   (docs/deployment-runbook.md §6.9 step 6). A 401/42501 in THIS mode
+#   means the JWT is invalid/expired, not that pfin is unexposed -- also
+#   a FAILURE for this mode, never silently accepted as the anon mode's
+#   success.
+#   ⚠ Fixed (Sec, PR #833 joint review, F1): an earlier revision of this
+#   script crossed the JWT via `docker exec -e SMOKE_JWT_OVERRIDE=<jwt>
+#   ...`, which put the token in BOTH the operator's OWN local `ssh`
+#   argv and the box-side `docker` invocation's argv -- two hosts, and
+#   this header named only the box-side one. The seed-file mechanism
+#   (option A, same hop scripts/coolify-env.sh's own `set` path uses for
+#   its env VALUES) closes both: neither host's argv ever carries the
+#   token, only a path to a 0600 file shredded immediately after use.
 #
 # OUTPUT
 #   Prints the HTTP status and (if present) the response body's `code`
@@ -68,7 +71,18 @@
 #      200 with --jwt)
 #   1  anything else: PGRST106 (schema not exposed), 3F000, a connection
 #      failure, the wrong status/code for the mode in use, resource not
-#      found, or an unreachable box/container.
+#      found, ambiguous (>1) running container match, or an unreachable
+#      box/container.
+#   2  the node one-liner itself exits 2 for a precondition it couldn't
+#      even attempt the request under -- NO_ANON_KEY (the container's own
+#      PUBLIC_SUPABASE_ANON_KEY env is absent -- see
+#      docs/deployment-runbook.md §7.1 step 1's `--require-env` guard,
+#      which should already have prevented this) or CONN_ERROR (couldn't
+#      reach `api-gw:8000` at all -- a network/DNS-level failure, not a
+#      PostgREST response). Propagates through this script's own
+#      `set -e` at the `RESULT=$(...)` assignment -- distinct from exit 1,
+#      which is a PostgREST response this script classified as a failure
+#      shape (Sec, PR #833 joint review, N6).
 
 set -euo pipefail
 
@@ -150,9 +164,20 @@ ok "resolved '$APP_QUERY' -> $APP_UUID"
 # --- Step 2: find the running container (plain-Dockerfile-pack -- no ------
 #     compose project to address, `docker exec` by uuid-substring name
 #     match, same primitive scripts/deploy-app.sh's own health read uses).
+# ⚠ Fixed (Sec, PR #833 joint review, F4): a bare `| head -1` asserted
+# non-empty, not unique -- during a Coolify redeploy the pre-deploy and
+# post-deploy containers can both be RUNNING, and `head -1` can silently
+# smoke-test the STALE one. Refuse on >1 match, naming both, matching
+# scripts/deploy-app.sh's own fix for the identical resolution.
 step "Finding the running container"
-CONTAINER_NAME="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.Names}}' | head -1")"
-[[ -n "$CONTAINER_NAME" ]] || die "no running container found matching '$APP_UUID' -- is the app deployed and healthy? (scripts/deploy-app.sh)"
+RUNNING_LIST="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.Names}}\t{{.CreatedAt}}'")"
+[[ -n "$RUNNING_LIST" ]] || die "no running container found matching '$APP_UUID' -- is the app deployed and healthy? (scripts/deploy-app.sh)"
+RUNNING_COUNT="$(printf '%s\n' "$RUNNING_LIST" | grep -c .)"
+[[ "$RUNNING_COUNT" -eq 1 ]] \
+  || die "AMBIGUOUS: $RUNNING_COUNT running containers match '$APP_UUID' -- refusing to silently pick one (a Coolify redeploy can leave the pre-deploy container still RUNNING alongside the new one). Matches:
+$RUNNING_LIST
+Investigate on the box (docker ps -a) before trusting which one this smoke should target."
+CONTAINER_NAME="$(awk -F'\t' '{print $1}' <<<"$RUNNING_LIST")"
 ok "running container: $CONTAINER_NAME"
 
 # --- Step 3: the smoke request, executed INSIDE the container --------------
@@ -160,10 +185,31 @@ step "Issuing the pfin-relation smoke request"
 NODE_ONE_LINER='const k=process.env.PUBLIC_SUPABASE_ANON_KEY; const j=process.env.SMOKE_JWT_OVERRIDE||k; if(!k){console.error("NO_ANON_KEY");process.exit(2);} require("http").get({host:"api-gw",port:8000,path:"/rest/v1/user_settings?select=users_id&limit=1",headers:{apikey:k,Authorization:"Bearer "+j,"Accept-Profile":"pfin"}},r=>{let b="";r.on("data",d=>b+=d);r.on("end",()=>{let c="";try{c=JSON.parse(b).code||"";}catch(e){}console.log(r.statusCode+" "+c);});}).on("error",e=>{console.error("CONN_ERROR "+e.message);process.exit(2);});'
 
 if [[ -n "$USER_JWT" ]]; then
-  # Crosses via `docker exec -e`, never read from the container's own
-  # env, never this script's own argv beyond this one exec call -- see
-  # the header's named residual (ps-visible on the box for this call).
-  RESULT="$(sshx "docker exec -e SMOKE_JWT_OVERRIDE=$(printf '%q' "$USER_JWT") $CONTAINER_NAME node -e $(printf '%q' "$NODE_ONE_LINER")")"
+  # F1 fix (Sec, PR #833 joint review, option A): the JWT crosses via a
+  # 0600 seed file written over SSH STDIN -- the same seed-file hop
+  # scripts/coolify-env.sh's own `set` path already uses for its env
+  # VALUES -- then `docker exec --env-file <path>`, never `docker exec
+  # -e VAR=<value>`. This closes BOTH argv exposures the prior shape
+  # left open: the LOCAL `ssh` argv (this script's own machine) now
+  # carries only the seed file's PATH, and the box-side `docker`
+  # invocation's argv carries only that same path, never the token
+  # value on either host. The seed file is shredded on the box in a
+  # trap immediately after use.
+  SEED_LOCAL="$(mktemp)"
+  trap 'rm -f "$SEED_LOCAL"' EXIT
+  printf 'SMOKE_JWT_OVERRIDE=%s\n' "$USER_JWT" > "$SEED_LOCAL"
+  chmod 600 "$SEED_LOCAL"
+  BOX_SEED="/root/.pfin/.smoke-jwt-seed.$$"
+  sshx "umask 077; mkdir -p /root/.pfin; cat > $BOX_SEED" < "$SEED_LOCAL"
+  rm -f "$SEED_LOCAL"
+  trap - EXIT
+
+  RESULT="$(sshx_in <<REMOTE
+set -e
+trap 'shred -u "$BOX_SEED" 2>/dev/null || rm -f "$BOX_SEED"' EXIT
+docker exec --env-file "$BOX_SEED" $CONTAINER_NAME node -e $(printf '%q' "$NODE_ONE_LINER")
+REMOTE
+)"
 else
   RESULT="$(sshx "docker exec $CONTAINER_NAME node -e $(printf '%q' "$NODE_ONE_LINER")")"
 fi

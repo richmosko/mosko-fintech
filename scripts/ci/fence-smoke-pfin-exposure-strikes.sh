@@ -21,8 +21,10 @@
 #   5. jwt-pass        (200, --jwt given)            -> exit 0
 #   6. jwt-fail         (401/42501, --jwt given)      -> exit 1 (a 401 that
 #      would PASS in anon mode must NOT pass in jwt mode)
+#   7. ambiguous       (2 RUNNING containers match)  -> exit 1 (Sec F4 --
+#      must refuse, never silently `head -1` a stale/pre-deploy container)
 #
-# Exit 0 only if all six scenarios behave exactly as specified above.
+# Exit 0 only if all seven scenarios behave exactly as specified above.
 
 set -euo pipefail
 
@@ -108,6 +110,10 @@ run_scenario "anon mode: PGRST106 fails"               1 anon-fail-pgrst106 pfin
 run_scenario "anon mode: 3F000 fails"                  1 anon-fail-3f000    pfin-app || FAIL=1
 run_scenario "jwt mode: 200 passes"                    0 jwt-pass          pfin-app --jwt fake-user-jwt || FAIL=1
 run_scenario "jwt mode: 401/42501 (would pass in anon mode) FAILS here" 1 jwt-fail pfin-app --jwt fake-user-jwt || FAIL=1
+
+# 7. AMBIGUOUS -- two RUNNING containers match the app uuid (Sec F4).
+#    Must refuse, never silently pick one via a bare `| head -1`.
+FAKE_DOCKER_CONTAINERS=2 run_scenario "ambiguous: 2 running containers refuses" 1 anon-pass pfin-app || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

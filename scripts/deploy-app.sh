@@ -48,12 +48,33 @@
 #   §7.36 item 60).
 #
 # USAGE
-#   BOX_IP=<box-ip> scripts/deploy-app.sh <APP_NAME|uuid> --expect-base-directory <dir> [--require-env NAME[,NAME...]] [--apply] [--health-path </path>]
+#   BOX_IP=<box-ip> scripts/deploy-app.sh <APP_NAME|uuid> --expect-base-directory <dir> [--require-env NAME[,NAME...]] [--require-network-with <APP_NAME|uuid>] [--apply] [--health-path </path>]
 #
 #   Without --apply: preflight only -- resolves the app, prints its
 #   current name/base_directory/fqdn, asserts the identity guard AND (if
-#   given) the required-env-names guard below, writes nothing, deploys
-#   nothing.
+#   given) the required-env-names guard AND (if given) the
+#   required-network-with guard below, writes nothing, deploys nothing.
+#   --require-network-with <APP_NAME|uuid>: resolves a SECOND application
+#   and refuses (before any /deploy call, in BOTH preflight and --apply)
+#   unless both applications share the same Coolify project + environment
+#   AND both carry `settings.connect_to_docker_network == true`. This is
+#   the CA-4-shaped precondition docs/deployment-runbook.md §7.1 step 2
+#   states in prose ("same Coolify project ... connect_to_docker_network
+#   enabled on both sides") but previously supplied no command for --
+#   the guard against a resource silently NOT reaching its dependency
+#   (e.g. `pfin-app` unable to resolve `http://api-gw:8000` because it
+#   was created in a different project) surfacing only as a runtime
+#   connection failure well after deploy, rather than before it.
+#   ⚠ FIELD-PATH PROVENANCE: `settings.connect_to_docker_network` is
+#   inferred BY ANALOGY to the sibling `settings.include_source_commit_
+#   in_build` field this repo's own scripts/ci/check-source-commit-in-
+#   build.sh already reads and has measured live (Sec, 2026-09-19) --
+#   this specific field has NOT been independently confirmed against a
+#   live `GET /applications/<uuid>` response (DevOps does not touch the
+#   box). Same posture as check-source-commit-in-build.sh's own field
+#   BEFORE that measurement existed: traced by convention, not yet
+#   observed. If a live read shows a different path, fix this script's
+#   python, not the runbook's prose.
 #   --require-env NAME[,NAME...]: a names-only presence check against the
 #   resolved application's OWN Coolify env store (GET
 #   /applications/<uuid>/envs, keys only -- no value is ever read,
@@ -78,9 +99,10 @@
 # EXIT CODES
 #   0  clean run (preflight or --apply)
 #   1  a real failure (missing BOX_IP, unreachable box, resource not
-#      found, identity-guard mismatch, a required env name absent,
-#      deploy failed, no running container after a 'finished' deploy,
-#      Coolify API error)
+#      found, identity-guard mismatch, a required env name absent, the
+#      network precondition unsatisfied, ambiguous (>1) running container
+#      match, deploy failed, no running container after a 'finished'
+#      deploy, Coolify API error)
 
 set -euo pipefail
 
@@ -92,17 +114,19 @@ ok()   { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
 info() { printf '      %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
-[[ $# -ge 1 ]] || die "usage: $0 <APP_NAME|uuid> --expect-base-directory <dir> [--require-env NAME[,NAME...]] [--apply] [--health-path </path>]"
+[[ $# -ge 1 ]] || die "usage: $0 <APP_NAME|uuid> --expect-base-directory <dir> [--require-env NAME[,NAME...]] [--require-network-with <APP_NAME|uuid>] [--apply] [--health-path </path>]"
 APP_QUERY="$1"; shift
 
 EXPECT_BASE_DIR=""
 REQUIRE_ENV_RAW=""
+REQUIRE_NETWORK_WITH=""
 APPLY=0
 HEALTH_PATH=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --expect-base-directory) [[ $# -ge 2 ]] || die "--expect-base-directory requires an argument"; EXPECT_BASE_DIR="$2"; shift 2 ;;
     --require-env) [[ $# -ge 2 ]] || die "--require-env requires an argument"; REQUIRE_ENV_RAW="$2"; shift 2 ;;
+    --require-network-with) [[ $# -ge 2 ]] || die "--require-network-with requires an argument"; REQUIRE_NETWORK_WITH="$2"; shift 2 ;;
     --apply) APPLY=1; shift ;;
     --health-path) [[ $# -ge 2 ]] || die "--health-path requires an argument"; HEALTH_PATH="$2"; shift 2 ;;
     --*) die "unknown flag: $1" ;;
@@ -211,6 +235,69 @@ REMOTE
   ok "required env names present: $REQUIRE_ENV_LIST"
 fi
 
+# --- Step 2.6: cross-application network precondition (Sec F3) -------------
+if [[ -n "$REQUIRE_NETWORK_WITH" ]]; then
+  step "Cross-application network precondition check"
+  NET_MATCH_MODE="name"
+  [[ "$REQUIRE_NETWORK_WITH" =~ $UUID_RE ]] && NET_MATCH_MODE="uuid"
+  set +e
+  NET_CHECK_OUT="$(sshx_in <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "$APP_UUID" "$REQUIRE_NETWORK_WITH" "$NET_MATCH_MODE" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, app_uuid, other_query, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+apps = api(token, "GET", "/applications")
+field = "uuid" if mode == "uuid" else "name"
+matches = [a for a in apps if a.get(field) == other_query]
+if len(matches) != 1:
+    die(f"expected exactly one application matching {field}='{other_query}' for --require-network-with, found {len(matches)}")
+other_uuid = matches[0]["uuid"]
+other_name = matches[0].get("name") or other_uuid
+
+a1 = api(token, "GET", f"/applications/{app_uuid}")
+a2 = api(token, "GET", f"/applications/{other_uuid}")
+
+# ⚠ FIELD-PATH PROVENANCE (see the header comment above): environment_id
+# and settings.connect_to_docker_network are inferred by analogy to the
+# sibling settings.include_source_commit_in_build field this repo has
+# already measured live -- NOT independently confirmed for these two
+# fields against a real Coolify response. If a live read disagrees, fix
+# the field names here, not the runbook prose this guard backs.
+env1 = a1.get("environment_id")
+env2 = a2.get("environment_id")
+net1 = (a1.get("settings") or {}).get("connect_to_docker_network")
+net2 = (a2.get("settings") or {}).get("connect_to_docker_network")
+
+print(f"this app  ({app_uuid}): environment_id={env1!r} connect_to_docker_network={net1!r}")
+print(f"other app ({other_uuid}, {other_name}): environment_id={env2!r} connect_to_docker_network={net2!r}")
+
+problems = []
+if env1 is None or env2 is None:
+    problems.append("environment_id missing on one or both applications -- cannot confirm same-project/environment membership")
+elif env1 != env2:
+    problems.append(f"different environment_id ({env1!r} vs {env2!r}) -- applications are not in the same Coolify project/environment")
+if net1 is not True:
+    problems.append(f"connect_to_docker_network for this app is not true (got {net1!r})")
+if net2 is not True:
+    problems.append(f"connect_to_docker_network for other app ({other_name}) is not true (got {net2!r})")
+
+if problems:
+    for p in problems:
+        print(f"PROBLEM: {p}")
+    sys.exit(1)
+PYEOF
+REMOTE
+)"
+  NET_CHECK_RC=$?
+  set -e
+  printf '%s\n' "$NET_CHECK_OUT" | while IFS= read -r line; do info "$line"; done
+  [[ $NET_CHECK_RC -eq 0 ]] \
+    || die "REQUIRED-NETWORK GUARD FAILED: '$APP_QUERY' and '$REQUIRE_NETWORK_WITH' do not satisfy the same-project/environment + connect_to_docker_network-on-both-sides precondition -- see PROBLEM lines above. Fix the Coolify project placement or flip the setting on the named side before retrying (never by assigning either resource a public Domain)."
+  ok "network precondition satisfied: same environment, connect_to_docker_network true on both sides"
+fi
+
 if [[ $APPLY -eq 0 ]]; then
   printf '\n\033[33mPREFLIGHT ONLY.\033[0m Nothing deployed. Re-run with --apply to execute.\n'
   exit 0
@@ -266,9 +353,23 @@ ok "deploy finished"
 # the actual application-level check, best-effort because it depends on
 # Coolify's Traefik routing (and, pre-DNS-cutover, a placeholder fqdn)
 # rather than anything this container guarantees.
-RUNNING="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.Names}}\t{{.Status}}'")"
-[[ -n "$RUNNING" ]] || die "no running container found matching '$APP_UUID' after a 'finished' deploy -- check 'docker ps -a' on the box before trusting this deploy."
-ok "running container: $RUNNING"
+#
+# ⚠ Fixed (Sec, PR #833 joint review, F4): `--filter name=<uuid>` asserted
+# NON-EMPTY, not UNIQUE. During a Coolify redeploy the pre-deploy and
+# post-deploy containers can both be RUNNING simultaneously (the old one
+# is stopped only after the new one is confirmed up) -- an unqualified
+# `head -1` (or the old bare non-empty check, which stopped one line
+# short of the same problem) can certify a STALE container as this
+# deploy's own. Refuse on >1 match, naming all of them, rather than
+# silently picking one.
+RUNNING_LIST="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.Names}}\t{{.Status}}\t{{.CreatedAt}}'")"
+[[ -n "$RUNNING_LIST" ]] || die "no running container found matching '$APP_UUID' after a 'finished' deploy -- check 'docker ps -a' on the box before trusting this deploy."
+RUNNING_COUNT="$(printf '%s\n' "$RUNNING_LIST" | grep -c .)"
+[[ "$RUNNING_COUNT" -eq 1 ]] \
+  || die "AMBIGUOUS: $RUNNING_COUNT running containers match '$APP_UUID' -- refusing to silently pick one (a Coolify redeploy can leave the pre-deploy container still RUNNING alongside the new one). Matches:
+$RUNNING_LIST
+Investigate on the box (docker ps -a) before trusting which one is this deploy's."
+ok "running container: $RUNNING_LIST"
 
 # --- Step 5: optional external health check ---------------------------------
 if [[ -n "$HEALTH_PATH" ]]; then

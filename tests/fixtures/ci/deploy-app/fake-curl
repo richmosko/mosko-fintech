@@ -26,6 +26,14 @@
 #                  omits one required name -- deploy-app.sh's
 #                  required-env-names guard must die() before any
 #                  /deploy call is ever made.
+#   network-match     -- a second app ("pfin-stack") shares environment_id
+#                         and both carry connect_to_docker_network=true --
+#                         --require-network-with must pass.
+#   network-diff-env  -- the two apps have DIFFERENT environment_id --
+#                         --require-network-with must refuse.
+#   network-off       -- same environment_id, but the OTHER app carries
+#                         connect_to_docker_network=false --
+#                         --require-network-with must refuse.
 
 set -euo pipefail
 
@@ -43,8 +51,29 @@ URL="${*: -1}"
 BASE_DIR="/api"
 [[ "${FAKE_CURL_MODE:-match}" == "mismatch" ]] && BASE_DIR="/wrong"
 
+# Network-guard fields for the two applications -- defaults describe the
+# happy path (network-match); the other two modes flip exactly one field.
+APP_ENV_ID=5
+STACK_ENV_ID=5
+APP_NET=true
+STACK_NET=true
+case "${FAKE_CURL_MODE:-match}" in
+  network-diff-env) STACK_ENV_ID=6 ;;
+  network-off)      STACK_NET=false ;;
+esac
+
 if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
-  printf '[{"uuid":"abc123def456ghi789jk01","name":"pfin-app","base_directory":"%s","fqdn":"http://test.example.sslip.io"}]' "$BASE_DIR"
+  printf '[{"uuid":"abc123def456ghi789jk01","name":"pfin-app","base_directory":"%s","fqdn":"http://test.example.sslip.io"},{"uuid":"stack000000000000000001","name":"pfin-stack","base_directory":"/infra/supabase"}]' "$BASE_DIR"
+  exit 0
+fi
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications/abc123def456ghi789jk01" ]]; then
+  printf '{"uuid":"abc123def456ghi789jk01","environment_id":%s,"settings":{"connect_to_docker_network":%s}}' "$APP_ENV_ID" "$APP_NET"
+  exit 0
+fi
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications/stack000000000000000001" ]]; then
+  printf '{"uuid":"stack000000000000000001","environment_id":%s,"settings":{"connect_to_docker_network":%s}}' "$STACK_ENV_ID" "$STACK_NET"
   exit 0
 fi
 

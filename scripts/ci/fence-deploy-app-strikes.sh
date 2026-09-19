@@ -9,11 +9,17 @@
 # responses -- deploy-app.sh itself is never modified or made aware this
 # exists). Same strike shape as scripts/ci/fence-coolify-env-strikes.sh.
 #
-# Proves the TWO claims deploy-app.sh's header makes about its own safety
-# (the identity guard, and the --require-env names-only presence guard):
+# Proves the FOUR claims deploy-app.sh's header makes about its own safety
+# (the identity guard, the --require-env names-only presence guard, the
+# --require-network-with cross-application guard, and the ambiguous-
+# running-container refusal) -- eight scenarios in total (N4, PR #833 Sec
+# joint review: this comment previously said "three", there are now
+# eight; keep this count current, it is read, not decorative):
 #   1. MATCH -- a resolved application whose base_directory equals the
 #      caller's --expect-base-directory proceeds through preflight AND
 #      (in --apply) through a full deploy+poll to "finished".
+#   1b. AMBIGUOUS -- 2 RUNNING containers match the app uuid (Sec F4) --
+#      must refuse, never silently `head -1` a stale/pre-deploy container.
 #   2. MISMATCH -- a resolved application whose base_directory does NOT
 #      match refuses (non-zero exit) in PREFLIGHT ONLY, before --apply is
 #      even given -- proving the guard is not merely "checked, then
@@ -27,8 +33,13 @@
 #   4. REQUIRE-ENV-MATCH -- all required names present -> passes.
 #   5. REQUIRE-ENV-MISSING -- one required name absent -> refuses, same
 #      before-any-/deploy-call proof as scenarios 2/3.
+#   6. NETWORK-MATCH (Sec F3) -- both applications share environment_id
+#      and connect_to_docker_network=true on both -> passes.
+#   7. NETWORK-DIFF-ENV -- different environment_id -> refuses.
+#   8. NETWORK-OFF -- connect_to_docker_network=false on the OTHER side
+#      -> refuses, naming which side.
 #
-# Exit 0 only if all three scenarios behave exactly as specified above.
+# Exit 0 only if every scenario behaves exactly as specified above.
 
 set -euo pipefail
 
@@ -55,10 +66,16 @@ ln -s "$FIXTURE_DIR/fake-curl" "$FAKE_BIN/curl"
 # `docker ps --filter name=<uuid> --filter status=running --format ...`
 # on the box. Stand in with a canned single-row match so the strike
 # exercises the full script, not just the guard + deploy halves.
+# $FAKE_DOCKER_CONTAINERS controls how many RUNNING rows `docker ps`
+# reports -- default 1 (the normal case); "2" exercises Sec's F4 fix
+# (ambiguous match must refuse, never silently pick one via `head -1`).
 cat > "$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$*" == *"ps"* && "$*" == *"status=running"* ]]; then
-  echo -e "app-abc123def456ghi789jk01-000000000000\tUp 5 seconds"
+  echo -e "app-abc123def456ghi789jk01-000000000000\tUp 5 seconds\t2026-09-19 12:00:00"
+  if [[ "${FAKE_DOCKER_CONTAINERS:-1}" == "2" ]]; then
+    echo -e "app-abc123def456ghi789jk01-111111111111\tUp 2 seconds\t2026-09-19 12:05:00"
+  fi
   exit 0
 fi
 exit 0
@@ -137,6 +154,12 @@ run_scenario "match: preflight passes" 0 match \
 run_scenario "match: --apply deploys clean" 0 match \
   pfin-app --expect-base-directory /api --apply >/dev/null || FAIL=1
 
+# 2a. AMBIGUOUS -- two RUNNING containers match the app uuid (the
+#     Coolify-redeploy overlap window, Sec F4). Must refuse, never
+#     silently pick one via `head -1` / a bare non-empty check.
+FAKE_DOCKER_CONTAINERS=2 run_scenario "ambiguous: 2 running containers refuses" 1 match \
+  pfin-app --expect-base-directory /api --apply >/dev/null || FAIL=1
+
 # 2b. MATCH + --require-env, all three present -- preflight passes.
 run_scenario "match: --require-env passes when all names present" 0 match \
   pfin-app --expect-base-directory /api \
@@ -177,6 +200,31 @@ MISMATCH_APPLY_LOG="$(run_scenario "mismatch: refuses even with --apply" 1 misma
   pfin-app --expect-base-directory /api --apply)" || FAIL=1
 if [[ -n "${MISMATCH_APPLY_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$MISMATCH_APPLY_LOG" 2>/dev/null; then
   echo "FAIL: [mismatch: refuses even with --apply] the identity guard did NOT prevent a /deploy call -- vacuous refusal." >&2
+  FAIL=1
+fi
+
+# 5. NETWORK-MATCH -- both apps share environment_id and
+#    connect_to_docker_network=true on both -- --require-network-with
+#    must pass.
+run_scenario "network-match: --require-network-with passes" 0 network-match \
+  pfin-app --expect-base-directory /api --require-network-with pfin-stack >/dev/null || FAIL=1
+
+# 6. NETWORK-DIFF-ENV -- different environment_id -- must refuse BEFORE
+#    any /deploy call.
+NETWORK_DIFF_LOG="$(run_scenario "network-diff-env: --require-network-with refuses" 1 network-diff-env \
+  pfin-app --expect-base-directory /api --require-network-with pfin-stack --apply)" || FAIL=1
+if [[ -n "${NETWORK_DIFF_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$NETWORK_DIFF_LOG" 2>/dev/null; then
+  echo "FAIL: [network-diff-env: --require-network-with refuses] the network guard did NOT prevent a /deploy call -- vacuous refusal." >&2
+  FAIL=1
+fi
+
+# 7. NETWORK-OFF -- same environment_id, but the OTHER app has
+#    connect_to_docker_network=false -- must refuse BEFORE any /deploy
+#    call, naming the failing side.
+NETWORK_OFF_LOG="$(run_scenario "network-off: --require-network-with refuses" 1 network-off \
+  pfin-app --expect-base-directory /api --require-network-with pfin-stack --apply)" || FAIL=1
+if [[ -n "${NETWORK_OFF_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$NETWORK_OFF_LOG" 2>/dev/null; then
+  echo "FAIL: [network-off: --require-network-with refuses] the network guard did NOT prevent a /deploy call -- vacuous refusal." >&2
   FAIL=1
 fi
 
