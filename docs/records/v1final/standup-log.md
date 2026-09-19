@@ -639,3 +639,65 @@ F/CTO ran the pre-Phase-D box-side pre-check (`ssh -i ~/.ssh/id_ed25519_ci_migra
 - **Phantom `GET` route (PR #808).** The pre-fire task-command read-back originally cited a single-task `GET /applications/{uuid}/scheduled-tasks/{task_uuid}` — inferred from the `PATCH` route's shape, never measured, and it 404'd on a real fire as `ci-migrate` before this fix landed. Coolify v4.3.18 has no single-task GET; the fix reads the **list** route and selects by `uuid` with an exactly-one-match requirement, fail-closed on zero or two-or-more matches.
 - **`scheduled_tasks.command` `varchar(255)` + baked script (PRs #811/#812, ADR-072 Amendment 8).** The original 357-byte tagged inline literal did not fit Coolify's `command` column (measured, a real `SQLSTATE 22001` save failure) — a rewrite that fit 255 bytes had to drop either the `rc=$?`/`exit $rc` failure-capture (every failed migration reports success) or a ledger-comparison tag (a one-sided delivery assertion), both Sec-VETO. Fixed by baking the full logic into the migrator image (`infra/supabase/migrator/pfin-task.sh`) and reducing the Coolify command to a 26-byte invocation, `sh /workspace/pfin-task.sh`.
 - **Execution binding by uuid set difference (PR #814, Sec-directed).** The orchestrator's poll originally read `rows[0]` ("the latest execution") from the executions API. The first real fire exited 8 reading a stale, pre-Amendment-8 row with no tags — fail-closed that time only by accident, since Coolify creates the execution row only once a queue worker starts the dispatched job, never at the execute call's response. From that fire onward the newest prior row carries valid tags, making the old selector a **latent fail-open** on any re-fire against the same image. Fixed by binding the poll to the one execution uuid absent from a pre-fire snapshot, never to list position.
+
+### §6.9 — `pfin` Data-API exposure flip EXECUTED, 2026-09-19 (BACKLOG §7.36 item 22 — B-1/B-2/B-3 F/CTO-executed on the box; steps 4–6 run from the operator's machine by team-lead on F/CTO's "go")
+
+**Baseline:** `main` @ `cf5a2373` (runbook §6.9 as rewritten at #825; scripts `coolify-env.sh` + `fence-pgrst-schemas-live.sh`). Stack application `pfin-supabase-stack` = `nz7mbexygw9lesjlazcxeltn` (resolved by NAME by `coolify-env.sh`, matches §5's record).
+
+**B-1 (VETO trigger) — PASS.** As `supabase_admin` on the live `db`:
+```
+select has_schema_privilege('anon', 'pfin', 'USAGE') as anon_schema_usage;
+ anon_schema_usage
+-------------------
+ f
+(1 row)
+
+select n.nspname, c.relname, c.relkind from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'pfin' and c.relkind in ('r','v','m','p') and (has_table_privilege('anon', c.oid, 'SELECT') or has_table_privilege('anon', c.oid, 'INSERT') or has_table_privilege('anon', c.oid, 'UPDATE') or has_table_privilege('anon', c.oid, 'DELETE'));
+ nspname | relname | relkind
+---------+---------+---------
+(0 rows)
+
+-- positive control that the enumeration is non-empty (added at execution; not in the runbook text):
+select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and c.relkind in ('r','v','m','p');
+ count
+-------
+    46
+(1 row)
+```
+
+**B-2 — PASS.** `select count(*) from supabase_migrations.schema_migrations;` → **120**. Re-counted `supabase/migrations/*.sql` on `main` @ `e962ce9d` at execution: 120. Equal.
+
+**B-3 — PASS.** `select version from supabase_migrations.schema_migrations where version like '025%';` → one row, `025`.
+
+**Steps 4–5 — PASS, one command from the operator's machine** (`BOX_IP` from `.env`; token over `curl -K -` stdin; the post-check's `grep` runs INSIDE the remote command so only the one matching line crosses the wire):
+```
+ok  application 'pfin-supabase-stack' -> nz7mbexygw9lesjlazcxeltn
+Current store state
+      PGRST_DB_SCHEMAS=public,graphql_public
+Setting PGRST_DB_SCHEMAS on nz7mbexygw9lesjlazcxeltn
+VERIFIED: ['PGRST_DB_SCHEMAS']
+ok  set + byte-exact read-back verified for PGRST_DB_SCHEMAS
+Redeploying nz7mbexygw9lesjlazcxeltn
+QUEUED: xebpslra1weaxuab9ztcidok
+FINISHED
+ok  deploy finished
+Running post-check
+OK: PGRST_DB_SCHEMAS is the exact ruled literal 'public,graphql_public,pfin'.
+ok  post-check passed
+```
+Preflight (no `--apply`) was run first and printed the same "Current store state" line with "PREFLIGHT ONLY. Nothing written." The stack redeploy recreated every container including `db` (~1 min); nothing was live against it.
+
+**Step 6 — smoke, PASS, with two controls that make it non-vacuous.** Run ON THE BOX (the API has no published port and no DNS/TLS yet — from the operator's Mac `curl` returns `000`, as expected). Against PostgREST directly (`rest:3000` on the project network; `api-gw` also answers on its `_default`-network address), anon key read from `/root/.pfin/supabase.env` and never leaving the box:
+
+| request | response | reading |
+|---|---|---|
+| `Accept-Profile: pfin`, anon bearer, `user_settings?select=users_id&limit=1` | `401 {"code":"42501","message":"permission denied for schema pfin"}` | `pfin` IS exposed (the request reached the schema) and the B-1 fence holds (anon refused at USAGE). Not PGRST106. |
+| same, NO profile header | `404 {"code":"PGRST205","message":"Could not find the table 'public.user_settings' in the schema cache"}` | `public` is still the DEFAULT profile — the literal's order is right. |
+| `Accept-Profile: nope` | `406 {"code":"PGRST106","hint":"Only the following schemas are exposed: public, graphql_public, pfin"}` | PostgREST itself reports the ruled literal. |
+
+The authenticated-JWT variant (a real user token → `200` + JSON array) is NOT yet taken — no user token was to hand; it adds RLS-visible-row evidence, not evidence about the flip. Open; take it at the first login walk.
+
+**B-4 — re-affirmed, dated 2026-09-19.** With `pfin` now exposed, `rest`↔`db` carries tenant financial rows over the in-network plaintext hop (`sslmode=disable`) that BACKLOG §7.36 item 26's ruling accepted. That ruling holds because both containers sit on one host's project network; it is **VOID the day `db` or `supavisor` becomes reachable off-host.** Re-stated here, not inherited.
+
+**What this did NOT do:** the `graphql_public` question (item 63) is untouched; no manifest / RT / SD / §10 entry moved (Sec's #822 ruling). Production now runs ADR-023's ratified posture for the first time since first provision.
