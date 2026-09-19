@@ -27,6 +27,14 @@
 # assertion -- see docs/deployment-runbook.md §4 for the full field-name /
 # UI-location provenance this predicate assumes).
 #
+# The `settings.include_source_commit_in_build` JSON path this script reads
+# was, before this date, source-verified only (traced to the Livewire
+# backing field, not observed live). Sec's live read-back on this same day,
+# on `GET /api/v1/applications/anz4uzfdumcfgc92wnfpov4i` (Coolify 4.3.18),
+# MEASURED it directly: `false` before team-lead's PATCH, `true` after, at
+# exactly this path -- the basis for this predicate is now a live
+# measurement, not only a source trace.
+#
 # WHAT THIS SCRIPT DOES NOT COVER, stated so it is not oversold: whether a
 # PATCH actually lands and is re-readable on a real Coolify instance is an
 # end-to-end property of a live box; this script only judges JSON it is
