@@ -722,11 +722,14 @@ fi
 # $CONF_FILE is root-only-writable so that already requires box-root. This
 # second field costs nothing extra to check (same $APP_RECORD_JSON already
 # fetched, no new API call) and turns a two-field coordinated drift into a
-# three-field one: the SAME field scripts/provision-migrator-app.sh
-# compares to decide whether a live application matches its own file
-# (`:184`, `base_directory`), which is `/infra/supabase/migrator` for the
-# real `pfin-migrator` resource and something else entirely for the
-# Supabase-stack application this guard exists to rule out.
+# three-field one. ⚠ MEASURED by Sec, 2026-09-19, `GET /api/v1/applications/<uuid>`
+# on Coolify 4.3.18 (the DETAIL route this call itself uses, not
+# provision-migrator-app.sh's LIST route at `:184` -- a first measurement
+# of this route in this repo, not an inference carried from that list-route
+# precedent): the detail route serialises `base_directory` as
+# `/infra/supabase/migrator` for `pfin-migrator` and `/infra/supabase` for
+# `pfin-supabase-stack` -- the two values differ, and the guard below
+# checks the one that names the resource this section is about to deploy.
 if ! LIVE_BASE_DIR="$(printf '%s' "$APP_RECORD_JSON" | jqp "
 d=json.load(sys.stdin)
 print(d.get('base_directory','') if isinstance(d, dict) else '')

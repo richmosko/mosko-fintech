@@ -102,6 +102,10 @@ LOCK_FILE="$LOCK_DIR/pfin-migrator-orchestrate.lock"
 # image) -- and this fence's EXIT trap unconditionally deletes both paths.
 # Refuse rather than adopt-and-later-destroy a file this fence did not
 # create itself.
+# ⚠ This guard is ALSO the host check: on the production box both paths
+# exist, so it refuses there regardless of what GITHUB_ACTIONS says. Do
+# NOT "fix" a retry failure by deleting these files first -- on a real box
+# that is the exact destruction this guard exists to prevent.
 if [[ -e "$CONF_FILE" || -e "$TOKEN_FILE" ]]; then
   echo "FATAL: $CONF_FILE or $TOKEN_FILE already exists -- refusing to overwrite it or clean it up later. This fence only ever touches a path it created itself in THIS run." >&2
   exit 2
@@ -249,13 +253,18 @@ run_scenario "happy"           0  "app deploy SUPPRESSED"
 # that line until an operator flips the flag at runbook §7 step 7 -- add
 # the leg BEFORE that flip, not after. Flips the fixture conf's own
 # DEPLOY_ON_SUCCESS to 1 (sudo, in place -- this fence already owns this
-# file) for this ONE scenario; nothing runs after it in this script, so no
-# restore is needed. FAKE_MODE stays "happy" (4th arg) -- the same canned
-# responses answer the one extra POST /deploy?uuid=<app-uuid> call this
-# mode triggers; only the scenario's own NAME (and therefore its state
-# dir / log file / PASS-FAIL line) differs.
+# file) for this ONE scenario, then RESTORES it to 0 immediately after --
+# Sec's own re-review catch (2026-09-19): "nothing runs after it in this
+# script" was true only for the current leg ORDER, and is exactly the
+# kind of claim a later-appended leg silently falsifies. Restoring makes
+# this scenario self-contained regardless of what runs after it. FAKE_MODE
+# stays "happy" (4th arg) -- the same canned responses answer the one
+# extra POST /deploy?uuid=<app-uuid> call this mode triggers; only the
+# scenario's own NAME (and therefore its state dir / log file / PASS-FAIL
+# line) differs.
 sudo sed -i 's/^DEPLOY_ON_SUCCESS=.*/DEPLOY_ON_SUCCESS=1/' "$CONF_FILE"
 run_scenario "happy-deploy-on-success" 0 "app deploy triggered" "happy"
+sudo sed -i 's/^DEPLOY_ON_SUCCESS=.*/DEPLOY_ON_SUCCESS=0/' "$CONF_FILE"
 
 if [[ "$FAILURES" -gt 0 ]]; then
   echo "FATAL: $FAILURES scenario(s) failed -- see above." >&2
