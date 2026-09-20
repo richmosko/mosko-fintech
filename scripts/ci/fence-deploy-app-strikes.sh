@@ -19,7 +19,7 @@
 # `external:` network, making a pre-deploy declared-settings check
 # irrelevant; the new checks verify the DEPLOYED reality instead). Keep
 # this count current, it is read, not decorative (N4, PR #833 Sec joint
-# review) -- fifteen scenarios in total:
+# review) -- sixteen scenarios in total:
 #   1. MATCH -- a resolved application whose base_directory AND
 #      build_pack equal the caller's --expect-* flags proceeds through
 #      preflight AND (in --apply) through a full deploy+poll to
@@ -31,6 +31,12 @@
 #   4. MISSING-ENV -- one required name absent -> refuses BEFORE any
 #      /deploy call.
 #   5. MISSING-ENV-WITH-APPLY -- same refusal holds with --apply given.
+#   5a. PLACEHOLDER-ENV -- MEASURED (team-lead, 2026-09-20): all three
+#      required names PRESENT, but one carries a Coolify compose-parse
+#      placeholder value (the `:?message` text a fresh dockercompose
+#      app's env store is pre-populated with) -- refuses on the VALUE-
+#      SHAPE check, BEFORE any /deploy call, via a code path distinct
+#      from scenario 4/5's absent-key path.
 #   6. MISMATCH (base_directory) -- refuses in PREFLIGHT ONLY, before
 #      --apply is even given -- proving the guard is not merely "checked,
 #      then deployed anyway." Also asserts the fake curl log contains NO
@@ -234,6 +240,21 @@ MISSING_ENV_APPLY_LOG="$(run_scenario "missing-env: --require-env refuses even w
   --require-env PUBLIC_SUPABASE_URL,PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY)" || FAIL=1
 if [[ -n "${MISSING_ENV_APPLY_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$MISSING_ENV_APPLY_LOG" 2>/dev/null; then
   echo "FAIL: [missing-env: --require-env refuses even with --apply] the required-env guard did NOT prevent a /deploy call -- vacuous refusal." >&2
+  FAIL=1
+fi
+
+# 5a. PLACEHOLDER-ENV -- MEASURED (team-lead, 2026-09-20): all three
+#    required names are PRESENT (unlike scenario 4/5's MISSING key), but
+#    one carries a Coolify compose-parse placeholder value (the literal
+#    `:?message` text a fresh dockercompose app's env store gets pre-
+#    populated with) -- must refuse on the VALUE-SHAPE check, BEFORE any
+#    /deploy call, distinguishing "absent" from "present but a
+#    placeholder" via two different code paths in the guard.
+PLACEHOLDER_ENV_LOG="$(run_scenario "placeholder-env: --require-env refuses on a compose-parse placeholder value" 1 placeholder-env \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose \
+  --require-env PUBLIC_SUPABASE_URL,PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY)" || FAIL=1
+if [[ -n "${PLACEHOLDER_ENV_LOG:-}" ]] && grep -qF '/deploy?uuid=' "$PLACEHOLDER_ENV_LOG" 2>/dev/null; then
+  echo "FAIL: [placeholder-env: --require-env refuses on a compose-parse placeholder value] the required-env guard did NOT prevent a /deploy call -- vacuous refusal." >&2
   FAIL=1
 fi
 
