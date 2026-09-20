@@ -2794,11 +2794,20 @@ jobs:
     # APP_NAME resolving to the wrong resource. scripts/ci/fence-deploy-
     # app-strikes.sh proves that refusal fires BEFORE any /deploy call is
     # made (not merely that the script exits non-zero for some reason),
-    # offline via a PATH-shadowed fake ssh/curl/docker -- see that
-    # script's own header for what each scenario proves.
+    # offline via a PATH-shadowed fake ssh/curl/docker.
+    # Live finding, 2026-09-20 (team-lead, stage A step 1 second --apply):
+    # `--require-env` was a NAMES-only presence check -- Coolify's own
+    # compose-parse pre-populates a fresh dockercompose app's env store
+    # with a `${VAR:?message}` default's own MESSAGE TEXT as its value
+    # (or empty for a bare `${VAR}`), which a presence-only check treats
+    # as satisfying the guard. Fixed: `--require-env` now also refuses a
+    # PRESENT key whose value is empty or contains "must be set" --
+    # scenario 5a (PLACEHOLDER-ENV) strike-verifies this against the
+    # reverted presence-only check -- see that script's own header for
+    # what each of its sixteen scenarios proves.
     steps:
       - uses: actions/checkout@v4
-      - name: offline strike-proofs (identity-guard match / mismatch, pre- and post-deploy)
+      - name: offline strike-proofs (identity-guard match / mismatch, pre- and post-deploy, placeholder-value detection)
         run: bash scripts/ci/fence-deploy-app-strikes.sh
 
   fence-provision-app-strikes:

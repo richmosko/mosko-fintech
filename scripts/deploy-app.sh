@@ -71,14 +71,29 @@
 #   compose PROJECT to address for a plain-Dockerfile-pack app, only a
 #   single container by uuid-substring name match, which remains the
 #   default when this flag is omitted).
-#   --require-env NAME[,NAME...]: a names-only presence check against the
+#   --require-env NAME[,NAME...]: a presence-AND-shape check against the
 #   resolved application's OWN Coolify env store (GET
-#   /applications/<uuid>/envs, keys only -- no value is ever read,
-#   printed, or compared) -- refuses (before any /deploy call, in BOTH
-#   preflight and --apply) if any named key is absent. This is the guard
-#   against deploying a container that will throw at its first request
-#   for a missing required env var (docs/deployment-runbook.md §7.1 step
-#   1 uses this for PUBLIC_SUPABASE_URL / PUBLIC_SUPABASE_ANON_KEY /
+#   /applications/<uuid>/envs) -- refuses (before any /deploy call, in
+#   BOTH preflight and --apply) if any named key is absent, OR present
+#   with a value this script can tell is a PLACEHOLDER rather than a
+#   real value: empty, or containing the substring "must be set". MEASURED
+#   (team-lead, 2026-09-20): Coolify's own compose-parse, on FIRST
+#   creating a `dockercompose` application, pre-populates its env store
+#   from every name api/docker-compose.yaml's `environment:` block
+#   declares -- for a `${VAR:?message}`-shaped default, Coolify's parser
+#   (not understanding `:?` means "required, error if unset" the way a
+#   shell would) stores the literal MESSAGE TEXT as the row's value; for
+#   a bare `${VAR}` with no default, it stores an EMPTY string. A
+#   presence-only check would treat either of these pre-populated rows
+#   as satisfying the guard -- this is exactly why this check now also
+#   inspects the value's SHAPE. The value itself is still never printed
+#   or logged anywhere (only "PRESENT" / "PLACEHOLDER/EMPTY" / "MISSING"
+#   per name) -- this is a shape check, not a value read-out. This is
+#   the guard against deploying a container that will throw at its first
+#   request for a missing required env var, or silently boot with a
+#   compose-parser placeholder string instead of a real secret
+#   (docs/deployment-runbook.md §7.1 step 1 uses this for
+#   PUBLIC_SUPABASE_URL / PUBLIC_SUPABASE_ANON_KEY /
 #   SUPABASE_SERVICE_ROLE_KEY, run AFTER scripts/mint-supabase-jwt-keys.sh
 #   has propagated the real anon/service-role values onto the app
 #   resource) -- generic across any application, not app-specific code.
@@ -249,11 +264,31 @@ import sys
 token, app_uuid, required_s = sys.argv[1], sys.argv[2], sys.argv[3]
 required = required_s.split()
 envs = api(token, "GET", f"/applications/{app_uuid}/envs")
-present = {e["key"] for e in envs if not e.get("is_preview", False)}
-missing = [n for n in required if n not in present]
+by_key = {e["key"]: e for e in envs if not e.get("is_preview", False)}
+# MEASURED (team-lead, 2026-09-20): a Coolify compose-parse pre-
+# populates a fresh dockercompose app's env store with a `:?message`
+# default's own MESSAGE TEXT, or an empty string for a bare `${VAR}` --
+# either shape must fail this guard the same as an absent key. The value
+# itself is never printed below, only the classification.
+missing = []
+placeholder = []
 for n in required:
-    print(f"{n}: {'PRESENT' if n not in missing else 'MISSING'}")
-if missing:
+    row = by_key.get(n)
+    if row is None:
+        missing.append(n)
+        continue
+    v = row.get("value") or ""
+    if v == "" or "must be set" in v:
+        placeholder.append(n)
+for n in required:
+    if n in missing:
+        status = "MISSING"
+    elif n in placeholder:
+        status = "PLACEHOLDER/EMPTY"
+    else:
+        status = "PRESENT"
+    print(f"{n}: {status}")
+if missing or placeholder:
     sys.exit(1)
 PYEOF
 REMOTE
@@ -262,7 +297,7 @@ REMOTE
   set -e
   printf '%s\n' "$ENV_CHECK_OUT" | while IFS= read -r line; do info "$line"; done
   [[ $ENV_CHECK_RC -eq 0 ]] \
-    || die "REQUIRED-ENV GUARD FAILED: one or more of [$REQUIRE_ENV_LIST] is absent from '$APP_NAME_LIVE' ($APP_UUID)'s env store -- refusing to deploy a container that will throw at its first request for a missing env var. Run whatever step is supposed to have set it (see the caller's own procedure) before retrying."
+    || die "REQUIRED-ENV GUARD FAILED: one or more of [$REQUIRE_ENV_LIST] is absent from, or present with a PLACEHOLDER/EMPTY value in, '$APP_NAME_LIVE' ($APP_UUID)'s env store -- refusing to deploy a container that will throw at its first request for a missing env var, or boot silently with a compose-parser placeholder string instead of a real secret. Run whatever step is supposed to have set it (see the caller's own procedure) before retrying."
   ok "required env names present: $REQUIRE_ENV_LIST"
 fi
 
