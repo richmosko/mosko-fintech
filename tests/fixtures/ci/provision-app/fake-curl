@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-provision-app-strikes.sh to drive
+# scripts/provision-app.sh's remote python driver against CANNED Coolify
+# API responses instead of a live box. Selected by PATH precedence inside
+# the fence's fake `ssh` wrapper -- provision-app.sh itself is never
+# modified to know this exists. Same shape as
+# tests/fixtures/ci/deploy-app/fake-curl.
+#
+# This fence only exercises provision-app.sh's PREFLIGHT path (no
+# --apply), which touches exactly two Coolify endpoints:
+#
+#   GET /applications      -- always returns TWO applications: the
+#                              Supabase stack (name pfin-supabase-stack,
+#                              carrying a nested environment.uuid so
+#                              provision-app.sh's path (a) resolution
+#                              fires without a /projects fallback call)
+#                              and the stale pfin-app (build_pack
+#                              "dockerfile", so the delete-guard branch
+#                              always fires -- the branch under test).
+#   GET .../envs            -- empty array unless $FAKE_CURL_MODE is
+#                              "env-nonzero", in which case one entry
+#                              (names only -- no real secret shape).
+#
+# Logs its OWN ARGV (never the -K config FILE's contents) to
+# $FAKE_CURL_LOG, so the fence can assert the fake token never appears
+# there.
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+METHOD="GET"
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  prev="$a"
+done
+URL="${*: -1}"
+
+STACK_UUID="aaaa1111bbbb2222cccc3333"
+ENV_UUID="eeee7777ffff8888aaaa9999"
+OLD_APP_UUID="dddd4444eeee5555ffff6666"
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
+  printf '[{"uuid":"%s","name":"pfin-supabase-stack","build_pack":"dockercompose","environment":{"uuid":"%s"}},{"uuid":"%s","name":"pfin-app","build_pack":"dockerfile"}]' \
+    "$STACK_UUID" "$ENV_UUID" "$OLD_APP_UUID"
+  exit 0
+fi
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/envs" ]]; then
+  if [[ "${FAKE_CURL_MODE:-clean}" == "env-nonzero" ]]; then
+    echo '[{"key":"SOME_NAME","value":"x","is_preview":false}]'
+  else
+    echo '[]'
+  fi
+  exit 0
+fi
+
+echo '{}'
+exit 0

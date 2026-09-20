@@ -24,10 +24,24 @@
 #   1. DELETE the existing `pfin-app` resource, IF one exists AND it is
 #      NOT already a `dockercompose` application (idempotent re-run: if
 #      it's already the target shape, this step is a no-op) -- but ONLY
-#      after asserting it has zero deployments and zero env-store names.
-#      Refuses (does not delete) if either count is non-zero: this script
-#      must never be the vehicle that silently destroys a resource that
-#      turned out to hold real state.
+#      after asserting the resource is a genuinely empty shell: zero
+#      containers ever created for its uuid (`docker ps -a`, on the box),
+#      zero images ever built for it (`docker images`, on the box), and
+#      zero env-store names (API, `GET /applications/<uuid>/envs`).
+#      MEASURED (team-lead, 2026-09-20): `GET
+#      /applications/<uuid>/deployments` is 404 on this Coolify (4.3.18)
+#      -- this script's original predicate, unusable as history evidence
+#      and not a real Coolify route. `GET /deployments?uuid=<uuid>`
+#      returns 200 `[]` even for an application (`pfin-migrator`) with
+#      FOUR completed deployments earlier the same day -- that route
+#      lists only in-flight/queued deployments, so an empty list there is
+#      NOT evidence a resource was never deployed; unfiltered `GET
+#      /deployments` is equally uninformative. The on-box `docker`
+#      reads are the only measurable substitute found. Refuses (does not
+#      delete) if any of the three counts is non-zero, naming the
+#      offending predicate and its count (names only -- no env values, no
+#      full env dump): this script must never be the vehicle that
+#      silently destroys a resource that turned out to hold real state.
 #   2. Create `pfin-app` as `dockercompose` (base_directory `/api`,
 #      compose location `/docker-compose.yaml`, branch `main`), in the
 #      SAME project/environment as the Supabase-stack application --
@@ -277,16 +291,25 @@ if [[ -n "$OLD_APP_JSON" ]]; then
     APP_UUID="$OLD_APP_UUID"
   else
     info "'$APP_NAME' ($OLD_APP_UUID) exists with build_pack='$OLD_BUILD_PACK' — needs replacement with a dockercompose resource."
-    DEPLOY_COUNT="$(api GET "/applications/$OLD_APP_UUID/deployments" | jqp "
-d=json.load(sys.stdin)
-lst = d if isinstance(d, list) else d.get('data', [])
-print(len(lst))" 2>/dev/null || echo "unknown")"
+    # Empty-shell predicate, on-box + API (MEASURED team-lead 2026-09-20 --
+    # see this script's own header "WHAT THIS SCRIPT DOES" item 1 for why
+    # the deployments-count API family was replaced with these three
+    # reads). $OLD_APP_UUID is already UUID_RE-validated above, before it
+    # reaches these greps.
+    CONTAINER_COUNT="$(sshx "docker ps -a --format '{{.Names}}' | grep -c \"$OLD_APP_UUID\" || true")"
+    IMAGE_COUNT="$(sshx "docker images --format '{{.Repository}}' | grep -c \"$OLD_APP_UUID\" || true")"
     ENV_COUNT="$(api GET "/applications/$OLD_APP_UUID/envs" | jqp "
 d=json.load(sys.stdin)
 print(len(d))" 2>/dev/null || echo "unknown")"
-    info "measured on '$OLD_APP_UUID': deployments=$DEPLOY_COUNT, env-store names=$ENV_COUNT"
-    if [[ "$DEPLOY_COUNT" != "0" || "$ENV_COUNT" != "0" ]]; then
-      die "REFUSING TO DELETE '$APP_NAME' ($OLD_APP_UUID): deployments=$DEPLOY_COUNT, env-store names=$ENV_COUNT -- expected both zero (the ruling's own stated precondition, measured 2026-09-19). This resource may hold real state now; investigate by hand before deleting anything. This script only deletes a genuinely empty shell."
+    info "measured on '$OLD_APP_UUID': containers=$CONTAINER_COUNT, images=$IMAGE_COUNT, env-store names=$ENV_COUNT"
+    if [[ "$CONTAINER_COUNT" != "0" ]]; then
+      die "REFUSING TO DELETE '$APP_NAME' ($OLD_APP_UUID): containers=$CONTAINER_COUNT -- \`docker ps -a\` shows at least one container ever created for this uuid. This resource may hold real state; investigate by hand before deleting anything. This script only deletes a genuinely empty shell."
+    fi
+    if [[ "$IMAGE_COUNT" != "0" ]]; then
+      die "REFUSING TO DELETE '$APP_NAME' ($OLD_APP_UUID): images=$IMAGE_COUNT -- \`docker images\` shows at least one image ever built for this uuid. This resource may hold real state; investigate by hand before deleting anything. This script only deletes a genuinely empty shell."
+    fi
+    if [[ "$ENV_COUNT" != "0" ]]; then
+      die "REFUSING TO DELETE '$APP_NAME' ($OLD_APP_UUID): env-store names=$ENV_COUNT -- expected zero. This resource may hold real state; investigate by hand before deleting anything. This script only deletes a genuinely empty shell."
     fi
     DELETE_NEEDED=1
   fi
