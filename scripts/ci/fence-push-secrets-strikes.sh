@@ -27,7 +27,7 @@
 #   secrets-manifest.yml's own PLAID_CLIENT_ID/PLAID_SECRET entries say
 #   has NO CI fence. This is that fence.
 #
-# Five scenarios, all offline:
+# Six scenarios, all offline:
 #   (i) RESOLUTION-CORRECTNESS -- default fixture (pfin-app exists;
 #      pfin-back-etl does not), --skip-missing-resource: `pfin-app`
 #      resolves to its OWN uuid, `pfin-back-etl` is SKIPPED (never
@@ -46,6 +46,12 @@
 #      tempfile/--data-binary fix (PR #840 item 3) keeps a real secret
 #      value off curl's argv, unlike the reverted shape this scenario's
 #      own strike-verify exercises.
+#   (vi) CROSS-RESOURCE-UNIQUENESS -- two DIFFERENT resource keys
+#      (`pfin-app`, `pfin-back-etl`) resolving to the SAME uuid, each
+#      individually unambiguous -> refuses (exit 1), naming both keys
+#      and the shared uuid. Distinct from (iii): that scenario is ONE
+#      name matching TWO applications; this one is TWO names matching
+#      ONE application -- structurally the live incident's own shape.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -216,6 +222,27 @@ if [[ -f "$LOG_V" ]] && grep -qF "FIXTURE-DO-NOT-LEAK" "$LOG_V" 2>/dev/null; the
 fi
 if grep -qF "FIXTURE-DO-NOT-LEAK" <<<"${OUT_V:-}" 2>/dev/null; then
   echo "FAIL: [apply-no-argv-leak] the fixture secret value leaked into the script's own printed output." >&2
+  FAIL=1
+fi
+
+# (vi) CROSS-RESOURCE-UNIQUENESS -- Sec AC (PR #840 review, 2026-09-20):
+#     uniqueness must hold over the RESOLVED SET, not only per individual
+#     lookup. fake-curl's "collision" mode returns `pfin-app` (the `app`
+#     key's real name) and `pfin-back-etl` (the `etl` key's real name) as
+#     TWO DIFFERENT applications sharing ONE uuid -- each lookup is
+#     individually unambiguous (exactly one match each), so scenario
+#     (iii)'s own per-lookup ambiguity check would NOT catch this; only
+#     the cross-resource check added in this same PR does. This is
+#     structurally the exact shape of the original live incident (every
+#     resource key resolving to the same wrong uuid) -- must refuse,
+#     naming both resource keys and the shared uuid.
+LOG_VI="$WORK/log-vi"
+OUT_VI="$(run_scenario "cross-resource-uniqueness" 1 collision "$CLEAN_ROOT" "$LOG_VI" --skip-missing-resource)" || FAIL=1
+assert_output_contains "cross-resource-uniqueness" "${OUT_VI:-}" "all resolved to the SAME Coolify application" || FAIL=1
+assert_output_contains "cross-resource-uniqueness" "${OUT_VI:-}" "'pfin-app'" || FAIL=1
+assert_output_contains "cross-resource-uniqueness" "${OUT_VI:-}" "'pfin-back-etl'" || FAIL=1
+if [[ -n "${OUT_VI:-}" ]] && ! grep -qF "1111aaaa2222bbbb3333cccc" <<<"$OUT_VI"; then
+  echo "FAIL: [cross-resource-uniqueness] refusal did not name the shared uuid." >&2
   FAIL=1
 fi
 

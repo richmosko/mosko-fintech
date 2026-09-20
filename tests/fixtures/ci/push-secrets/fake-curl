@@ -21,7 +21,11 @@
 #   `pfin-back-etl` / `pfin-pdf-render` / `pfin-provider-sync` are
 #   deliberately ABSENT, matching the real box (none created yet).
 #   "duplicate": pfin-app appears TWICE (different uuids) -- exercises
-#   the ambiguous-name die() guard.
+#   the per-lookup ambiguous-name die() guard. "collision": pfin-app and
+#   pfin-back-etl are two DIFFERENT names sharing the SAME uuid --
+#   exercises the cross-resource uniqueness check instead (each lookup
+#   is individually unambiguous; the collision is only visible across
+#   the resolved SET).
 # PATCH .../envs/bulk -- validates the PATCHed body (read via the
 #   `--data-binary @<tmpfile>` argument, a real file on disk) has a
 #   non-empty `data` array of `{key, value}` objects; 200 on success,
@@ -72,6 +76,17 @@ if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
   if [[ "${FAKE_CURL_MODE:-clean}" == "duplicate" ]]; then
     respond "$(printf '[{"name":"pfin-app","uuid":"%s"},{"name":"pfin-app","uuid":"%s"},{"name":"pfin-migrator","uuid":"%s"},{"name":"pfin-supabase-stack","uuid":"%s"}]' \
       "$APP_UUID" "$APP_UUID_DUP" "$MIGRATOR_UUID" "$STACK_UUID")"
+  fi
+  if [[ "${FAKE_CURL_MODE:-clean}" == "collision" ]]; then
+    # Two DIFFERENT resource names (pfin-app, pfin-back-etl) sharing the
+    # SAME uuid -- each name individually resolves via an unambiguous
+    # single match (the per-lookup ambiguity check in scenario iii/
+    # "duplicate" mode above does NOT fire here), but the two resource
+    # KEYS ("app", "etl") end up pointing at one application. Exercises
+    # the cross-resource uniqueness check (Sec AC, PR #840 review) --
+    # structurally the live incident's own shape.
+    respond "$(printf '[{"name":"pfin-app","uuid":"%s"},{"name":"pfin-back-etl","uuid":"%s"},{"name":"pfin-migrator","uuid":"%s"},{"name":"pfin-supabase-stack","uuid":"%s"}]' \
+      "$APP_UUID" "$APP_UUID" "$MIGRATOR_UUID" "$STACK_UUID")"
   fi
   respond "$(printf '[{"name":"pfin-app","uuid":"%s"},{"name":"pfin-migrator","uuid":"%s"},{"name":"pfin-supabase-stack","uuid":"%s"}]' \
     "$APP_UUID" "$MIGRATOR_UUID" "$STACK_UUID")"
