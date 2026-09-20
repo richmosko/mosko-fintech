@@ -3520,11 +3520,15 @@ jobs:
     # scripts/ci/fence-coolify-env-strikes.sh, which fakes `ssh`/`curl`
     # rather than requiring a live box -- see that script's own header for
     # what each strike proves (allowlist refusal, read-back mismatch,
-    # blanked-not-deleted, the new-allowlist-name resolution sweep, plus
-    # Sec F-5's PFIN_DB_USER / ADMISSION_PROBE_PUBLIC_URLS value-shape
-    # guards, PR #846) and why an earlier draft of its own fixture was
-    # silently vacuous (caught by an inversion strike against the fixture
-    # itself, not against coolify-env.sh).
+    # blanked-not-deleted, the new-allowlist-name resolution sweep, Sec
+    # F-5's PFIN_DB_USER / ADMISSION_PROBE_PUBLIC_URLS value-shape guards,
+    # and Sec F-8's PER-RESOURCE PFIN_DB_USER gate -- pfin-back-etl only
+    # accepts pfin_etl; pfin-provider-sync accepts pfin_provider_sync or
+    # the transitional pre-cutover authenticator (BACKLOG.md §7.36 item
+    # 71 books its expiry); any other resource refuses outright -- PR
+    # #846) and why an earlier draft of its own fixture was silently
+    # vacuous (caught by an inversion strike against the fixture itself,
+    # not against coolify-env.sh).
     steps:
       - uses: actions/checkout@v4
       - name: offline strike-proofs (allowlist refusal, read-back mismatch, blanked-not-deleted, value-shape)
@@ -3641,13 +3645,20 @@ jobs:
     # mismatch warns on initial handoff but refuses under --rotate (Sec
     # F-4, PR #846); the measured 127.0.0.1/32 trust-path connect-as-role
     # bypass is caught by the missing-password-prompt guard (Sec VETO V-1,
-    # PR #846); and both roles' full happy paths (initial handoff +
-    # rotate) succeed end to end — offline via a PATH-shadowed fake
-    # ssh/docker/curl (tests/fixtures/ci/db-role-handoff/fake-curl), never
-    # a live box, never a real Postgres.
+    # PR #846); a credential leak elsewhere in a PROMPT-PRESENT connect
+    # response is caught independently by the CONNECT_OUT cleartext guard,
+    # isolated from the missing-prompt guard (Sec F-6, PR #846 2nd
+    # review); the connect-as-role invocation's own `-v ON_ERROR_STOP=1`
+    # + `-h db` pairing is pinned by a source-literal assertion, standing
+    # in for two properties an offline fake cannot observe behaviorally
+    # (Sec F-7, PR #846 2nd review); and both roles' full happy paths
+    # (initial handoff + rotate) succeed end to end — offline via a
+    # PATH-shadowed fake ssh/docker/curl
+    # (tests/fixtures/ci/db-role-handoff/fake-curl), never a live box,
+    # never a real Postgres.
     steps:
       - uses: actions/checkout@v4
-      - name: offline strike-proofs (16 scenarios — see the fence script's own header for the full list)
+      - name: offline strike-proofs (18 scenarios — see the fence script's own header for the full list)
         run: bash scripts/ci/fence-db-role-handoff-strikes.sh
 
   fence-operator-env-template:

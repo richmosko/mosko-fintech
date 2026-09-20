@@ -107,6 +107,7 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
   [[ "\$CMDLINE" == "-s" ]] && CMDLINE="bash -s"
   REWRITTEN="\$(sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
   PATH="$FAKE_BIN:\$PATH" FAKE_CURL_LOG="\$FAKE_CURL_LOG" FAKE_CURL_MODE="\$FAKE_CURL_MODE" \\
+    FAKE_RESOLVED_NAME="\$FAKE_RESOLVED_NAME" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -117,12 +118,20 @@ EOF
 chmod +x "$FAKE_BIN/ssh"
 
 run_scenario() {
+  # Sec F-8 (PR #846 review): reads FAKE_RESOLVED_NAME from ITS OWN calling
+  # environment (not a new positional param, to avoid reshaping every
+  # existing call site) -- the name coolify-env.sh's new reverse-uuid-
+  # lookup should resolve $APP_QUERY to. Set it in the caller's shell
+  # immediately before a call that needs a specific resource identity;
+  # defaults to pfin-back-etl (matching every scenario's literal
+  # 'abc123def456ghi789jk01' APP_QUERY when the test doesn't care).
   local desc="$1" expect_exit="$2" mode="$3"; shift 3
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   set +e
   BOX_IP=127.0.0.1 AUTOMATION_KEY=/dev/null REPO_ROOT="$REPO_ROOT" \
     PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$log" FAKE_CURL_MODE="$mode" \
+    FAKE_RESOLVED_NAME="${FAKE_RESOLVED_NAME:-pfin-back-etl}" \
     bash "$COOLIFY_ENV_SH" "$@" < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -217,9 +226,14 @@ run_scenario "PFIN_DB_USER value-shape: refuses a non-role value" 1 ok \
   set abc123def456ghi789jk01 PFIN_DB_USER=postgres || FAIL=1
 
 # 7. F-5 -- PFIN_DB_USER accepts each of the three minted roles (not just
-#    the one scenario 5 happens to use).
-for VALID_ROLE in pfin_etl pfin_provider_sync authenticator; do
-  run_scenario "PFIN_DB_USER value-shape: accepts '$VALID_ROLE'" 0 ok \
+#    the one scenario 5 happens to use) -- ON THE RESOURCE THAT ROLE IS
+#    VALID FOR (Sec F-8, PR #846 review: the gate is now per-resource, so
+#    each role needs FAKE_RESOLVED_NAME set to its OWN matching resource,
+#    not the loop's former shared default).
+for PAIR in "pfin_etl:pfin-back-etl" "pfin_provider_sync:pfin-provider-sync" "authenticator:pfin-provider-sync"; do
+  VALID_ROLE="${PAIR%%:*}"
+  FAKE_RESOLVED_NAME="${PAIR#*:}" \
+  run_scenario "PFIN_DB_USER value-shape: accepts '$VALID_ROLE' on '${PAIR#*:}'" 0 ok \
     set abc123def456ghi789jk01 "PFIN_DB_USER=${VALID_ROLE}" || FAIL=1
 done
 
@@ -235,6 +249,30 @@ done
 #    comma-separated multi-FQDN shape, not just a single URL.
 run_scenario "ADMISSION_PROBE_PUBLIC_URLS value-shape: accepts multi-FQDN" 0 ok \
   set abc123def456ghi789jk01 "ADMISSION_PROBE_PUBLIC_URLS=https://a.example.com,https://b.example.com" || FAIL=1
+
+# 10. F-8 (PR #846 review) -- the per-resource gate itself: a value VALID
+#     IN SHAPE (passes scenario 6's global check) but wrong for THIS
+#     resource must still refuse. 'authenticator' is legitimate on
+#     pfin-provider-sync (scenario 7) but must be REFUSED on pfin-back-etl
+#     -- this is the exact defect F-8 found (ETL silently accepted onto
+#     PostgREST's own identity, defeating ADR-041/SELF-214 B8's dedicated-
+#     role rationale).
+FAKE_RESOLVED_NAME="pfin-back-etl" \
+run_scenario "PFIN_DB_USER per-resource: refuses 'authenticator' on pfin-back-etl" 1 ok \
+  set abc123def456ghi789jk01 PFIN_DB_USER=authenticator || FAIL=1
+
+# 11. F-8 -- the converse: 'pfin_etl' is legitimate on pfin-back-etl
+#     (scenario 7) but must be REFUSED on pfin-provider-sync.
+FAKE_RESOLVED_NAME="pfin-provider-sync" \
+run_scenario "PFIN_DB_USER per-resource: refuses 'pfin_etl' on pfin-provider-sync" 1 ok \
+  set abc123def456ghi789jk01 PFIN_DB_USER=pfin_etl || FAIL=1
+
+# 12. F-8 -- PFIN_DB_USER may only be set on the two documented resources
+#     at all; a third, unrelated resource name must refuse outright, even
+#     with an otherwise-valid role value.
+FAKE_RESOLVED_NAME="pfin-app" \
+run_scenario "PFIN_DB_USER per-resource: refuses on an unrelated resource ('pfin-app')" 1 ok \
+  set abc123def456ghi789jk01 PFIN_DB_USER=pfin_etl || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

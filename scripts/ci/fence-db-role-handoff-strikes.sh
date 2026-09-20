@@ -72,6 +72,17 @@
 #   16. PFIN-DB-USER-MISMATCH-ROTATE (Sec F-4) -- same mismatch, but under
 #       --rotate, where PFIN_DB_USER should already match (rotate implies
 #       the role is already LOGIN'd) -- refuses: exit 1.
+#   17. CONNECT-CLEARTEXT-LEAK (Sec F-6) -- the connect-as-role prompt DOES
+#       print (unlike #13's trust-path bypass) but the credential also
+#       leaks elsewhere in the captured output -- refuses via the
+#       CONNECT_OUT cleartext guard specifically, proven in isolation from
+#       the missing-prompt guard.
+#   18. STEP-C-STRUCTURAL-PIN (Sec F-7) -- a source-literal (not runtime)
+#       assertion that db-role-handoff.sh's connect-as-role psql
+#       invocation carries both `-v ON_ERROR_STOP=1` and `-h db` together,
+#       standing in for two properties an offline fake cannot observe
+#       behaviorally (ON_ERROR_STOP's exit-code effect) or observes only
+#       incidentally (the hostname, pinned by the fake's own matcher).
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -171,11 +182,35 @@ if [[ "$ARGS" == *"-h db"* ]]; then
     # server-log capture via log_min_error_statement would carry). NO
     # "Password for user" line is printed. Historically (pre-fix) the
     # script still saw a current_user block and exited 0; this fake still
-    # PRINTS that block, so the strike proves the NEW guards -- the
-    # missing-prompt check and the cleartext-in-CONNECT_OUT check -- are
-    # what catches this, not a change in what psql itself reports.
+    # PRINTS that block, so the strike proves the missing-prompt guard is
+    # what catches this, not a change in what psql itself reports. Sec F-6
+    # (PR #846 review) -- CORRECTED comment: this scenario does NOT also
+    # prove the separate cleartext-in-CONNECT_OUT guard, even though the
+    # cleartext happens to appear in this fake's own output too -- the
+    # missing-prompt guard runs first and exits before the cleartext grep
+    # is ever reached (measured: deleting the cleartext grep alone leaves
+    # this scenario, and the whole suite, green). The cleartext guard has
+    # its OWN dedicated scenario below (FAKE_ECHO_PW_IN_CONNECT) where the
+    # prompt DOES print, so the missing-prompt guard cannot absorb the
+    # strike.
     echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$FIRST_LINE\""
     echo "LINE 1: $FIRST_LINE"
+    echo " current_user "
+    echo "--------------"
+    echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+    exit 0
+  fi
+  if [[ "${FAKE_ECHO_PW_IN_CONNECT:-0}" == "1" ]]; then
+    # Sec F-6 (PR #846 review) -- the dedicated cleartext-guard scenario the
+    # comment above now correctly says NO OTHER scenario provides: the
+    # prompt DOES print (a normal, password-authenticated connection), but
+    # the credential ALSO leaks into the output elsewhere -- a plausible
+    # transport/echo bug on an otherwise-unremarkable connection, not a
+    # trust-path bypass. With the prompt present, the missing-prompt guard
+    # passes and cannot absorb this strike; only the CONNECT_OUT cleartext
+    # grep can catch it.
+    echo "Password for user ${FAKE_ROLE_NAME:-pfin_etl}: "
+    echo "DEBUG (simulated transport bug): last line was $FIRST_LINE"
     echo " current_user "
     echo "--------------"
     echo " ${FAKE_ROLE_NAME:-pfin_etl}"
@@ -252,7 +287,7 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_CONNECT_FAIL="\$FAKE_CONNECT_FAIL" FAKE_MISMATCH="\$FAKE_MISMATCH" FAKE_HANDOFF_FAIL="\$FAKE_HANDOFF_FAIL" \\
     FAKE_ECHO_PASSWORD_IN_OUTPUT="\$FAKE_ECHO_PASSWORD_IN_OUTPUT" FAKE_READBACK_COUNT="\$FAKE_READBACK_COUNT" \\
     FAKE_NO_PASSWORD_PROMPT="\$FAKE_NO_PASSWORD_PROMPT" FAKE_READBACK_HASH_MISMATCH="\$FAKE_READBACK_HASH_MISMATCH" \\
-    FAKE_READBACK_USER="\$FAKE_READBACK_USER" \\
+    FAKE_READBACK_USER="\$FAKE_READBACK_USER" FAKE_ECHO_PW_IN_CONNECT="\$FAKE_ECHO_PW_IN_CONNECT" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -267,15 +302,18 @@ EOF
 chmod +x "$FAKE_BIN/ssh"
 
 run_scenario() {
-  # run_scenario <desc> <expect_exit> <role> <apply_flag> <curl_mode> <role_state> <verify_state> <connect_fail> <mismatch> <handoff_fail> <echo_pw> <readback_count> [no_prompt] [hash_mismatch] [readback_user]
+  # run_scenario <desc> <expect_exit> <role> <apply_flag> <curl_mode> <role_state> <verify_state> <connect_fail> <mismatch> <handoff_fail> <echo_pw> <readback_count> [no_prompt] [hash_mismatch] [readback_user] [echo_pw_in_connect]
   # <readback_count>: empty string -> fake computes a REAL count=1 + hash
   # bound to the actual generated credential (happy path); a digit ->
   # forces that row-count, striking the count-mismatch guard.
   # <readback_user>: empty string -> fake reports PFIN_DB_USER == <role>
   # (no ordering hazard); a different role name -> strikes Sec F-4's
   # ordering guard.
+  # <echo_pw_in_connect>: 1 -> the connect-as-role fake prints the prompt
+  # normally AND also leaks the credential elsewhere in its output (Sec
+  # F-6's dedicated cleartext-guard scenario).
   local desc="$1" expect_exit="$2" role="$3" apply_flag="$4" curl_mode="$5" \
-        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}"
+        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   local resource_name="pfin-back-etl"
@@ -287,7 +325,7 @@ run_scenario() {
     FAKE_CONNECT_FAIL="$connect_fail" FAKE_MISMATCH="$mismatch" FAKE_HANDOFF_FAIL="$handoff_fail" \
     FAKE_ECHO_PASSWORD_IN_OUTPUT="$echo_pw" FAKE_READBACK_COUNT="$readback_count" \
     FAKE_NO_PASSWORD_PROMPT="$no_prompt" FAKE_READBACK_HASH_MISMATCH="$hash_mismatch" \
-    FAKE_READBACK_USER="$readback_user" \
+    FAKE_READBACK_USER="$readback_user" FAKE_ECHO_PW_IN_CONNECT="$echo_pw_in_connect" \
     bash "$DB_ROLE_HANDOFF_SH" "$role" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -407,6 +445,33 @@ assert_output_contains "pfin-db-user-mismatch-initial" "${OUT15:-}" "EXPECTED mi
 #     isn't even wired to use -- refuses.
 OUT16="$(run_scenario "pfin-db-user-mismatch-rotate: refuses" 1 pfin_etl "--apply --rotate" clean "t|t" "t|t" 0 0 0 0 "" 0 0 authenticator)" || FAIL=1
 assert_output_contains "pfin-db-user-mismatch-rotate" "${OUT16:-}" "refusing to rotate a credential for a role the resource is not configured to use" || FAIL=1
+
+# 17. CONNECT-CLEARTEXT-LEAK (Sec F-6, PR #846 review) -- dedicated strike
+#     for the CONNECT_OUT cleartext guard specifically. The prompt DOES
+#     print (a normal, password-authenticated connection -- distinct from
+#     scenario 13's trust-path bypass), so the missing-prompt guard passes
+#     and cannot absorb this strike; only the CONNECT_OUT `grep -qF "$PW"`
+#     guard can catch a plausible transport/echo bug leaking the
+#     credential elsewhere in an otherwise-normal connection's output.
+OUT17="$(run_scenario "connect-cleartext-leak: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "" 0 0 "" 1)" || FAIL=1
+assert_output_contains "connect-cleartext-leak" "${OUT17:-}" "the credential's cleartext value appeared in the connect-as-role step's own captured output" || FAIL=1
+
+# 18. STEP-C-STRUCTURAL-PIN (Sec F-7, PR #846 review) -- a source-literal
+#     assertion, not a runtime scenario: an offline fake psql cannot model
+#     psql's own exit-code semantics under `-v ON_ERROR_STOP=1` without
+#     simply being told the answer (FAKE_CONNECT_FAIL sets an exit code
+#     directly, exercising the RC guard, not ON_ERROR_STOP's effect), and
+#     without this check `-h db` is pinned only INCIDENTALLY by the fake's
+#     own `*"-h db"*` matcher -- a future fixture refactor broadening that
+#     matcher would silently unpin the hostname with no test going red.
+#     This converts both into STATED properties: the step-C invocation
+#     line in the real script must carry both flags, verbatim, together.
+if ! grep -qE 'psql[^"'"'"']*-v ON_ERROR_STOP=1[^"'"'"']*-h db' "$DB_ROLE_HANDOFF_SH"; then
+  echo "FAIL: [step-c-structural-pin] $DB_ROLE_HANDOFF_SH's connect-as-role invocation no longer carries both '-v ON_ERROR_STOP=1' and '-h db' on the same psql call -- the offline fake cannot observe either property behaviorally, so this source-literal pin is the only thing standing between a silent regression and a false green." >&2
+  FAIL=1
+else
+  echo "OK: [step-c-structural-pin] $DB_ROLE_HANDOFF_SH's connect-as-role invocation carries both '-v ON_ERROR_STOP=1' and '-h db'." >&2
+fi
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

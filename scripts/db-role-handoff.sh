@@ -68,12 +68,16 @@
 #     the LOGIN statement): built into a bash VARIABLE on the box and fed
 #     to `docker compose exec -T db psql` via a HERE-STRING (`<<<`), never
 #     `-c '<sql>'` (would be argv), never a second on-disk file. Sec N-8
-#     (PR #846 review) -- precisely: a here-string is bash's OWN construct,
-#     not libc's or the child's -- bash writes the expanded word to a
-#     temporary file, opens it, then immediately UNLINKS it (no directory
-#     entry survives) before dup2'ing the open fd onto the child's stdin.
-#     It never appears in that child's own argv or in `ps`, and unlinking
-#     closes the window where a sibling process could read it by path.
+#     (PR #846 review; restored verbatim at N-11 after an earlier edit here
+#     dropped Sec's own qualifier) -- precisely: a here-string is bash's
+#     OWN construct, not libc's or the child's -- on bash before 5.1, bash
+#     writes the expanded word to a temporary file and immediately unlinks
+#     it (no directory entry survives) before dup2'ing the open fd onto the
+#     child's stdin; bash 5.1+ uses a pipe outright for a here-string that
+#     fits the pipe buffer. Neither form ever appears in that child's own
+#     argv or in `ps`, and the pre-5.1 unlinked-tmpfile form additionally
+#     closes the window where a sibling process could read it by path (a
+#     pipe never had a path to read in the first place).
 #   - The connect-AS-the-role verification: psql's OWN connection-time
 #     password prompt, ALSO driven via piped stdin (verified locally, same
 #     mechanism as `\password` — no tty, no echo, just a line read) — NOT
@@ -452,8 +456,11 @@ step_r "C. Connect AS $ROLE over a non-loopback path with the generated credenti
 #    all -- so THE PROMPT ITSELF proves the connection did not traverse
 #    the trust line." Absence of "Password for user" in the captured
 #    output is now FATAL on its own, independent of the exit code.
-# 3. The cleartext-in-output guard (Sec F-5-class, applied to step A above)
-#    now ALSO covers this channel -- CONNECT_OUT is grepped for `$PW` the
+# 3. The cleartext-in-output guard (Sec VETO V-1 item 4, PR #846 review --
+#    corrected at N-12 after an earlier edit here mislabeled it F-5-class;
+#    F-5 was Sec's UNRELATED SET_ALLOWLIST value-shape finding on
+#    coolify-env.sh) is the SAME mechanism applied to step A above, now
+#    ALSO covering this channel -- CONNECT_OUT is grepped for `$PW` the
 #    same way step A's $OUT already is. The password crosses via psql's
 #    OWN connection-time prompt, piped over stdin (verified locally this
 #    PR, same mechanism as \password's own prompt) -- never PGPASSWORD

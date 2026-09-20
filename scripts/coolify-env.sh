@@ -436,6 +436,66 @@ fi
 [[ "$APP_UUID" =~ $UUID_RE ]] || die "resolved UUID '$APP_UUID' is not uuid-shaped -- refusing to interpolate API output into a remote shell"
 ok "application '$APP_QUERY' -> $APP_UUID"
 
+# --- Step 3b: PFIN_DB_USER is per-resource, not global (Sec F-8, PR #846
+# review) ---------------------------------------------------------------
+# Step 1b's shape check above bars a NONSENSE value (`postgres`, a typo)
+# cheaply, before any network call. It does NOT catch a VALID-shaped value
+# on the WRONG resource: `PFIN_DB_USER=authenticator` passes Step 1b's
+# check unconditionally, so it was accepted on `pfin-back-etl` just as
+# readily as on `pfin-provider-sync` -- putting the ETL onto PostgREST's
+# own `authenticator` identity and defeating the independent-revocability
+# rationale ADR-041 / SELF-214 finding B8 chose the dedicated `pfin_etl`
+# role for in the first place. This step closes that: once the resource
+# is known (resolved above), gate the value against THAT resource's own
+# allowed set.
+if [[ "$OP" == "set" ]]; then
+  for k in "${KEYS[@]}"; do
+    if [[ "$k" == "PFIN_DB_USER" ]]; then
+      # RESOLVED_NAME: APP_QUERY is already the canonical name when the
+      # operator typed one (the common case); only when APP_QUERY was
+      # itself UUID-shaped do we not yet know the name -- resolve it with
+      # one more read-only API call, same api() helper Step 3 just used.
+      if [[ "$APP_QUERY" =~ $UUID_RE ]]; then
+        RESOLVED_NAME="$(sshx "env app_uuid=$(printf '%q' "$APP_UUID") bash -s" <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "\$app_uuid" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, uuid = sys.argv[1], sys.argv[2]
+app = api(token, "GET", f"/applications/{uuid}")
+print(app.get("name", ""))
+PYEOF
+REMOTE
+)"
+        [[ -n "$RESOLVED_NAME" ]] || die "could not resolve application uuid '$APP_UUID' back to a name -- refusing to set PFIN_DB_USER without knowing which resource this is (Sec F-8)."
+      else
+        RESOLVED_NAME="$APP_QUERY"
+      fi
+      v=""
+      for i in "${!KEYS[@]}"; do [[ "${KEYS[$i]}" == "PFIN_DB_USER" ]] && v="${VALUES[$i]}"; done
+      case "$RESOLVED_NAME" in
+        pfin-back-etl)
+          case "$v" in
+            pfin_etl) ;;
+            *) die "'PFIN_DB_USER=$v' is not valid for resource '$RESOLVED_NAME' -- this resource's ONLY minted role is pfin_etl (ADR-041 / SELF-214 B8: dedicated, independently-revocable). Refusing to point the ETL worker at any other identity, including 'authenticator' (PostgREST's own)." ;;
+          esac
+          ;;
+        pfin-provider-sync)
+          case "$v" in
+            pfin_provider_sync|authenticator) ;;
+            *) die "'PFIN_DB_USER=$v' is not valid for resource '$RESOLVED_NAME' -- this resource accepts pfin_provider_sync (post-§6.2-cutover, the dedicated role) or authenticator (pre-cutover, TRANSITIONAL -- BACKLOG.md §7.36 item 71 books the written expiry condition; remove this arm's 'authenticator' branch once §6.2 cutover is confirmed run). Any other value refused." ;;
+          esac
+          ;;
+        *)
+          die "PFIN_DB_USER may only be set on 'pfin-back-etl' or 'pfin-provider-sync' -- resource '$RESOLVED_NAME' is neither. Refusing (Sec F-8: no other resource is a documented holder of a PFIN_DB_* database identity)."
+          ;;
+      esac
+      ok "PFIN_DB_USER='$v' valid for resource '$RESOLVED_NAME'"
+    fi
+  done
+fi
+
 # --- Step 4: preflight read of current store state -------------------------
 step "Current store state"
 sshx_in <<REMOTE
