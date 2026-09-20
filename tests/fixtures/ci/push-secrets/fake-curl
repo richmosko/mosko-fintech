@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-push-secrets-strikes.sh to drive
+# scripts/push-production-secrets.sh's two curl call sites (the outer
+# resolution-step api() and the inner python-level push-step api())
+# against CANNED Coolify API responses instead of a live box.
+#
+# The two call sites use DIFFERENT curl invocation shapes, and this file
+# tells them apart the same way real curl would behave differently under
+# each: the outer resolution api() calls plain `curl -fsS ...` (no `-w`),
+# so its response is the bare JSON body with NO trailing status line; the
+# inner push-step api() (PR #840 fix) calls `curl -sS ... -w
+# '\n%{http_code}'`, so its response must carry a trailing bare status-
+# code line for that api()'s rpartition-based parser to find. Detected
+# here by whether `-w` appears in curl's own argv -- never by which
+# "logical" call site this is, since fake-curl only ever sees argv.
+#
+# GET /applications -- "clean" (default): pfin-app, pfin-migrator,
+#   pfin-supabase-stack (the REAL live list, measured 2026-09-20) --
+#   `pfin-back-etl` / `pfin-pdf-render` / `pfin-provider-sync` are
+#   deliberately ABSENT, matching the real box (none created yet).
+#   "duplicate": pfin-app appears TWICE (different uuids) -- exercises
+#   the per-lookup ambiguous-name die() guard. "collision": pfin-app and
+#   pfin-back-etl are two DIFFERENT names sharing the SAME uuid --
+#   exercises the cross-resource uniqueness check instead (each lookup
+#   is individually unambiguous; the collision is only visible across
+#   the resolved SET).
+# PATCH .../envs/bulk -- validates the PATCHed body (read via the
+#   `--data-binary @<tmpfile>` argument, a real file on disk) has a
+#   non-empty `data` array of `{key, value}` objects; 200 on success,
+#   422 otherwise. Never inspects or logs the file's CONTENTS -- only
+#   this file's own ARGV is logged (see below), and the body never
+#   reaches argv at all post-fix, which is exactly the property leg (v)
+#   asserts.
+#
+# Logs its OWN ARGV ONLY (never a --data-binary body FILE's contents, and
+# there is no -K config FILE content to worry about either since this
+# fixture doesn't inspect that file) to $FAKE_CURL_LOG -- leg (v) greps
+# this log for the fixture's own known secret-value string to prove it
+# never reaches curl's argv.
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+METHOD="GET"
+prev=""
+BODY_FILE=""
+HAS_W=0
+for a in "$@"; do
+  if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  if [[ "$prev" == "--data-binary" && "$a" == @* ]]; then BODY_FILE="${a#@}"; fi
+  if [[ "$a" == "-w" ]]; then HAS_W=1; fi
+  prev="$a"
+done
+URL="${*: -1}"
+
+respond() {
+  local body="$1" code="${2:-200}"
+  if [[ "$HAS_W" == "1" ]]; then
+    printf '%s\n%s' "$body" "$code"
+  else
+    printf '%s' "$body"
+  fi
+  exit 0
+}
+
+APP_UUID="1111aaaa2222bbbb3333cccc"
+APP_UUID_DUP="1111aaaa2222bbbb3333dddd"
+MIGRATOR_UUID="2222bbbb3333cccc4444dddd"
+STACK_UUID="3333cccc4444dddd5555eeee"
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
+  if [[ "${FAKE_CURL_MODE:-clean}" == "duplicate" ]]; then
+    respond "$(printf '[{"name":"pfin-app","uuid":"%s"},{"name":"pfin-app","uuid":"%s"},{"name":"pfin-migrator","uuid":"%s"},{"name":"pfin-supabase-stack","uuid":"%s"}]' \
+      "$APP_UUID" "$APP_UUID_DUP" "$MIGRATOR_UUID" "$STACK_UUID")"
+  fi
+  if [[ "${FAKE_CURL_MODE:-clean}" == "collision" ]]; then
+    # Two DIFFERENT resource names (pfin-app, pfin-back-etl) sharing the
+    # SAME uuid -- each name individually resolves via an unambiguous
+    # single match (the per-lookup ambiguity check in scenario iii/
+    # "duplicate" mode above does NOT fire here), but the two resource
+    # KEYS ("app", "etl") end up pointing at one application. Exercises
+    # the cross-resource uniqueness check (Sec AC, PR #840 review) --
+    # structurally the live incident's own shape.
+    respond "$(printf '[{"name":"pfin-app","uuid":"%s"},{"name":"pfin-back-etl","uuid":"%s"},{"name":"pfin-migrator","uuid":"%s"},{"name":"pfin-supabase-stack","uuid":"%s"}]' \
+      "$APP_UUID" "$APP_UUID" "$MIGRATOR_UUID" "$STACK_UUID")"
+  fi
+  respond "$(printf '[{"name":"pfin-app","uuid":"%s"},{"name":"pfin-migrator","uuid":"%s"},{"name":"pfin-supabase-stack","uuid":"%s"}]' \
+    "$APP_UUID" "$MIGRATOR_UUID" "$STACK_UUID")"
+fi
+
+if [[ "$METHOD" == "PATCH" && "$URL" == *"/envs/bulk" ]]; then
+  if [[ -z "$BODY_FILE" || ! -f "$BODY_FILE" ]]; then
+    respond '{"message":"fake-curl: no --data-binary @file found in argv"}' 400
+  fi
+  if ! python3 -c "
+import json, sys
+d = json.load(open('$BODY_FILE'))
+rows = d.get('data')
+if not isinstance(rows, list) or not rows:
+    sys.exit(1)
+for r in rows:
+    if not isinstance(r, dict) or 'key' not in r or 'value' not in r:
+        sys.exit(1)
+" >/dev/null 2>&1; then
+    respond '{"message":"Validation failed."}' 422
+  fi
+  respond '{}'
+fi
+
+respond '{}'

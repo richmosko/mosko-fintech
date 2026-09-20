@@ -147,11 +147,23 @@
 #   functional bug -- flagged for F/CTO/Sec rather than silently
 #   resequencing the runbook's own section numbers in this PR.
 #   Mechanically: this script NEVER assumes a resource exists. It resolves
-#   each target resource's UUID by NAME via the Coolify API (same
-#   by-name-lookup idiom provision-supabase-stack.sh already uses for its
-#   own application) and FAILS CLOSED, naming the missing resource, if the
-#   lookup comes back empty -- never silently skips a secret because its
-#   resource isn't there yet. `--skip-missing-resource` is available for a
+#   each target resource's UUID by NAME. Sec correction (PR #840 review,
+#   2026-09-20): the ORIGINAL text here claimed this was "the same by-name-
+#   lookup idiom provision-supabase-stack.sh already uses" -- FALSE. That
+#   sibling (and provision-app.sh, provision-migrator-app.sh, record-
+#   coolify-uuids.sh) fetches `/applications` UNFILTERED, ONCE, and matches
+#   the target name LOCALLY via a python list comprehension -- it never
+#   sends a `?name=` query string at all. This script's OWN resolver now
+#   does the SAME unfiltered-fetch-then-local-exact-match shape (see the
+#   resolution step's own header comment for the MEASURED reason: `GET
+#   /applications?name=X` on this Coolify (4.3.18) ignores the `name`
+#   parameter entirely), but that similarity is a FIX landed in this same
+#   PR, not a pre-existing shared idiom -- the ORIGINAL code here sent a
+#   per-resource `?name=$resource` query and trusted the response was
+#   filtered, which it was not. FAILS CLOSED, naming the missing resource,
+#   if the local match comes back empty -- never silently skips a secret
+#   because its resource isn't there yet. `--skip-missing-resource` is
+#   available for a
 #   deliberate partial run (e.g. pushing app-tier secrets before the
 #   worker resources exist) and prints, per skipped resource, exactly
 #   which secrets were NOT pushed and why -- an operator opts into that
@@ -221,6 +233,43 @@
 #   natural follow-up, not built here, so this script's manifest-driven
 #   contract stays honest about what it covers.
 #
+# KNOT 7 -- manifest-key -> Coolify resource-NAME mapping: where it lives,
+#   and which of the four names are CONFIRMED vs. a stated best guess.
+#   MEASURED (team-lead, 2026-09-20, live preflight on `main` `f6c1f9d9`):
+#   this script's own resource-name defaults used to be the CONCEPTUAL
+#   keys ("app", "etl", "pdf-render", "provider-sync") -- not Coolify
+#   application NAMES. Combined with the `?name=` filter defect fixed
+#   below, every one of those keys "resolved" to whichever application
+#   Coolify's unfiltered list happened to return first (`pfin-app`),
+#   regardless of which key was being looked up. Two independent defects
+#   that happened to compound into one visible symptom.
+#   RESOLUTION -- the mapping lives HERE, as this script's own
+#   *_RESOURCE_NAME defaults, not in secrets-manifest.yml. Precedent:
+#   KNOT 2 already treats "which Coolify resource" as this script's own
+#   hardcoded config, distinct from the manifest's actual scope ("which
+#   STORE," ci_only vs production_only -- KNOT 1). Adding a `coolify_name:`
+#   field to the manifest would blur that boundary, require
+#   check-secrets-nonoverlap.py to explicitly ignore a new key it has
+#   never had to reason about, and route a topology fact through a file
+#   whose CI fence is about SECRET-STORE non-overlap, not infrastructure
+#   naming -- more surface for a smaller win.
+#   CONFIRMED (sourced, not guessed): `pfin-app` -- created, live UUID
+#   measured this same day (docs/deployment-runbook.md §7.1 step (i)).
+#   `pfin-back-etl` -- runbook §3's own topology table names it
+#   explicitly as the nightly-ingest unit's Coolify application (the
+#   monthly-report cron is a SEPARATE unit, `pfin-back-etl-monthly-report`,
+#   not resolved by this script -- see KNOT 2's own "etl open question").
+#   UNCONFIRMED, best-guess pending resource creation (runbook §7):
+#   `pfin-pdf-render` / `pfin-provider-sync` -- no Coolify application by
+#   either name exists yet, and no committed doc names what it will be
+#   called once created. Guessed here by extending the "pfin-<slug>"
+#   pattern `pfin-app`/`pfin-migrator`/`pfin-supabase-stack` all follow --
+#   but that pattern is NOT universal (`pfin-back-etl` breaks it), so this
+#   is a guess, stated as one, not a measured fact. Safe to guess wrong:
+#   the exact-name-match fix below (KNOT 7 continued, the resolution loop)
+#   means a wrong guess resolves to ABSENT, never to the WRONG resource --
+#   it fails exactly like an unconfirmed name should, not silently.
+#
 # IDEMPOTENCE
 #   Unconditional overwrite when a name has a non-empty local .env value,
 #   not mint-if-absent -- these are OPERATOR-CHOSEN credentials (Plaid/
@@ -286,11 +335,13 @@ fi
 BOX_IP="${BOX_IP:-}"
 AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
 
-# Resource names -- overridable, matching runbook §3's topology table.
-APP_RESOURCE_NAME="${APP_RESOURCE_NAME:-app}"
-ETL_RESOURCE_NAME="${ETL_RESOURCE_NAME:-etl}"
-PDF_RESOURCE_NAME="${PDF_RESOURCE_NAME:-pdf-render}"
-PROVIDER_SYNC_RESOURCE_NAME="${PROVIDER_SYNC_RESOURCE_NAME:-provider-sync}"
+# Resource names -- overridable, defaulting to real Coolify APPLICATION
+# names, not the conceptual manifest keys (KNOT 7 explains the mapping
+# decision and which of these four are confirmed vs. a stated guess).
+APP_RESOURCE_NAME="${APP_RESOURCE_NAME:-pfin-app}"
+ETL_RESOURCE_NAME="${ETL_RESOURCE_NAME:-pfin-back-etl}"
+PDF_RESOURCE_NAME="${PDF_RESOURCE_NAME:-pfin-pdf-render}"
+PROVIDER_SYNC_RESOURCE_NAME="${PROVIDER_SYNC_RESOURCE_NAME:-pfin-provider-sync}"
 
 APPLY=0
 SKIP_MISSING=0
@@ -376,7 +427,16 @@ PLAN_JSON_FILE="$PLAN_DIR/plan.json"
 # statement with its stdout redirected to a file -- does not trigger it.
 # Fixed at the mechanism (don't nest it) rather than by hunting for
 # whichever character combination trips this build's parser.
-if ! python3 - "$REPO_ROOT/secrets-manifest.yml" "$REPO_ROOT/.env" "$PLAN_DIR" \
+# Found while building this PR's own fence: the ORIGINAL `if ! cmd; then
+# die "..."; fi` wrapper here always called die(), which ALWAYS exits 1 --
+# collapsing this script's own documented EXIT CODES contract (2 = "the
+# push PLAN itself is invalid," e.g. an unmapped manifest name below) into
+# the SAME code as every other failure class. The contract was never
+# actually reachable. Fixed: capture python3's own exit code and
+# propagate it when it is the documented 2; anything else still gets the
+# die() banner.
+set +e
+python3 - "$REPO_ROOT/secrets-manifest.yml" "$REPO_ROOT/.env" "$PLAN_DIR" \
   "$APP_RESOURCE_NAME" "$ETL_RESOURCE_NAME" "$PDF_RESOURCE_NAME" "$PROVIDER_SYNC_RESOURCE_NAME" \
   > "$PLAN_JSON_FILE" <<'PYEOF'
 import sys, os
@@ -434,19 +494,28 @@ if unexpected_excluded_absent:
 
 # KNOT 2 -- per-resource mapping. Cross-checked against each target's own
 # .env.example (root .env.example for `app`; workers/pdf-render/.env.example;
-# workers/etl/.env.example; workers/provider-sync/.env.example).
+# workers/etl/.env.example; workers/provider-sync/.env.example). Values are
+# LOGICAL resource keys ("app"/"etl"/"pdf-render"/"provider-sync"), NOT
+# Coolify names -- KNOT 7's own RESOURCE_IDENTITY_MAP (below) is the
+# SEPARATE, second fail-closed stage that turns a logical key into the
+# real Coolify application name to resolve. Sec correction (PR #840
+# review, 2026-09-20): this map is the CONFINEMENT check (which secret
+# goes to which logical container) -- do not fold the identity check into
+# it; different stage (plan-time vs. resolve-time), different key space
+# (a secret NAME vs. a resource KEY), and collapsing them would make a
+# missing identity-map entry unreachable as its own failure.
 SECRET_RESOURCE_MAP = {
-    "SUPABASE_SERVICE_ROLE_KEY":       [app_name],
-    "PDF_WORKER_SIGNING_KEY":          [app_name, pdf_name],
-    "DISCORD_WEBHOOK_URL":             [app_name, etl_name, ps_name],
+    "SUPABASE_SERVICE_ROLE_KEY":       ["app"],
+    "PDF_WORKER_SIGNING_KEY":          ["app", "pdf-render"],
+    "DISCORD_WEBHOOK_URL":             ["app", "etl", "provider-sync"],
     # KNOT 5 -- pushed identically to both tiers directly; NOT a Coolify
     # SharedEnvironmentVariable via this script. See header.
-    "WORKER_ADMISSION_SHARED_SECRET":  [app_name, ps_name],
-    "FMP_API_KEY":                     [etl_name],
-    "BLS_API_KEY":                     [etl_name],
-    "PLAID_CLIENT_ID":                 [ps_name],
-    "PLAID_SECRET":                    [ps_name],
-    "SIMPLEFIN_TOKEN":                 [ps_name],
+    "WORKER_ADMISSION_SHARED_SECRET":  ["app", "provider-sync"],
+    "FMP_API_KEY":                     ["etl"],
+    "BLS_API_KEY":                     ["etl"],
+    "PLAID_CLIENT_ID":                 ["provider-sync"],
+    "PLAID_SECRET":                    ["provider-sync"],
+    "SIMPLEFIN_TOKEN":                 ["provider-sync"],
 }
 
 unmapped = sorted(set(in_scope) - set(SECRET_RESOURCE_MAP))
@@ -455,6 +524,31 @@ if unmapped:
           f"SECRET_RESOURCE_MAP -- a new secret was added to the manifest since this "
           f"script's mapping table was last updated. Update SECRET_RESOURCE_MAP (with "
           f"Sec joint-review, per this file's own header) before pushing: {unmapped}",
+          file=sys.stderr)
+    sys.exit(2)
+
+# KNOT 7 -- the IDENTITY map: logical resource key -> real Coolify
+# application NAME. A SEPARATE, second fail-closed check from the
+# unmapped-secret-name one above (Sec review, PR #840, 2026-09-20) --
+# catches a future logical key added to SECRET_RESOURCE_MAP's own values
+# without a matching identity-map entry, which that check cannot see
+# (it only looks at secret NAMES, never at the logical keys SECRET_
+# RESOURCE_MAP's values name). See this script's own header KNOT 7 for
+# which of these four are CONFIRMED Coolify names vs. a stated guess.
+RESOURCE_IDENTITY_MAP = {
+    "app": app_name,
+    "etl": etl_name,
+    "pdf-render": pdf_name,
+    "provider-sync": ps_name,
+}
+referenced_keys = set()
+for targets in SECRET_RESOURCE_MAP.values():
+    referenced_keys.update(targets)
+unidentified = sorted(referenced_keys - set(RESOURCE_IDENTITY_MAP))
+if unidentified:
+    print(f"FATAL: SECRET_RESOURCE_MAP names logical resource key(s) with no "
+          f"RESOURCE_IDENTITY_MAP entry -- a resource key was added to the "
+          f"confinement map without a matching identity-map entry: {unidentified}",
           file=sys.stderr)
     sys.exit(2)
 
@@ -474,7 +568,8 @@ for name in in_scope:
     if not value:
         missing_values.append(name)
         continue
-    for resource in SECRET_RESOURCE_MAP[name]:
+    for logical_key in SECRET_RESOURCE_MAP[name]:
+        resource = RESOURCE_IDENTITY_MAP[logical_key]
         by_resource.setdefault(resource, {})[name] = value
 
 report = {"in_scope": in_scope, "excluded_supabase_stack": sorted(EXCLUDED_SUPABASE_STACK),
@@ -490,7 +585,12 @@ for resource, kv in by_resource.items():
 import json
 print(json.dumps(report))
 PYEOF
-then
+PLAN_RC=$?
+set -e
+if [[ $PLAN_RC -eq 2 ]]; then
+  printf '\n\033[31mFAIL\033[0m  building the push plan failed: the plan itself is invalid (see stderr above) -- exit 2, per this script'"'"'s own EXIT CODES contract.\n' >&2
+  exit 2
+elif [[ $PLAN_RC -ne 0 ]]; then
   die "building the push plan failed (see stderr above)"
 fi
 
@@ -512,22 +612,50 @@ for resource, info in sorted(r["resources"].items()):
 PYEOF
 
 step "Resolving target resources on Coolify (by name; fails closed on a missing one unless --skip-missing-resource)"
-# Same by-name-lookup idiom provision-supabase-stack.sh already uses for
-# its own application -- run ON THE BOX (Coolify's API is loopback-only;
-# :8000 is deliberately not in the firewall, per runbook §1).
-api() { # api <METHOD> <PATH> [json-body]
-  local method="$1" path="$2" body="${3:-}"
-  if [[ -n "$body" ]]; then
-    sshx "TOKEN=\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-); curl -fsS -X $method -H \"Authorization: Bearer \$TOKEN\" -H 'Content-Type: application/json' -d '$body' http://localhost:8000/api/v1$path"
-  else
-    sshx "TOKEN=\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-); curl -fsS -X $method -H \"Authorization: Bearer \$TOKEN\" http://localhost:8000/api/v1$path"
-  fi
+# MEASURED (team-lead, 2026-09-20, Coolify 4.3.18): `GET
+# /applications?name=X` IGNORES the `name` query parameter entirely --
+# `?name=etl`, `?name=app`, `?name=pfin-app`, and `?name=does-not-exist`
+# all returned the SAME unfiltered 3-element application list. The old
+# per-resource query-string call, combined with taking `d[0]` off
+# whatever came back, silently resolved every resource name to the SAME
+# wrong uuid (whichever application sorted first) -- with
+# --skip-missing-resource given, the skip branch below was unreachable
+# and the exit-3 partial-run contract was dead code in practice.
+# Fixed: fetch `/applications` ONCE (unfiltered -- the filter never
+# worked anyway), then match each resource by EXACT `name ==` LOCALLY --
+# the same idiom provision-app.sh / record-coolify-uuids.sh already use
+# for this exact reason, including their own die-on-ambiguous guard,
+# reused verbatim here.
+api() { # api GET <PATH> -- GET only. Nothing in this resolution step
+  # ever needs a body; a body-capable variant here would just be an
+  # unused, unaudited surface for the SAME class of defect this PR fixes
+  # in the PUSH step's own api() below (item 3, secret values via curl
+  # argv) -- removed rather than left dead-but-armed.
+  #
+  # Found while building this PR's own fence (item 60 class, same
+  # residual named elsewhere in this file): the PRIOR shape here put the
+  # Coolify API TOKEN directly into curl's own `-H` argv, `ps`-visible on
+  # the box for this call's lifetime -- contradicting this script's own
+  # header claim that "the API call itself [is] built with the token as
+  # a `curl -K -` stdin config directive (never an argv element)," which
+  # was only actually true for the PUSH step's api() below, not this
+  # resolution-only one. Fixed to match: the token now crosses via a
+  # `header = "Authorization: Bearer <token>"` config LINE piped into
+  # curl's own `-K -` on the REMOTE side, built there from the remote
+  # `$TOKEN` variable -- never an argv element on either machine.
+  local method="$1" path="$2"
+  sshx "TOKEN=\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-); printf 'header = \"Authorization: Bearer %s\"\n' \"\$TOKEN\" | curl -fsS -K - -X $method http://localhost:8000/api/v1$path"
 }
-jqp() { python3 -c "import json,sys;$1"; }
 
 RESOURCE_NAMES="$(python3 -c "import json,sys
 with open(sys.argv[1]) as f: r = json.load(f)
 print(' '.join(sorted(r['resources'])))" "$PLAN_JSON_FILE")"
+
+# Same file-redirect discipline as PLAN_JSON_FILE above (never a $(...)
+# capture of a multi-application JSON blob) -- one fetch, read back by
+# every resource's own local exact-match pass below.
+ALL_APPS_JSON_FILE="$PLAN_DIR/all-applications.json"
+api GET /applications > "$ALL_APPS_JSON_FILE"
 
 # "resource|uuid" pairs, one per resolved resource, in a plain INDEXED
 # array. Deliberately NOT a bash associative array (`declare -A`, bash 4+
@@ -546,10 +674,20 @@ RESOLVED_PAIRS=()
 ANY_SKIPPED=0
 
 for resource in $RESOURCE_NAMES; do
-  found="$(api GET "/applications?name=$resource" | jqp "
-d=json.load(sys.stdin)
-d=d if isinstance(d, list) else d.get('data', [])
-print(d[0]['uuid'] if d else '')")"
+  found="$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    d = json.load(f)
+d = d if isinstance(d, list) else d.get('data', [])
+m = [a for a in d if a.get('name') == sys.argv[2]]
+if len(m) > 1:
+    print('AMBIGUOUS:' + ','.join(sorted(a['uuid'] for a in m)))
+elif m:
+    print(m[0]['uuid'])
+" "$ALL_APPS_JSON_FILE" "$resource")"
+  if [[ "$found" == AMBIGUOUS:* ]]; then
+    die "multiple Coolify applications named '$resource' (${found#AMBIGUOUS:}) -- refusing to pick one."
+  fi
   if [[ -z "$found" ]]; then
     if [[ $SKIP_MISSING -eq 1 ]]; then
       info "SKIPPING '$resource' -- no Coolify resource by that name yet (--skip-missing-resource given). Its secrets are NOT pushed this run."
@@ -561,6 +699,41 @@ print(d[0]['uuid'] if d else '')")"
   RESOLVED_PAIRS+=("$resource|$found")
   ok "resolved '$resource' -> $found"
 done
+
+# Sec AC (PR #840 review, 2026-09-20): uniqueness must hold over the
+# RESOLVED SET, not only per individual lookup. A per-resource "exactly
+# one match" check (above) passes even when TWO DIFFERENT resource keys
+# both resolve to the SAME uuid -- which is EXACTLY today's live
+# incident's own shape: under the `?name=` defect, each per-resource
+# lookup returned exactly one well-defined match (satisfying a presence-
+# only or per-lookup-ambiguity check), but that one match was the SAME
+# wrong application every time. This check is what actually catches that
+# class structurally, independent of the resolution mechanism itself.
+# Bash-3.2-safe (no `declare -A`, same discipline as RESOLVED_PAIRS
+# above) -- extract the uuid column, `sort | uniq -d` to find any
+# duplicate, then name every resource key sharing it. NOTE for future
+# readers: provision-supabase-stack.sh's own application lookup and
+# provision-app.sh's equivalent take `m[0]` with NO such cross-resource
+# assertion -- this script deliberately adds one, and it must not be
+# "harmonised" back to match those siblings; they resolve exactly ONE
+# named resource each, this script resolves several in the same run.
+DUP_UUIDS="$(
+  for pair in ${RESOLVED_PAIRS[@]+"${RESOLVED_PAIRS[@]}"}; do
+    echo "${pair#*|}"
+  done | sort | uniq -d
+)"
+if [[ -n "$DUP_UUIDS" ]]; then
+  while IFS= read -r dup_uuid; do
+    [[ -z "$dup_uuid" ]] && continue
+    SHARERS=""
+    for pair in ${RESOLVED_PAIRS[@]+"${RESOLVED_PAIRS[@]}"}; do
+      if [[ "${pair#*|}" == "$dup_uuid" ]]; then
+        SHARERS="$SHARERS '${pair%%|*}'"
+      fi
+    done
+    die "resource keys$SHARERS all resolved to the SAME Coolify application ($dup_uuid) -- two distinct resource keys must never share one uuid; refusing to push to any of them. Investigate which *_RESOURCE_NAME override or default is wrong before re-running."
+  done <<< "$DUP_UUIDS"
+fi
 
 if [[ $APPLY -eq 0 ]]; then
   printf '\n\033[33mPREFLIGHT ONLY.\033[0m Nothing was pushed. Re-run with --apply to execute.\n'
@@ -601,34 +774,79 @@ print(r['resources']['$resource']['seed_path'])" "$PLAN_JSON_FILE")"
   sshx "env box_seed=\"$box_seed\" uuid=\"$uuid\" bash -s" <<'REMOTE'
 set -e
 umask 077
-trap 'shred -u "$box_seed" 2>/dev/null || rm -f "$box_seed"' EXIT
+# Sec correction (PR #840 review, 2026-09-20): the request BODY (the
+# json.dumps'd {"data": [...]} PATCH payload, i.e. the actual SECRET
+# VALUES being pushed) now lands in a file BESIDE $box_seed, under the
+# SAME cleanup trap -- ONE cleanup mechanism for both secret-bearing
+# files this process creates, not a second one (an earlier draft used
+# python's own tempfile.mkstemp() + a `finally: os.unlink()`, a
+# redundant, weaker-cleanup mechanism next to this trap's shred -u).
+box_body="$box_seed.body.json"
+trap 'shred -u "$box_seed" "$box_body" 2>/dev/null || rm -f "$box_seed" "$box_body"' EXIT
 TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-python3 - "$TOKEN" "$uuid" "$box_seed" <<'PYEOF'
-import json, subprocess, sys
+python3 - "$TOKEN" "$uuid" "$box_seed" "$box_body" <<'PYEOF'
+import json, os, subprocess, sys
 
-token, app_uuid, seed_file = sys.argv[1], sys.argv[2], sys.argv[3]
+token, app_uuid, seed_file, body_file = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 def die(msg):
     print(f"FAIL: {msg}", file=sys.stderr)
     sys.exit(1)
 
-# Identical hardened api() shape to provision-supabase-stack.sh's own
-# 2026-09-11 fix (#734/#735 sibling): token via curl -K stdin config, never
-# an argv element -- so it cannot appear in ps, and cannot leak through an
-# unhandled CalledProcessError's default str(argv) representation either.
+# Token via curl -K stdin config, never an argv element -- so it cannot
+# appear in `ps`, and cannot leak through an unhandled CalledProcessError's
+# default str(argv) representation either (identical shape to
+# provision-supabase-stack.sh's own 2026-09-11 #734/#735 fix).
+#
+# Sec correction (PR #840 review, 2026-09-20; team-lead's original citation
+# named the wrong line, but the class was right): the PRIOR shape here put
+# the request BODY -- for this call site, the actual SECRET VALUES being
+# pushed -- directly into `cmd` via `-d json.dumps(body)`, i.e. into
+# curl's own argv, `ps`-visible on the box for this process's lifetime.
+# Worse than the already-named item-60 residual (that one is a Coolify
+# API TOKEN in a python process's argv; this was real secret VALUES in
+# curl's). Fixed per Sec's own AC: the body is written to `body_file`
+# (passed in, beside $box_seed, under the REMOTE shell's own umask 077 +
+# shred-on-EXIT trap -- see that trap for why this is ONE cleanup
+# mechanism, not a second one alongside it) and referenced via
+# `--data-binary @path`, never a command-line argument on either side of
+# this boundary -- matching this whole script's own stated charter ("no
+# secret value is ever printed, logged, or returned... every value
+# crosses the boundary exactly the way provision-supabase-stack.sh's
+# SMTP_PASS override does"). `--data-binary` over a bare `-d`: curl's own
+# docs note plain `-d`/`--data` strips embedded newlines from its
+# argument, which does not apply to `--data-binary`'s file form -- the
+# safer choice for a JSON payload even though no value here is expected
+# to contain one. Also drops `-f` for `-w '\n%{http_code}'`, parsed
+# locally below -- same fix as PR #838/#837: `-f` discards the response
+# BODY on a non-2xx status, so a validation error here would previously
+# die with only curl's generic "(NN) returned error" text instead of
+# Coolify's own error JSON.
 def api(method, path, body=None):
     if '"' in token or "\n" in token:
         die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
     config = 'header = "Authorization: Bearer ' + token + '"\n'
-    cmd = ["curl", "-fsS", "-K", "-", "-X", method]
+    cmd = ["curl", "-sS", "-K", "-", "-X", method, "-w", "\n%{http_code}"]
     if body is not None:
-        cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
+        # Inherits the remote shell's own `umask 077` (set above, before
+        # this python process was ever started) -- belt-and-braces
+        # explicit mode too, matching the LOCAL plan-builder's own
+        # seed_path writer (KNOT 1's own PLAN_JSON_FILE step).
+        with open(body_file, "w", opener=lambda p, f: os.open(p, f, 0o600)) as bf:
+            bf.write(json.dumps(body))
+        cmd += ["-H", "Content-Type: application/json", "--data-binary", f"@{body_file}"]
     cmd += [f"http://localhost:8000/api/v1{path}"]
-    try:
-        result = subprocess.run(cmd, input=config, capture_output=True, text=True, check=True)
-    except subprocess.CalledProcessError as exc:
-        die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.strip()[:200]})")
-    return json.loads(result.stdout) if result.stdout.strip() else None
+    result = subprocess.run(cmd, input=config, capture_output=True, text=True)
+    if result.returncode != 0:
+        die(f"Coolify API {method} {path} failed: curl exit {result.returncode} ({result.stderr.strip()[:200]})")
+    raw = result.stdout
+    out, _, code = raw.rpartition("\n")
+    if not code.isdigit():
+        die(f"Coolify API {method} {path}: could not parse an HTTP status code off curl's own -w output -- refusing to guess success or failure.")
+    status = int(code)
+    if not (200 <= status < 300):
+        die(f"Coolify API {method} {path} -> HTTP {status}: {out.strip()[:500]}")
+    return json.loads(out) if out.strip() else None
 
 with open(seed_file) as f:
     kv = dict(line.rstrip("\n").split("=", 1) for line in f if "=" in line)

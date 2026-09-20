@@ -2853,6 +2853,37 @@ jobs:
       - name: offline strike-proofs (all-zero proceeds; containers/images/env/failed-read refuse independently; create-body watcher)
         run: bash scripts/ci/fence-provision-app-strikes.sh
 
+  fence-push-secrets-strikes:
+    name: push-production-secrets.sh — resource-resolution + secret-transport strike-proofs
+    runs-on: ubuntu-latest
+    # Unlabeled, same posture as the sibling fences above. DevOps-owned,
+    # Sec-consulted (secrets surface). Live finding, 2026-09-20
+    # (team-lead, stage A step 3 preflight): `GET /applications?name=X`
+    # on this Coolify (4.3.18) IGNORES the `name` query parameter
+    # entirely -- every resource name silently resolved to whichever
+    # application sorted first, and with --skip-missing-resource given
+    # the skip branch was unreachable. Had --apply run, this would have
+    # pushed provider-sync's and ETL's secrets onto the web-app
+    # container -- the confinement violation secrets-manifest.yml's own
+    # PLAID_CLIENT_ID/PLAID_SECRET entries say has NO CI fence. This is
+    # that fence. scripts/ci/fence-push-secrets-strikes.sh proves: exact-
+    # name resolution off a single unfiltered fetch (never a wrong
+    # resource, never a query-string filter that doesn't work), an
+    # unmapped manifest key refuses before any resolution, duplicate
+    # application names refuse, a missing resource dies without
+    # --skip-missing-resource, a real --apply push never lets a secret
+    # VALUE reach any curl invocation's own argv (a second,
+    # independently-found defect in the same PATCH call, fixed
+    # alongside the resolution bug), and -- Sec AC, PR #840 -- that two
+    # DIFFERENT resource keys resolving to the SAME uuid refuses, which
+    # no per-lookup ambiguity check can catch and which is the live
+    # incident's own shape. See that script's own header for what each
+    # of its six scenarios proves.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (exact-name resolution, unmapped key, duplicate names, missing resource, no argv leak, cross-resource uniqueness)
+        run: bash scripts/ci/fence-push-secrets-strikes.sh
+
   fence-smoke-pfin-exposure-strikes:
     name: smoke-pfin-exposure.sh — anon-vs-jwt mode-classification strike-proofs
     runs-on: ubuntu-latest
