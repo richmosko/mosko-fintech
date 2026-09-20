@@ -2801,6 +2801,33 @@ jobs:
       - name: offline strike-proofs (identity-guard match / mismatch, pre- and post-deploy)
         run: bash scripts/ci/fence-deploy-app-strikes.sh
 
+  fence-provision-app-strikes:
+    name: provision-app.sh — delete-if-empty-shell guard strike-proofs
+    runs-on: ubuntu-latest
+    # Unlabeled, same posture as fence-deploy-app-strikes above. DevOps-owned.
+    # Live finding, 2026-09-20 (team-lead, stage A step 1 preflight):
+    # scripts/provision-app.sh's delete-guard originally read `GET
+    # /applications/<uuid>/deployments` -- 404 on this Coolify (4.3.18).
+    # `GET /deployments?uuid=<uuid>` was ruled out too -- it returned 200
+    # [] for `pfin-migrator` despite that resource having FOUR completed
+    # deployments the same day, because it lists only in-flight/queued
+    # deployments, not history. The guard now reads three on-box/API
+    # predicates instead (`docker ps -a`, `docker images`, env-store name
+    # count), each failing CLOSED (not open) if the on-box read itself
+    # fails (Sec F-1, PR #836 review -- a prior shape's remote
+    # `| grep -c ... || true` pipeline silently reported a FAILED docker
+    # read as count=0, letting the guard pass on a read it never took).
+    # scripts/ci/fence-provision-app-strikes.sh proves the three refuse
+    # independently naming the offending predicate, that all-zero
+    # proceeds, and that a failed on-box read refuses naming "unknown"
+    # rather than "0" -- offline via a PATH-shadowed fake ssh/curl/docker
+    # -- see that script's own header for what each of its six scenarios
+    # proves.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (all-zero proceeds; containers/images/env/failed-read refuse independently)
+        run: bash scripts/ci/fence-provision-app-strikes.sh
+
   fence-smoke-pfin-exposure-strikes:
     name: smoke-pfin-exposure.sh — anon-vs-jwt mode-classification strike-proofs
     runs-on: ubuntu-latest
