@@ -2825,9 +2825,20 @@ jobs:
     # `POST /applications/public` 422'd on a missing required
     # `project_uuid` field -- fixed, and scenario 7 (CREATE-HAPPY) now
     # exercises the create path under --apply, asserting fake-curl's
-    # unconditional required-key check on the POSTed body passes -- see
-    # that script's own header for what each of its seven scenarios
-    # proves.
+    # unconditional required-key check on the POSTed body passes. A
+    # third live finding, same day (second --apply, after create
+    # succeeded): the "Setting APP_STACK_NETWORK_NAME" leg built its
+    # PATCH body as an inline ARGUMENT command substitution -- under
+    # macOS bash 3.2 (the operator's `#!/usr/bin/env bash` resolution;
+    # CI's Linux bash 5 never had this defect, so no fence run could see
+    # it) that shape mis-parses via brace expansion, producing an empty
+    # body and a Coolify 400. Fixed: the body is now built into a
+    # variable first, same shape CREATE_BODY already used safely.
+    # fake-curl's `/envs/bulk` PATCH handler now validates body structure
+    # and 400s with Coolify's own measured error text otherwise --
+    # strike-verified against the reverted code under bash 3.2 locally
+    # (and confirmed NOT to reproduce under bash 5.2.15) -- see that
+    # script's own header for what each of its seven scenarios proves.
     steps:
       - uses: actions/checkout@v4
       - name: offline strike-proofs (all-zero proceeds; containers/images/env/failed-read refuse independently; create-body watcher)
