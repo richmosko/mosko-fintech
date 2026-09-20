@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+#
+# fake-docker -- offline stand-in for `docker`, used by
+# scripts/ci/fence-smoke-pfin-exposure-strikes.sh. Never actually runs
+# scripts/smoke-pfin-exposure.sh's node one-liner -- returns a canned
+# "STATUS CODE" line selected by $FAKE_DOCKER_MODE, matching the exact
+# output shape the real node one-liner prints (`console.log(status+" "+code)`).
+
+set -euo pipefail
+
+# $FAKE_DOCKER_CONTAINERS controls how many RUNNING rows are reported --
+# default 1; "2" exercises Sec's F4 fix (ambiguous match must refuse).
+if [[ "$*" == *"ps"* && "$*" == *"status=running"* ]]; then
+  echo -e "app-abc123def456ghi789jk01-000000000000\t2026-09-19 12:00:00"
+  if [[ "${FAKE_DOCKER_CONTAINERS:-1}" == "2" ]]; then
+    echo -e "app-abc123def456ghi789jk01-111111111111\t2026-09-19 12:05:00"
+  fi
+  exit 0
+fi
+
+# Compose-pack resolution mechanism -- same shape as
+# tests/fixtures/ci/deploy-app/fake-curl's own sibling fixture.
+# $FAKE_DOCKER_COMPOSE_CONTAINERS controls row count (default 1; "2"
+# exercises the SAME F4 discipline on this mechanism).
+if [[ "$*" == "compose "*"ps -q"* ]]; then
+  echo "cid1"
+  if [[ "${FAKE_DOCKER_COMPOSE_CONTAINERS:-1}" == "2" ]]; then
+    echo "cid2"
+  fi
+  exit 0
+fi
+if [[ "$*" == *"inspect"* && "$*" == *"State.Running"* ]]; then
+  cid="${*: -1}"
+  echo -e "true\t$cid\t2026-09-19T12:00:00Z"
+  exit 0
+fi
+
+if [[ "$*" == *"exec"* ]]; then
+  # The mode name encodes which CREDENTIAL the scenario exercises. A jwt-*
+  # mode arriving with no JWT actually delivered means the script
+  # silently ran the ANON path while the fence asserted a jwt-mode
+  # outcome -- the one direction smoke-pfin-exposure.sh's own header says
+  # it is never vacuous in. Refuse, loudly, with a status no branch passes.
+  # (Sec, PR #833 joint review, F2 -- caught by deleting the `-e
+  # SMOKE_JWT_OVERRIDE=` clause on a copy of this fixture: all six
+  # scenarios stayed GREEN because nothing here checked delivery.)
+  #
+  # Post-F1 fix, the JWT no longer appears literally in `docker`'s own
+  # argv at all (that was the whole point of moving it to a --env-file) --
+  # so this checks the ACTUAL DELIVERED VALUE the same way the real
+  # `docker exec --env-file` would: read the referenced file's contents,
+  # exactly as the real smoke-pfin-exposure.sh writes it, and confirm the
+  # key is present there. An argv-only check would now be vacuous by
+  # construction (the mechanism it used to check no longer exists).
+  ENV_FILE=""
+  prev=""
+  for a in "$@"; do
+    [[ "$prev" == "--env-file" ]] && ENV_FILE="$a"
+    prev="$a"
+  done
+  JWT_DELIVERED=0
+  if [[ -n "$ENV_FILE" && -f "$ENV_FILE" ]] && grep -q '^SMOKE_JWT_OVERRIDE=' "$ENV_FILE" 2>/dev/null; then
+    JWT_DELIVERED=1
+  fi
+  case "${FAKE_DOCKER_MODE:-anon-pass}" in
+    jwt-*)  [[ $JWT_DELIVERED -eq 1 ]] || { echo "555 NO_JWT_DELIVERED"; exit 0; } ;;
+    anon-*) [[ $JWT_DELIVERED -eq 0 ]] || { echo "556 UNEXPECTED_JWT"; exit 0; } ;;
+  esac
+  case "${FAKE_DOCKER_MODE:-anon-pass}" in
+    anon-pass)         echo "401 42501" ;;
+    anon-fail-200)      echo "200 " ;;
+    anon-fail-pgrst106) echo "406 PGRST106" ;;
+    anon-fail-3f000)    echo "401 3F000" ;;
+    jwt-pass)          echo "200 " ;;
+    jwt-fail)          echo "401 42501" ;;
+    *) echo "999 UNKNOWN_MODE" ;;
+  esac
+  exit 0
+fi
+
+exit 0

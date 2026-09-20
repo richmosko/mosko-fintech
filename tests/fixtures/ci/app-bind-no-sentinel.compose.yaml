@@ -1,0 +1,17 @@
+# GOLDEN FIXTURE — STRUCTURAL (sentinel absent → fence FAILS CLOSED, exit 2).
+#
+# Otherwise identical to app-bind-private.compose.yaml (a clean, private
+# shape) but deliberately missing the `# fence-app-private-bind: target`
+# sentinel line. Proves the fence refuses to emit a clean pass over a file
+# it cannot confirm is the intended app-application manifest. Exercised by
+# the fence-app-bind CI job, asserting exit 2 specifically (not just
+# non-zero).
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3000"

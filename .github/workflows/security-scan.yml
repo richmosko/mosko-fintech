@@ -1856,6 +1856,161 @@ jobs:
           fi
           echo "OK: check-source-commit-in-build failed closed on a missing field (exit $rc)."
 
+  fence-app-bind:
+    name: app private-bind config-lint (V1 web-app compose)
+    runs-on: ubuntu-latest
+    # F/CTO ruling, 2026-09-19 (docs/deployment-runbook.md Open Flags #12,
+    # option A) / PR #833. `app` moves from a plain-Dockerfile build pack
+    # to `dockercompose` with an `external:` network attachment to the
+    # Supabase stack — the migrator's own proven shape (ADR-072 Amendment
+    # 4). Sibling job to fence-migrator-bind above: SAME layer, DIFFERENT
+    # subject, and a DELIBERATELY DIFFERENT sentinel/predicate — `expose:`
+    # is ALLOWED here (see scripts/ci/fence-app-private-bind.sh's own
+    # header for why this is a separate fence, not a widened one).
+    #
+    # Run-always (no paths filter), matching the sibling fences' own
+    # reasoning: a path-trigger leaves a trigger-drift meta-risk.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Production-mode — real compose (expects clean; exit 0)
+        run: bash scripts/ci/fence-app-private-bind.sh api/docker-compose.yaml
+
+      - name: "Canary — corrupts the REAL compose, not a fixture (expects violation, exit 1, vector-1 token)"
+        # Same discipline as fence-migrator-bind's own canary (Sec F1, PR
+        # #819 joint review): a fixture-only battery proves the script
+        # works; this proves it bites on the file it actually protects.
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          awk '{ print } /dockerfile: Dockerfile/ { print "    ports:"; print "      - \"9999:3000\"" }' \
+            api/docker-compose.yaml > "$SCRATCH"
+          if ! grep -q '9999:3000' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the app 'dockerfile: Dockerfile' anchor to insert ports: after -- either the app service moved or its build block changed out from under this canary. Update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh "$SCRATCH" 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: canary expected exit 1 against the corrupted REAL app compose but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: canary exited 1 but no vector-1 'ports:' token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a published port on the app service on the REAL compose file, not just on a fixture (exit $rc)."
+
+      - name: "Inversion — negative control fixture (correct config, expose: present; expects exit 0)"
+        run: bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-private.compose.yaml
+
+      - name: "Inversion — golden 1: published ports (expects violation, exit 1, vector-1 'ports:' token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-public-ports.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: app-bind fence expected exit 1 on the published-ports golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: the published-ports golden exited 1 but the vector-1 'ports:' token is absent from fence output — failing closed."
+            exit 1
+          fi
+          echo "OK: app-bind fence caught a published port via its own token (exit $rc)."
+
+      - name: "Inversion — golden 2: reverse-proxy Domain / public-FQDN request (expects violation, exit 1, vector-2 token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-public-domain.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: app-bind fence expected exit 1 on the public-domain golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 2:'; then
+            echo "FATAL: the public-domain golden exited 1 but no vector-2 token is present — failing closed."
+            exit 1
+          fi
+          echo "OK: app-bind fence caught a compose-committed Domain request via its own token (exit $rc)."
+
+      - name: "Inversion — golden 3: network_mode: host (expects violation, exit 1, vector-3 token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-host-network.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: app-bind fence expected exit 1 on the host-network golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 3:'; then
+            echo "FATAL: the host-network golden exited 1 but no vector-3 token is present — failing closed."
+            exit 1
+          fi
+          echo "OK: app-bind fence caught network_mode: host via its own token (exit $rc)."
+
+      - name: "Inversion — golden 4: foreign/mistyped external-network reference (expects violation, exit 1, vector-4 token)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-foreign-network.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: app-bind fence expected exit 1 on the foreign-network golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 4:'; then
+            echo "FATAL: the foreign-network golden exited 1 but no vector-4 token is present — failing closed."
+            exit 1
+          fi
+          echo "OK: app-bind fence caught a mistyped/foreign external-network reference via its own token (exit $rc)."
+
+      - name: "Inversion — golden 5: sentinel absent (expects structural refusal, exit 2)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-no-sentinel.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: app-bind fence expected exit 2 (structural refusal) on the no-sentinel golden but got $rc."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'sentinel not found'; then
+            echo "FATAL: no-sentinel golden exited 2 but the expected structural message is absent — failing closed."
+            exit 1
+          fi
+          echo "OK: fence refused a file with no confirmed app-application sentinel, failing closed (exit $rc)."
+
+      - name: "Inversion — golden 6: ports: key with zero value lines (expects structural refusal, exit 2)"
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh tests/fixtures/ci/app-bind-ports-empty-block.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: app-bind fence expected exit 2 (structural refusal) on the empty-ports-block golden but got $rc."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'collected zero value lines'; then
+            echo "FATAL: empty-ports-block golden exited 2 but the expected structural message is absent — failing closed."
+            exit 1
+          fi
+          echo "OK: fence refused a 'ports:' block it could not read, failing closed (exit $rc)."
+
   fence-pgrst-schemas-pfin:
     name: pgrst-schemas-pfin — PGRST_DB_SCHEMAS committed-default literal (BACKLOG.md §7.36 item 22)
     runs-on: ubuntu-latest
@@ -2627,6 +2782,41 @@ jobs:
       - uses: actions/checkout@v4
       - name: offline strike-proofs (allowlist refusal, read-back mismatch, blanked-not-deleted)
         run: bash scripts/ci/fence-coolify-env-strikes.sh
+
+  fence-deploy-app-strikes:
+    name: deploy-app.sh — identity-guard strike-proofs
+    runs-on: ubuntu-latest
+    # Unlabeled, same posture as fence-coolify-env-strikes above. DevOps-owned.
+    # scripts/deploy-app.sh (the docs/deployment-runbook.md §7.1 step 1
+    # first-deploy vehicle) refuses to deploy a resolved Coolify
+    # application whose base_directory does not match the caller's
+    # --expect-base-directory -- the guard against a typo'd/stale
+    # APP_NAME resolving to the wrong resource. scripts/ci/fence-deploy-
+    # app-strikes.sh proves that refusal fires BEFORE any /deploy call is
+    # made (not merely that the script exits non-zero for some reason),
+    # offline via a PATH-shadowed fake ssh/curl/docker -- see that
+    # script's own header for what each scenario proves.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (identity-guard match / mismatch, pre- and post-deploy)
+        run: bash scripts/ci/fence-deploy-app-strikes.sh
+
+  fence-smoke-pfin-exposure-strikes:
+    name: smoke-pfin-exposure.sh — anon-vs-jwt mode-classification strike-proofs
+    runs-on: ubuntu-latest
+    # Unlabeled, same posture as the sibling fences above. DevOps-owned.
+    # scripts/smoke-pfin-exposure.sh (BACKLOG.md §7.36 item 64's standing
+    # smoke, reused at docs/deployment-runbook.md §7.1 step 1(vi)) has two
+    # modes with DIFFERENT expected outcomes (anon-bearer 401/42501 vs.
+    # --jwt 200) that must not accept each other's success shape --
+    # scripts/ci/fence-smoke-pfin-exposure-strikes.sh proves a 200 in
+    # anon-mode is treated as a security-anomaly FAILURE, not a pass, and
+    # a 401 in jwt-mode fails even though the identical status would pass
+    # in anon-mode. Offline via a PATH-shadowed fake ssh/curl/docker.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (anon-pass, anon-fail x3, jwt-pass, jwt-fail)
+        run: bash scripts/ci/fence-smoke-pfin-exposure-strikes.sh
 
   fence-migrator-orchestrate-strikes:
     name: migrator-orchestrate.sh — deploy-then-execute strike-proofs (BACKLOG §7.36 item 59)

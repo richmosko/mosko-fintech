@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-smoke-pfin-exposure-strikes.sh to drive
+# scripts/smoke-pfin-exposure.sh's app-resolution step against a canned
+# Coolify API response. Only /applications is ever called by this
+# script (the actual smoke request happens via `docker exec`, faked
+# separately by the sibling `fake-docker`), so this fixture is smaller
+# than tests/fixtures/ci/deploy-app/fake-curl.
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+URL="${*: -1}"
+if [[ "$URL" == *"/applications" ]]; then
+  echo '[{"uuid":"abc123def456ghi789jk01","name":"pfin-app","base_directory":"/api"}]'
+  exit 0
+fi
+
+echo '{}'
+exit 0

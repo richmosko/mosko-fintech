@@ -1,0 +1,131 @@
+# api/docker-compose.yaml
+#
+# `app` — V1 web-app, Coolify `dockercompose` build pack. F/CTO ruling,
+# 2026-09-19 (docs/deployment-runbook.md Open Flags #12, option A).
+# DevOps-owned. Replaces the plain-Dockerfile build pack this resource
+# previously used.
+#
+# WHY THIS FILE EXISTS
+#   MEASURED (team-lead, 2026-09-19, read-only via the box): `pfin-app`
+#   and `pfin-supabase-stack` sit in DIFFERENT Coolify projects/
+#   environments, and `connect_to_docker_network` is FALSE on both —
+#   contradicting docs/deployment-runbook.md §3's stated "one Coolify
+#   project" premise (the app never had a working path to `api-gw:8000`
+#   under the plain-Dockerfile pack). This is the SAME shape ADR-072
+#   Amendment 4 hit for the `migrator` application, and the SAME fix:
+#   an `external:` Docker network attachment to the Supabase-stack
+#   application's own network — mechanism (b), MEASURED WORKING on this
+#   Coolify version (docs/deployment-runbook.md §6.8 step 2). Option B
+#   (toggling `connect_to_docker_network` on both sides) was considered
+#   and REJECTED for the SAME reason Amendment 4 rejected it for
+#   `migrator`: it widens `db`'s (here, `api-gw`'s) reachable-from set to
+#   every OTHER resource also toggled onto that predefined network, not
+#   exclusively this one.
+#
+# ┌─ RECIPROCAL POINTER ────────────────────────────────────────────────────┐
+# │ This service's only network dependency is the Supabase-stack's own      │
+# │ gateway, `api-gw:8000` (docs/deployment-runbook.md §4 (1d);             │
+# │ infra/supabase/docker-compose.yml declares `api-gw` itself, NOT here).  │
+# │ See infra/supabase/migrator/docker-compose.yaml for the sibling         │
+# │ `external:` network attachment this file's own `networks:` block       │
+# │ mirrors — same mechanism, different consumer.                          │
+# └───────────────────────────────────────────────────────────────────────┘
+#
+# fence-app-private-bind: target
+#
+# ┌─ `expose:` IS ALLOWED HERE — UNLIKE THE MIGRATOR'S ZERO-TOLERANCE FENCE ─┐
+# │ infra/supabase/migrator/docker-compose.yaml (fence-migrator-private-    │
+# │ bind.sh) forbids `expose:` outright because that container takes ZERO   │
+# │ legitimate inbound connections — it is invoked only by a Scheduled      │
+# │ Task's `docker exec`. `app` is the OPPOSITE case: it is the fleet's ONE │
+# │ user-facing surface, and Coolify's Traefik reaches a `dockercompose`    │
+# │ application's container over the project's own Docker network ON THE   │
+# │ EXPOSED PORT — that IS the mechanism a public Domain routes through,    │
+# │ not a leak alongside it. What stays forbidden, same as the migrator:    │
+# │ `ports:` (a HOST-port publish, bypassing Coolify's own proxy layer      │
+# │ entirely — the exact 2026-09-10 `api-gw` collision-with-Coolify's-own-  │
+# │ dashboard incident, §4 (1d)) and `network_mode: host`. See              │
+# │ scripts/ci/fence-app-private-bind.sh's own header for why this is a     │
+# │ SEPARATE fence from fence-migrator-private-bind.sh rather than a        │
+# │ widened one (ADR-011 Decision 4 layer-attribution discipline — a        │
+# │ widened sentinel covering two different exposure postures cannot later  │
+# │ be narrowed without leaving one manifest unfenced).                     │
+# └───────────────────────────────────────────────────────────────────────┘
+#
+# ENV — every name below is pushed onto THIS Coolify application's OWN env
+# store by a separate script (never hardcoded here) — a shared-store var
+# reaches only the service whose block references `${VAR}` (same
+# discipline the migrator-provisioning note states):
+#   PUBLIC_SUPABASE_URL             -- coolify-env.sh (non-secret; §5)
+#   PUBLIC_SUPABASE_ANON_KEY        -- mint-supabase-jwt-keys.sh (§5; LAST)
+#   SUPABASE_SERVICE_ROLE_KEY       -- mint-supabase-jwt-keys.sh (§5; LAST)
+#   PDF_WORKER_SIGNING_KEY          -- push-production-secrets.sh (§5)
+#   WORKER_ADMISSION_SHARED_SECRET  -- push-production-secrets.sh (§5)
+#   DISCORD_WEBHOOK_URL             -- push-production-secrets.sh (§5)
+#   PLAID_ENV                       -- non-secret, api/.env.example default
+# See docs/deployment-runbook.md §7.1 step 1 for the numbered procedure
+# that pushes each of these, in order, onto this specific resource.
+
+services:
+  app:
+    build:
+      # Build context is THIS directory (api/) itself, NOT the repo root
+      # unlike the stack/migrator compose files (whose Dockerfiles COPY
+      # supabase/migrations/** etc. from outside their own subtree).
+      # api/Dockerfile's COPY package.json/package-lock.json/`.` all
+      # resolve against api/'s own contents, so `context: .` (this file's
+      # own directory) is correct and needs no `../` prefix. Verify this
+      # against api/Dockerfile before changing either file — do not
+      # assume the stack/migrator convention transfers here.
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # `EXPOSE 3000` / adapter-node default port, per api/Dockerfile line
+    # 35 (`EXPOSE 3000`) and line 36 (`CMD ["node","build"]` — no PORT
+    # override anywhere in this repo). expose:-only, see the header block
+    # above for why this is the correct (and required) shape here, unlike
+    # the migrator.
+    expose:
+      - "3000"
+    environment:
+      # Sec R2 optional hardening (PR #833 joint review): `:?` on the
+      # three boot-critical names, consistent with this file's own
+      # `networks:` block below and its stated rationale ("a loud
+      # failure here is preferable to a silent one at first request").
+      # `--require-env` (deploy-app.sh) only checks NAMES are present in
+      # the store, not that their VALUES are non-empty -- an empty-
+      # string store entry would otherwise interpolate to "" silently.
+      # Both app guards (hooks.server.ts, lib/server/supabase-admin.ts)
+      # already fail closed on that (truthiness checks), so this was not
+      # an exposure -- it moves the failure earlier, to container start.
+      PUBLIC_SUPABASE_URL: ${PUBLIC_SUPABASE_URL:?PUBLIC_SUPABASE_URL must be set -- see scripts/coolify-env.sh SET_ALLOWLIST.}
+      PUBLIC_SUPABASE_ANON_KEY: ${PUBLIC_SUPABASE_ANON_KEY:?PUBLIC_SUPABASE_ANON_KEY must be set -- minted by scripts/mint-supabase-jwt-keys.sh.}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY must be set -- minted by scripts/mint-supabase-jwt-keys.sh.}
+      PDF_WORKER_SIGNING_KEY: ${PDF_WORKER_SIGNING_KEY}
+      WORKER_ADMISSION_SHARED_SECRET: ${WORKER_ADMISSION_SHARED_SECRET}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+      PLAID_ENV: ${PLAID_ENV:-sandbox}
+    networks:
+      - default
+
+# Top-level network definition for the `default` name the service above
+# joins — ADR-072 Amendment 4's mechanism (b), reused here: an
+# `external:` network naming the Supabase-stack application's own Docker
+# network. Attaches exactly ONE new member (this container) rather than
+# widening a predefined network shared by every resource toggled onto it
+# (option B, rejected — see the header above).
+#
+# APP_STACK_NETWORK_NAME is NOT a secret — a Coolify-generated Docker
+# network name, environment-specific (derived from the stack
+# application's UUID), populated into THIS application's env store by
+# scripts/provision-app.sh (read off the box via the same `docker
+# inspect` lookup provision-migrator-app.sh already uses for
+# MIGRATOR_STACK_NETWORK_NAME). The `:?` form fails the compose
+# interpolation closed (refuses to start) rather than silently falling
+# back to Coolify's own per-application default network, which would
+# leave `app` unable to reach `api-gw` at all — a loud failure here is
+# preferable to a silent one at first request.
+networks:
+  default:
+    name: ${APP_STACK_NETWORK_NAME:?APP_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-app.sh. Do NOT default this to a guessed value.}
+    external: true

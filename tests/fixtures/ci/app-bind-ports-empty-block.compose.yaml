@@ -1,0 +1,17 @@
+# fence-app-private-bind: target
+# GOLDEN FIXTURE — STRUCTURAL: a `ports:` key with zero value lines
+# (exit 2, fail closed).
+#
+# Same double-catch shape fence-migrator-private-bind.sh's own
+# migrator-bind-ports-empty-block.compose.yaml documents: the unconditional
+# per-key VIOLATION print fires the moment the bare `ports:` key is
+# sighted (would independently yield exit 1 on its own), and the
+# STRUCTURAL check — which this script's exit-code ordering checks FIRST —
+# determines the exit code actually observed: exit 2, not 1. Exercised by
+# the fence-app-bind CI job, asserting exit 2 specifically.
+
+services:
+  app:
+    restart: unless-stopped
+    ports:
+    image_placeholder: unused

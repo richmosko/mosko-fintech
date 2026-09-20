@@ -1,0 +1,27 @@
+# fence-app-private-bind: target
+# GOLDEN FIXTURE — VECTOR 1 (`ports:` key present → fence FAILS, exit 1).
+#
+# `app` routes publicly through Coolify's Domain/Traefik mechanism over its
+# `expose:`d port, never a published host port — the exact class of
+# incident §4 (1d) records for `api-gw`. Exercised by the fence-app-bind CI
+# job, asserting exit 1 AND the vector-1 `ports:` token. Carries a correct
+# top-level networks: block (vector 4) so this fixture isolates vector 1
+# alone.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "9999:3000"
+    expose:
+      - "3000"
+    networks:
+      - default
+
+networks:
+  default:
+    name: ${APP_STACK_NETWORK_NAME:?APP_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name.}
+    external: true
