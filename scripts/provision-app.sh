@@ -18,7 +18,11 @@
 #   application with an `external:` network attachment to the stack's own
 #   Docker network (the migrator's own proven shape, ADR-072 Amendment 4).
 #   `pfin-app` has ZERO deployments and ZERO env names in its store as of
-#   this ruling (measured 2026-09-19) -- recreating it loses nothing.
+#   this ruling (measured 2026-09-19) -- recreating it loses no DATA.
+#   Sec wording note (PR #836 review): CONFIG is not preserved by this
+#   claim -- persistent-storage entries, fqdn/Traefik labels, scheduled
+#   tasks, and webhook/git bindings are all re-created by §7.1 step 1's
+#   own remaining steps, not carried over from the deleted resource.
 #
 # WHAT THIS SCRIPT DOES
 #   1. DELETE the existing `pfin-app` resource, IF one exists AND it is
@@ -42,6 +46,16 @@
 #      offending predicate and its count (names only -- no env values, no
 #      full env dump): this script must never be the vehicle that
 #      silently destroys a resource that turned out to hold real state.
+#      Sec wording note (PR #836 review): `docker ps -a` / `docker
+#      images` are PRUNABLE (`docker system prune`, image GC) -- 0/0
+#      here is weaker evidence than "never deployed" on its own; the
+#      2026-09-20 measurement that motivated this predicate swap was
+#      pinned alongside INDEPENDENT never-deployed evidence for
+#      `pfin-app` specifically (zero matching containers/images/env
+#      names measured directly on the box at that time), not derived
+#      from this predicate in isolation. Also fails CLOSED, not open, if
+#      a docker read itself fails (daemon down, permission error) --
+#      reported as `unknown`, treated as non-zero.
 #   2. Create `pfin-app` as `dockercompose` (base_directory `/api`,
 #      compose location `/docker-compose.yaml`, branch `main`), in the
 #      SAME project/environment as the Supabase-stack application --
@@ -296,17 +310,36 @@ if [[ -n "$OLD_APP_JSON" ]]; then
     # the deployments-count API family was replaced with these three
     # reads). $OLD_APP_UUID is already UUID_RE-validated above, before it
     # reaches these greps.
-    CONTAINER_COUNT="$(sshx "docker ps -a --format '{{.Names}}' | grep -c \"$OLD_APP_UUID\" || true")"
-    IMAGE_COUNT="$(sshx "docker images --format '{{.Repository}}' | grep -c \"$OLD_APP_UUID\" || true")"
+    #
+    # Sec F-1 (PR #836 review): fail CLOSED when the on-box docker read
+    # itself fails (daemon down/restarting, docker missing, permission
+    # error) -- checking the SSH command's own exit status BEFORE piping
+    # into grep locally, rather than `... | grep -c ... || true` inside
+    # the remote command string. The prior shape ran with no pipefail on
+    # the remote shell: a failed `docker` fed grep empty stdin, which
+    # printed 0 and exited 1, and the trailing `|| true` swallowed that
+    # 1 -- so a failed read and a genuinely empty box were indistinguishable,
+    # both reporting count=0 and letting the guard pass. Same fail-closed
+    # shape as the env-store read below (ENV_COUNT="unknown" on failure).
+    if CONTAINER_RAW="$(sshx "docker ps -a --format '{{.Names}}'" 2>/dev/null)"; then
+      CONTAINER_COUNT="$(printf '%s\n' "$CONTAINER_RAW" | grep -c "$OLD_APP_UUID" || true)"
+    else
+      CONTAINER_COUNT="unknown"
+    fi
+    if IMAGE_RAW="$(sshx "docker images --format '{{.Repository}}'" 2>/dev/null)"; then
+      IMAGE_COUNT="$(printf '%s\n' "$IMAGE_RAW" | grep -c "$OLD_APP_UUID" || true)"
+    else
+      IMAGE_COUNT="unknown"
+    fi
     ENV_COUNT="$(api GET "/applications/$OLD_APP_UUID/envs" | jqp "
 d=json.load(sys.stdin)
 print(len(d))" 2>/dev/null || echo "unknown")"
     info "measured on '$OLD_APP_UUID': containers=$CONTAINER_COUNT, images=$IMAGE_COUNT, env-store names=$ENV_COUNT"
     if [[ "$CONTAINER_COUNT" != "0" ]]; then
-      die "REFUSING TO DELETE '$APP_NAME' ($OLD_APP_UUID): containers=$CONTAINER_COUNT -- \`docker ps -a\` shows at least one container ever created for this uuid. This resource may hold real state; investigate by hand before deleting anything. This script only deletes a genuinely empty shell."
+      die "REFUSING TO DELETE '$APP_NAME' ($OLD_APP_UUID): containers=$CONTAINER_COUNT -- either \`docker ps -a\` shows at least one container ever created for this uuid, or the on-box read itself failed ('unknown', treated as non-zero). This resource may hold real state, or could not be confirmed empty; investigate by hand before deleting anything. This script only deletes a genuinely empty shell."
     fi
     if [[ "$IMAGE_COUNT" != "0" ]]; then
-      die "REFUSING TO DELETE '$APP_NAME' ($OLD_APP_UUID): images=$IMAGE_COUNT -- \`docker images\` shows at least one image ever built for this uuid. This resource may hold real state; investigate by hand before deleting anything. This script only deletes a genuinely empty shell."
+      die "REFUSING TO DELETE '$APP_NAME' ($OLD_APP_UUID): images=$IMAGE_COUNT -- either \`docker images\` shows at least one image ever built for this uuid, or the on-box read itself failed ('unknown', treated as non-zero). This resource may hold real state, or could not be confirmed empty; investigate by hand before deleting anything. This script only deletes a genuinely empty shell."
     fi
     if [[ "$ENV_COUNT" != "0" ]]; then
       die "REFUSING TO DELETE '$APP_NAME' ($OLD_APP_UUID): env-store names=$ENV_COUNT -- expected zero. This resource may hold real state; investigate by hand before deleting anything. This script only deletes a genuinely empty shell."
