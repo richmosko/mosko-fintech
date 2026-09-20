@@ -86,9 +86,11 @@
 - [A manifest fence stops at the fields it parses](feedback_a_manifest_fence_stops_at_the_fields_it_parses.md) — lifecycle scripts and the lockfile `resolved` host are the two open doors.
 - [A fence sentinel asserts SUBJECT, not layer](feedback_fence_sentinel_asserts_subject_not_layer.md) — same layer + different subject ⇒ sibling fence; an `RT-NN` in a workflow mints a CI-fenced-set member by side effect.
 - [Per-role settings bypass a LOGIN role's whole posture](feedback_per_role_settings_bypass_a_login_roles_posture.md) — assert `rolconfig IS NULL`; `ALTER ROLE r SET role=` is self-grantable and catalog-invisible.
+- **[Vector-4 `head -1` passes three attachment shapes](feedback_private_bind_vector4_head1_passes_three_attachment_shapes.md)** — a 2nd network, a non-`default` key, and a missing `external: true` all go green; fix BOTH bind fences.
 
 ## Standing constraints on future work
 
+- **[Lock 13 mod #2 and ADR-072 A4 are narrower than their names](project_lock13_mod2_and_adr072_a4_are_narrower_than_their_names.md)** — mod #2 is credential+client ABSENCE, not network isolation; A4's written-statement obligation is mechanism-(a)-only.
 - [Stack transport posture: explicit `sslmode=disable` in-network](project_stack_transport_posture_plaintext_in_network.md) — `workers/etl` defaults to `require` and is a LATENT connect-failure; the ruling is load-bearing on RT-32 and VOID if `db` goes off-host.
 - [DB clock is UTC; repo clock is PDT](project_db_clock_is_utc_repo_clock_is_pdt.md) — ask WHICH clock before grading any date claim.
 - [CPI positivity CHECK must be additive](project_cpi_positivity_check_must_be_additive.md) — `NaN > 0` is TRUE in Postgres.

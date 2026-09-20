@@ -97,6 +97,30 @@ while reading exactly as authoritative. Treat every Lock/ADR name in my own brie
 a lossy label**: resolve the label against the ADR body before using it to decide scope, and report
 the gloss drift in the verdict alongside the branch findings.
 
+**⚠⚠ THE MIRROR, and it is the higher-stakes direction: my role brief's gloss can also be BROADER
+than canon — scoping a surface IN, and the brief lists that surface as a VETO TRIGGER.** Reviewing PR
+#844 (W-1, worker compose network attachment), my brief's veto list reads *"give the PDF worker any
+database reach (Lock 13 mod #2 zero-DB-isolation)"*. The PR attaches `pdf-render` to the Supabase
+stack's Docker network, which does hand it a TCP route to `db:5432` — on the brief's gloss that is a
+veto, stated without hedging. Read verbatim, **ADR-011 Decision 17's locked option defines mod #2 as
+*"no `SUPABASE_*` env vars; no Postgres client installed"*** — an infrastructure-credential-**presence**
+layer fence — and `docs/SECURITY/index.html:498` calls it the *"infrastructure-credential-absence
+fence"* in the same words. **Network membership is not its subject.** ADR-073 Consequence 4 says so
+outright: *"The network is not the control."* A veto would have blocked a PR executing ADR-073
+Decision A, which names `pdf-render` **by name** in an Accepted F/CTO-ruled fleet convention.
+**The asymmetry to hold onto: a too-narrow gloss costs a missed surface I may catch later; a too-broad
+gloss costs a VETO issued against ratified work, and my brief tells me to state vetoes without
+hedging — so the unhedged confidence and the unverified premise arrive together.** Before every veto
+whose trigger my brief names in shorthand, resolve the shorthand to the ADR's own predicate sentence
+and quote it. A Lock's NAME ("no-direct-DB-access", "zero-DB-isolation") routinely describes the
+*goal*; its ratified **mechanism** is narrower, and only the mechanism is the fence.
+⚠ Same review, same shape, one artifact out: the **dispatch brief** glossed ADR-072 Amendment 4 as
+*"attaching a resource to the stack network … must be stated, never assumed"*. Verbatim, A4 lists two
+mechanisms and closes *"Prefer (b); fall back to (a) only with an explicit written statement of what
+it widens"* — the obligation is **conditioned on mechanism (a)**, and the PR used (b). Two glosses,
+two artifacts, one review; both read as authoritative. See
+[[project-lock13-mod2-and-adr072-a4-are-narrower-than-their-names]].
+
 **How to apply:** on every verbatim-vs-paraphrase axis check, flatten the cited file
 (`sed 's/^--*//' | tr '\n' ' ' | tr -s ' '`) so SQL-comment and string-concatenation line wrapping
 doesn't produce false negatives, then grep the quoted fragment in **the cited artifact first**. A zero
