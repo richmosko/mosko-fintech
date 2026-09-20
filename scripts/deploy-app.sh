@@ -266,10 +266,39 @@ required = required_s.split()
 envs = api(token, "GET", f"/applications/{app_uuid}/envs")
 by_key = {e["key"]: e for e in envs if not e.get("is_preview", False)}
 # MEASURED (team-lead, 2026-09-20): a Coolify compose-parse pre-
-# populates a fresh dockercompose app's env store with a `:?message`
-# default's own MESSAGE TEXT, or an empty string for a bare `${VAR}` --
-# either shape must fail this guard the same as an absent key. The value
-# itself is never printed below, only the classification.
+# populates a fresh dockercompose app env store with a colon-question-
+# mark-message default MESSAGE TEXT, or an empty string for a bare name
+# with no default -- either shape must fail this guard the same as an
+# absent key. The value itself is never printed below, only the
+# classification.
+#
+# D-2 (PR #841, F/CTO-relayed 2026-09-20): this comment previously wrote
+# the two compose-default shapes above using their own literal shell
+# syntax, backtick-quoted, as inline markdown. This whole block sits
+# inside an UNQUOTED heredoc (see the sshx_in call above): a backtick
+# pair anywhere in an unquoted heredoc body triggers command
+# substitution at the LOCAL shell read time, regardless of the nested
+# quoted heredoc surrounding it or of this text being, to Python, only
+# a comment; a dollar-brace reference does the same via plain parameter
+# expansion, no backticks needed. One such pair ran the local bash
+# command-substitution parser against a colon-question-mark-message
+# string with no such command on PATH (command not found error); the
+# other expanded an unset local shell variable under this script strict
+# unset-variable mode (unbound variable error). Both fired every run,
+# silently, alongside a still-PRESENT/PASS classification: the guard
+# never actually failed, only its own diagnostic output was corrupted.
+# Spelling either shape out here as plain prose, with no backtick and no
+# dollar-brace reference at all, is deliberate and load-bearing, not a
+# style choice to drift back from -- and, separately measured while
+# fixing this: an odd count of unescaped apostrophes anywhere in this
+# same heredoc body (this whole block, from the TOKEN line through the
+# PYEOF terminator) also breaks the enclosing command substitution
+# parse, with an unrelated-looking unexpected end of file while looking
+# for the matching closing parenthesis, at bash parse time, well before
+# any remote round trip -- this paragraph itself was rewritten
+# apostrophe-free after tripping over exactly that while drafting it.
+# See the sibling secrets-push fence own header comment for the
+# backtick trap, hit and fixed there first in this same stage.
 missing = []
 placeholder = []
 for n in required:
@@ -375,7 +404,21 @@ ok "deploy finished"
 if [[ -n "$COMPOSE_SERVICE" ]]; then
   # One remote call, not N round trips: list the service's container IDs,
   # then inspect each server-side, filtering to RUNNING only.
-  RUNNING_LIST="$(sshx "docker compose --project-name $APP_UUID ps -q $COMPOSE_SERVICE | xargs -r -I{} docker inspect --format '{{.State.Running}}\t{{.Id}}\t{{.Created}}' {} | awk -F'\t' '\$1==\"true\"{print \$2\"\t\"\$3}'")"
+  # ⚠ Fixed (D-1, PR #841 review, F/CTO-relayed 2026-09-20): a Go template
+  # format string of literal `\t` (two characters, backslash+t) is NOT
+  # interpreted as a tab by `docker inspect` -- Go templates only expand
+  # `{{"\t"}}` (a string-literal ACTION) into a real tab; bare `\t` in the
+  # template's literal text passes through byte-for-byte. `awk -F'\t'`
+  # DOES interpret its own `\t` as a real tab (awk supports C-style
+  # escapes in string literals, Go templates don't), so the two sides
+  # disagreed: the remote awk's field separator was a real tab while the
+  # data it read contained literal backslash-t, `$1` was always the whole
+  # line, never `"true"`, and this leg died with a false "no running
+  # container" refusal even though the deploy succeeded (MEASURED, stage
+  # A step 6, 2026-09-20: `docker inspect --format '{{.State.Running}}\t{{.Id}}'`
+  # against a real running container printed the literal bytes
+  # `true\t<id>`, not `true<TAB><id>`). Fixed: `{{"\t"}}` in the template.
+  RUNNING_LIST="$(sshx "docker compose --project-name $APP_UUID ps -q $COMPOSE_SERVICE | xargs -r -I{} docker inspect --format '{{.State.Running}}{{\"\\t\"}}{{.Id}}{{\"\\t\"}}{{.Created}}' {} | awk -F'\t' '\$1==\"true\"{print \$2\"\t\"\$3}'")"
   [[ -n "$RUNNING_LIST" ]] || die "no running container found for compose service '$COMPOSE_SERVICE' under project '$APP_UUID' after a 'finished' deploy -- check 'docker compose --project-name $APP_UUID ps -a' on the box before trusting this deploy."
   RUNNING_COUNT="$(printf '%s\n' "$RUNNING_LIST" | grep -c .)"
   [[ "$RUNNING_COUNT" -eq 1 ]] \
