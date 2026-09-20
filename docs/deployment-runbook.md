@@ -1829,7 +1829,7 @@ No CPU/memory ceiling for any Coolify service appears anywhere in this repo — 
 
 **New 2026-09-20 (BACKLOG.md §7.36 item 68 / PR W-1; F/CTO ruled 2026-09-20: workers before the §2/§9 Domain assignment, because §10's smoke gate needs the workers up first).** Mirrors §7.1's numbered-procedure shape: preconditions named, then a SCRIPTED/BY-HAND audit table, sequenced across three PRs. **W-1 (this PR)** lands the compose network-attachment pattern (§3/§7's own text above) and `scripts/provision-worker.sh`, and closes step (i) below for all three workers. **W-2** and **W-3** are named here so the procedure is legible end to end, but their steps are **PENDING** — not built in this PR — and are marked as such, per this runbook's own SCRIPTED/BY-HAND convention (a step without a named script is a gap, not an assumption of "by hand is fine").
 
-Preconditions: `pfin-supabase-stack` already exists and is deployed (§4/§6); for `etl` and `provider-sync`, §6.1/§6.2's role provisioning must run before that worker can connect (below). `pdf-render` has zero DB reach by design (Lock 13 mod #2) and needs no role handoff at all.
+Preconditions: `pfin-supabase-stack` already exists and is deployed (§4/§6); for `etl` and `provider-sync`, §6.1/§6.2's role provisioning must run before that worker can connect (below). `pdf-render` holds no database credential and no Postgres client by design (Lock 13 mod #2 — a credential-absence fence, not a network one; it is attached to the stack network like every other fleet service) and needs no role handoff at all.
 
 **SCRIPTED / BY-HAND audit.**
 

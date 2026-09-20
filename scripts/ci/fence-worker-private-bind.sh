@@ -237,7 +237,9 @@ if [ -n "$HOSTNET_HITS" ]; then
 fi
 
 # --- Vector 4: top-level networks.default.name must be exactly
-#     ${<NETWORK_VAR>:?...} -- never a literal, never another var --
+#     ${<NETWORK_VAR>:?...} -- never a literal, never another var, never a
+#     second attached network, never a non-'default' key, never
+#     'external: true' missing --
 TOPLEVEL_NETWORKS_LINE="$(grep -n '^networks:[[:space:]]*$' "$TARGET" | head -1 | cut -d: -f1 || true)"
 if [ -z "$TOPLEVEL_NETWORKS_LINE" ]; then
   echo "FATAL: no top-level 'networks:' key found in $TARGET — cannot confirm the external network reference; failing closed." >&2
@@ -250,11 +252,63 @@ NETWORKS_BLOCK="$(awk -v start="$TOPLEVEL_NETWORKS_LINE" '
     print
   }
 ' "$TARGET")"
-NAME_LINE="$(printf '%s\n' "$NETWORKS_BLOCK" | grep -E '^[[:space:]]*name:' | head -1)"
-if [ -z "$NAME_LINE" ]; then
-  echo "FATAL: top-level 'networks:' block in $TARGET has no 'name:' key — cannot confirm the external network reference; failing closed." >&2
+
+# Sec F-2 (PR #844 joint review): a `head -1` on the first key/name: line
+# silently passed (1) a second top-level network with the service attached
+# to both, (2) a network key not named `default`, (3) `external: true`
+# removed. Each of the three now asserts its own predicate instead of
+# trusting whichever line a `head -1` happened to find first.
+NETWORK_KEYS="$(printf '%s\n' "$NETWORKS_BLOCK" | grep -E '^  [A-Za-z0-9_.-]+:[[:space:]]*$' || true)"
+NETWORK_KEY_COUNT="$(printf '%s\n' "$NETWORK_KEYS" | grep -c . || true)"
+if [ "$NETWORK_KEY_COUNT" -eq 0 ]; then
+  echo "FATAL: top-level 'networks:' block in $TARGET has no network key at 2-space indent — cannot confirm the external network reference; failing closed." >&2
   exit 2
 fi
+if [ "$NETWORK_KEY_COUNT" -gt 1 ]; then
+  echo "FATAL: top-level 'networks:' block in $TARGET declares $NETWORK_KEY_COUNT network keys (multi-attachment) — this fence only confirms a SINGLE 'default:' attachment; a second attached network is a committed misattachment vector, not something this fence may pass silently. Failing closed." >&2
+  printf '%s\n' "$NETWORK_KEYS" | sed 's/^/  /' >&2
+  exit 2
+fi
+NETWORK_KEY_NAME="$(printf '%s' "$NETWORK_KEYS" | sed -E 's/^[[:space:]]*([A-Za-z0-9_.-]+):.*/\1/')"
+if [ "$NETWORK_KEY_NAME" != "default" ]; then
+  echo "FATAL: top-level 'networks:' block in $TARGET declares its one network key as '$NETWORK_KEY_NAME', not 'default' — cannot confirm the expected networks.default.name/external attachment under a renamed key. Failing closed." >&2
+  exit 2
+fi
+
+# Everything inside the 'default:' key's own block, one indent level deeper.
+DEFAULT_BLOCK="$(printf '%s\n' "$NETWORKS_BLOCK" | awk '
+  function indent_of(l,    n) { n = match(l, /[^ ]/); return (n == 0) ? -1 : n - 1 }
+  {
+    ind = indent_of($0)
+    if (!found) {
+      if ($0 ~ /^  default:[[:space:]]*$/) { found = 1; base = ind }
+      next
+    }
+    if (ind == -1) { next }
+    if (ind <= base) { exit }
+    print
+  }
+')"
+
+NAME_LINES="$(printf '%s\n' "$DEFAULT_BLOCK" | grep -E '^[[:space:]]*name:' || true)"
+NAME_LINE_COUNT="$(printf '%s\n' "$NAME_LINES" | grep -c . || true)"
+if [ "$NAME_LINE_COUNT" -eq 0 ]; then
+  echo "FATAL: top-level 'networks.default' block in $TARGET has no 'name:' key — cannot confirm the external network reference; failing closed." >&2
+  exit 2
+fi
+if [ "$NAME_LINE_COUNT" -gt 1 ]; then
+  echo "FATAL: top-level 'networks.default' block in $TARGET declares $NAME_LINE_COUNT 'name:' lines — cannot confirm which is authoritative; failing closed." >&2
+  exit 2
+fi
+NAME_LINE="$NAME_LINES"
+
+EXTERNAL_LINE="$(printf '%s\n' "$DEFAULT_BLOCK" | grep -E '^[[:space:]]*external:[[:space:]]*true[[:space:]]*(#.*)?$' || true)"
+if [ -z "$EXTERNAL_LINE" ]; then
+  echo "VIOLATION (vector 4b: top-level networks.default block is missing 'external: true' — Docker would CREATE a new network by that name rather than join the stack's; a resolution failure must never be 'fixed' by removing this line):" >&2
+  echo "  $TARGET" >&2
+  VIOLATIONS=$((VIOLATIONS+1))
+fi
+
 EXPECTED_REF='${'"${NETWORK_VAR}"':?'
 if ! printf '%s' "$NAME_LINE" | grep -qF "$EXPECTED_REF"; then
   STRIPPED_NAME_LINE="$(printf '%s' "$NAME_LINE" | sed 's/^[[:space:]]*//')"

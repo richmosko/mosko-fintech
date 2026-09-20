@@ -51,7 +51,28 @@
 # renderer sandbox (`--no-sandbox`) — accepted by Sec on the grounds that the
 # container holds exactly one secret (PDF_WORKER_SIGNING_KEY), that secret is
 # stripped from Chromium's child-process environment (render.js's
-# `_childEnvWithoutSecrets()`), and the container has zero DB reach. The
+# `_childEnvWithoutSecrets()`), and the container holds no database credential
+# and no Postgres client.
+#
+# ⚠ THAT THIRD GROUND IS RE-GRADED HERE, in the same change that widened it
+# (item 68 / PR W-1, Sec joint review 2026-09-20). It was originally written
+# as "the container has zero DB reach", and the `external:` network block at
+# the bottom of this file makes that wording FALSE AS A NETWORK STATEMENT:
+# this container now holds a container-level TCP route to `db:5432`, to the
+# pooler, to `auth`, to `api-gw`, and to `provider-sync:8081` — like every
+# other service attached to the stack network (ADR-073 Consequence 4: "The
+# network is not the control"). What is UNCHANGED is the ratified control
+# itself: ADR-011 Decision 17 / Lock 13 mod #2's predicate is verbatim "no
+# `SUPABASE_*` env vars; no Postgres client installed" — an infrastructure-
+# credential-and-client-ABSENCE fence, not a network fence — and RT-22 +
+# RT-22-manifest enforce both halves on every PR, untouched by this PR. So
+# the F-17 acceptance STANDS, but it now stands on the credential half only:
+# a renderer escape reaches those ports, and has no credential to use on
+# them. Re-measure this paragraph at any PR that adds a database driver or
+# any DB credential to this container — the same re-measure trigger ADR-073
+# Consequence 4 sets for `app`.
+#
+# The
 # residual: the Dockerfile has no `USER` directive, so the Node process and
 # Chromium run as the same root UID, and a renderer-escape can still read
 # `/proc/<node-pid>/environ`, which DOES hold the signing key. Dropping all
