@@ -2871,14 +2871,17 @@ jobs:
     # resource, never a query-string filter that doesn't work), an
     # unmapped manifest key refuses before any resolution, duplicate
     # application names refuse, a missing resource dies without
-    # --skip-missing-resource, and a real --apply push never lets a
-    # secret VALUE reach any curl invocation's own argv (a second,
+    # --skip-missing-resource, a real --apply push never lets a secret
+    # VALUE reach any curl invocation's own argv (a second,
     # independently-found defect in the same PATCH call, fixed
-    # alongside the resolution bug) -- see that script's own header for
-    # what each of its five scenarios proves.
+    # alongside the resolution bug), and -- Sec AC, PR #840 -- that two
+    # DIFFERENT resource keys resolving to the SAME uuid refuses, which
+    # no per-lookup ambiguity check can catch and which is the live
+    # incident's own shape. See that script's own header for what each
+    # of its six scenarios proves.
     steps:
       - uses: actions/checkout@v4
-      - name: offline strike-proofs (exact-name resolution, unmapped key, duplicate names, missing resource, no argv leak)
+      - name: offline strike-proofs (exact-name resolution, unmapped key, duplicate names, missing resource, no argv leak, cross-resource uniqueness)
         run: bash scripts/ci/fence-push-secrets-strikes.sh
 
   fence-smoke-pfin-exposure-strikes:

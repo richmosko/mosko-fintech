@@ -90,6 +90,7 @@ ln -s "$FIXTURE_DIR/fake-curl" "$FAKE_BIN/curl"
 cat > "$FAKE_BIN/ssh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "\$*" >> "\$FAKE_CURL_LOG"
 LAST_PROBE="\${@: -1}"
 if [[ "\$LAST_PROBE" == "true" ]]; then
   exit 0
@@ -238,13 +239,7 @@ fi
 #     naming both resource keys and the shared uuid.
 LOG_VI="$WORK/log-vi"
 OUT_VI="$(run_scenario "cross-resource-uniqueness" 1 collision "$CLEAN_ROOT" "$LOG_VI" --skip-missing-resource)" || FAIL=1
-assert_output_contains "cross-resource-uniqueness" "${OUT_VI:-}" "all resolved to the SAME Coolify application" || FAIL=1
-assert_output_contains "cross-resource-uniqueness" "${OUT_VI:-}" "'pfin-app'" || FAIL=1
-assert_output_contains "cross-resource-uniqueness" "${OUT_VI:-}" "'pfin-back-etl'" || FAIL=1
-if [[ -n "${OUT_VI:-}" ]] && ! grep -qF "1111aaaa2222bbbb3333cccc" <<<"$OUT_VI"; then
-  echo "FAIL: [cross-resource-uniqueness] refusal did not name the shared uuid." >&2
-  FAIL=1
-fi
+assert_output_contains "cross-resource-uniqueness" "${OUT_VI:-}" "resource keys 'pfin-app' 'pfin-back-etl' all resolved to the SAME Coolify application (1111aaaa2222bbbb3333cccc)" || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
