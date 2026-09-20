@@ -49,3 +49,25 @@ see [[feedback_a_discharge_can_go_stale_against_its_own_pr]] and
 4. Grep `workers/`, per-directory `CLAUDE.md`, and `docs/records/` — the three places my filters keep
    missing. A per-directory `CLAUDE.md` is auto-loaded context, so a false claim there outranks the
    same false claim in a doc.
+
+## ⚠ THE SHARPEST INSTANCE: I handed over an UNTESTED PREDICATE and it would have caused the exact harm my own note warned against (2026-09-16)
+
+I required a PUBLIC-grant assertion and, to stop the implementer shipping a leg that errors, I supplied a SQL
+shape: `relacl::text like '%=%'`. **It returns TRUE on every relation carrying any ACL entry — it would have
+fired ALWAYS.** My own note in the same message said *"the likely repair is to drop the PUBLIC check — the one
+of the three a permissive default would actually travel through."* **So my instrument would have produced
+precisely the outcome I wrote it to prevent**, on the only leg that catches a default this codebase has
+measured as once-real. (The same message also claimed `has_table_privilege('public', …)` raises; it does not —
+Postgres special-cases the name.) Architect measured both rather than taking my word.
+
+**The distinction to hand back every time, because it tells the team which outputs to check:** **both RULINGS
+stood — the JUDGMENTS held and the INSTRUMENTS failed.** Say that explicitly; it is more useful than a flat
+apology and it correctly leaves the ruling standing.
+
+**The rule: hand over the PROPERTY, not an untested predicate.** I have no cluster. A SQL shape I cannot execute
+is a *suggestion*, and writing it in spec voice makes an implementer trust it more than I do. Either
+- state the property and let the owner choose and TEST the instrument (*"assert no PUBLIC grant carries SELECT;
+  pick an instrument and inversion-prove it"*), or
+- label it explicitly: *"untested shape, verify before adopting."*
+⚠ **The tell that I am about to do this: I am writing a predicate to prevent a bad repair.** That motive makes
+the predicate feel load-bearing and suppresses the urge to hedge it. Extends [[my-review-measurements-become-quoted-sources]].

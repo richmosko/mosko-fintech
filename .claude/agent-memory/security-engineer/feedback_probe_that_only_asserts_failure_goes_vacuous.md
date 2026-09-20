@@ -113,3 +113,38 @@ the same check produced a provable artifact, so I reported the verb-level result
 that the operand half was **not verified by me**. **An unreliable measurement is not a weaker
 result; it is not a result** — do not report it with a hedge, report the scope of what was actually
 established.
+
+---
+
+**FOURTH DIRECTION — the vacuity arrives inside the REMEDIATION of my own finding, in a RUNBOOK
+step rather than in CI (PR #819 round 2, 443617b8, 2026-09-18).** I flagged that §6.8 step 11
+("prove the OLD credential fails to authenticate" — a ratified merge condition) named no command.
+DevOps's fix supplied a good one: sources the retiring value, pipes it over **stdin** not argv,
+expects `password authentication failed`. **An EMPTY or ABSENT password produces that identical
+message.** So if the name is missing from the file, the step reports the old credential correctly
+rejected having tested nothing — and records condition 4 as discharged.
+
+**The generalisation, which is the reusable half: for any "prove X is REJECTED" test, ask whether
+the ABSENCE of X produces the same signal as its REJECTION.** Authentication, signature
+verification, token validation and permission checks all answer "no" the same way to a bad credential
+and to no credential. Every such proof owes a non-emptiness guard as its positive control — not as
+hygiene, as the thing that makes it a predicate at all. This is the inverse of the usual
+fail-closed instinct: here the *failure* is the expected outcome, so fail-closed reasoning gives
+no protection and the guard must be on the INPUT.
+
+**Two review habits it sharpens:**
+- **Re-review a fix to my own finding as a fresh artifact, not as a diff against my request.** The
+  fix did everything I asked. The defect was in the part I did not specify, which is exactly where a
+  remediation's defects live. Cf. [[feedback_a_discharge_can_go_stale_against_its_own_pr]] and
+  [[feedback_a_correction_pass_inherits_the_reviewers_filter]].
+- **Check the SOURCE FILE's write mode before trusting "read the value from it."**
+  `/root/.pfin/supabase.env` is opened `"a"` (append), so it carries several
+  `MIGRATOR_DB_PASSWORD=` lines across runs. `source` takes the LAST (correct here, by accident);
+  the repo's own idiom `grep -m1 … | cut -d= -f2-` takes the OLDEST — which fails to authenticate
+  for the wrong reason, a SECOND route to the same false pass. Pin `tail -1` and say why, or the
+  next person "fixing" it to match house style re-introduces the vacuity.
+- **`set -a; . <credential file>` is a two-for-one hazard** — it exports the WHOLE store into the
+  operator's shell for the rest of the procedure (inherited by every later child), and sourcing is a
+  code-execution channel whose parse errors print secret-bearing lines. In a procedure whose subject
+  is confinement, that is a control removal wearing a convenience. See
+  [[feedback_sourcing_a_credential_file_is_code_execution]].

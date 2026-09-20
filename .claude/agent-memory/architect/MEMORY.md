@@ -23,10 +23,13 @@
 ## Postgres / RLS facts worth not re-deriving
 
 - [The C1 label is MIS-ATTRIBUTED, not unsupported](reference_adr023_c1_label_is_misattributed.md) — home RULED ADR-019 C1 (reconstructed 2026-09-09); carriers by grep, no count.
+- **[Coolify network identity is the APPLICATION, not the project](reference_coolify_network_identity_is_the_application.md)** — same-project placement confers NO reach; only an explicit `external:` attachment does.
 - [A worker LOGIN role's minimum grant set is EMPTY](reference_worker_login_role_minimum_grant_is_the_empty_set.md) — ⚠ granting it EXECUTE is a WIDENING.
 - [Local cluster has duplicate-grantor drift on `pfin_etl`](reference_local_cluster_duplicate_grantor_drift.md) — 3 RED in `054` is the BASELINE (2913 ok / 3 not ok).
 - [D3 entries record ORIGINAL provenance](reference_decision3_entries_record_original_provenance.md) — re-targets live in AMENDMENTS; the entry is never edited.
 - [A role comment is a SHARED CLUSTER catalog](reference_role_comment_is_a_shared_cluster_catalog.md) — `pg_shdescription`; a scratch-DB apply is NOT isolated. Use `shobj_description`.
+- **[A role cannot COMMENT ON itself, and self-admin grant is REFUSED](reference_a_role_cannot_comment_on_itself.md)** — ⚠ so a `comment on role migrator` migration can never be the Phase D vehicle.
+- **[Migrator-lane privilege facts (4, measured)](reference_migrator_lane_privilege_facts.md)** — ⚠ `security_invoker` does NOT move the CREATE-time view check; name-resolution needs schema USAGE; a skipped migration still gets a ledger row.
 - [`WITH CHECK` is a POLICY, not a CHECK constraint](reference_with_check_is_a_policy_not_a_check_constraint.md) — subqueries, survives replica; "every fence is a trigger" is dated.
 - [A BEFORE ROW trigger can't see later rows in the statement](reference_before_row_trigger_cannot_see_later_rows.md) — SET-property fences need a deferred CONSTRAINT TRIGGER.
 - [A fail-closed lock in a DEFERRED fence can block CASCADE DELETE](reference_a_fail_closed_lock_in_a_deferred_fence_can_block_cascade_delete.md) — judge the empty SET before the empty LOCK.
@@ -41,7 +44,7 @@
 - [Prove a delta is comment/string-only](reference_prove_a_delta_is_comment_string_only.md) — normalize both revisions, diff; inversion-prove the normalizer or it's decoration.
 - [Scratch-DB recipe for a clean chain apply](reference_scratch_db_full_chain_recipe.md) — container `pg_dump`, load as `supabase_admin`, all-lowercase name.
 - [Catalog-comment staleness needs the CATALOG](feedback_catalog_comment_staleness_needs_the_catalog.md) — grepping source over-reports staleness.
-- [`set local` outside a transaction is a silent no-op](feedback_set_local_outside_transaction_is_a_noop.md) — a vacuous harness looks PERMISSIVE. Control leg first.
+- **[`set local` is a no-op ONLY in some venues — SCOPED 2026-09-16](feedback_set_local_outside_transaction_is_a_noop.md)** — ⚠ it DOES take effect under `supabase db push`; a vacuous harness looks PERMISSIVE. Control leg first.
 - [`user_settings` can never carry the aal2 clause](reference_user_settings_excluded_from_aal2_backstop.md) — `025` non-negotiable exclusion (policy recursion).
 - [manual_valuation OUTRANKS every feed in the price pick](reference_manual_valuation_outranks_feeds_in_price_pick.md) — ⚠ no `market_feed` writer exists in V1.
 - [A Σ=0 trial balance can't see a Suspense-absorbed divergence](reference_suspense_branch_absorbs_the_divergence.md) — an omitted column RE-ROUTES a branch.

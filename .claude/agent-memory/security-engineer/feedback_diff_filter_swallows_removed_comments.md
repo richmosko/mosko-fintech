@@ -33,3 +33,9 @@ survived unnoticed.
 command that would falsify it and check the command can actually return a hit. Related:
 [[clearance-conditions-must-absorb-my-own-recommendations]] and the project-level
 *instrument cannot observe the property* memory.
+
+**⚠ SECOND INSTANCE, and it is MY INSTRUMENT, not a teammate's — 2026-09-18, twice in one turn.** Reviewing a SQL migration, I built `git diff | grep -vE '^(\+\+\+|---)'` and then `awk '!/^--- /'` to display a comment-only delta. **In a file whose comments start with `--`, a REMOVED comment line renders in the diff as `---   …` — which matches the `--- a/path` HEADER pattern.** Both filters discarded every removed line and showed me a one-sided diff; I walked into this while checking for exactly this class.
+
+**What saved it:** the visible `-` count disagreed with `--stat`. Not the filter — the disagreement.
+
+**What to do:** strip the diff header **POSITIONALLY** (`git diff -U0 … | tail -n +5`), never by matching `^---`. And when a display filter and `--stat` disagree, the filter is wrong until proven otherwise. ⚠ **Grade the counting filter separately from the display filter** — mine survived (a removed line beginning `---` can only be a comment in SQL, since no executable statement starts with `--`, so nothing executable could hide), but that is an argument I had to make, not something to assume. Related: [[feedback_my_review_measurements_become_quoted_sources]].

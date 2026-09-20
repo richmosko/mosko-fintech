@@ -235,3 +235,17 @@ The tell was implausibility again — a merge commit's "file" being 7 lines long
   compare the FILES. The loop bought nothing and cost a near-miss.
 - **Before reporting a DIFFERENCE, re-run one leg standalone.** A difference is as much an
   instrument artefact as a sameness is; I had internalised the second and not the first.
+
+## ⚠⚠⚠ FIFTH malformed instrument — and I had already named the fix and not adopted it (2026-09-16)
+**`grep -oE '.{0,N}<needle>.{0,M}'` on this stack exceeds ugrep's complexity limit and ERRORS.** I built that
+probe three times in one session, the third time on the one finding where **context was the whole question**
+(was a surviving falsified phrase the defect, or a quotation inside its own correction?). It failed loudly every
+time, so no wrong answer shipped — but I had already written "I re-ran with a simpler instrument" after the
+first and then reached for the same broken shape twice more.
+
+**The rule, adopted as a default rather than a remedy:** to read context out of a long single-line markdown
+cell, use **`sed -n 'Np' <file> | fold -w 150 | grep -n -B2 -A2 '<needle>'`**. Deterministic, no regex
+complexity, and `fold` gives stable line numbers to cite.
+**And the generalisation that matters more than the command:** *naming* a corrective in a report is not adopting
+it. A fix I state in a verdict lives in the verdict; a fix I want to keep has to change what I reach for first.
+When I catch the same instrument defect twice, the finding is no longer about the instrument.

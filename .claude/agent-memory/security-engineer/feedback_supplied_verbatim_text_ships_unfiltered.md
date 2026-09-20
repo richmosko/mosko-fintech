@@ -77,3 +77,5 @@ both veto-grade, and both look like reasonable cleanups in the moment.
 
 Related: [[measure-the-fence-regex-not-its-comment]] — same lesson from the other side: I measured the
 fence's registry and its comment, never its regex against my own artifact.
+
+**⚠ And my landed text can go STALE against a LATER measurement — 2026-09-18.** My C4 supersession sentence framed the widening as *"can rewrite what the Scheduled Task runs"*; a later source read showed the grant binds at the **token's team**, not at the route, so the property was never scheduled-task-shaped. **My sentence then understated the reach in the canonical place a reader consults for it — the exact failure mode I wrote it to fix.** When a new measurement widens a property, re-read every block I supplied on that property and ask whether my framing is now the narrow one. Supplying the correction myself is part of the same duty: I own the text after it lands, not just at the splice. And when supplying a generalization, mark what is MEASURED versus NOT MEASURED with a named owner — do not let my own commit-ready text assert a reach I have not evidenced.

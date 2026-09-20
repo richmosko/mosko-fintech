@@ -74,3 +74,21 @@ that analysis was the veto boundary I set around `dblink_connect_u` and superuse
 held. **Environment-shaped failures are local-until-measured** — see
 [[dblink-in-a-test-is-a-privilege-boundary]]. State a reading as a reading, and let the CI run
 decide.
+
+**⚠ "CI GREEN ON THIS TIP" IS NOT EVIDENCE ABOUT THE MERGE RESULT — run `git merge-tree` as a standing
+part of every PR review (PR #833 r2, 2026-09-19).** The branch was reported CI-green and was; it was
+also **4 commits behind main** and conflicted on merge. CI runs on the branch tip, which is a different
+tree from the one that will land. `git merge-tree $(git merge-base <main> <tip>) <tip> <main>` piped to
+`grep -c '<<<<<<<'` is one command and answers it.
+
+**The recurring conflict site in this repo is `MILESTONES.md`'s recent-activity list** — both sides add
+a bullet at the top and both delete the 6th, so any two same-day PRs collide there. When reporting it,
+say what the resolution must preserve, not just that it conflicts: **the list stays at 5 AND the
+`AUTOLOAD-CUTOFF` marker survives** (the SessionStart hook keys on that marker; a
+slice-to-the-next-heading resolution eats it and every future session silently loads the wrong thing).
+
+**Also check, same command, same moment:** whether the branch carries the ADRs its own new text cites.
+#833 linked `#adr-073` while its own `DECISIONS.md` predated ADR-073 — harmless post-merge, but it
+means **any substring test of a quoted ADR clause must be aimed at MAIN, not at the branch.** I aimed
+one at the branch first and got a false negative that would have had me tell Architect their ADR text
+was missing. See [[feedback_which_ref_the_probe_was_aimed_at]].
