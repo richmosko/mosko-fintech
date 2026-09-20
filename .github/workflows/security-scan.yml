@@ -3519,12 +3519,15 @@ jobs:
     # Coolify UI steps) is entirely offline-testable via
     # scripts/ci/fence-coolify-env-strikes.sh, which fakes `ssh`/`curl`
     # rather than requiring a live box -- see that script's own header for
-    # what each of the three strikes proves and why an earlier draft of
-    # its own fixture was silently vacuous (caught by an inversion strike
-    # against the fixture itself, not against coolify-env.sh).
+    # what each strike proves (allowlist refusal, read-back mismatch,
+    # blanked-not-deleted, the new-allowlist-name resolution sweep, plus
+    # Sec F-5's PFIN_DB_USER / ADMISSION_PROBE_PUBLIC_URLS value-shape
+    # guards, PR #846) and why an earlier draft of its own fixture was
+    # silently vacuous (caught by an inversion strike against the fixture
+    # itself, not against coolify-env.sh).
     steps:
       - uses: actions/checkout@v4
-      - name: offline strike-proofs (allowlist refusal, read-back mismatch, blanked-not-deleted)
+      - name: offline strike-proofs (allowlist refusal, read-back mismatch, blanked-not-deleted, value-shape)
         run: bash scripts/ci/fence-coolify-env-strikes.sh
 
   fence-deploy-app-strikes:
@@ -3633,14 +3636,18 @@ jobs:
     # (measured locally against a throwaway Postgres instance, not
     # assumed) is caught by a string guard, not the exit code alone; a
     # post-handoff catalog-verify mismatch refuses; a failed connect-AS-
-    # the-role check refuses; a Coolify env-store readback length
-    # mismatch refuses; and both roles' full happy paths (initial handoff
-    # + rotate) succeed end to end — offline via a PATH-shadowed fake
+    # the-role check refuses; a Coolify env-store readback row-count or
+    # hash mismatch refuses (Sec F-2, PR #846); a PFIN_DB_USER ordering
+    # mismatch warns on initial handoff but refuses under --rotate (Sec
+    # F-4, PR #846); the measured 127.0.0.1/32 trust-path connect-as-role
+    # bypass is caught by the missing-password-prompt guard (Sec VETO V-1,
+    # PR #846); and both roles' full happy paths (initial handoff +
+    # rotate) succeed end to end — offline via a PATH-shadowed fake
     # ssh/docker/curl (tests/fixtures/ci/db-role-handoff/fake-curl), never
     # a live box, never a real Postgres.
     steps:
       - uses: actions/checkout@v4
-      - name: offline strike-proofs (12 scenarios — see the fence script's own header for the full list)
+      - name: offline strike-proofs (16 scenarios — see the fence script's own header for the full list)
         run: bash scripts/ci/fence-db-role-handoff-strikes.sh
 
   fence-operator-env-template:
@@ -3684,6 +3691,68 @@ jobs:
             exit 1
           fi
           echo "OK: fence caught a removed required name, naming it (exit $rc)."
+
+  fence-app-env-template:
+    name: api/.env.example — app-surface template bidirectional-equality
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 68, W-2 (F/CTO ruling 2026-09-20: retire the
+    # repo-root .env.example; api/.env.example becomes the single
+    # app-surface contract). Unlabeled, same posture as
+    # fence-operator-env-template above. DevOps-owned. Asserts
+    # api/.env.example carries EXACTLY the name set
+    # api/docker-compose.yaml's app.environment block declares --
+    # bidirectional, not one-way: a name only in the template is stale/
+    # orphaned (the running container never receives it); a name only in
+    # the compose block is undocumented. Run-always (no paths filter) --
+    # either file can drift independently of the other changing.
+    steps:
+      - uses: actions/checkout@v4
+      - name: derive both sets and assert bidirectional equality
+        run: bash scripts/ci/fence-app-env-template.sh
+
+      - name: "Inversion (leg 1) — remove a name from api/.env.example on a copy (expects failure, naming it as undocumented-side-missing)"
+        run: |
+          set -e
+          SCRATCH_DIR="$(mktemp -d)"
+          cp -r . "$SCRATCH_DIR/repo"
+          grep -v '^DISCORD_WEBHOOK_URL=$' api/.env.example > "$SCRATCH_DIR/repo/api/.env.example"
+          set +e
+          out="$(bash scripts/ci/fence-app-env-template.sh "$SCRATCH_DIR/repo" 2>&1)"
+          rc=$?
+          set -e
+          rm -rf "$SCRATCH_DIR"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on a copy missing DISCORD_WEBHOOK_URL from api/.env.example but got $rc -- the fence does not bite."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'DISCORD_WEBHOOK_URL'; then
+            echo "FATAL: exited 1 but did not name DISCORD_WEBHOOK_URL -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught a name removed from api/.env.example, naming it (exit $rc)."
+
+      - name: "Inversion (leg 2) — remove a name from docker-compose.yaml's environment block on a copy (expects failure, naming it as undocumented-in-compose)"
+        run: |
+          set -e
+          SCRATCH_DIR="$(mktemp -d)"
+          cp -r . "$SCRATCH_DIR/repo"
+          grep -v '^      PLAID_ENV: ' api/docker-compose.yaml > "$SCRATCH_DIR/repo/api/docker-compose.yaml"
+          set +e
+          out="$(bash scripts/ci/fence-app-env-template.sh "$SCRATCH_DIR/repo" 2>&1)"
+          rc=$?
+          set -e
+          rm -rf "$SCRATCH_DIR"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on a copy missing PLAID_ENV from docker-compose.yaml's environment block but got $rc -- the fence does not bite."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'PLAID_ENV'; then
+            echo "FATAL: exited 1 but did not name PLAID_ENV -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught a name removed from docker-compose.yaml's environment block, naming it (exit $rc)."
 
   fence-push-secrets-strikes:
     name: push-production-secrets.sh — resource-resolution + secret-transport strike-proofs
