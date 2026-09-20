@@ -32,6 +32,12 @@
 #                          .../envs omits one required name -- the
 #                          required-env-names guard must die() before
 #                          any /deploy call.
+#   placeholder-env    -- base_directory/build_pack match, all three
+#                          required names are PRESENT, but one carries a
+#                          Coolify compose-parse placeholder value (a
+#                          `:?message` string) -- the required-env guard
+#                          must die() on the VALUE-SHAPE check, before
+#                          any /deploy call, same as missing-env.
 
 set -euo pipefail
 
@@ -61,6 +67,14 @@ if [[ "$METHOD" == "GET" && "$URL" == *"/envs" ]]; then
     # Omits SUPABASE_SERVICE_ROLE_KEY -- the strike checks all three are
     # required and this one is deliberately absent.
     echo '[{"key":"PUBLIC_SUPABASE_URL","value":"http://api-gw:8000","is_preview":false},{"key":"PUBLIC_SUPABASE_ANON_KEY","value":"x","is_preview":false}]'
+  elif [[ "${FAKE_CURL_MODE:-match}" == "placeholder-env" ]]; then
+    # MEASURED (team-lead, 2026-09-20): the KEY is present (unlike
+    # missing-env above) but its VALUE is a Coolify compose-parse
+    # placeholder -- the literal `:?message` text a fresh dockercompose
+    # app's env store gets pre-populated with. Distinguishes "key
+    # absent" from "key present, value is a placeholder" -- both must
+    # refuse, via different code paths in the guard.
+    echo '[{"key":"PUBLIC_SUPABASE_URL","value":"http://api-gw:8000","is_preview":false},{"key":"PUBLIC_SUPABASE_ANON_KEY","value":"x","is_preview":false},{"key":"SUPABASE_SERVICE_ROLE_KEY","value":"SUPABASE_SERVICE_ROLE_KEY must be set -- minted by scripts/mint-supabase-jwt-keys.sh.","is_preview":false}]'
   else
     echo '[{"key":"PUBLIC_SUPABASE_URL","value":"http://api-gw:8000","is_preview":false},{"key":"PUBLIC_SUPABASE_ANON_KEY","value":"x","is_preview":false},{"key":"SUPABASE_SERVICE_ROLE_KEY","value":"y","is_preview":false}]'
   fi
