@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# fake-curl -- offline stand-in for curl, Coolify /applications lookup only.
+set -euo pipefail
+ARGS="$*"
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$ARGS" >> "$LOG"
+if [[ "$ARGS" == *"/applications"* ]]; then
+  echo '[{"uuid": "siblinguuid000000001", "name": "pfin-app"}]'
+  exit 0
+fi
+echo '{}'
+exit 0

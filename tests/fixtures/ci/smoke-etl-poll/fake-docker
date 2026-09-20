@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# fake-docker -- offline stand-in for docker, used by
+# scripts/ci/fence-smoke-etl-poll-strikes.sh. Handles container
+# resolution (compose ps -q / inspect), the worker run
+# (`docker exec ... python run_nav_daily.py`), and the row-count
+# read-back (`docker exec ... python3 -c ...`).
+
+set -euo pipefail
+
+ARGS="$*"
+
+if [[ "$ARGS" == *"compose --project-name"*"ps -q"* ]]; then
+  echo "container-abc123"
+  if [[ "${FAKE_CONTAINERS:-1}" == "2" ]]; then
+    echo "container-def456"
+  fi
+  exit 0
+fi
+
+if [[ "$ARGS" == *"inspect --format"* ]]; then
+  ID="${*: -1}"
+  printf 'true\t%s\t2026-01-01T00:00:00Z\n' "$ID"
+  exit 0
+fi
+
+if [[ "$ARGS" == *"run_nav_daily.py"* ]]; then
+  if [[ "${FAKE_WORKER_MODE:-ok}" == "fail" ]]; then
+    echo "Traceback: something broke" >&2
+    exit 1
+  fi
+  if [[ "${FAKE_WORKER_MODE:-ok}" == "no-completion-line" ]]; then
+    echo "started, then nothing"
+    exit 0
+  fi
+  echo "Starting daily-NAV checkpoint run at 2026-01-01T00:00:00Z"
+  echo "Finished at 2026-01-01T00:05:00Z (elapsed: 0:05:00) -- summary: {'ok': 3}"
+  exit 0
+fi
+
+if [[ "$ARGS" == *"python3 -c"* ]]; then
+  if [[ "${FAKE_COUNT_MODE:-ok}" == "conn-error" ]]; then
+    echo "CONN_ERROR could not connect" >&2
+    exit 2
+  fi
+  echo "${FAKE_COUNT:-3}"
+  exit 0
+fi
+
+echo "FAKE DOCKER: unrecognised invocation: $ARGS" >&2
+exit 1

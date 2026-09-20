@@ -849,7 +849,7 @@ Scope: apply the repo's `supabase/migrations/` against the fresh Postgres 17 ins
 | Verify the handoff actually took | SCRIPTED | A catalog re-read (`pg_authid`) PLUS a live connect-AS-the-role check over TCP (`-h localhost`, forcing the same password-auth path a remote worker container needs) with the generated credential — not a catalog read alone. |
 | Push `PFIN_DB_PASSWORD` onto the worker's Coolify resource | SCRIPTED | Same invocation — the SAME generated value, via `PATCH .../envs/bulk`, token and body both off `curl`'s own argv. |
 | Confirm the push landed | SCRIPTED | Presence + LENGTH-only readback (Coolify's own on-box decrypt path) — the value itself is never read back or printed, by either the script or this table. |
-| Restart/redeploy the worker's Coolify container | **BY-HAND** (Coolify UI Deploy button, or the `POST /deploy?uuid=<uuid>` idiom other scripts here already use) | **Deliberately not auto-triggered by this script** — Coolify only injects an env-store change at deploy/recreate time (same caveat `scripts/mint-supabase-jwt-keys.sh`'s own header states for its own case), and §6.1/§6.2's own text is explicit that only the ONE affected worker restarts, never a coordinated PostgREST redeploy. A deploy vehicle for this step is named as a W-3 follow-up, not built here. |
+| Restart/redeploy the worker's Coolify container | **SCRIPTED — W-3 (this PR)** | **Deliberately not auto-triggered by `db-role-handoff.sh` itself** — Coolify only injects an env-store change at deploy/recreate time (same caveat `scripts/mint-supabase-jwt-keys.sh`'s own header states for its own case), and §6.1/§6.2's own text is explicit that only the ONE affected worker restarts, never a coordinated PostgREST redeploy. `scripts/deploy-app.sh <resource-name> --expect-base-directory <dir> --expect-build-pack dockercompose --apply` — the SAME fully-generic vehicle §7.2's own numbered procedure uses, a deliberate SEPARATE operator step from the push above, never chained automatically. |
 
 **No interactive credential moment anywhere in this procedure** — the one BY-HAND row above is an operational restart/redeploy action, not a step where a human reads, types, or otherwise handles the plaintext credential. If a future change to this script ever needed one (e.g. `\password` stopped accepting piped stdin on some future `psql` version), that would have to be justified in writing here, not silently added.
 
@@ -1846,7 +1846,7 @@ No CPU/memory ceiling for any Coolify service appears anywhere in this repo — 
 
 ### 7.2 Worker first-deploy procedure — `etl` / `pdf-render` / `provider-sync`
 
-**New 2026-09-20 (BACKLOG.md §7.36 item 68 / PR W-1; F/CTO ruled 2026-09-20: workers before the §2/§9 Domain assignment, because §10's smoke gate needs the workers up first).** Mirrors §7.1's numbered-procedure shape: preconditions named, then a SCRIPTED/BY-HAND audit table, sequenced across three PRs. **W-1** landed the compose network-attachment pattern (§3/§7's own text above) and `scripts/provision-worker.sh`, closing step (i) below for all three workers. **W-2** lands `scripts/db-role-handoff.sh` and the non-secret env wiring below, closing steps (ii)/(iii). **W-3** (deploy vehicle, reachability smoke, §10 checklist, Scheduled Task creation) remains **PENDING** — not built yet — marked as such per this runbook's own SCRIPTED/BY-HAND convention (a step without a named script is a gap, not an assumption of "by hand is fine").
+**New 2026-09-20 (BACKLOG.md §7.36 item 68 / PR W-1; F/CTO ruled 2026-09-20: workers before the §2/§9 Domain assignment, because §10's smoke gate needs the workers up first).** Mirrors §7.1's numbered-procedure shape: preconditions named, then a SCRIPTED/BY-HAND audit table, sequenced across three PRs. **W-1** landed the compose network-attachment pattern (§3/§7's own text above) and `scripts/provision-worker.sh`, closing step (i) below for all three workers. **W-2** lands `scripts/db-role-handoff.sh` and the non-secret env wiring below, closing steps (ii)/(iii). **W-3 (this PR)** closes steps (iv)-(vii): deploy vehicle (reuses `scripts/deploy-app.sh` directly, no new script needed), reachability smoke (`scripts/smoke-admission-endpoint.sh` / `scripts/smoke-etl-poll.sh` / `scripts/smoke-pdf-roundtrip.sh`), the §10 checklist (de-stubbed below), and Scheduled Task creation (`scripts/worker-scheduled-task.sh`, correcting an earlier claim that no API-scriptable equivalent existed).
 
 **Non-secret worker env — `scripts/coolify-env.sh`, W-2.** `PFIN_DB_HOST` / `PFIN_DB_PORT` / `PFIN_DB_NAME` / `PFIN_DB_USER` / `PLAID_ENV` / `ADMISSION_PROBE_PUBLIC_URLS` join `PFIN_DB_SSLMODE` on that script's `SET_ALLOWLIST` (the credential itself, `PFIN_DB_PASSWORD`, stays OFF this allowlist — it is a `secrets-manifest.yml` `production_only` name, delivered only by step (iii)'s `db-role-handoff.sh`, never by this script). Intended values — the STACK's own internal service DNS (§4/§6), not each worker's local-dev `.env.example` default:
 
@@ -1871,10 +1871,62 @@ Preconditions: `pfin-supabase-stack` already exists and is deployed (§4/§6); f
 | (i) | **SCRIPTED — W-1 (this PR)** | `provision-worker.sh <resource-name> --apply`, run once per worker (`pfin-back-etl`, `pfin-pdf-render`, `pfin-provider-sync`) — recreates the resource as `dockercompose` (same delete-if-empty-shell guard as `provision-app.sh`), and sets that resource's own uniquely-named network var (`ETL_STACK_NETWORK_NAME` / `PDF_RENDER_STACK_NETWORK_NAME` / `PROVIDER_SYNC_STACK_NETWORK_NAME`) from the stack's live Docker network. Does NOT deploy. |
 | (ii) | **SCRIPTED (W-2)** | Push the `production_only` secrets already mappable to each worker: `push-production-secrets.sh --apply --skip-missing-resource` (same script §7.1 step 2 uses — its `RESOURCE_IDENTITY_MAP` carries the F/CTO-RULED names `pfin-back-etl` / `pfin-pdf-render` / `pfin-provider-sync`, landed at W-1). `pdf-render` gets `PDF_WORKER_SIGNING_KEY` only; `provider-sync` gets `WORKER_ADMISSION_SHARED_SECRET` + `PLAID_CLIENT_ID`/`PLAID_SECRET` + `SIMPLEFIN_TOKEN` + `DISCORD_WEBHOOK_URL`; `etl` gets `FMP_API_KEY`/`BLS_API_KEY` (nightly unit) + `DISCORD_WEBHOOK_URL` (monthly-report unit). No code change needed — the script already excludes `PFIN_DB_PASSWORD` (`EXCLUDED_DEFERRED`, step (iii)'s own province). |
 | (iii) | **SCRIPTED (W-2)** | **DB role handoff + `PFIN_DB_PASSWORD` delivery — `scripts/db-role-handoff.sh <role> --apply`**, same two-statement discipline as §6.1/§6.2 (`\password <role>` piped over stdin then `ALTER ROLE <role> LOGIN;`, never a single atomic statement — see §6.0's own new SCRIPTED/BY-HAND table above, and the script's own header, for the full mechanism). `etl`: `scripts/db-role-handoff.sh pfin_etl --apply` (§6.1). `provider-sync`: `scripts/db-role-handoff.sh pfin_provider_sync --apply` (§6.2; pre-cutover, `authenticator`'s own credential applies instead — see the existing `workers/CLAUDE.md` note on the rotation-coupling distinction; this script targets the POST-cutover dedicated-role state). `pdf-render`: **N/A — no DB credential of any kind, skip this step** (zero-DB-isolation by design; do not add one to "complete the table"). |
-| (iv) | **PENDING — W-3** | Deploy. Needs a `deploy-worker.sh` sibling to `scripts/deploy-app.sh` (identity guard on name/base_directory/build_pack; `--require-env` names-only presence; post-deploy `--require-network` + `--resolve-host`; health/poll) — **not built in this PR**, named here as the next scripted gap, not assumed to already exist. |
-| (v) | **PENDING — W-3** | Per-worker reachability smoke: `provider-sync`'s CA-2 admission-endpoint negative smoke (§7's existing CA-1/CA-4 text; §10 CA-2), an ETL poll smoke, and a PDF round-trip smoke (`app` → `pdf-render:8080/render` → PDF bytes back) — the two named explicitly in MILESTONES.md's Active Feature row as what §10's smoke checklist needs before the §9 DNS cutover can proceed. |
-| (vi) | **PENDING — W-3** | `docs/deployment-runbook.md` §10's own verification checklist items for the ETL poll and the PDF round-trip — closing the gate F/CTO's 2026-09-20 ruling names (§10 smoke gates §9). |
-| (vii) | **PENDING — W-3** | Scheduled Task creation (Coolify UI — no API-scriptable equivalent named anywhere in this repo yet, so this step is BY-HAND, not a scripted gap): `provider-sync`'s `@daily` poll (existing bullet above), `etl`'s monthly-report cron (`0 6 1 * *`, existing bullet above). **`etl`'s own nightly-ingest cron remains the pre-existing gap this runbook already flags above** (no cadence ratified, no `PFIN_DB_*`/`FMP_API_KEY`/`BLS_API_KEY` wired to that service block) — unchanged by this PR, not silently folded into W-3's scope. |
+| (iv) | **SCRIPTED — W-3 (this PR)** | Deploy. **No `deploy-worker.sh` sibling was built — `scripts/deploy-app.sh` is already fully generic** (name/uuid + flags, no `pfin-app`-specific code anywhere in it; confirmed by reading it, not assumed from its original brief) and is reused directly, once per worker, with each worker's own `--expect-base-directory`/`--compose-service`/`--require-env`/`--require-network`/`--resolve-host` values — see the numbered procedure below. The PENDING marker this row carried named a gap that measurement closed, not one that needed new code. |
+| (v) | **SCRIPTED — W-3 (this PR)** | Per-worker reachability smoke, one script per surface: [`scripts/smoke-admission-endpoint.sh`](../scripts/smoke-admission-endpoint.sh) (CA-2 negative + positive controls — §10 CA-2, below), [`scripts/smoke-etl-poll.sh`](../scripts/smoke-etl-poll.sh) (one real `run_nav_daily.py` run + a `pfin.nav_daily` row-presence read-back), [`scripts/smoke-pdf-roundtrip.sh`](../scripts/smoke-pdf-roundtrip.sh) (`app` → `pdf-render:8080/render` → real PDF bytes back, via a self-minted SD-20 JWT matching `renderClient.ts`'s own mint exactly). Each is offline strike-proofed for its own SHELL CONTROL FLOW (`scripts/ci/fence-smoke-admission-endpoint-strikes.sh` / `fence-smoke-etl-poll-strikes.sh` / `fence-smoke-pdf-roundtrip-strikes.sh`) — none of the three fences touch a real box, real Postgres, or a real headless-Chromium render; that leg is live-only by construction, stated in each fence's own header, not glossed. |
+| (vi) | **SCRIPTED — W-3 (this PR)** | `docs/deployment-runbook.md` §10's own verification checklist items for the ETL poll and the PDF round-trip — closing the gate F/CTO's 2026-09-20 ruling names (§10 smoke gates §9). §10 below is filled in, no longer a STUB. |
+| (vii) | **SCRIPTED — W-3 (this PR)** | Scheduled Task creation. ⚠ **Corrected in place: this row previously said "Coolify UI — no API-scriptable equivalent named anywhere in this repo yet."** That was already false at the time it was written — `scripts/migrator-scheduled-task.sh` (landed earlier, ADR-072) already scripts Scheduled Task creation via `POST /applications/<uuid>/scheduled-tasks` / `GET .../scheduled-tasks` against this same Coolify instance — this row's own author simply had not looked. [`scripts/worker-scheduled-task.sh <task-name> --apply`](../scripts/worker-scheduled-task.sh) generalises that exact mechanism, table-driven, across `pfin-back-etl-monthly-report` (`0 6 1 * *`, `python run_monthly_report.py`, container `pfin-back-etl-monthly-report`) and `pfin-provider-sync-daily-poll` (`@daily`, `node dist/cli/poll.js`, container `provider-sync`) — both `enabled: true` (unlike the migrator's own deliberately-inert task; these are real, self-firing recurring cron). Refuses to mutate a live, disagreeing task rather than PATCHing it. **`etl`'s own nightly-ingest cron remains the pre-existing gap this runbook already flags above** (no cadence ratified, no `PFIN_DB_*`/`FMP_API_KEY`/`BLS_API_KEY` wired to that service block) — unchanged by this PR, not silently folded into W-3's scope; `scripts/smoke-etl-poll.sh` above works around it by name, not by fixing it. |
+
+**Numbered procedure — one worker at a time, after steps (i)-(iii) above have run for it.**
+
+```sh
+# etl -- deploys BOTH compose services (nightly + monthly-report share one
+# image/build); --compose-service targets the WIRED one for the post-
+# deploy checks (the nightly service's own missing PFIN_DB_*
+# environment: block is the pre-existing gap named above -- checking it
+# here would not prove anything the gap doesn't already explain).
+BOX_IP=<box-ip> scripts/deploy-app.sh pfin-back-etl \
+  --expect-base-directory /workers/etl --expect-build-pack dockercompose \
+  --compose-service pfin-back-etl-monthly-report \
+  --require-env PFIN_DB_HOST,PFIN_DB_PORT,PFIN_DB_NAME,PFIN_DB_USER,PFIN_DB_PASSWORD,PFIN_DB_SSLMODE,DISCORD_WEBHOOK_URL \
+  --require-network <ETL_STACK_NETWORK_NAME from step (i)'s own output> \
+  --resolve-host db \
+  --apply
+
+# provider-sync -- no --health-path: this resource NEVER carries a Coolify
+# Domain by design (RT-27/CA-2), so an external health probe would only
+# ever no-op; the on-box running-container check is this deploy's real
+# assertion.
+BOX_IP=<box-ip> scripts/deploy-app.sh pfin-provider-sync \
+  --expect-base-directory /workers/provider-sync --expect-build-pack dockercompose \
+  --compose-service provider-sync \
+  --require-env PFIN_DB_HOST,PFIN_DB_PORT,PFIN_DB_NAME,PFIN_DB_USER,PFIN_DB_PASSWORD,WORKER_ADMISSION_SHARED_SECRET,PLAID_CLIENT_ID,PLAID_SECRET,PLAID_ENV \
+  --require-network <PROVIDER_SYNC_STACK_NETWORK_NAME from step (i)'s own output> \
+  --resolve-host db \
+  --apply
+
+# pdf-render -- no --resolve-host: zero DB reach by design (Lock 13
+# mod #2), this container has no dependency HOSTNAME of its own to
+# resolve (its only network purpose is being reachable BY app, not
+# reaching anything itself). No --health-path for the same reason as
+# provider-sync (no Domain, ever).
+BOX_IP=<box-ip> scripts/deploy-app.sh pfin-pdf-render \
+  --expect-base-directory /workers/pdf-render --expect-build-pack dockercompose \
+  --compose-service pdf-render \
+  --require-env PDF_WORKER_SIGNING_KEY \
+  --require-network <PDF_RENDER_STACK_NETWORK_NAME from step (i)'s own output> \
+  --apply
+
+# Reachability smokes -- after all three workers above are deployed.
+BOX_IP=<box-ip> scripts/smoke-admission-endpoint.sh
+BOX_IP=<box-ip> scripts/smoke-etl-poll.sh
+BOX_IP=<box-ip> scripts/smoke-pdf-roundtrip.sh
+
+# Scheduled Tasks -- after the smokes pass.
+BOX_IP=<box-ip> scripts/worker-scheduled-task.sh pfin-back-etl-monthly-report --apply
+BOX_IP=<box-ip> scripts/worker-scheduled-task.sh pfin-provider-sync-daily-poll --apply
+```
+
+Then run §10's checklist below, row by row, before the §2/§9 DNS cutover proceeds.
 
 ---
 
@@ -1926,7 +1978,22 @@ Scope: prove the from-scratch stand-up actually works before declaring V1 deploy
     - **Three questions, three instruments — they compose, none substitutes:** **provenance** (`schema_migrations` — did our migration run here?) · **current state** (the §4.1 (1b) catalog read — is a database-level declaration recorded right now?) · **effective value** (TZ-1's `setting` / `source` — what is this session actually resolving?).
     - **This limb needs the migration-applying identity** (`authenticator` gets `permission denied for schema supabase_migrations`), which is why it lives here at deploy time and not in the unprivileged recurring sweep.
 
-> **STUB —** Fill in: the end-to-end smoke checklist (web-app reachable over TLS; auth login; a seeded user sees only their own rows — RLS isolation; a migration-backed query returns; PDF render round-trips via the signed-JWT path; ETL container runs one poll; Discord notification fires). This gates §9 teardown — define the explicit pass/fail go/no-go criteria here. QA owns the RLS/isolation assertions; DevOps owns the infra-reachability assertions.
+**End-to-end smoke checklist — de-stubbed 2026-09-20 (BACKLOG.md §7.36 item 68, W-3). This gates §9 teardown (and the §2/§9 DNS cutover more broadly, per F/CTO's 2026-09-20 ruling: "§10's smoke gate needs the workers up first").** Go/no-go: every row below must read PASS before §9 proceeds. QA owns the RLS/isolation rows (not filled in here — flag QA when this section is next revisited); DevOps owns the infra-reachability rows, filled in below with the actual script per row.
+
+| # | Check | Script | Pass criterion | Owner |
+|---|---|---|---|---|
+| 1 | Web-app reachable over TLS | `deploy-app.sh pfin-app ... --health-path /` (§7.1 step 5) | External health probe → 200 once the §2/§9 Domain is assigned (pre-cutover, a non-fatal 404/000 against the sslip.io placeholder is expected, not a failure — see §7.1's own flags) | DevOps |
+| 2 | Auth login | — | Not scripted here; QA/manual per PRD §2's auth flow | QA |
+| 3 | A seeded user sees only their own rows (RLS isolation) | — | QA's RLS verification battery (per-Wave, `/tests`) | QA |
+| 4 | A migration-backed query returns | `smoke-pfin-exposure.sh --jwt <user-jwt>` (§7.1 step 6, post-invite mode) | HTTP 200 with a JSON array | DevOps (mechanism) / QA (data correctness) |
+| 5 | `provider-sync` admission endpoint is internal-only (CA-2) | [`scripts/smoke-admission-endpoint.sh`](../scripts/smoke-admission-endpoint.sh) | Exit 0 — unreachable from the operator machine AND the box host (N1/N2, both `000`), no Coolify Domain assigned (N3), reachable + auth-gated from a sibling `app` container (P1 `200`/P2 `401`/P3 `400`) | DevOps |
+| 6 | Supabase datastore is internal-only (CA-7) | — | Not yet scripted — same shape as row 5, different subject (`api-gw`/`supavisor`); booked as a follow-up, not built in this PR (out of W-3's own scope: §10 CA-7's own text, not a W-3 deliverable) | DevOps |
+| 7 | Database TimeZone pin (TZ-1) | — | Per §10's own TZ-1 text above; not re-derived here | DevOps |
+| 8 | ETL container runs one poll | [`scripts/smoke-etl-poll.sh`](../scripts/smoke-etl-poll.sh) | Exit 0 — `run_nav_daily.py` exits 0 with its own completion log line AND `pfin.nav_daily` carries ≥1 row for today (idempotency-safe presence check, not a count-delta — see the script's own header for why) | DevOps |
+| 9 | PDF render round-trips via the signed-JWT path | [`scripts/smoke-pdf-roundtrip.sh`](../scripts/smoke-pdf-roundtrip.sh) | Exit 0 — `POST /render` → HTTP 200 with a body starting `%PDF` | DevOps |
+| 10 | Discord notification fires | — | Trigger one real Scheduled-Task failure (or wait for the next real one) and confirm a message lands in the configured channel; not independently scripted this PR — the Coolify→Discord routing itself is incumbent (§8), not new | DevOps |
+
+Rows 2/3 (QA-owned) and row 6 (CA-7, explicitly out of W-3's scope) are NOT closed by this PR — flagged here so this table is not mistaken for a completed gate. Rows 1/4/5/7/8/9/10 are closed by scripts this PR ships or scripts/procedures this runbook already names elsewhere.
 
 ---
 

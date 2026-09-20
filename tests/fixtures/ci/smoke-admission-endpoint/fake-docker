@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# fake-docker -- offline stand-in for docker, used by
+# scripts/ci/fence-smoke-admission-endpoint-strikes.sh. Handles the three
+# docker invocations scripts/smoke-admission-endpoint.sh makes:
+#   1. `docker compose --project-name <uuid> ps -q <service>` -- prints
+#      one fake container id per line (two if FAKE_CONTAINERS=2, striking
+#      the ambiguity guard).
+#   2. `docker inspect --format '...' <id>` -- reports the given id as
+#      RUNNING (real tab between fields, matching the real script's own
+#      `{{"\t"}}` Go-template-action fix).
+#   3. `docker exec <container> node -e '...'` -- the P1/P2/P3 admission
+#      probe; prints "<P1> <P2> <P3> <SECRET_STATE>" per the FAKE_P1/
+#      FAKE_P2/FAKE_P3/FAKE_SECRET_STATE env vars, ignoring the actual JS.
+
+set -euo pipefail
+
+ARGS="$*"
+
+if [[ "$ARGS" == *"compose --project-name"*"ps -q"* ]]; then
+  echo "container-abc123"
+  if [[ "${FAKE_CONTAINERS:-1}" == "2" ]]; then
+    echo "container-def456"
+  fi
+  exit 0
+fi
+
+if [[ "$ARGS" == *"inspect --format"* ]]; then
+  ID="${*: -1}"
+  printf 'true\t%s\t2026-01-01T00:00:00Z\n' "$ID"
+  exit 0
+fi
+
+if [[ "$ARGS" == *"exec"*"node -e"* ]]; then
+  printf '%s %s %s %s\n' "${FAKE_P1:-200}" "${FAKE_P2:-401}" "${FAKE_P3:-400}" "${FAKE_SECRET_STATE:-SECRET_PRESENT}"
+  exit 0
+fi
+
+echo "FAKE DOCKER: unrecognised invocation: $ARGS" >&2
+exit 1
