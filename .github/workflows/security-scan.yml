@@ -3643,6 +3643,48 @@ jobs:
       - name: offline strike-proofs (12 scenarios — see the fence script's own header for the full list)
         run: bash scripts/ci/fence-db-role-handoff-strikes.sh
 
+  fence-operator-env-template:
+    name: provision.env.example — operator .env template completeness
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 68, W-2 rider (F/CTO asked "is the .env.example
+    # template up to date?" — measured answer was NO). Derives, live, every
+    # name any scripts/*.sh reads from the operator's local $REPO_ROOT/.env
+    # (the read_env_var()/env_or_dotenv() call-site idiom, the direct
+    # `grep -m1 '^NAME=' "$REPO_ROOT/.env"` idiom, and secrets-manifest.yml's
+    # own production_only names minus push-production-secrets.sh's stated
+    # EXCLUDED_SUPABASE_STACK/EXCLUDED_DEFERRED sets) and fails if
+    # scripts/provision.env.example is missing any of them. Struck by
+    # inversion (removing one required name from a copy of the template).
+    # Run-always (no paths filter) — a new script landing on any PR could
+    # add a read this fence needs to catch immediately, not on the next PR
+    # that happens to touch scripts/provision.env.example itself.
+    steps:
+      - uses: actions/checkout@v4
+      - name: derive the required set and assert completeness
+        run: bash scripts/ci/fence-operator-env-template.sh
+
+      - name: "Inversion — remove a required name from a copy (expects failure, naming the removed name)"
+        run: |
+          set -e
+          SCRATCH_DIR="$(mktemp -d)"
+          cp -r . "$SCRATCH_DIR/repo"
+          grep -v '^FMP_API_KEY=' scripts/provision.env.example > "$SCRATCH_DIR/repo/scripts/provision.env.example"
+          set +e
+          out="$(bash scripts/ci/fence-operator-env-template.sh "$SCRATCH_DIR/repo" 2>&1)"
+          rc=$?
+          set -e
+          rm -rf "$SCRATCH_DIR"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: expected exit 1 on a copy missing FMP_API_KEY but got $rc -- the fence does not bite."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'FMP_API_KEY'; then
+            echo "FATAL: exited 1 but did not name FMP_API_KEY as the missing name -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught a removed required name, naming it (exit $rc)."
+
   fence-push-secrets-strikes:
     name: push-production-secrets.sh — resource-resolution + secret-transport strike-proofs
     runs-on: ubuntu-latest
