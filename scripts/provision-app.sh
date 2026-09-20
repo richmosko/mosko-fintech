@@ -102,6 +102,14 @@ GIT_BRANCH="${GIT_BRANCH:-main}"
 BASE_DIRECTORY="/api"
 DOCKER_COMPOSE_LOCATION="/docker-compose.yaml"
 
+# Sec R2-F3 (PR #833 joint review): shape-guard every API/box-derived
+# string before it crosses into a remote shell command or a JSON body --
+# same UUID_RE deploy-app.sh:195 and smoke-pfin-exposure.sh use. Not a
+# live vector (values come from our own Coolify on our own box; a Docker
+# network name cannot contain a quote) -- defense-in-depth, cheap to add.
+UUID_RE='^[a-z0-9]{20,32}$'
+NETWORK_NAME_RE='^[a-zA-Z0-9][a-zA-Z0-9_.-]*$'
+
 APPLY=0
 for arg in "$@"; do
   case "$arg" in
@@ -125,13 +133,60 @@ sshx true >/dev/null 2>&1 || die "box at $BOX_IP not reachable over SSH with $AU
 sshx 'test -s /root/.pfin/coolify.env' >/dev/null 2>&1 \
   || die "no /root/.pfin/coolify.env on the box -- run scripts/provision-vps.sh --apply first"
 
+# Sec R2-F1 (PR #833 joint review): same api() shape as
+# scripts/deploy-app.sh -- the Coolify token is passed to a remote
+# python3 process's own argv (never to curl's argv or a curl -H header
+# value). This does NOT close the residual deploy-app.sh's own header
+# already names and does not claim to close (python3's own argv stays
+# ps-visible on the box, root-only, for that process's lifetime --
+# BACKLOG.md §7.36 item 60); it makes this script carry the SAME named
+# residual as its two siblings in this PR, instead of a strictly weaker,
+# unnamed one (the prior form put the token on curl's own -H argv).
+read -r -d '' PY_API_HELPER <<'PY' || true
+import json, sys, subprocess, tempfile, os
+
+def die(msg):
+    print(f"FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def api(token, method, path, body=None):
+    if '"' in token or "\n" in token:
+        die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    tmppath = None
+    cmd = ["curl", "-fsS", "-K", "-", "-X", method]
+    if body is not None:
+        fd, tmppath = tempfile.mkstemp(prefix="pfin-app-body-")
+        os.write(fd, body.encode())
+        os.close(fd)
+        cmd += ["-H", "Content-Type: application/json", "--data-binary", f"@{tmppath}"]
+    cmd += [f"http://localhost:8000/api/v1{path}"]
+    try:
+        result = subprocess.run(cmd, input=config.encode(), capture_output=True)
+    finally:
+        if tmppath:
+            os.unlink(tmppath)
+    if result.returncode != 0:
+        die(f"Coolify API {method} {path} failed: exit {result.returncode} ({result.stderr.decode(errors='replace').strip()[:200]})")
+    out = result.stdout.decode()
+    return json.loads(out) if out.strip() else None
+PY
+
 api() {
   local method="$1" path="$2" body="${3:-}"
-  if [[ -n "$body" ]]; then
-    sshx "TOKEN=\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-); curl -fsS -X $method -H \"Authorization: Bearer \$TOKEN\" -H 'Content-Type: application/json' -d '$body' http://localhost:8000/api/v1$path"
-  else
-    sshx "TOKEN=\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-); curl -fsS -X $method -H \"Authorization: Bearer \$TOKEN\" http://localhost:8000/api/v1$path"
-  fi
+  local env_assign="method=$(printf '%q' "$method") path=$(printf '%q' "$path") body=$(printf '%q' "$body")"
+  sshx "env $env_assign bash -s" <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "\$method" "\$path" "\$body" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, method, path = sys.argv[1], sys.argv[2], sys.argv[3]
+body = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
+result = api(token, method, path, body)
+print(json.dumps(result) if result is not None else '')
+PYEOF
+REMOTE
 }
 jqp() { python3 -c "import json,sys;$1"; }
 
@@ -139,9 +194,12 @@ step "Preflight — the Supabase-stack application must already be deployed"
 STACK_APP_JSON="$(api GET /applications | jqp "
 d=json.load(sys.stdin)
 m=[a for a in d if a['name']=='$SUPABASE_STACK_APP_NAME']
+if len(m) > 1:
+    raise SystemExit('FATAL: %d applications named %r (%r) -- refusing to pick one.' % (len(m), '$SUPABASE_STACK_APP_NAME', [x['uuid'] for x in m]))
 print(json.dumps(m[0]) if m else '')")"
 [[ -n "$STACK_APP_JSON" ]] || die "no application named '$SUPABASE_STACK_APP_NAME' -- run scripts/provision-supabase-stack.sh --apply first. This script needs the stack's live Docker network and project/environment identity."
 STACK_APP_UUID="$(echo "$STACK_APP_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
+[[ "$STACK_APP_UUID" =~ $UUID_RE ]] || die "resolved stack application uuid '$STACK_APP_UUID' does not match the expected uuid shape -- refusing to use it in a remote command."
 ok "Supabase-stack application '$SUPABASE_STACK_APP_NAME' exists — $STACK_APP_UUID"
 
 step "Resolving project/environment from the stack's own resource (never hard-coded)"
@@ -176,6 +234,7 @@ m=[p for p in d if p['name']=='$PROJECT_NAME']
 print(json.dumps(m[0]) if m else '')")"
   [[ -n "$PROJECT_JSON" ]] || die "path (b) fallback failed too: project '$PROJECT_NAME' does not exist. Fix PROJECT_NAME/ENVIRONMENT_NAME, or fix path (a)'s field-path guess in this script against the stack's actual live JSON shape."
   PROJECT_UUID="$(echo "$PROJECT_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
+  [[ "$PROJECT_UUID" =~ $UUID_RE ]] || die "resolved project uuid '$PROJECT_UUID' does not match the expected uuid shape -- refusing to use it in a remote command."
   ENV_JSON="$(api GET "/projects/$PROJECT_UUID/environments" | jqp "
 d=json.load(sys.stdin)
 m=[e for e in d if e['name']=='$ENVIRONMENT_NAME']
@@ -183,6 +242,7 @@ print(json.dumps(m[0]) if m else '')")"
   [[ -n "$ENV_JSON" ]] || die "path (b) fallback failed too: environment '$ENVIRONMENT_NAME' does not exist under project $PROJECT_UUID."
   ENV_UUID="$(echo "$ENV_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
 fi
+[[ "$ENV_UUID" =~ $UUID_RE ]] || die "resolved environment uuid '$ENV_UUID' does not match the expected uuid shape -- refusing to use it in a remote command or JSON body."
 ok "environment resolved — $ENV_UUID (project: $PROJECT_UUID)"
 
 step "Looking up the stack's live Docker network (for APP_STACK_NETWORK_NAME)"
@@ -197,16 +257,20 @@ if [[ "$NETWORK_COUNT" -ne 1 ]]; then
   die "expected exactly ONE non-default Docker network on the stack's 'meta' container, found $NETWORK_COUNT: [$STACK_NETWORKS]. Cannot safely pick which network 'app' should join -- investigate by hand (docker inspect on the box) rather than guessing."
 fi
 APP_STACK_NETWORK_NAME="$STACK_NETWORKS"
+[[ "$APP_STACK_NETWORK_NAME" =~ $NETWORK_NAME_RE ]] || die "stack network name '$APP_STACK_NETWORK_NAME' does not match the expected Docker-network-name shape -- refusing to use it in a remote command or JSON body."
 ok "stack network — $APP_STACK_NETWORK_NAME"
 
 step "Preflight — existing '$APP_NAME' resource (delete-if-stale-shape check)"
 OLD_APP_JSON="$(api GET /applications | jqp "
 d=json.load(sys.stdin)
 m=[a for a in d if a['name']=='$APP_NAME']
+if len(m) > 1:
+    raise SystemExit('FATAL: %d applications named %r (%r) -- refusing to pick one to delete.' % (len(m), '$APP_NAME', [x['uuid'] for x in m]))
 print(json.dumps(m[0]) if m else '')")"
 DELETE_NEEDED=0
 if [[ -n "$OLD_APP_JSON" ]]; then
   OLD_APP_UUID="$(echo "$OLD_APP_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
+  [[ "$OLD_APP_UUID" =~ $UUID_RE ]] || die "resolved existing '$APP_NAME' uuid '$OLD_APP_UUID' does not match the expected uuid shape -- refusing to use it in a DELETE call."
   OLD_BUILD_PACK="$(echo "$OLD_APP_JSON" | jqp "print(json.load(sys.stdin).get('build_pack',''))")"
   if [[ "$OLD_BUILD_PACK" == "dockercompose" ]]; then
     info "'$APP_NAME' ($OLD_APP_UUID) already exists as build_pack=dockercompose — treating as already-migrated, no delete needed."
@@ -263,6 +327,7 @@ d=json.load(sys.stdin)
 m=[s for s in d if s['name']=='localhost']
 print(m[0]['uuid'] if m else '')")"
   [[ -n "$SERVER_UUID" ]] || die "no server named 'localhost' -- expected Coolify's own auto-registered entry for this box"
+  [[ "$SERVER_UUID" =~ $UUID_RE ]] || die "resolved server uuid '$SERVER_UUID' does not match the expected uuid shape -- refusing to use it in a JSON body."
   CREATE_BODY="$(python3 -c "
 import json
 print(json.dumps({
@@ -275,6 +340,7 @@ print(json.dumps({
   'instant_deploy': False,
 }))")"
   APP_UUID="$(api POST /applications/public "$CREATE_BODY" | jqp "print(json.load(sys.stdin)['uuid'])")"
+  [[ "$APP_UUID" =~ $UUID_RE ]] || die "created-application uuid '$APP_UUID' does not match the expected uuid shape -- refusing to use it in later API calls."
   ok "application created — $APP_UUID (compose parse queued, not deployed — scripts/deploy-app.sh handles the deploy separately)"
 fi
 

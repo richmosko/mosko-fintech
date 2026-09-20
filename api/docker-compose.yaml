@@ -88,9 +88,19 @@ services:
     expose:
       - "3000"
     environment:
-      PUBLIC_SUPABASE_URL: ${PUBLIC_SUPABASE_URL}
-      PUBLIC_SUPABASE_ANON_KEY: ${PUBLIC_SUPABASE_ANON_KEY}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # Sec R2 optional hardening (PR #833 joint review): `:?` on the
+      # three boot-critical names, consistent with this file's own
+      # `networks:` block below and its stated rationale ("a loud
+      # failure here is preferable to a silent one at first request").
+      # `--require-env` (deploy-app.sh) only checks NAMES are present in
+      # the store, not that their VALUES are non-empty -- an empty-
+      # string store entry would otherwise interpolate to "" silently.
+      # Both app guards (hooks.server.ts, lib/server/supabase-admin.ts)
+      # already fail closed on that (truthiness checks), so this was not
+      # an exposure -- it moves the failure earlier, to container start.
+      PUBLIC_SUPABASE_URL: ${PUBLIC_SUPABASE_URL:?PUBLIC_SUPABASE_URL must be set -- see scripts/coolify-env.sh SET_ALLOWLIST.}
+      PUBLIC_SUPABASE_ANON_KEY: ${PUBLIC_SUPABASE_ANON_KEY:?PUBLIC_SUPABASE_ANON_KEY must be set -- minted by scripts/mint-supabase-jwt-keys.sh.}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY must be set -- minted by scripts/mint-supabase-jwt-keys.sh.}
       PDF_WORKER_SIGNING_KEY: ${PDF_WORKER_SIGNING_KEY}
       WORKER_ADMISSION_SHARED_SECRET: ${WORKER_ADMISSION_SHARED_SECRET}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
