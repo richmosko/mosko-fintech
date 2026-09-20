@@ -117,7 +117,26 @@ if [[ "$*" == "compose "*"ps -q"* ]]; then
 fi
 if [[ "$*" == *"inspect"* && "$*" == *"State.Running"* ]]; then
   cid="${*: -1}"
-  echo -e "true\t$cid\t2026-09-19T12:00:00Z"
+  # D-1 (PR #841, F/CTO-relayed 2026-09-20): real docker/Go templates
+  # only expand a string-literal ACTION -- {{"\t"}} -- into a real tab; a
+  # bare \t in the format's literal text passes through as two literal
+  # characters (backslash, t), unexpanded. This fixture used to emit a
+  # REAL tab unconditionally, regardless of which format string
+  # deploy-app.sh passed -- which meant this fence stayed green even
+  # while the live script shipped the pre-fix format and broke on the
+  # real box. Fixed: inspect the actual --format argument and reproduce
+  # each shape faithfully, so this fence can fail on the pre-fix string.
+  fmt=""
+  prev=""
+  for a in "$@"; do
+    if [[ "$prev" == "--format" ]]; then fmt="$a"; fi
+    prev="$a"
+  done
+  if [[ "$fmt" == *'{{"\t"}}'* ]]; then
+    printf 'true\t%s\t2026-09-19T12:00:00Z\n' "$cid"
+  else
+    printf 'true\\t%s\\t2026-09-19T12:00:00Z\n' "$cid"
+  fi
   exit 0
 fi
 if [[ "$*" == *"inspect"* && "$*" == *"NetworkSettings.Networks"* ]]; then
@@ -222,6 +241,21 @@ FAKE_DOCKER_CONTAINERS=2 run_scenario "ambiguous (non-compose): 2 running contai
 run_scenario "match: --require-env passes when all names present" 0 match \
   pfin-app --expect-base-directory /api --expect-build-pack dockercompose \
   --require-env PUBLIC_SUPABASE_URL,PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY >/dev/null || FAIL=1
+# D-2 (PR #841, F/CTO-relayed 2026-09-20): this --require-env guard runs
+# its python check inside an UNQUOTED <<REMOTE heredoc in deploy-app.sh;
+# a backtick or dollar-brace reference anywhere in that heredoc body
+# (even inside a comment, even inside the nested quoted <<'PYEOF' block)
+# is expanded by the LOCAL shell before anything is sent remotely. The
+# live incident: a `:?message`/`${VAR}` markdown-styled comment there
+# corrupted this exact scenario's own stderr with "command not found"
+# and "unbound variable" while the guard itself still reported PRESENT
+# and exited 0 -- a silently-corrupted PASS, not a caught failure. Assert
+# the captured output is clean of both symptoms.
+if grep -qE 'command not found|unbound variable' "$WORK/out.$$" 2>/dev/null; then
+  echo "FAIL: [match: --require-env passes when all names present] D-2 regression -- local heredoc parse corruption leaked into output:" >&2
+  cat "$WORK/out.$$" >&2
+  FAIL=1
+fi
 
 # 4. MISSING-ENV -- base_directory/build_pack match, but one required
 #    name is absent from the env store -- must refuse BEFORE any
