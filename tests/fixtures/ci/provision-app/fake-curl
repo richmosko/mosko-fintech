@@ -59,7 +59,20 @@
 #                              object; provision-app.sh only reports
 #                              this, never forces it -- api/Dockerfile
 #                              has no SOURCE_COMMIT/GIT_SHA guard).
-#   PATCH .../envs/bulk     -- 200, empty body.
+#   PATCH .../envs/bulk     -- validates the PATCHed body has a non-empty
+#                              `data` array of `{key, value}` objects (or
+#                              a `--data-binary @file` argv at all) --
+#                              200 empty body on success, else 400 with
+#                              Coolify's own MEASURED error text for a
+#                              body-less/malformed PATCH (team-lead,
+#                              2026-09-20 -- see the branch's own
+#                              comment). This is scenario 7's own create-
+#                              happy flow reaching this leg for real; the
+#                              watcher this fixes is what a bash-3.2
+#                              argument-position defect in
+#                              scripts/provision-app.sh (also fixed this
+#                              PR) would otherwise leave silently
+#                              undetected.
 #
 # Logs its OWN ARGV (never the -K config FILE's contents, never a
 # --data-binary body FILE's contents) to $FAKE_CURL_LOG, so the fence can
@@ -146,6 +159,34 @@ if [[ "$METHOD" == "GET" && "$URL" == *"/applications/$NEW_APP_UUID" ]]; then
 fi
 
 if [[ "$METHOD" == "PATCH" && "$URL" == *"/envs/bulk" ]]; then
+  # MEASURED (team-lead, 2026-09-20): a bash-3.2 argument-position brace-
+  # expansion defect (fixed in scripts/provision-app.sh -- see that
+  # script's own header) once turned this PATCH's body into an empty
+  # string at the CALLER, which api()'s remote PY_API_HELPER then treats
+  # as `body=None` (an empty-but-truthy-check-false argv value) --
+  # `--data-binary` and the `Content-Type` header are BOTH skipped
+  # entirely in that case, and Coolify 4.3.18's own real response to
+  # that exact shape is `400 {"message":"Content-Type must be
+  # application/json"}`, reproduced verbatim here. A missing
+  # `--data-binary @file` argv (BODY_FILE empty) is that same "no body
+  # sent at all" shape; a present-but-structurally-wrong body (JSON
+  # without a non-empty `data` array of `{key,value}` objects) 400s the
+  # same way, since Coolify would reject that shape too.
+  if [[ -z "$BODY_FILE" || ! -f "$BODY_FILE" ]]; then
+    respond '{"message":"Content-Type must be application/json"}' 400
+  fi
+  if ! python3 -c "
+import json, sys
+d = json.load(open('$BODY_FILE'))
+rows = d.get('data')
+if not isinstance(rows, list) or not rows:
+    sys.exit(1)
+for r in rows:
+    if not isinstance(r, dict) or 'key' not in r or 'value' not in r:
+        sys.exit(1)
+" >/dev/null 2>&1; then
+    respond '{"message":"Content-Type must be application/json"}' 400
+  fi
   respond '{}'
 fi
 

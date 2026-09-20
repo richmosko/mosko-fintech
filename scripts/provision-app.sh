@@ -478,9 +478,31 @@ fi
 rm -f /tmp/app-source-commit-check.$$
 
 step "Setting APP_STACK_NETWORK_NAME (non-secret, unconditional overwrite)"
-api PATCH "/applications/$APP_UUID/envs/bulk" "$(python3 -c "
+# MEASURED (team-lead, 2026-09-20, live re-run on the operator's Mac):
+# this leg previously built the PATCH body INLINE as an argument to
+# `api`, i.e. `api PATCH "..." "$(python3 -c "...")"`. Under macOS
+# `/bin/bash` 3.2.57 (what `#!/usr/bin/env bash` resolves to on the
+# operator's box -- NOT what CI's Linux bash 5 resolves to, so no fence
+# run ever exercised this), that argument-position command substitution,
+# nested inside an outer double-quoted string with its OWN embedded
+# double- and single-quoted python literal, is mis-parsed: the dict
+# literal's braces undergo brace expansion, splitting `{'key': ...,
+# 'value': ...}` into two separate words at the comma and handing
+# python two syntactically broken `-c` scripts (2 SyntaxErrors,
+# reproduced locally under /bin/bash). The result was an EMPTY PATCH
+# body, which Coolify rejected with 400 "Content-Type must be
+# application/json" (curl still sent the header; the body itself was
+# gone). CREATE_BODY above (this script's create-body construction) uses
+# the SAME python shape but as a plain ASSIGNMENT first, which does NOT
+# trigger this -- confirmed by isolating both shapes under /bin/bash.
+# Fix: build the body into a variable FIRST, same as CREATE_BODY, then
+# pass the variable (never an inline command substitution) as api()'s
+# argument. This was the ONLY api-call site in this script using the
+# inline-argument shape (swept: `grep -n 'api [A-Z]* .*"\$(python3'`).
+ENV_BODY="$(python3 -c "
 import json
-print(json.dumps({'data': [{'key': 'APP_STACK_NETWORK_NAME', 'value': '$APP_STACK_NETWORK_NAME'}]}))")" >/dev/null
+print(json.dumps({'data': [{'key': 'APP_STACK_NETWORK_NAME', 'value': '$APP_STACK_NETWORK_NAME'}]}))")"
+api PATCH "/applications/$APP_UUID/envs/bulk" "$ENV_BODY" >/dev/null
 ENVS_AFTER="$(api GET "/applications/$APP_UUID/envs")"
 READBACK="$(echo "$ENVS_AFTER" | jqp "
 d=json.load(sys.stdin)
