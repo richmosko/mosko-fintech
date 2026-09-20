@@ -21,6 +21,17 @@
 #               absence assertion must fail (the "blanked, not deleted"
 #               shape docs/deployment-runbook.md §6.8 step 10 names).
 #   ok       -- canned success responses throughout (happy path).
+#
+# Sec F-8 (PR #846 review) -- MODE-INDEPENDENT: `GET .../applications/<uuid>`
+# (coolify-env.sh's new per-resource PFIN_DB_USER reverse-name-lookup,
+# exercised whenever APP_QUERY is itself uuid-shaped, which every scenario
+# in this fence's own harness passes) returns `{"name": "$FAKE_RESOLVED_NAME"}`
+# regardless of $FAKE_CURL_MODE -- this call has nothing to do with the
+# envs/bulk read-back-mismatch or blanked-delete scenarios those modes
+# exist for, and must not be shadowed by their fallthrough branches.
+# Matched BEFORE the mode dispatch, and narrowly (must NOT match
+# `.../applications/<uuid>/envs` or `.../envs/bulk`, both real call shapes
+# that need their own mode-specific handling below).
 
 set -euo pipefail
 
@@ -34,6 +45,11 @@ for a in "$@"; do
   prev="$a"
 done
 URL="${*: -1}"
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications/"* && "$URL" != *"/envs"* ]]; then
+  printf '{"name":"%s"}\n' "${FAKE_RESOLVED_NAME:-pfin-back-etl}"
+  exit 0
+fi
 
 case "${FAKE_CURL_MODE:-ok}" in
   mismatch)

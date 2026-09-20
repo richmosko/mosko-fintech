@@ -29,9 +29,15 @@
 # checked by measurement, not by re-reading the script and agreeing with
 # itself.
 #
-# Exit 0 only if all three scenarios behave exactly as specified above.
-# Any other outcome (wrong exit code, OR the token leaking into a logged
-# argv) fails closed.
+# Also proves (Sec F-5, PR #846 review) that `set`'s value-shape
+# constraints on PFIN_DB_USER (one of the three DB roles this repo mints)
+# and ADMISSION_PROBE_PUBLIC_URLS (bare comma-separated https:// FQDNs,
+# echoed verbatim into Discord alerts) are load-bearing, not decorative --
+# each accepts its documented valid shapes and refuses every invalid one.
+#
+# Exit 0 only if every scenario behaves exactly as specified above. Any
+# other outcome (wrong exit code, OR the token leaking into a logged argv)
+# fails closed.
 
 set -euo pipefail
 
@@ -101,6 +107,7 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
   [[ "\$CMDLINE" == "-s" ]] && CMDLINE="bash -s"
   REWRITTEN="\$(sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
   PATH="$FAKE_BIN:\$PATH" FAKE_CURL_LOG="\$FAKE_CURL_LOG" FAKE_CURL_MODE="\$FAKE_CURL_MODE" \\
+    FAKE_RESOLVED_NAME="\$FAKE_RESOLVED_NAME" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -111,12 +118,20 @@ EOF
 chmod +x "$FAKE_BIN/ssh"
 
 run_scenario() {
+  # Sec F-8 (PR #846 review): reads FAKE_RESOLVED_NAME from ITS OWN calling
+  # environment (not a new positional param, to avoid reshaping every
+  # existing call site) -- the name coolify-env.sh's new reverse-uuid-
+  # lookup should resolve $APP_QUERY to. Set it in the caller's shell
+  # immediately before a call that needs a specific resource identity;
+  # defaults to pfin-back-etl (matching every scenario's literal
+  # 'abc123def456ghi789jk01' APP_QUERY when the test doesn't care).
   local desc="$1" expect_exit="$2" mode="$3"; shift 3
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   set +e
   BOX_IP=127.0.0.1 AUTOMATION_KEY=/dev/null REPO_ROOT="$REPO_ROOT" \
     PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$log" FAKE_CURL_MODE="$mode" \
+    FAKE_RESOLVED_NAME="${FAKE_RESOLVED_NAME:-pfin-back-etl}" \
     bash "$COOLIFY_ENV_SH" "$@" < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -172,6 +187,92 @@ COOLIFY_ENV_SH="$WIDENED"
 run_scenario "manifest refusal holds even with a WIDENED SET_ALLOWLIST" 1 ok \
   set abc123def456ghi789jk01 SUPABASE_SERVICE_ROLE_KEY=x || FAIL=1
 COOLIFY_ENV_SH="$COOLIFY_ENV_SH_SAVED"
+
+# 5. BACKLOG.md §7.36 item 68 (W-2): the six new SET_ALLOWLIST additions
+#    (PFIN_DB_HOST / PFIN_DB_PORT / PFIN_DB_NAME / PFIN_DB_USER / PLAID_ENV
+#    / ADMISSION_PROBE_PUBLIC_URLS) must each (a) actually be present in
+#    the committed SET_ALLOWLIST array and (b) NOT collide with a
+#    secrets-manifest.yml-declared name -- the exact risk class this
+#    script's own header warns about ("if a name that is genuinely secret
+#    is ever proposed for SET_ALLOWLIST, that is the wrong fix"). Each
+#    name is struck by running a real preflight `set` call (no --apply)
+#    against it -- if either condition were false, the manifest-refusal
+#    die() (scenario 1's own mechanism) would fire and this would exit 1
+#    naming the offending name, not 0.
+# F-5 (PR #846 review) added value-shape constraints on PFIN_DB_USER and
+# ADMISSION_PROBE_PUBLIC_URLS specifically -- the placeholder 'x' value
+# this loop used for every OTHER name no longer clears their own shape
+# check, so each gets a value that actually satisfies it here. A case
+# statement, not an associative array -- coolify-env.sh's own header
+# (line ~236) documents why: the OPERATOR's own /bin/bash is stock macOS
+# 3.2, no `declare -A`, and this fence follows the same discipline even
+# though it is CI-only today.
+valid_value_for() {
+  case "$1" in
+    PFIN_DB_USER) echo "pfin_etl" ;;
+    ADMISSION_PROBE_PUBLIC_URLS) echo "https://example.com" ;;
+    *) echo "x" ;;
+  esac
+}
+for NEW_NAME in PFIN_DB_HOST PFIN_DB_PORT PFIN_DB_NAME PFIN_DB_USER PLAID_ENV ADMISSION_PROBE_PUBLIC_URLS; do
+  run_scenario "new allowlist name '$NEW_NAME' resolves (present + non-manifest)" 0 ok \
+    set abc123def456ghi789jk01 "${NEW_NAME}=$(valid_value_for "$NEW_NAME")" || FAIL=1
+done
+
+# 6. F-5 (PR #846 review) -- PFIN_DB_USER value-shape guard. Only the
+#    three DB roles this repo mints are accepted; anything else refuses,
+#    even though the NAME itself is allowlisted.
+run_scenario "PFIN_DB_USER value-shape: refuses a non-role value" 1 ok \
+  set abc123def456ghi789jk01 PFIN_DB_USER=postgres || FAIL=1
+
+# 7. F-5 -- PFIN_DB_USER accepts each of the three minted roles (not just
+#    the one scenario 5 happens to use) -- ON THE RESOURCE THAT ROLE IS
+#    VALID FOR (Sec F-8, PR #846 review: the gate is now per-resource, so
+#    each role needs FAKE_RESOLVED_NAME set to its OWN matching resource,
+#    not the loop's former shared default).
+for PAIR in "pfin_etl:pfin-back-etl" "pfin_provider_sync:pfin-provider-sync" "authenticator:pfin-provider-sync"; do
+  VALID_ROLE="${PAIR%%:*}"
+  FAKE_RESOLVED_NAME="${PAIR#*:}" \
+  run_scenario "PFIN_DB_USER value-shape: accepts '$VALID_ROLE' on '${PAIR#*:}'" 0 ok \
+    set abc123def456ghi789jk01 "PFIN_DB_USER=${VALID_ROLE}" || FAIL=1
+done
+
+# 8. F-5 -- ADMISSION_PROBE_PUBLIC_URLS value-shape guard. Userinfo,
+#    query-strings, and non-https schemes must all refuse -- this is the
+#    exact exfil/credential-embedding shape the guard exists to close off.
+for BAD_URL in "http://example.com" "https://user:pass@example.com" "https://example.com/?x=1" "https://example.com,not-a-url"; do
+  run_scenario "ADMISSION_PROBE_PUBLIC_URLS value-shape: refuses '$BAD_URL'" 1 ok \
+    set abc123def456ghi789jk01 "ADMISSION_PROBE_PUBLIC_URLS=${BAD_URL}" || FAIL=1
+done
+
+# 9. F-5 -- ADMISSION_PROBE_PUBLIC_URLS accepts the documented
+#    comma-separated multi-FQDN shape, not just a single URL.
+run_scenario "ADMISSION_PROBE_PUBLIC_URLS value-shape: accepts multi-FQDN" 0 ok \
+  set abc123def456ghi789jk01 "ADMISSION_PROBE_PUBLIC_URLS=https://a.example.com,https://b.example.com" || FAIL=1
+
+# 10. F-8 (PR #846 review) -- the per-resource gate itself: a value VALID
+#     IN SHAPE (passes scenario 6's global check) but wrong for THIS
+#     resource must still refuse. 'authenticator' is legitimate on
+#     pfin-provider-sync (scenario 7) but must be REFUSED on pfin-back-etl
+#     -- this is the exact defect F-8 found (ETL silently accepted onto
+#     PostgREST's own identity, defeating ADR-041/SELF-214 B8's dedicated-
+#     role rationale).
+FAKE_RESOLVED_NAME="pfin-back-etl" \
+run_scenario "PFIN_DB_USER per-resource: refuses 'authenticator' on pfin-back-etl" 1 ok \
+  set abc123def456ghi789jk01 PFIN_DB_USER=authenticator || FAIL=1
+
+# 11. F-8 -- the converse: 'pfin_etl' is legitimate on pfin-back-etl
+#     (scenario 7) but must be REFUSED on pfin-provider-sync.
+FAKE_RESOLVED_NAME="pfin-provider-sync" \
+run_scenario "PFIN_DB_USER per-resource: refuses 'pfin_etl' on pfin-provider-sync" 1 ok \
+  set abc123def456ghi789jk01 PFIN_DB_USER=pfin_etl || FAIL=1
+
+# 12. F-8 -- PFIN_DB_USER may only be set on the two documented resources
+#     at all; a third, unrelated resource name must refuse outright, even
+#     with an otherwise-valid role value.
+FAKE_RESOLVED_NAME="pfin-app" \
+run_scenario "PFIN_DB_USER per-resource: refuses on an unrelated resource ('pfin-app')" 1 ok \
+  set abc123def456ghi789jk01 PFIN_DB_USER=pfin_etl || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

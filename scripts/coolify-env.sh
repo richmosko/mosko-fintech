@@ -97,7 +97,31 @@
 # deploys (BACKLOG.md §7.36 item 26, Sec-ruled non-secret production
 # override; docs/deployment-runbook.md §5/§7). Same non-manifest-name
 # status, same independent-refusal backstop.
-SET_ALLOWLIST=(PGRST_DB_SCHEMAS MIGRATOR_DB_USER PUBLIC_SUPABASE_URL PUBLIC_SUPABASE_ANON_KEY PFIN_DB_SSLMODE)
+#
+# PFIN_DB_HOST / PFIN_DB_PORT / PFIN_DB_NAME / PFIN_DB_USER -- added for
+# item 68's W-2 (worker DB-role handoff; docs/deployment-runbook.md §7.2).
+# All four are non-secret connection-shape config, not credentials -- the
+# credential is PFIN_DB_PASSWORD, which stays OFF this allowlist (it IS a
+# secrets-manifest.yml production_only name, so the manifest-refusal check
+# above would reject it even if someone added it here; scripts/db-role-
+# handoff.sh is its own, separate, dedicated write path). Confirmed
+# non-manifest names (checked against secrets-manifest.yml at the same PR
+# that added this entry). Values per worker, per docs/deployment-runbook.md
+# §4/§6 (the stack's own internal service DNS, not each worker's local-dev
+# .env.example default): PFIN_DB_HOST=db, PFIN_DB_PORT=5432,
+# PFIN_DB_NAME=postgres (the actual database name -- "pfin" is the SCHEMA,
+# not the database), PFIN_DB_USER=pfin_etl or pfin_provider_sync.
+#
+# PLAID_ENV -- added for provider-sync's deploy. Non-secret Plaid API tier
+# selector ("sandbox"/"production"), already declared as such in
+# workers/provider-sync/.env.example ("non-secret — Plaid API tier").
+#
+# ADMISSION_PROBE_PUBLIC_URLS -- added for provider-sync's SELF-279 CA-2
+# recurring reachability probe. Non-secret by construction (public https
+# FQDNs, comma-separated; unset/empty is fail-safe no-op per
+# workers/provider-sync/.env.example's own "non-secret" declaration) --
+# never a credential, never a URL carrying embedded creds (Note N1 there).
+SET_ALLOWLIST=(PGRST_DB_SCHEMAS MIGRATOR_DB_USER PUBLIC_SUPABASE_URL PUBLIC_SUPABASE_ANON_KEY PFIN_DB_SSLMODE PFIN_DB_HOST PFIN_DB_PORT PFIN_DB_NAME PFIN_DB_USER PLAID_ENV ADMISSION_PROBE_PUBLIC_URLS)
 # MIGRATOR_DB_PASSWORD is delete-only, never settable here (it is minted
 # ONLY by scripts/provision-migrator-app.sh's own mint-if-absent step,
 # ADR-072 Amendment 4 Decision B -- routing it through this script's
@@ -235,6 +259,39 @@ for k in "${KEYS[@]}"; do
   for a in "${ALLOW[@]}"; do [[ "$k" == "$a" ]] && allowed=1 && break; done
   [[ $allowed -eq 1 ]] || die "'$k' is not on the $OP allowlist (${ALLOW[*]}) -- add it to this script's own ALLOWLIST array first (Sec joint-review) if this is a genuinely new, intentional case, never as a one-off bypass."
 done
+
+# --- Step 1b: value-shape constraints on specific SET_ALLOWLIST names -----
+# Sec F-5 (PR #846 review). Name-only allowlisting lets ANY value ride
+# under an approved NAME -- these two carry consequences a bare name-check
+# cannot catch:
+#   PFIN_DB_USER -- sets the identity a worker's DB connection
+#   authenticates as. Restricting the value to the three DB roles this
+#   repo ever mints (§6.1/§6.2/pre-cutover authenticator) prevents an
+#   operator typo, or a copy-paste of a DIFFERENT worker's value, from
+#   silently pointing a worker at `postgres` or some other identity with
+#   far broader privilege than any minted role.
+#   ADMISSION_PROBE_PUBLIC_URLS -- echoed VERBATIM into Discord alerts
+#   (workers/provider-sync/.env.example Note N1). Restricting to bare
+#   comma-separated https:// FQDNs (no userinfo, no query-string, no path)
+#   closes off embedding a credential or a tracking/exfil query string in
+#   a value guaranteed to be posted somewhere an operator will read it.
+if [[ "$OP" == "set" ]]; then
+  for i in "${!KEYS[@]}"; do
+    k="${KEYS[$i]}"; v="${VALUES[$i]}"
+    case "$k" in
+      PFIN_DB_USER)
+        case "$v" in
+          pfin_etl|pfin_provider_sync|authenticator) ;;
+          *) die "'PFIN_DB_USER' value '$v' is not one of the three DB roles this repo mints (pfin_etl, pfin_provider_sync, authenticator) -- refusing. If a new role name is genuinely intentional, add it here (Sec joint-review), never as a one-off bypass." ;;
+        esac
+        ;;
+      ADMISSION_PROBE_PUBLIC_URLS)
+        [[ "$v" =~ ^https://[A-Za-z0-9.-]+(,https://[A-Za-z0-9.-]+)*$ ]] \
+          || die "'ADMISSION_PROBE_PUBLIC_URLS' value does not match the required shape (bare comma-separated https:// FQDNs, no userinfo, no query-string, no path) -- this value is echoed verbatim into Discord alerts (workers/provider-sync/.env.example Note N1). Refusing."
+        ;;
+    esac
+  done
+fi
 
 # --- Step 2: secrets-manifest.yml refusal (set only) ----------------------
 # Pure-text extraction, not PyYAML -- this script runs on the OPERATOR's
@@ -378,6 +435,66 @@ fi
 # directly; this is what makes that safe.
 [[ "$APP_UUID" =~ $UUID_RE ]] || die "resolved UUID '$APP_UUID' is not uuid-shaped -- refusing to interpolate API output into a remote shell"
 ok "application '$APP_QUERY' -> $APP_UUID"
+
+# --- Step 3b: PFIN_DB_USER is per-resource, not global (Sec F-8, PR #846
+# review) ---------------------------------------------------------------
+# Step 1b's shape check above bars a NONSENSE value (`postgres`, a typo)
+# cheaply, before any network call. It does NOT catch a VALID-shaped value
+# on the WRONG resource: `PFIN_DB_USER=authenticator` passes Step 1b's
+# check unconditionally, so it was accepted on `pfin-back-etl` just as
+# readily as on `pfin-provider-sync` -- putting the ETL onto PostgREST's
+# own `authenticator` identity and defeating the independent-revocability
+# rationale ADR-041 / SELF-214 finding B8 chose the dedicated `pfin_etl`
+# role for in the first place. This step closes that: once the resource
+# is known (resolved above), gate the value against THAT resource's own
+# allowed set.
+if [[ "$OP" == "set" ]]; then
+  for k in "${KEYS[@]}"; do
+    if [[ "$k" == "PFIN_DB_USER" ]]; then
+      # RESOLVED_NAME: APP_QUERY is already the canonical name when the
+      # operator typed one (the common case); only when APP_QUERY was
+      # itself UUID-shaped do we not yet know the name -- resolve it with
+      # one more read-only API call, same api() helper Step 3 just used.
+      if [[ "$APP_QUERY" =~ $UUID_RE ]]; then
+        RESOLVED_NAME="$(sshx "env app_uuid=$(printf '%q' "$APP_UUID") bash -s" <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "\$app_uuid" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, uuid = sys.argv[1], sys.argv[2]
+app = api(token, "GET", f"/applications/{uuid}")
+print(app.get("name", ""))
+PYEOF
+REMOTE
+)"
+        [[ -n "$RESOLVED_NAME" ]] || die "could not resolve application uuid '$APP_UUID' back to a name -- refusing to set PFIN_DB_USER without knowing which resource this is (Sec F-8)."
+      else
+        RESOLVED_NAME="$APP_QUERY"
+      fi
+      v=""
+      for i in "${!KEYS[@]}"; do [[ "${KEYS[$i]}" == "PFIN_DB_USER" ]] && v="${VALUES[$i]}"; done
+      case "$RESOLVED_NAME" in
+        pfin-back-etl)
+          case "$v" in
+            pfin_etl) ;;
+            *) die "'PFIN_DB_USER=$v' is not valid for resource '$RESOLVED_NAME' -- this resource's ONLY minted role is pfin_etl (ADR-041 / SELF-214 B8: dedicated, independently-revocable). Refusing to point the ETL worker at any other identity, including 'authenticator' (PostgREST's own)." ;;
+          esac
+          ;;
+        pfin-provider-sync)
+          case "$v" in
+            pfin_provider_sync|authenticator) ;;
+            *) die "'PFIN_DB_USER=$v' is not valid for resource '$RESOLVED_NAME' -- this resource accepts pfin_provider_sync (post-§6.2-cutover, the dedicated role) or authenticator (pre-cutover, TRANSITIONAL -- BACKLOG.md §7.36 item 71 books the written expiry condition; remove this arm's 'authenticator' branch once §6.2 cutover is confirmed run). Any other value refused." ;;
+          esac
+          ;;
+        *)
+          die "PFIN_DB_USER may only be set on 'pfin-back-etl' or 'pfin-provider-sync' -- resource '$RESOLVED_NAME' is neither. Refusing (Sec F-8: no other resource is a documented holder of a PFIN_DB_* database identity)."
+          ;;
+      esac
+      ok "PFIN_DB_USER='$v' valid for resource '$RESOLVED_NAME'"
+    fi
+  done
+fi
 
 # --- Step 4: preflight read of current store state -------------------------
 step "Current store state"
