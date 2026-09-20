@@ -2011,6 +2011,750 @@ jobs:
           fi
           echo "OK: fence refused a 'ports:' block it could not read, failing closed (exit $rc)."
 
+      - name: "Canary — golden 7: second top-level network, service attached to both (corrupts a copy of the REAL compose; expects structural refusal, exit 2)"
+        # Sec F-2 (PR #844 joint review): the pre-existing vector-4 code used
+        # `head -1` on the first key/name: line, so a second top-level
+        # network with the service attached to both went GREEN silently —
+        # exactly the multi-attachment axis this fence exists to lint.
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          python3 - "$SCRATCH" <<'PY'
+          import sys
+          src = open('api/docker-compose.yaml').read()
+          src = src.replace(
+              "    networks:\n      - default\n",
+              "    networks:\n      - default\n      - extra\n",
+          )
+          src = src.replace(
+              "networks:\n  default:\n    name: ${APP_STACK_NETWORK_NAME:?APP_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-app.sh. Do NOT default this to a guessed value.}\n    external: true\n",
+              "networks:\n  default:\n    name: ${APP_STACK_NETWORK_NAME:?APP_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-app.sh. Do NOT default this to a guessed value.}\n    external: true\n  extra:\n    name: some-other-network\n    external: true\n",
+          )
+          open(sys.argv[1], "w").write(src)
+          PY
+          if ! grep -q '  extra:' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the app compose's networks: block anchors to insert a second network after -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh "$SCRATCH" 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: golden 7 expected exit 2 (structural refusal) but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'multi-attachment'; then
+            echo "FATAL: golden 7 exited 2 but no multi-attachment token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a second attached network on the REAL app compose (exit $rc)."
+
+      - name: "Canary — golden 8: network key renamed away from 'default' (corrupts a copy of the REAL compose; expects structural refusal, exit 2)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          sed 's/^  default:$/  stack:/' api/docker-compose.yaml > "$SCRATCH"
+          if ! grep -q '^  stack:$' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the app compose's '  default:' key to rename -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh "$SCRATCH" 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: golden 8 expected exit 2 (structural refusal) but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "not 'default'"; then
+            echo "FATAL: golden 8 exited 2 but no renamed-key token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a network key renamed away from 'default' on the REAL app compose (exit $rc)."
+
+      - name: "Canary — golden 9: 'external: true' removed (corrupts a copy of the REAL compose; expects violation, exit 1, vector-4b token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          grep -v '^    external: true$' api/docker-compose.yaml > "$SCRATCH"
+          if grep -q '^    external: true$' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't remove the app compose's 'external: true' line -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-app-private-bind.sh "$SCRATCH" 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: golden 9 expected exit 1 but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 4b'; then
+            echo "FATAL: golden 9 exited 1 but no vector-4b token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a missing 'external: true' on the REAL app compose (exit $rc)."
+
+  fence-worker-bind:
+    name: worker private-bind config-lint (etl / pdf-render / provider-sync compose)
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 68 (F/CTO-ruled fleet convention, 2026-09-19;
+    # ADR-073). One parametrised script (scripts/ci/fence-worker-private-
+    # bind.sh) covers all three worker composes — same four vectors
+    # fence-app-bind's own fence checks (ports:, proxy Domain, network_mode:
+    # host, external-network reference), parametrised by sentinel slug +
+    # per-worker network-var name. Coverage shape (team-lead directive,
+    # 2026-09-20, PR #844 review — a leg that only runs on one compose
+    # cannot fail for the other two): the FULL inversion sweep (all four
+    # vectors + the sentinel/structural golden) runs against EACH of the
+    # three composes independently, corrupting a copy of the REAL file, not
+    # a fixture (same discipline as fence-app-bind's own canary) — RT-27
+    # covers pdf-render/provider-sync's own admission-port exposure
+    # separately; this fence is their ONLY network-attachment check.
+    #
+    # Run-always (no paths filter), matching every sibling private-bind
+    # fence's own reasoning: a path-trigger leaves a trigger-drift
+    # meta-risk.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Production-mode — etl compose (expects clean; exit 0)
+        run: bash scripts/ci/fence-worker-private-bind.sh workers/etl/docker-compose.yaml etl ETL_STACK_NETWORK_NAME
+
+      - name: Production-mode — pdf-render compose (expects clean; exit 0)
+        run: bash scripts/ci/fence-worker-private-bind.sh workers/pdf-render/docker-compose.yaml pdf-render PDF_RENDER_STACK_NETWORK_NAME
+
+      - name: Production-mode — provider-sync compose (expects clean; exit 0)
+        run: bash scripts/ci/fence-worker-private-bind.sh workers/provider-sync/docker-compose.yaml provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME
+
+      - name: "Inversion — etl golden 1: published ports (corrupts a copy; expects violation, exit 1, vector-1 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          awk '{ print } /build: \./ && !done { print "    ports:"; print "      - \"9999:5432\""; done=1 }' \
+            workers/etl/docker-compose.yaml > "$SCRATCH"
+          if ! grep -q '9999:5432' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find an etl 'build: .' anchor to insert ports: after -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" etl ETL_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: etl canary expected exit 1 but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: etl canary exited 1 but no vector-1 'ports:' token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a published port on the etl compose, on the REAL file (exit $rc)."
+
+      - name: "Inversion — etl golden 2: reverse-proxy Domain / public-FQDN request (expects violation, exit 1, vector-2 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          sed 's/^services:/services:\n  x:\n    labels:\n      - "traefik.http.routers.x.rule=Host(`x.example.com`)"/' \
+            workers/etl/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" etl ETL_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: etl golden 2 expected exit 1 but got $rc -- failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 2:'; then
+            echo "FATAL: etl golden 2 exited 1 but no vector-2 token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught a compose-committed Domain request via its own token (exit $rc)."
+
+      - name: "Inversion — etl golden 3: network_mode: host (expects violation, exit 1, vector-3 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          awk '{ print } /build: \./ && !done { print "    network_mode: host"; done=1 }' \
+            workers/etl/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" etl ETL_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: etl golden 3 expected exit 1 but got $rc -- failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 3:'; then
+            echo "FATAL: etl golden 3 exited 1 but no vector-3 token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught network_mode: host via its own token (exit $rc)."
+
+      - name: "Inversion — etl golden 4: foreign/mistyped external-network reference (expects violation, exit 1, vector-4 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          sed 's/\${ETL_STACK_NETWORK_NAME:?[^}]*}/a-hardcoded-literal-network-name/' \
+            workers/etl/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" etl ETL_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: etl golden 4 expected exit 1 but got $rc -- failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 4:'; then
+            echo "FATAL: etl golden 4 exited 1 but no vector-4 token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught a mistyped/foreign external-network reference via its own token (exit $rc)."
+
+      - name: "Inversion — etl golden 5: sentinel absent (expects structural refusal, exit 2)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          grep -v 'fence-etl-private-bind: target' workers/etl/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" etl ETL_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: etl golden 5 expected exit 2 (structural refusal) but got $rc."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'sentinel not found'; then
+            echo "FATAL: etl golden 5 exited 2 but the expected structural message is absent -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence refused a file with no confirmed etl-application sentinel, failing closed (exit $rc)."
+
+      - name: "Canary — etl golden 6: second top-level network, service attached to both (corrupts a copy; expects structural refusal, exit 2)"
+        # Sec F-2 (PR #844 joint review): the pre-existing vector-4 code used
+        # `head -1` on the first key/name: line, so a second top-level
+        # network with the service attached to both went GREEN silently.
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          python3 - "$SCRATCH" <<'PY'
+          import sys
+          src = open('workers/etl/docker-compose.yaml').read()
+          src = src.replace(
+              "    networks:\n      - default\n",
+              "    networks:\n      - default\n      - extra\n",
+              1,
+          )
+          src = src.replace(
+              "networks:\n  default:\n    name: ${ETL_STACK_NETWORK_NAME:?ETL_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-worker.sh pfin-back-etl. Do NOT default this to a guessed value.}\n    external: true\n",
+              "networks:\n  default:\n    name: ${ETL_STACK_NETWORK_NAME:?ETL_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-worker.sh pfin-back-etl. Do NOT default this to a guessed value.}\n    external: true\n  extra:\n    name: some-other-network\n    external: true\n",
+          )
+          open(sys.argv[1], "w").write(src)
+          PY
+          if ! grep -q '  extra:' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the etl compose's networks: block anchors to insert a second network after -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" etl ETL_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: etl golden 6 expected exit 2 (structural refusal) but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'multi-attachment'; then
+            echo "FATAL: etl golden 6 exited 2 but no multi-attachment token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a second attached network on the REAL etl compose (exit $rc)."
+
+      - name: "Canary — etl golden 7: network key renamed away from 'default' (corrupts a copy; expects structural refusal, exit 2)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          sed 's/^  default:$/  stack:/' workers/etl/docker-compose.yaml > "$SCRATCH"
+          if ! grep -q '^  stack:$' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the etl compose's '  default:' key to rename -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" etl ETL_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: etl golden 7 expected exit 2 (structural refusal) but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "not 'default'"; then
+            echo "FATAL: etl golden 7 exited 2 but no renamed-key token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a network key renamed away from 'default' on the REAL etl compose (exit $rc)."
+
+      - name: "Canary — etl golden 8: 'external: true' removed (corrupts a copy; expects violation, exit 1, vector-4b token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          grep -v '^    external: true$' workers/etl/docker-compose.yaml > "$SCRATCH"
+          if grep -q '^    external: true$' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't remove the etl compose's 'external: true' line -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" etl ETL_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: etl golden 8 expected exit 1 but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 4b'; then
+            echo "FATAL: etl golden 8 exited 1 but no vector-4b token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a missing 'external: true' on the REAL etl compose (exit $rc)."
+
+      - name: "Inversion — pdf-render golden 1: published ports (corrupts a copy; expects violation, exit 1, vector-1 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          awk '{ print } /build: \./ && !done { print "    ports:"; print "      - \"9999:8080\""; done=1 }' \
+            workers/pdf-render/docker-compose.yaml > "$SCRATCH"
+          if ! grep -q '9999:8080' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find a pdf-render 'build: .' anchor to insert ports: after -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" pdf-render PDF_RENDER_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: pdf-render golden 1 expected exit 1 but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: pdf-render golden 1 exited 1 but no vector-1 'ports:' token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a published port on the pdf-render compose, on the REAL file (exit $rc)."
+
+      - name: "Inversion — pdf-render golden 2: reverse-proxy Domain / public-FQDN request (expects violation, exit 1, vector-2 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          sed 's/^services:/services:\n  x:\n    labels:\n      - "traefik.http.routers.x.rule=Host(`x.example.com`)"/' \
+            workers/pdf-render/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" pdf-render PDF_RENDER_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: pdf-render golden 2 expected exit 1 but got $rc -- failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 2:'; then
+            echo "FATAL: pdf-render golden 2 exited 1 but no vector-2 token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught a compose-committed Domain request via its own token (exit $rc)."
+
+      - name: "Inversion — pdf-render golden 3: network_mode: host (expects violation, exit 1, vector-3 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          awk '{ print } /build: \./ && !done { print "    network_mode: host"; done=1 }' \
+            workers/pdf-render/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" pdf-render PDF_RENDER_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: pdf-render golden 3 expected exit 1 but got $rc -- failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 3:'; then
+            echo "FATAL: pdf-render golden 3 exited 1 but no vector-3 token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught network_mode: host via its own token (exit $rc)."
+
+      - name: "Inversion — pdf-render golden 4: foreign/mistyped external-network reference (expects violation, exit 1, vector-4 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          sed 's/\${PDF_RENDER_STACK_NETWORK_NAME:?[^}]*}/a-hardcoded-literal-network-name/' \
+            workers/pdf-render/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" pdf-render PDF_RENDER_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: pdf-render golden 4 expected exit 1 but got $rc -- failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 4:'; then
+            echo "FATAL: pdf-render golden 4 exited 1 but no vector-4 token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught a mistyped/foreign external-network reference via its own token (exit $rc)."
+
+      - name: "Inversion — pdf-render golden 5: sentinel absent (expects structural refusal, exit 2)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          grep -v 'fence-pdf-render-private-bind: target' workers/pdf-render/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" pdf-render PDF_RENDER_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: pdf-render golden 5 expected exit 2 (structural refusal) but got $rc."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'sentinel not found'; then
+            echo "FATAL: pdf-render golden 5 exited 2 but the expected structural message is absent -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence refused a file with no confirmed pdf-render-application sentinel, failing closed (exit $rc)."
+
+      - name: "Canary — pdf-render golden 6: second top-level network, service attached to both (corrupts a copy; expects structural refusal, exit 2)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          python3 - "$SCRATCH" <<'PY'
+          import sys
+          src = open('workers/pdf-render/docker-compose.yaml').read()
+          src = src.replace(
+              "    networks:\n      - default\n",
+              "    networks:\n      - default\n      - extra\n",
+              1,
+          )
+          src = src.replace(
+              "networks:\n  default:\n    name: ${PDF_RENDER_STACK_NETWORK_NAME:?PDF_RENDER_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-worker.sh pfin-pdf-render. Do NOT default this to a guessed value.}\n    external: true\n",
+              "networks:\n  default:\n    name: ${PDF_RENDER_STACK_NETWORK_NAME:?PDF_RENDER_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-worker.sh pfin-pdf-render. Do NOT default this to a guessed value.}\n    external: true\n  extra:\n    name: some-other-network\n    external: true\n",
+          )
+          open(sys.argv[1], "w").write(src)
+          PY
+          if ! grep -q '  extra:' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the pdf-render compose's networks: block anchors to insert a second network after -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" pdf-render PDF_RENDER_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: pdf-render golden 6 expected exit 2 (structural refusal) but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'multi-attachment'; then
+            echo "FATAL: pdf-render golden 6 exited 2 but no multi-attachment token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a second attached network on the REAL pdf-render compose (exit $rc)."
+
+      - name: "Canary — pdf-render golden 7: network key renamed away from 'default' (corrupts a copy; expects structural refusal, exit 2)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          sed 's/^  default:$/  stack:/' workers/pdf-render/docker-compose.yaml > "$SCRATCH"
+          if ! grep -q '^  stack:$' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the pdf-render compose's '  default:' key to rename -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" pdf-render PDF_RENDER_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: pdf-render golden 7 expected exit 2 (structural refusal) but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "not 'default'"; then
+            echo "FATAL: pdf-render golden 7 exited 2 but no renamed-key token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a network key renamed away from 'default' on the REAL pdf-render compose (exit $rc)."
+
+      - name: "Canary — pdf-render golden 8: 'external: true' removed (corrupts a copy; expects violation, exit 1, vector-4b token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          grep -v '^    external: true$' workers/pdf-render/docker-compose.yaml > "$SCRATCH"
+          if grep -q '^    external: true$' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't remove the pdf-render compose's 'external: true' line -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" pdf-render PDF_RENDER_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: pdf-render golden 8 expected exit 1 but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 4b'; then
+            echo "FATAL: pdf-render golden 8 exited 1 but no vector-4b token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a missing 'external: true' on the REAL pdf-render compose (exit $rc)."
+
+      - name: "Inversion — provider-sync golden 1: published ports (corrupts a copy; expects violation, exit 1, vector-1 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          awk '{ print } /build: \./ && !done { print "    ports:"; print "      - \"9999:8081\""; done=1 }' \
+            workers/provider-sync/docker-compose.yaml > "$SCRATCH"
+          if ! grep -q '9999:8081' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find a provider-sync 'build: .' anchor to insert ports: after -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: provider-sync golden 1 expected exit 1 but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "vector 1: 'ports:'"; then
+            echo "FATAL: provider-sync golden 1 exited 1 but no vector-1 'ports:' token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a published port on the provider-sync compose, on the REAL file (exit $rc)."
+
+      - name: "Inversion — provider-sync golden 2: reverse-proxy Domain / public-FQDN request (expects violation, exit 1, vector-2 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          sed 's/^services:/services:\n  x:\n    labels:\n      - "traefik.http.routers.x.rule=Host(`x.example.com`)"/' \
+            workers/provider-sync/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: provider-sync golden 2 expected exit 1 but got $rc -- failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 2:'; then
+            echo "FATAL: provider-sync golden 2 exited 1 but no vector-2 token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught a compose-committed Domain request via its own token (exit $rc)."
+
+      - name: "Inversion — provider-sync golden 3: network_mode: host (expects violation, exit 1, vector-3 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          awk '{ print } /build: \./ && !done { print "    network_mode: host"; done=1 }' \
+            workers/provider-sync/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: provider-sync golden 3 expected exit 1 but got $rc -- failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 3:'; then
+            echo "FATAL: provider-sync golden 3 exited 1 but no vector-3 token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught network_mode: host via its own token (exit $rc)."
+
+      - name: "Inversion — provider-sync golden 4: foreign/mistyped external-network reference (expects violation, exit 1, vector-4 token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          sed 's/\${PROVIDER_SYNC_STACK_NETWORK_NAME:?[^}]*}/a-hardcoded-literal-network-name/' \
+            workers/provider-sync/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: provider-sync golden 4 expected exit 1 but got $rc -- failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 4:'; then
+            echo "FATAL: provider-sync golden 4 exited 1 but no vector-4 token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught a mistyped/foreign external-network reference via its own token (exit $rc)."
+
+      - name: "Inversion — provider-sync golden 5: sentinel absent (expects structural refusal, exit 2)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          grep -v 'fence-provider-sync-private-bind: target' workers/provider-sync/docker-compose.yaml > "$SCRATCH"
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: provider-sync golden 5 expected exit 2 (structural refusal) but got $rc."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'sentinel not found'; then
+            echo "FATAL: provider-sync golden 5 exited 2 but the expected structural message is absent -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence refused a file with no confirmed provider-sync-application sentinel, failing closed (exit $rc)."
+
+      - name: "Canary — provider-sync golden 6: second top-level network, service attached to both (corrupts a copy; expects structural refusal, exit 2)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          python3 - "$SCRATCH" <<'PY'
+          import sys
+          src = open('workers/provider-sync/docker-compose.yaml').read()
+          src = src.replace(
+              "    networks:\n      - default\n",
+              "    networks:\n      - default\n      - extra\n",
+              1,
+          )
+          src = src.replace(
+              "networks:\n  default:\n    name: ${PROVIDER_SYNC_STACK_NETWORK_NAME:?PROVIDER_SYNC_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-worker.sh pfin-provider-sync. Do NOT default this to a guessed value.}\n    external: true\n",
+              "networks:\n  default:\n    name: ${PROVIDER_SYNC_STACK_NETWORK_NAME:?PROVIDER_SYNC_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-worker.sh pfin-provider-sync. Do NOT default this to a guessed value.}\n    external: true\n  extra:\n    name: some-other-network\n    external: true\n",
+          )
+          open(sys.argv[1], "w").write(src)
+          PY
+          if ! grep -q '  extra:' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the provider-sync compose's networks: block anchors to insert a second network after -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: provider-sync golden 6 expected exit 2 (structural refusal) but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'multi-attachment'; then
+            echo "FATAL: provider-sync golden 6 exited 2 but no multi-attachment token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a second attached network on the REAL provider-sync compose (exit $rc)."
+
+      - name: "Canary — provider-sync golden 7: network key renamed away from 'default' (corrupts a copy; expects structural refusal, exit 2)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          sed 's/^  default:$/  stack:/' workers/provider-sync/docker-compose.yaml > "$SCRATCH"
+          if ! grep -q '^  stack:$' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't find the provider-sync compose's '  default:' key to rename -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: provider-sync golden 7 expected exit 2 (structural refusal) but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "not 'default'"; then
+            echo "FATAL: provider-sync golden 7 exited 2 but no renamed-key token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a network key renamed away from 'default' on the REAL provider-sync compose (exit $rc)."
+
+      - name: "Canary — provider-sync golden 8: 'external: true' removed (corrupts a copy; expects violation, exit 1, vector-4b token)"
+        run: |
+          set -e
+          SCRATCH="$(mktemp)"
+          grep -v '^    external: true$' workers/provider-sync/docker-compose.yaml > "$SCRATCH"
+          if grep -q '^    external: true$' "$SCRATCH"; then
+            echo "FATAL: canary setup didn't remove the provider-sync compose's 'external: true' line -- update the canary, don't skip it."
+            rm -f "$SCRATCH"
+            exit 1
+          fi
+          set +e
+          out="$(bash scripts/ci/fence-worker-private-bind.sh "$SCRATCH" provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME 2>&1)"
+          rc=$?
+          set -e
+          rm -f "$SCRATCH"
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: provider-sync golden 8 expected exit 1 but got $rc -- the fence does not bite on its actual protection target."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 4b'; then
+            echo "FATAL: provider-sync golden 8 exited 1 but no vector-4b token is present -- failing closed."
+            exit 1
+          fi
+          echo "OK: fence catches a missing 'external: true' on the REAL provider-sync compose (exit $rc)."
+
   fence-pgrst-schemas-pfin:
     name: pgrst-schemas-pfin — PGRST_DB_SCHEMAS committed-default literal (BACKLOG.md §7.36 item 22)
     runs-on: ubuntu-latest
@@ -2852,6 +3596,25 @@ jobs:
       - uses: actions/checkout@v4
       - name: offline strike-proofs (all-zero proceeds; containers/images/env/failed-read refuse independently; create-body watcher)
         run: bash scripts/ci/fence-provision-app-strikes.sh
+
+  fence-provision-worker-strikes:
+    name: provision-worker.sh — delete-if-empty-shell guard + unknown-name refusal strike-proofs
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 68. scripts/provision-worker.sh generalises
+    # scripts/provision-app.sh — same delete-guard logic (three on-box/API
+    # predicates, each failing CLOSED on a failed on-box read), table-driven
+    # over the three worker resource names, plus a new unknown-resource-name
+    # refusal surface provision-app.sh has no equivalent of (it has no
+    # resource-name argument at all). scripts/ci/fence-provision-worker-
+    # strikes.sh runs the SAME seven scenarios fence-provision-app-strikes.sh
+    # proves, once per resource (pfin-back-etl / pfin-pdf-render /
+    # pfin-provider-sync), plus the unknown-name refusal — offline via a
+    # PATH-shadowed fake ssh/curl/docker (tests/fixtures/ci/provision-worker/
+    # fake-curl), never a live box.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (3 resources x 7 scenarios + unknown-name refusal)
+        run: bash scripts/ci/fence-provision-worker-strikes.sh
 
   fence-push-secrets-strikes:
     name: push-production-secrets.sh — resource-resolution + secret-transport strike-proofs

@@ -1825,6 +1825,26 @@ No CPU/memory ceiling for any Coolify service appears anywhere in this repo — 
 
 ---
 
+### 7.2 Worker first-deploy procedure — `etl` / `pdf-render` / `provider-sync`
+
+**New 2026-09-20 (BACKLOG.md §7.36 item 68 / PR W-1; F/CTO ruled 2026-09-20: workers before the §2/§9 Domain assignment, because §10's smoke gate needs the workers up first).** Mirrors §7.1's numbered-procedure shape: preconditions named, then a SCRIPTED/BY-HAND audit table, sequenced across three PRs. **W-1 (this PR)** lands the compose network-attachment pattern (§3/§7's own text above) and `scripts/provision-worker.sh`, and closes step (i) below for all three workers. **W-2** and **W-3** are named here so the procedure is legible end to end, but their steps are **PENDING** — not built in this PR — and are marked as such, per this runbook's own SCRIPTED/BY-HAND convention (a step without a named script is a gap, not an assumption of "by hand is fine").
+
+Preconditions: `pfin-supabase-stack` already exists and is deployed (§4/§6); for `etl` and `provider-sync`, §6.1/§6.2's role provisioning must run before that worker can connect (below). `pdf-render` holds no database credential and no Postgres client by design (Lock 13 mod #2 — a credential-absence fence, not a network one; it is attached to the stack network like every other fleet service) and needs no role handoff at all.
+
+**SCRIPTED / BY-HAND audit.**
+
+| Step | Status | Detail |
+|---|---|---|
+| (i) | **SCRIPTED — W-1 (this PR)** | `provision-worker.sh <resource-name> --apply`, run once per worker (`pfin-back-etl`, `pfin-pdf-render`, `pfin-provider-sync`) — recreates the resource as `dockercompose` (same delete-if-empty-shell guard as `provision-app.sh`), and sets that resource's own uniquely-named network var (`ETL_STACK_NETWORK_NAME` / `PDF_RENDER_STACK_NETWORK_NAME` / `PROVIDER_SYNC_STACK_NETWORK_NAME`) from the stack's live Docker network. Does NOT deploy. |
+| (ii) | **PENDING — W-2** | Push the `production_only` secrets already mappable to each worker: `push-production-secrets.sh --apply --skip-missing-resource` (same script §7.1 step 2 uses — its `RESOURCE_IDENTITY_MAP` now carries the F/CTO-RULED names `pfin-back-etl` / `pfin-pdf-render` / `pfin-provider-sync`, this PR's deliverable (5)). `pdf-render` gets `PDF_WORKER_SIGNING_KEY` only; `provider-sync` gets `WORKER_ADMISSION_SHARED_SECRET` + `PLAID_CLIENT_ID`/`PLAID_SECRET` + `SIMPLEFIN_TOKEN` + `DISCORD_WEBHOOK_URL`; `etl` gets `FMP_API_KEY`/`BLS_API_KEY` (nightly unit) + `DISCORD_WEBHOOK_URL` (monthly-report unit). |
+| (iii) | **PENDING — W-2** | **DB role handoff + `PFIN_DB_PASSWORD` delivery — BY-HAND, same two-statement discipline as §6.1/§6.2** (`\password <role>` then `ALTER ROLE <role> LOGIN;`, never a single atomic statement — see §6.1's own header for why). `etl`: §6.1's `pfin_etl` handoff. `provider-sync`: §6.2's `pfin_provider_sync` handoff (pre-cutover, `authenticator`'s own credential applies instead — see the existing `workers/CLAUDE.md` note on the rotation-coupling distinction). `pdf-render`: **N/A — no DB credential of any kind, skip this step** (zero-DB-isolation by design; do not add one to "complete the table"). |
+| (iv) | **PENDING — W-3** | Deploy. Needs a `deploy-worker.sh` sibling to `scripts/deploy-app.sh` (identity guard on name/base_directory/build_pack; `--require-env` names-only presence; post-deploy `--require-network` + `--resolve-host`; health/poll) — **not built in this PR**, named here as the next scripted gap, not assumed to already exist. |
+| (v) | **PENDING — W-3** | Per-worker reachability smoke: `provider-sync`'s CA-2 admission-endpoint negative smoke (§7's existing CA-1/CA-4 text; §10 CA-2), an ETL poll smoke, and a PDF round-trip smoke (`app` → `pdf-render:8080/render` → PDF bytes back) — the two named explicitly in MILESTONES.md's Active Feature row as what §10's smoke checklist needs before the §9 DNS cutover can proceed. |
+| (vi) | **PENDING — W-3** | `docs/deployment-runbook.md` §10's own verification checklist items for the ETL poll and the PDF round-trip — closing the gate F/CTO's 2026-09-20 ruling names (§10 smoke gates §9). |
+| (vii) | **PENDING — W-3** | Scheduled Task creation (Coolify UI — no API-scriptable equivalent named anywhere in this repo yet, so this step is BY-HAND, not a scripted gap): `provider-sync`'s `@daily` poll (existing bullet above), `etl`'s monthly-report cron (`0 6 1 * *`, existing bullet above). **`etl`'s own nightly-ingest cron remains the pre-existing gap this runbook already flags above** (no cadence ratified, no `PFIN_DB_*`/`FMP_API_KEY`/`BLS_API_KEY` wired to that service block) — unchanged by this PR, not silently folded into W-3's scope. |
+
+---
+
 ## 8. Observability
 
 Scope: wire deploy + health/failure notifications.

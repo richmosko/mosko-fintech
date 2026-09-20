@@ -20,6 +20,27 @@
 # are pure batch workers that connect OUT (to Postgres, to Discord) and
 # accept no inbound connections at all. No `expose:`/`ports:` on either
 # service, by construction, not by fence.
+#
+# fence-etl-private-bind: target
+#
+# NETWORK ATTACHMENT — BACKLOG.md §7.36 item 68 (F/CTO-ruled fleet
+# convention, 2026-09-19; ADR-073). Both units need DIRECT-Postgres reach to
+# `db` (Lock 13 mod #3 TenantBoundConnection — `pfin_etl` login role) — that
+# reach is a property of DECLARED NETWORK ATTACHMENT, never of Coolify
+# project/environment placement (ADR-073). `external:` names the Supabase
+# stack's own Docker network by name — mechanism (b), the same shape
+# api/docker-compose.yaml and infra/supabase/migrator/docker-compose.yaml
+# both use, MEASURED WORKING on Coolify 4.3.18. ETL_STACK_NETWORK_NAME is
+# its OWN uniquely-named var (not a reuse of APP_STACK_NETWORK_NAME) — same
+# per-resource-name discipline as MIGRATOR_STACK_NETWORK_NAME /
+# APP_STACK_NETWORK_NAME, populated into THIS application's own env store
+# by scripts/provision-worker.sh pfin-back-etl. `expose:`/`ports:` posture
+# is UNCHANGED by this block — see the comment above; nothing here opens an
+# inbound surface, it only lets these services reach OUT to `db`.
+networks:
+  default:
+    name: ${ETL_STACK_NETWORK_NAME:?ETL_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-worker.sh pfin-back-etl. Do NOT default this to a guessed value.}
+    external: true
 
 services:
   pfin-back-etl:
@@ -28,6 +49,8 @@ services:
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
+    networks:
+      - default
 
   # SELF-351 (A7) — monthly_report cron. Gate F Option α (native Coolify cron
   # container; the consolidated ADR records this as a MECHANISM RIDER on Lock
@@ -81,3 +104,5 @@ services:
       # (secrets-manifest.yml); this cron container is documented there as
       # a fourth consumer, not a new secret.
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+    networks:
+      - default

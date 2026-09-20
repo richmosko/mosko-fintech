@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-provision-worker-strikes.sh to drive
+# scripts/provision-worker.sh's remote python driver against CANNED Coolify
+# API responses instead of a live box. Generalised sibling of
+# tests/fixtures/ci/provision-app/fake-curl -- same shape, parametrised by
+# $FAKE_RESOURCE_NAME (the fence sets it per scenario/resource under test)
+# instead of a single hardcoded "pfin-app". Selected by PATH precedence
+# inside the fence's fake `ssh` wrapper -- provision-worker.sh itself is
+# never modified or made aware this exists.
+#
+# Every response is followed by a bare status-code line with NO leading
+# newline stripped -- mirrors provision-worker.sh's own api() helper
+# (`curl -sS ... -w '\n%{http_code}'`, rpartition()d before json.loads()).
+# `respond()` below reproduces that exact shape; every branch must go
+# through it.
+#
+# Endpoints covered ($FAKE_CURL_MODE selects which fixture shape):
+#   GET /applications      -- "clean"/"env-nonzero" (delete-guard
+#                              scenarios): TWO applications, the Supabase
+#                              stack (nested environment.uuid, path (a)
+#                              fires) and a STALE $FAKE_RESOURCE_NAME
+#                              (build_pack "dockerfile"). "absent"
+#                              (create-path scenarios): stack app ONLY.
+#   GET /projects, GET /projects/<uuid>/environments -- same dual-path
+#                              coverage as provision-app's own fixture.
+#   GET .../envs            -- for $OLD_APP_UUID: empty array, unless
+#                              $FAKE_CURL_MODE is "env-nonzero" (one entry,
+#                              names only). For $NEW_APP_UUID (post-create
+#                              readback): one entry, keyed by whatever
+#                              $FAKE_NETWORK_VAR names, value "stack-net" --
+#                              matching the only value the script's own
+#                              logic ever PATCHes for the resource under
+#                              test.
+#   GET /servers            -- one server named "localhost".
+#   POST /applications/public -- validates the POSTed body against
+#                              Coolify's OWN required-key set,
+#                              UNCONDITIONALLY: 422 naming the first missing
+#                              key, or 200 with the new application's uuid.
+#   GET /applications/<uuid> -- source-commit-in-build report.
+#   PATCH .../envs/bulk     -- validates the PATCHed body has a non-empty
+#                              `data` array of `{key, value}` objects -- 200
+#                              empty body on success, else 400 with
+#                              Coolify's own measured error text for a
+#                              body-less/malformed PATCH.
+#
+# Logs its OWN ARGV (never the -K config FILE's contents, never a
+# --data-binary body FILE's contents) to $FAKE_CURL_LOG, so the fence can
+# assert the fake token never appears there.
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+respond() {
+  local body="$1" code="${2:-200}"
+  printf '%s\n%s' "$body" "$code"
+  exit 0
+}
+
+METHOD="GET"
+prev=""
+BODY_FILE=""
+for a in "$@"; do
+  if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  if [[ "$prev" == "--data-binary" && "$a" == @* ]]; then BODY_FILE="${a#@}"; fi
+  prev="$a"
+done
+URL="${*: -1}"
+
+RESOURCE_NAME="${FAKE_RESOURCE_NAME:-pfin-back-etl}"
+NETWORK_VAR="${FAKE_NETWORK_VAR:-ETL_STACK_NETWORK_NAME}"
+
+STACK_UUID="aaaa1111bbbb2222cccc3333"
+ENV_UUID="eeee7777ffff8888aaaa9999"
+PROJECT_UUID="ffff0000aaaa1111bbbb2222"
+OLD_APP_UUID="dddd4444eeee5555ffff6666"
+NEW_APP_UUID="9999cccc8888dddd7777eeee"
+SERVER_UUID="1111aaaa2222bbbb3333cccc"
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
+  if [[ "${FAKE_CURL_MODE:-clean}" == "absent" ]]; then
+    respond "$(printf '[{"uuid":"%s","name":"pfin-supabase-stack","build_pack":"dockercompose","environment":{"uuid":"%s"}}]' "$STACK_UUID" "$ENV_UUID")"
+  fi
+  respond "$(printf '[{"uuid":"%s","name":"pfin-supabase-stack","build_pack":"dockercompose","environment":{"uuid":"%s"}},{"uuid":"%s","name":"%s","build_pack":"dockerfile"}]' \
+    "$STACK_UUID" "$ENV_UUID" "$OLD_APP_UUID" "$RESOURCE_NAME")"
+fi
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/projects/$PROJECT_UUID/environments" ]]; then
+  respond "$(printf '[{"uuid":"%s","name":"production"}]' "$ENV_UUID")"
+fi
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/projects" ]]; then
+  respond "$(printf '[{"uuid":"%s","name":"pfin-supabase"}]' "$PROJECT_UUID")"
+fi
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/servers" ]]; then
+  respond "$(printf '[{"uuid":"%s","name":"localhost"}]' "$SERVER_UUID")"
+fi
+
+if [[ "$METHOD" == "GET" && "$URL" == *"$NEW_APP_UUID/envs" ]]; then
+  respond "$(printf '[{"key":"%s","value":"stack-net","is_preview":false}]' "$NETWORK_VAR")"
+fi
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/envs" ]]; then
+  if [[ "${FAKE_CURL_MODE:-clean}" == "env-nonzero" ]]; then
+    respond '[{"key":"SOME_NAME","value":"x","is_preview":false}]'
+  fi
+  respond '[]'
+fi
+
+if [[ "$METHOD" == "POST" && "$URL" == *"/applications/public" ]]; then
+  if [[ -z "$BODY_FILE" || ! -f "$BODY_FILE" ]]; then
+    respond '{"message":"fake-curl: no --data-binary @file found in argv"}' 500
+  fi
+  MISSING=""
+  for key in project_uuid environment_uuid server_uuid git_repository git_branch build_pack name base_directory docker_compose_location; do
+    if ! grep -q "\"$key\":" "$BODY_FILE"; then
+      MISSING="$key"
+      break
+    fi
+  done
+  if [[ -n "$MISSING" ]]; then
+    respond "$(printf '{"message":"Validation failed.","errors":{"%s":["This field is required."]}}' "$MISSING")" 422
+  fi
+  respond "$(printf '{"uuid":"%s"}' "$NEW_APP_UUID")"
+fi
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications/$NEW_APP_UUID" ]]; then
+  respond "$(printf '{"uuid":"%s","settings":{"include_source_commit_in_build":false}}' "$NEW_APP_UUID")"
+fi
+
+if [[ "$METHOD" == "PATCH" && "$URL" == *"/envs/bulk" ]]; then
+  if [[ -z "$BODY_FILE" || ! -f "$BODY_FILE" ]]; then
+    respond '{"message":"Content-Type must be application/json"}' 400
+  fi
+  if ! python3 -c "
+import json, sys
+d = json.load(open('$BODY_FILE'))
+rows = d.get('data')
+if not isinstance(rows, list) or not rows:
+    sys.exit(1)
+for r in rows:
+    if not isinstance(r, dict) or 'key' not in r or 'value' not in r:
+        sys.exit(1)
+" >/dev/null 2>&1; then
+    respond '{"message":"Content-Type must be application/json"}' 400
+  fi
+  respond '{}'
+fi
+
+if [[ "$METHOD" == "DELETE" ]]; then
+  respond '{}'
+fi
+
+respond '{}'
