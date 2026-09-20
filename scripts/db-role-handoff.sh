@@ -67,9 +67,13 @@
 #   - The psql `\password` script (role name + the two password lines +
 #     the LOGIN statement): built into a bash VARIABLE on the box and fed
 #     to `docker compose exec -T db psql` via a HERE-STRING (`<<<`), never
-#     `-c '<sql>'` (would be argv), never a second on-disk file. A
-#     here-string is a pipe/small-tmpfile libc hands the child process as
-#     its stdin — it never appears in that child's own argv or in `ps`.
+#     `-c '<sql>'` (would be argv), never a second on-disk file. Sec N-8
+#     (PR #846 review) -- precisely: a here-string is bash's OWN construct,
+#     not libc's or the child's -- bash writes the expanded word to a
+#     temporary file, opens it, then immediately UNLINKS it (no directory
+#     entry survives) before dup2'ing the open fd onto the child's stdin.
+#     It never appears in that child's own argv or in `ps`, and unlinking
+#     closes the window where a sibling process could read it by path.
 #   - The connect-AS-the-role verification: psql's OWN connection-time
 #     password prompt, ALSO driven via piped stdin (verified locally, same
 #     mechanism as `\password` — no tty, no echo, just a line read) — NOT
@@ -409,26 +413,72 @@ if [ "$VERIFY_TRIMMED" != "t|t" ]; then
 fi
 echo "OK: catalog confirms rolcanlogin=t and a password is set."
 
-step_r "C. Connect AS $ROLE over TCP with the generated credential (forces password auth, not local trust)"
-# -h localhost forces the TCP host-connection path -- the SAME pg_hba.conf
-# rule class a remote docker-network peer (the actual worker container)
-# needs, unlike the local Unix-socket connection supabase_admin used above.
-# The password crosses via psql's OWN connection-time prompt, piped over
-# stdin (verified locally this PR, same mechanism as \password's own
-# prompt) -- never PGPASSWORD (env or argv).
+step_r "C. Connect AS $ROLE over a non-loopback path with the generated credential (forces password auth)"
+# Sec VETO V-1 (PR #846 review) -- CORRECTED IN PLACE, not merely amended:
+# this leg previously used `-h localhost`, which -- run FROM INSIDE the db
+# container itself, as this leg does -- is the container-internal LOOPBACK
+# path. supabase/migrations/055_pfin_etl_role.sql:277-282's own measured
+# local-stack pg_hba.conf records `host all all 127.0.0.1/32 trust`: NO
+# password prompt on that path at all. Under trust, the first piped stdin
+# line (the CLEARTEXT credential) is consumed as a SQL STATEMENT instead of
+# a password answer -- a syntax error, whose statement text (the cleartext)
+# is then written to the server log via log_min_error_statement (default
+# `error`), independent of log_statement. This is the exact hazard class
+# the §6.1/§6.2 single-statement-form PROHIBITION exists to prevent,
+# re-entering through this verification step. The prior version's own
+# claim here ("forces the TCP host-connection path...not local trust") was
+# measured FALSE against 055's own recorded pg_hba.
+#
+# Fix: `-h db` instead of `-h localhost` -- resolving the stack's OWN
+# service name from inside its own container routes the connection through
+# the container's real network interface (Docker's embedded DNS + the
+# bridge network), landing on the CIDR-scoped rule
+# (`host all all 10/8, 172.16/12, 192.168/16, 0.0.0.0/0 scram-sha-256`,
+# same 055 citation) rather than the 127.0.0.1/32-specific trust rule --
+# the SAME rule class a remote docker-network peer (the actual worker
+# container) needs. ⚠ UNMEASURED ON THE PRODUCTION TARGET, stated rather
+# than assumed (055:296's own "production pg_hba is NOT measured" bound
+# applies identically here) -- this is why the three structural guards
+# below do not TRUST the hostname choice alone; they detect a trust-path
+# connection even if this reasoning turns out wrong on some future image.
+#
+# 1. `-v ON_ERROR_STOP=1` -- forces a non-zero psql exit on ANY SQL error
+#    inside the piped script, including the exact "credential consumed as
+#    a statement" failure mode above. The prior version had no such guard,
+#    so psql exited 0 after a syntax error and the next line
+#    (`select current_user;`) ran anyway, appearing to succeed.
+# 2. Assert the password PROMPT was actually issued. 055:297-299 names
+#    this exact discriminator: "Under trust no password is requested at
+#    all -- so THE PROMPT ITSELF proves the connection did not traverse
+#    the trust line." Absence of "Password for user" in the captured
+#    output is now FATAL on its own, independent of the exit code.
+# 3. The cleartext-in-output guard (Sec F-5-class, applied to step A above)
+#    now ALSO covers this channel -- CONNECT_OUT is grepped for `$PW` the
+#    same way step A's $OUT already is. The password crosses via psql's
+#    OWN connection-time prompt, piped over stdin (verified locally this
+#    PR, same mechanism as \password's own prompt) -- never PGPASSWORD
+#    (env or argv).
 set +e
-CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -h localhost -p 5432 -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
+CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
 CONNECT_RC=$?
 set -e
+if ! printf '%s' "$CONNECT_OUT" | grep -qF "Password for user"; then
+  echo "FATAL: no password prompt was observed connecting AS $ROLE -- this means the connection took a NON-password-authenticated path (e.g. a trust rule), which is the exact hazard this step exists to detect. Refusing regardless of exit code (this check does not trust ON_ERROR_STOP or the exit status alone)." >&2
+  exit 1
+fi
+if printf '%s' "$CONNECT_OUT" | grep -qF "$PW"; then
+  echo "FATAL: the credential's cleartext value appeared in the connect-as-role step's own captured output -- refusing to proceed or print it. Investigate before retrying." >&2
+  exit 1
+fi
 if [ $CONNECT_RC -ne 0 ]; then
-  echo "FATAL: could not connect AS $ROLE with the generated credential over TCP (exit $CONNECT_RC) -- the handoff did not take effect end to end." >&2
+  echo "FATAL: could not connect AS $ROLE with the generated credential (exit $CONNECT_RC) -- the handoff did not take effect end to end." >&2
   exit 1
 fi
 if ! printf '%s' "$CONNECT_OUT" | grep -qF "$ROLE"; then
   echo "FATAL: connected but current_user did not echo back '$ROLE'." >&2
   exit 1
 fi
-echo "OK: connected AS $ROLE over TCP with the generated credential; current_user confirmed."
+echo "OK: connected AS $ROLE over a non-loopback, password-prompted path with the generated credential; current_user confirmed."
 
 step_r "D. Pushing the SAME credential onto the target Coolify resource's env store as PFIN_DB_PASSWORD"
 TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
@@ -483,22 +533,71 @@ api("PATCH", f"/applications/{resource_uuid}/envs/bulk", json.dumps({"data": [
 print("PATCHED PFIN_DB_PASSWORD onto the target resource (value never printed).")
 PYEOF
 
-step_r "E. Byte-exact readback — presence + length only, never the value"
-# Coolify's public GET .../envs never returns a secret's real value (same
-# fact mint-supabase-jwt-keys.sh's own header states) -- readback goes
-# through the on-box Eloquent decrypt path, same as that script's own
-# JWT-shape check, but asserting LENGTH ONLY here, never a shape/content
-# check that would need to touch the value itself.
-LEN_OUT="$(docker exec coolify php artisan tinker --execute="
+step_r "E. Hash-bound readback — production row only, exactly one match, bound to the ACTUAL generated credential (never the value itself)"
+# Sec F-2 (PR #846 review). The prior length-only check ('== 64') passed
+# for ANY 64-char value on the resource -- it could not distinguish "our
+# push landed" from "a stale/different 64-char secret was already there,
+# and step D's own PATCH silently no-op'd or hit the wrong row". Two
+# tightenings, both still never reading the plaintext value back to this
+# shell or printing it:
+#   1. is_preview=false -- scope to the PRODUCTION env row specifically;
+#      Coolify's env store carries separate rows for a PR-preview deploy
+#      (is_preview=true) and the production deploy of the SAME app, and a
+#      bare `where('key', ...)` could silently bind to the wrong one.
+#   2. exactly one matching row (`count`, not `->first()`) -- `->first()`
+#      degrades silently to "whichever row Eloquent's default ordering
+#      picks first" if duplicates exist; this refuses instead.
+#   3. a TRUNCATED (16 hex char) SHA-256 of the stored value must match
+#      the same truncated hash of $PW, computed locally from the shell
+#      variable (still in scope; never re-reads the shredded seed file).
+#      16 hex chars (64 bits) is not a meaningful preimage/collision
+#      target for a value this short-lived and never exposed elsewhere,
+#      and it is the ONLY thing that proves the stored value is the SAME
+#      credential this run generated, not merely 64 characters long.
+EXPECTED_HASH="$(printf '%s' "$PW" | sha256sum | cut -c1-16)"
+READBACK_OUT="$(docker exec coolify php artisan tinker --execute="
 \$app = \App\Models\Application::where('uuid','$RESOURCE_UUID')->firstOrFail();
-\$env = \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->first();
-echo \$env ? strlen((string) \$env->value) : 0;
+\$rows = \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->where('is_preview', false)->get();
+\$userRow = \$app->environment_variables()->where('key', 'PFIN_DB_USER')->where('is_preview', false)->first();
+\$userVal = \$userRow ? (string) \$userRow->value : '';
+if (\$rows->count() !== 1) { echo \$rows->count() . '||' . \$userVal; } else { echo '1|' . substr(hash('sha256', (string) \$rows->first()->value), 0, 16) . '|' . \$userVal; }
 " 2>/dev/null | tail -1 | tr -d ' \n')"
-if [ "$LEN_OUT" != "64" ]; then
-  echo "FATAL: PFIN_DB_PASSWORD readback length is '$LEN_OUT', expected 64 -- refusing to trust the store. (Length only -- the value itself is never read back or printed.)" >&2
+READBACK_COUNT="${READBACK_OUT%%|*}"
+READBACK_REST="${READBACK_OUT#*|}"
+READBACK_HASH="${READBACK_REST%%|*}"
+READBACK_USER="${READBACK_REST#*|}"
+if [ "$READBACK_COUNT" != "1" ]; then
+  echo "FATAL: PFIN_DB_PASSWORD (is_preview=false) readback found $READBACK_COUNT matching row(s) on the target resource, expected exactly 1 -- refusing to trust the store." >&2
   exit 1
 fi
-echo "OK: PFIN_DB_PASSWORD present on the target resource, length 64 confirmed (value never printed)."
+if [ "$READBACK_HASH" != "$EXPECTED_HASH" ]; then
+  echo "FATAL: PFIN_DB_PASSWORD is present (one production row) but its truncated hash does not match the credential this run generated -- the store holds a DIFFERENT value than what was pushed. Refusing. (Hash only -- neither value is ever read back or printed.)" >&2
+  exit 1
+fi
+echo "OK: PFIN_DB_PASSWORD present on the target resource (production row, exactly one match), hash-bound to the generated credential confirmed (value never printed)."
+
+# Sec F-4 (PR #846 review) -- PFIN_DB_USER ordering hazard. docs/deployment-
+# runbook.md §7.2's own values table names it explicitly for provider-sync:
+# PFIN_DB_USER reads 'authenticator' PRE-cutover and 'pfin_provider_sync'
+# POST-cutover (§6.2). A DIFFERING value is therefore the EXPECTED state
+# for a normal --apply-without---rotate handoff run ahead of the cutover
+# (staging the new role's credential before the operator flips the var and
+# redeploys) -- hard-refusing on any mismatch here would break that
+# legitimate, documented flow. --rotate is different: it only ever applies
+# to a role the resource is ALREADY configured to use (§6.1/§6.2's own
+# idempotency gate above requires the role to already be LOGIN), so
+# PFIN_DB_USER should ALREADY equal $ROLE by the time --rotate runs; a
+# mismatch there means a credential is being rotated for a role the
+# resource isn't even wired to yet -- refuse hard.
+if [ "$READBACK_USER" != "$ROLE" ]; then
+  if [ "$ROTATE" = "1" ]; then
+    echo "FATAL: PFIN_DB_USER on the target resource is '$READBACK_USER', not '$ROLE' -- refusing to rotate a credential for a role the resource is not configured to use. --rotate implies the handoff already completed and PFIN_DB_USER should already match." >&2
+    exit 1
+  fi
+  echo "⚠ WARNING: PFIN_DB_USER on the target resource is still '$READBACK_USER', not '$ROLE'. This is the EXPECTED mid-cutover staging state (docs/deployment-runbook.md §7.2) but the credential just pushed will NOT take effect until an operator flips PFIN_DB_USER to '$ROLE' and redeploys. If this mismatch is unexpected for this resource, stop and investigate before redeploying."
+else
+  echo "OK: PFIN_DB_USER on the target resource already reads '$ROLE' -- the pushed credential will take effect on redeploy with no further env-var change needed."
+fi
 
 step_r "Done (remote)"
 echo "Seed file will be shredded now by this script's own EXIT trap."

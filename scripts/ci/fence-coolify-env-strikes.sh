@@ -29,9 +29,15 @@
 # checked by measurement, not by re-reading the script and agreeing with
 # itself.
 #
-# Exit 0 only if all three scenarios behave exactly as specified above.
-# Any other outcome (wrong exit code, OR the token leaking into a logged
-# argv) fails closed.
+# Also proves (Sec F-5, PR #846 review) that `set`'s value-shape
+# constraints on PFIN_DB_USER (one of the three DB roles this repo mints)
+# and ADMISSION_PROBE_PUBLIC_URLS (bare comma-separated https:// FQDNs,
+# echoed verbatim into Discord alerts) are load-bearing, not decorative --
+# each accepts its documented valid shapes and refuses every invalid one.
+#
+# Exit 0 only if every scenario behaves exactly as specified above. Any
+# other outcome (wrong exit code, OR the token leaking into a logged argv)
+# fails closed.
 
 set -euo pipefail
 
@@ -184,10 +190,51 @@ COOLIFY_ENV_SH="$COOLIFY_ENV_SH_SAVED"
 #    against it -- if either condition were false, the manifest-refusal
 #    die() (scenario 1's own mechanism) would fire and this would exit 1
 #    naming the offending name, not 0.
+# F-5 (PR #846 review) added value-shape constraints on PFIN_DB_USER and
+# ADMISSION_PROBE_PUBLIC_URLS specifically -- the placeholder 'x' value
+# this loop used for every OTHER name no longer clears their own shape
+# check, so each gets a value that actually satisfies it here. A case
+# statement, not an associative array -- coolify-env.sh's own header
+# (line ~236) documents why: the OPERATOR's own /bin/bash is stock macOS
+# 3.2, no `declare -A`, and this fence follows the same discipline even
+# though it is CI-only today.
+valid_value_for() {
+  case "$1" in
+    PFIN_DB_USER) echo "pfin_etl" ;;
+    ADMISSION_PROBE_PUBLIC_URLS) echo "https://example.com" ;;
+    *) echo "x" ;;
+  esac
+}
 for NEW_NAME in PFIN_DB_HOST PFIN_DB_PORT PFIN_DB_NAME PFIN_DB_USER PLAID_ENV ADMISSION_PROBE_PUBLIC_URLS; do
   run_scenario "new allowlist name '$NEW_NAME' resolves (present + non-manifest)" 0 ok \
-    set abc123def456ghi789jk01 "${NEW_NAME}=x" || FAIL=1
+    set abc123def456ghi789jk01 "${NEW_NAME}=$(valid_value_for "$NEW_NAME")" || FAIL=1
 done
+
+# 6. F-5 (PR #846 review) -- PFIN_DB_USER value-shape guard. Only the
+#    three DB roles this repo mints are accepted; anything else refuses,
+#    even though the NAME itself is allowlisted.
+run_scenario "PFIN_DB_USER value-shape: refuses a non-role value" 1 ok \
+  set abc123def456ghi789jk01 PFIN_DB_USER=postgres || FAIL=1
+
+# 7. F-5 -- PFIN_DB_USER accepts each of the three minted roles (not just
+#    the one scenario 5 happens to use).
+for VALID_ROLE in pfin_etl pfin_provider_sync authenticator; do
+  run_scenario "PFIN_DB_USER value-shape: accepts '$VALID_ROLE'" 0 ok \
+    set abc123def456ghi789jk01 "PFIN_DB_USER=${VALID_ROLE}" || FAIL=1
+done
+
+# 8. F-5 -- ADMISSION_PROBE_PUBLIC_URLS value-shape guard. Userinfo,
+#    query-strings, and non-https schemes must all refuse -- this is the
+#    exact exfil/credential-embedding shape the guard exists to close off.
+for BAD_URL in "http://example.com" "https://user:pass@example.com" "https://example.com/?x=1" "https://example.com,not-a-url"; do
+  run_scenario "ADMISSION_PROBE_PUBLIC_URLS value-shape: refuses '$BAD_URL'" 1 ok \
+    set abc123def456ghi789jk01 "ADMISSION_PROBE_PUBLIC_URLS=${BAD_URL}" || FAIL=1
+done
+
+# 9. F-5 -- ADMISSION_PROBE_PUBLIC_URLS accepts the documented
+#    comma-separated multi-FQDN shape, not just a single URL.
+run_scenario "ADMISSION_PROBE_PUBLIC_URLS value-shape: accepts multi-FQDN" 0 ok \
+  set abc123def456ghi789jk01 "ADMISSION_PROBE_PUBLIC_URLS=https://a.example.com,https://b.example.com" || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

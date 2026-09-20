@@ -260,6 +260,39 @@ for k in "${KEYS[@]}"; do
   [[ $allowed -eq 1 ]] || die "'$k' is not on the $OP allowlist (${ALLOW[*]}) -- add it to this script's own ALLOWLIST array first (Sec joint-review) if this is a genuinely new, intentional case, never as a one-off bypass."
 done
 
+# --- Step 1b: value-shape constraints on specific SET_ALLOWLIST names -----
+# Sec F-5 (PR #846 review). Name-only allowlisting lets ANY value ride
+# under an approved NAME -- these two carry consequences a bare name-check
+# cannot catch:
+#   PFIN_DB_USER -- sets the identity a worker's DB connection
+#   authenticates as. Restricting the value to the three DB roles this
+#   repo ever mints (§6.1/§6.2/pre-cutover authenticator) prevents an
+#   operator typo, or a copy-paste of a DIFFERENT worker's value, from
+#   silently pointing a worker at `postgres` or some other identity with
+#   far broader privilege than any minted role.
+#   ADMISSION_PROBE_PUBLIC_URLS -- echoed VERBATIM into Discord alerts
+#   (workers/provider-sync/.env.example Note N1). Restricting to bare
+#   comma-separated https:// FQDNs (no userinfo, no query-string, no path)
+#   closes off embedding a credential or a tracking/exfil query string in
+#   a value guaranteed to be posted somewhere an operator will read it.
+if [[ "$OP" == "set" ]]; then
+  for i in "${!KEYS[@]}"; do
+    k="${KEYS[$i]}"; v="${VALUES[$i]}"
+    case "$k" in
+      PFIN_DB_USER)
+        case "$v" in
+          pfin_etl|pfin_provider_sync|authenticator) ;;
+          *) die "'PFIN_DB_USER' value '$v' is not one of the three DB roles this repo mints (pfin_etl, pfin_provider_sync, authenticator) -- refusing. If a new role name is genuinely intentional, add it here (Sec joint-review), never as a one-off bypass." ;;
+        esac
+        ;;
+      ADMISSION_PROBE_PUBLIC_URLS)
+        [[ "$v" =~ ^https://[A-Za-z0-9.-]+(,https://[A-Za-z0-9.-]+)*$ ]] \
+          || die "'ADMISSION_PROBE_PUBLIC_URLS' value does not match the required shape (bare comma-separated https:// FQDNs, no userinfo, no query-string, no path) -- this value is echoed verbatim into Discord alerts (workers/provider-sync/.env.example Note N1). Refusing."
+        ;;
+    esac
+  done
+fi
+
 # --- Step 2: secrets-manifest.yml refusal (set only) ----------------------
 # Pure-text extraction, not PyYAML -- this script runs on the OPERATOR's
 # machine, which is not guaranteed to have PyYAML installed the way the CI
