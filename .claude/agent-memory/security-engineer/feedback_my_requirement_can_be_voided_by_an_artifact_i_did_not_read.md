@@ -90,3 +90,9 @@ leaned on it — I just never evaluated my proposal AGAINST it.**
 Related: [[hazard-mechanism-vs-reachability]] · [[replacement-control-name-the-losing-side]] ·
 [[verify-the-cited-source-subsection-not-the-headline]] · [[adding-vs-qualifying-verification-asymmetry]] ·
 [[clearance-conditions-must-absorb-my-own-recommendations]]
+
+**⚠ WORSE VARIANT — I SUPPLIED A ROUTE THAT DOES NOT EXIST, 2026-09-18.** My commit-ready block named `GET …/scheduled-tasks/{uuid}` as the read-back. Architect committed it verbatim, F/CTO ratified it, it propagated into a BACKLOG AC, DevOps built it — and the first real execution on the box got **404** and exited fail-closed. **I took the route from a teammate's note about the PATCH shape and inferred a sibling GET at the same path.** A REST family having `PATCH /x/{id}` does NOT imply `GET /x/{id}`.
+
+**The rule: when my commit-ready text names an API route, a file path, a flag or a function, I must READ THE SOURCE THAT DEFINES IT — not a teammate's note that mentions a sibling.** Supplied text carries my authority into a ratified artifact and gets BUILT; an inference that would be a harmless hypothesis in a review message becomes a requirement. Mark anything I have not personally measured as NOT MEASURED with a named owner, exactly as I do for generalizations.
+
+**Second half — the pattern, which is the reusable part:** this was the SECOND control in the same chain built on an unmeasured premise about the box/API (the first: whether `ci-migrate` could reach the Docker socket). **Both failed closed; both failed on FIRST CONTACT with the real identity.** When two premises in one chain turn out unmeasured, stop taking them one at a time — **ask for an enumeration of every premise that was REASONED rather than MEASURED, and measure them as a SET.** Related: [[feedback_a_described_control_is_not_a_built_one]], [[feedback_hazard_mechanism_vs_reachability]].

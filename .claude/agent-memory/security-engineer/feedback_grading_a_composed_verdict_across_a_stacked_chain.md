@@ -54,3 +54,23 @@ the delta is exactly the unexecuted legs, and it is how I found one. A verdict t
 citation *"present by grep; not locally re-executed"* is behaving correctly; the discharge is to
 cite the CI run that did execute it, carried across by an **executable-identity** argument (zero
 executable lines changed between the CI sha and the verdict sha).
+
+## ⚠ A FOLD FOLDED INTO A MERGE COMMIT (2026-09-17)
+A PR head arrived as a **single merge commit** whose parents were the reviewed head and `main` — but which
+**also carried three content folds**. **A blob-identity re-pin passes that while reviewing nothing**, because
+the blobs differ for a declared reason and the diff-hash check is aimed at "did the merge introduce anything,"
+not "what did this commit change."
+
+**The distinction that matters: DECLARED vs HIDDEN.** Here the coordinator named it, so it cost one content
+review of the delta. **Undeclared, it is the mechanism by which a change reaches `main` unreviewed** — and it
+would survive every parent/hash check I habitually run.
+
+**How to apply:**
+- **Whenever a pin target is a MERGE commit, diff it against BOTH parents, not just `main`.**
+  `git diff <reviewed-head> <merge>` is the one that exposes folds; `git diff <main-parent> <merge>` only shows
+  what the branch adds. A non-empty first diff means content review, not a re-pin.
+- **Re-derive the both-sides file's load-bearing content by COUNT, not by presence.** On that runbook the
+  predicate appeared **twice** — once in the Step-0 gate and once in the post-redeploy re-verify — and a
+  conflict resolution collapsing them to one would have silently removed the re-verification that makes the
+  later step a gate rather than an instruction. **A presence check would have passed; a count check caught it.**
+- Related: [[a-branch-cut-from-integration-carries-superseded-sibling-blobs]], [[read-the-branch-from-the-ref-not-the-worktree]].

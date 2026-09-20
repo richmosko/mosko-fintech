@@ -150,3 +150,51 @@ record was written, so the *corrected* forms are what landed. An over-read that 
 record teaches the next reader to treat a robust property as fragile — see
 [[supplied-verbatim-text-ships-unfiltered]] and
 [[clearance-conditions-must-absorb-my-own-recommendations]].
+
+---
+
+## ⚠⚠ THIRD INSTANCE — and this time the unmeasured half was MY OWN RULING (2026-09-16)
+
+I ruled a **procedure** acceptable — "`migrator` applies the full 001–118 set from its own container" —
+after grading only the MECHANISM half (*which role will own the objects it creates*). I never graded
+the REACHABILITY half (*can that role execute the set at all*). Architect ran it on a disposable
+PG 17.6 cluster with the role's exact attribute shape and hit **four hard walls** in the first few
+migrations: `auth` schema unreachable (REFERENCES on `auth.users`), `vault` unreachable (owner-semantics
+decrypt views), `grant service_role to …` refused, `comment on role` refused and **unfixable for the
+role itself** (`grant migrator to migrator` → "is a member of role"). My ruling was not merely
+incomplete; it was **unexecutable**, and I had made "grade on connection/execution evidence, not the
+config diff" the standard **for everyone else** in the same workstream.
+
+**Why:** I reason fluently about ownership/privilege SEMANTICS, so a semantic story feels like a
+measurement. It is not one. A procedure I author is exactly the artifact class I refuse to accept from
+others un-run.
+
+**How to apply:** when my own ruling prescribes a PROCEDURE (an apply order, a bootstrap sequence, a
+role's new job), the ruling is **provisional until someone executes it against a disposable instance**.
+Say so IN the ruling — "conditional on a dry run" — rather than issuing it clean and being corrected.
+A disposable-cluster run is cheap; ask for it. See [[run-the-measurements-a-ruling-needs]] and
+[[applied-vs-demonstrated-discharge]].
+
+**⚠ FOURTH INSTANCE, same workstream, new trigger (2026-09-16).** I argued that flipping a view to
+`security_invoker = true` *"strengthens tenant-gating — the view becomes RLS-subject."* Architect measured the
+**grantee's role attributes**: `service_role` carries `rolbypassrls = t` and is the only grantee, so **no policy
+is evaluated either way** and the change is tenant-gating-neutral. I had reasoned entirely from **object
+semantics** (what the view does) and never read **the identity that reads it**. Withdraw such a claim flatly —
+it propagates into artifacts that quote you. **How to apply: before asserting that an object-level change
+alters enforcement, read the ROLE ATTRIBUTES of every grantee** — `rolbypassrls`, `rolsuper`, `rolinherit` — and
+the object's ACL. An enforcement claim is a claim about a *pair*, never about the object alone.
+
+**⚠⚠⚠ FIFTH INSTANCE — and the disproof was inside MY OWN VERDICT (2026-09-16).** I approved
+`security_invoker = true` on two decrypt views on the basis that it *"removes the owner's vault dependency."*
+It removes the **RUNTIME** half only: **a view body is permission-checked at CREATE time regardless of
+`security_invoker`**, so the creating role still needs the privilege. An end-to-end `db push` strike died at
+`007` with `permission denied for schema vault`. **The falsifying sentence was in the same report I had read and
+QUOTED two verdicts earlier** — *"fails on the `create view` itself, not merely the read."* I named two
+measurements that would invert the ruling and **both were about runtime**; the one that mattered was already on
+the page.
+
+**The rule, and it is the generalisation the previous four instances were circling:** when a decision turns on
+*"who needs this privilege,"* **enumerate the LIFECYCLE PHASES and answer for each — CREATE / ALTER-DROP /
+RUNTIME.** A privilege story that covers only one phase is not an answer. And **when you write "measurement X
+would invert this ruling," check X against the phases too** — a gating measurement aimed at the wrong phase is
+worse than none, because it manufactures confidence.

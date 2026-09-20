@@ -38,6 +38,29 @@ inline quote is strong precisely where the source is a wrapped comment.
 4. **Keep the wrong form exactly once, as a dated record of what it read** — that
    is a report of a bad quotation, not a fresh one ([[feedback_sound_quote_false_gloss_drift]]).
 
+**⚠ THIRD RECURRENCE, 2026-09-19 (ADR-073 / PR #834) — and it added two sub-rules.**
+I quoted the migrator as *"takes ZERO inbound connections"* and sited it to
+`scripts/ci/fence-migrator-private-bind.sh`. **Sec's review did not catch it**, and
+Sec's own F3 note sited the same phrase to ADR-072 Amendment 4, where it does not
+occur at all. Two things this taught that the rules above did not:
+
+5. **Box-drawing comments need a WIDER rejoin than `\n#\s*`.** The fence header is
+   `# │ …text…      │` — rejoining must strip the trailing `│`, the padding AND the
+   leading `# │`. A normaliser tuned for plain `#` comments still reports 0 and
+   still looks like a genuine elision. Normalise by stripping the comment prefix and
+   collapsing all whitespace (`' '.join(re.sub(r'(?m)^\s*#\s?','',t).split())`)
+   rather than by matching one wrap pattern.
+6. **A zero hit can mean WRONG SOURCE, not bad quote — check the siblings before
+   rewriting.** The phrase was contiguous all along in
+   `infra/supabase/migrator/docker-compose.yaml`; the fence's own contiguous form is
+   different wording (*"must take ZERO inbound connections of any kind"*). Sweep every
+   plausible source file before concluding the quote is malformed — otherwise you
+   "fix" a correct quotation by re-siting it to the file you happened to check.
+
+**The cheap standing check, run it on every ADR before push:** extract every `*"…"*`
+span and block quote from the new section and substring-test each against its claimed
+source file. 8 spans / 8 pass / 0 fail is a measurement; "I quoted carefully" is not.
+
 Related: [[feedback_brief_drift_catch_verbatim_source_cross_check]],
 [[feedback_verifying_a_measurement_is_not_verifying_a_claim]],
 [[feedback_rule_and_example_share_the_authors_frame]].

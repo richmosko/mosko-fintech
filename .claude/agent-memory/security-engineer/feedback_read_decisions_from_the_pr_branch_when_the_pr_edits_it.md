@@ -193,3 +193,31 @@ git cat-file -e "$r:<path>" && ...; done` — because "authored locally, never p
 existed" look identical from one ref and have opposite consequences. Report the absence as its own
 finding: a verdict resting on a ruling that exists on no ref is unrecorded, and if the ruling WAS
 authored, saying so is what gets it pushed. Related: [[sec-lock-cross-check-catches-my-own-misreads]].
+
+**⚠ A QUOTE I INHERIT FROM THE ARTIFACT UNDER REVIEW CARRIES ITS SITING WITH IT — RE-SITE BEFORE I RE-USE IT
+(PR #834, 2026-09-19, my own error).** ADR-073 consequence (3) quoted the migrator as *"takes ZERO inbound
+connections"* and sited it to the migrator **fence**. I lifted the quote into my own F3 finding prose and
+attributed it to **ADR-072 Amendment 4**. Measured afterwards: the string occurs **zero** times in
+`DECISIONS.md` outside ADR-073's own two uses, and it is not contiguous in the fence either — the fence's
+header box wraps it across two comment lines; the contiguous form lives in
+`infra/supabase/migrator/docker-compose.yaml`'s header. So the document under review had the **attachment**
+wrong, and I compounded it by inventing a *different* wrong attachment while re-using the quote.
+
+**Why this is its own failure and not just "verify the citation":** I was mid-review of a *citation-accuracy*
+finding (F1, a mis-quoted Amendment 4 clause) and still re-used a neighbouring quote from the same document
+without testing it. Reviewing a document's citations does not immunize the quotes I borrow from it.
+
+**How to apply:**
+- **Any quoted string I carry OUT of the artifact under review into my own finding gets its own substring
+  test, against the source I am about to name** — not against the artifact I read it in. One `python3 -c`
+  with `in` over the candidate files; it is seconds.
+- **Prefer naming no source to naming a plausible one.** My committed F3 block happened to name none, which
+  is the only reason nothing false shipped. Make that deliberate: if I have not tested the siting, quote
+  without attribution and say "source untested".
+- **A wrapped comment box is a quoting hazard.** ASCII-art headers (`# │ … │`) break strings at the border,
+  so a phrase that reads contiguous on screen is two fragments in the file. Test the exact span, and when a
+  span does wrap, mark the second half as a continuation summary rather than extending the quote marks —
+  the shape Architect used here and the right durable form.
+- Same family as [[feedback_false_composite_citation]] and [[feedback_verify_the_cited_source_subsection_not_the_headline]];
+  this is the **attachment** axis of pointer · content · extent · attachment, failing in MY output rather
+  than in the artifact's.

@@ -81,3 +81,29 @@ holding it assert?**
 answer is non-empty and the fix is another agent's call, make the gap visible in the same edit rather
 than deferring it. Related: [[stated-invariant-stronger-than-the-contract]] and
 [[clearance-conditions-must-absorb-my-own-recommendations]].
+
+**3. MY OWN ATTRIBUTION FIX SCOPED OUT MORE THAN THE DEFECT — a disclaimer I authored declared a
+VERBATIM clause to be a gloss (PR #822 F2, caught by Architect at PR #834, 2026-09-19).**
+The runbook quoted ADR-072 Amendment 4's *"a real widening of `db`'s reachable-from set on an axis
+the RT-32 fence cannot see"* and then named `fence-migrator-private-bind` — a fence that **postdates**
+the amendment and appears nowhere in its text. That part of my finding was right. But the landed
+wording read *"that clause is this runbook's own gloss, not part of the Amendment 4 quotation"* and
+**the clause it points at IS Amendment 4 verbatim** (substring-tested). I disclaimed the whole span
+to disown one noun inside it. Net effect: a true citation now carries a standing statement that it is
+not a citation — worse than the original error, because the next reader stops trusting the quote.
+
+**How to apply — the two-part test for any attribution correction I write:**
+1. **Name the smallest wrong token, never the span containing it.** "The fence NAME is not in the
+   source" ≠ "the clause is not in the source". Before writing "not part of the quotation," run the
+   substring test on the exact span my sentence points at, not on the part I know is wrong.
+2. **Re-read my own landed text against the source at the NEXT review that touches it.** A disclaimer
+   is prescriptive: it instructs future readers to distrust something. That is
+   [[feedback_sweep_superseded_prescriptive_text]]'s class — it does not decay quietly, it actively
+   misinforms, so it ranks above a merely stale sentence.
+3. Same review surfaced the mirror defect in a NEW document: ADR-073 quoted the same Amendment 4
+   clause with **"cannot read"** for **"cannot see"** and placed it OUTSIDE the quote marks. **When a
+   clause has been mis-scoped once, expect the next author to inherit the mis-scoping** — grep every
+   carrier of the clause in one pass rather than grading the document in front of me.
+Related: [[feedback_supplied_verbatim_text_ships_unfiltered]],
+[[feedback_read_decisions_from_the_pr_branch_when_the_pr_edits_it]] (pointer · content · extent ·
+attachment — this was an *attachment* failure), [[feedback_sound_quote_false_gloss_drift]].

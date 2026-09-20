@@ -249,3 +249,20 @@ than a test artifact. One `--` line at each CoR site is the whole fix. ⚠ **And
 precondition:** the CoR takes a lock on a globally shared object, so `pg_prove -j N` against one
 database would make concurrent batteries BLOCK (a hang/flake risk, not a wrong-value risk). Measure the
 CI invocation before asserting either way — `supabase test db` runs serial, with no `-j`.
+
+**10. A STRIKE THAT LEAVES THE FENCE GREEN MAY MEAN MY STRIKE MISSED, NOT THAT THE FENCE IS BLIND —
+look for a FALL-THROUGH guard that still produces the asserted outcome (PR #833, `smoke-pfin-exposure.sh`).**
+I struck the `SECURITY ANOMALY` branch (anon-mode 200 → `die`) by turning its `die` into `ok`, and the
+fence stayed GREEN. I nearly filed that as a second fence gap. It was not: `ok` prints and returns, so
+control fell through to the generic `die "expected 401/42501 …"` two lines below and the exit code was
+still 1 — the fence asserts the **exit code**, and the exit code never moved. Re-struck properly
+(`ok "…"; exit 0`) → **RED**, so the control is genuinely strike-proven.
+
+**How to apply:** before reporting a GREEN-under-strike as a fence gap, re-read the struck function
+from the strike point to its `return`/`exit` and ask *what else produces the same observable?* If the
+fence asserts an exit code, the strike must change the exit code — neutering a `die`'s **message** is
+not the same experiment. State the corrected strike's result in the same message, and name the
+residual honestly: here only the exit code is fenced, not the message, so deleting the anomaly branch
+degrades the operator text from "escalate to Sec immediately" to "investigate" without going RED.
+Same family as [[feedback_a_red_whose_message_names_the_wrong_defect]] and
+[[feedback_probe_that_only_asserts_failure_goes_vacuous]].

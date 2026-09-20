@@ -27,3 +27,27 @@ I supplied a commit-ready block that piped the password on stdin and single-quot
 **Why:** deferring expansion is a per-variable decision, but quoting is an ALL-OR-NOTHING switch over the whole body. Every `${VAR}` inside a single-quoted `sh -c` is a claim that the CONTAINER defines it. Compose-file `${VAR}` interpolation and container `environment:` keys look identical in the YAML and are different scopes — the interpolated value reaches the rendered string, not the process env.
 
 **How to apply:** before handing over any `exec … sh -c '…'` text, **enumerate every `${VAR}` in the body and grade each one host-side or container-side**, then read the service's `environment:` block (and check for `env_file` / `x-` anchors) to confirm the container-side ones exist. Prefer literalising non-secret values the doc already states in the clear — lowest fragility, keeps the single-quote structure. The alternative is a double-quoted body with `\${SECRET}` escaped, which host-expands the non-secrets into argv (safe: not secret) and defers only the secret. ⚠ This failed **closed** (malformed URL → error), but a stranded operator at a 🔒 credential step is the improvise-toward-the-prohibited-form hazard from finding 2 — so a fail-closed break in a security procedure is still blocking. See [[supplied-verbatim-text-ships-unfiltered]], [[my-requirement-can-be-voided-by-an-artifact-i-did-not-read]] and [[adding-vs-qualifying]] — my own supplied text is the unchecked one.
+
+**⚠ COMPARE SIBLING SCRIPTS INTRODUCED IN THE SAME PR AGAINST EACH OTHER — asymmetry inside one PR is
+the tell (PR #833 r2, 2026-09-19).** That PR added three new operator scripts. Two (`deploy-app.sh`,
+`smoke-pfin-exposure.sh`) put the Coolify token on `curl -K -` (stdin config) **and named the residual
+they still keep** in their headers. The third (`provision-app.sh`) used a plain
+`-H "Authorization: Bearer $TOKEN"` — the box-side argv — **and said nothing about it.** Every
+individual choice had a precedent; the *set* did not. Reviewing each file on its own merits would
+have cleared all three.
+
+**Why this is worth its own habit:** a copied-from-a-sibling script inherits the sibling's *shape* but
+not its *header*, so the weaker channel arrives with the stronger one's credibility. And a residual
+that is accepted-and-named in file A but silent in file B reads, to the next author, as "file B has no
+residual" — the acceptance widens without anyone deciding to widen it
+([[feedback_an_accepted_residual_must_not_silently_widen]]).
+
+**How to apply:**
+- On any PR adding more than one script that talks to the same API: **tabulate the credential channel
+  per file before reading any of them closely.** One `grep -n 'Authorization: Bearer\|-K -' scripts/*.sh`
+  answers it. Then ask which files *name* what they keep.
+- The remediation menu is always two-tier: **(A)** adopt the stronger helper — usually already present
+  in the same PR, so the cost is a move not a design; **(B) minimum** — name the residual in the new
+  carrier's header, in the same shape the sibling uses. Offer (B) so the flag cannot be read as a block.
+- Related: [[project_provision_scripts_shell_api_has_no_dash_k]] (the standing fact about which family
+  uses which channel), [[feedback_filter_side_of_the_ssh_boundary]].

@@ -64,3 +64,21 @@ this role exists to catch — do not leave the anti-paraphrase artifact reachabl
 
 Related: [[read-the-branch-from-the-ref-not-the-worktree]] (the same worktree-vs-canonical-location
 confusion, one layer down).
+
+## ⚠ MY VERDICT FILENAMES ARE LEAKING INTO TRACKED ARTIFACTS AS CITATIONS (2026-09-17)
+A corrected source comment in `scripts/provision-vps.sh` cited **`sec-790-7d4962f8.md`** as the authority for the
+fix — a file in the gitignored job buffer that does not survive session cleanup. **A source comment citing an
+ephemeral path is a dangling citation the moment the session ends**, and it reads as authoritative precisely
+because it looks like a primary source.
+
+**Why it happens:** teammates cite what I gave them, and what I gave them is a `temp/` filename with an md5.
+The md5 header makes it *look* like a durable, verifiable artifact. It is not.
+
+**How to apply:**
+- **When a ruling is going to be cited in the tree, name the DURABLE anchor in the same message** — the ADR or
+  amendment, the PR number, or a `docs/SECURITY` entry I own. Say *"cite ADR-072 Amendment 6, not my verdict
+  file."*
+- **Scan for it at review time**: a grep for `sec-.*\.md` in a diff catches the leak before it lands. My own
+  posture entries are usually the right anchor, because they are in the repo and I hold the pen on them.
+- This is the flip side of [[a-described-control-is-not-a-built-one]]: there, prose stood in for an artifact;
+  here, an artifact points at prose that will vanish.
