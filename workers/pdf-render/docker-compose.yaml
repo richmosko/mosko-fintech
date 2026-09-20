@@ -74,6 +74,24 @@
 # real value from the service/project env at deploy. production_only per
 # secrets-manifest.yml (shared with the V1 web-app, which mints the JWT this
 # worker verifies). NO OTHER SECRET belongs in this file, by Lock 13 mod #2.
+#
+# fence-pdf-render-private-bind: target
+#
+# NETWORK ATTACHMENT — BACKLOG.md §7.36 item 68 (F/CTO-ruled fleet
+# convention, 2026-09-19; ADR-073). CONFIRMED, not assumed: item 68 asked
+# whether this zero-DB-isolation container also needs the attachment, since
+# Lock 13 mod #2 gives it no Postgres reach at all. It does — verified
+# against api/src/lib/server/pdf/renderClient.ts (SELF-349), which fetches
+# `http://pdf-render:8080/render` (DEFAULT_BASE_URL) directly: the APP is
+# this worker's caller, over internal DNS, which only resolves across a
+# SHARED Docker network attachment (ADR-073 — project/environment placement
+# grants none). Zero-DB-isolation is UNCHANGED by this block: the network is
+# not the control (ADR-073 Consequence 4) — RT-22 + RT-22-manifest keep
+# enforcing the Dockerfile/dependency-manifest credential absence regardless
+# of which network this container sits on. PDF_RENDER_STACK_NETWORK_NAME is
+# its OWN uniquely-named var (same per-resource-name discipline as
+# MIGRATOR_STACK_NETWORK_NAME / APP_STACK_NETWORK_NAME), populated by
+# scripts/provision-worker.sh pfin-pdf-render.
 
 services:
   pdf-render:
@@ -103,3 +121,16 @@ services:
       # and RT-22-manifest both fail closed on that, and this container has
       # no database reach to justify one by construction (R2 (C)).
       - PDF_WORKER_SIGNING_KEY=${PDF_WORKER_SIGNING_KEY}
+    networks:
+      - default
+
+# Top-level network definition for the `default` name the service above
+# joins — ADR-073 mechanism (b), reused here: an `external:` network naming
+# the Supabase-stack application's own Docker network, so the APP (attached
+# to the SAME network via api/docker-compose.yaml) can resolve
+# `http://pdf-render:8080`. See the NETWORK ATTACHMENT header comment above
+# for why this container needs it despite holding zero DB reach.
+networks:
+  default:
+    name: ${PDF_RENDER_STACK_NETWORK_NAME:?PDF_RENDER_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-worker.sh pfin-pdf-render. Do NOT default this to a guessed value.}
+    external: true

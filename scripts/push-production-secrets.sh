@@ -234,7 +234,10 @@
 #   contract stays honest about what it covers.
 #
 # KNOT 7 -- manifest-key -> Coolify resource-NAME mapping: where it lives,
-#   and which of the four names are CONFIRMED vs. a stated best guess.
+#   and which of the four names are CONFIRMED vs. RULED (F/CTO ruling,
+#   BACKLOG.md §7.36 item 68, 2026-09-20 — the two names this comment
+#   previously called a stated best guess are now trivial-naming-decided,
+#   not guessed; see the CONFIRMED/RULED paragraph below).
 #   MEASURED (team-lead, 2026-09-20, live preflight on `main` `f6c1f9d9`):
 #   this script's own resource-name defaults used to be the CONCEPTUAL
 #   keys ("app", "etl", "pdf-render", "provider-sync") -- not Coolify
@@ -259,16 +262,20 @@
 #   explicitly as the nightly-ingest unit's Coolify application (the
 #   monthly-report cron is a SEPARATE unit, `pfin-back-etl-monthly-report`,
 #   not resolved by this script -- see KNOT 2's own "etl open question").
-#   UNCONFIRMED, best-guess pending resource creation (runbook §7):
-#   `pfin-pdf-render` / `pfin-provider-sync` -- no Coolify application by
-#   either name exists yet, and no committed doc names what it will be
-#   called once created. Guessed here by extending the "pfin-<slug>"
-#   pattern `pfin-app`/`pfin-migrator`/`pfin-supabase-stack` all follow --
-#   but that pattern is NOT universal (`pfin-back-etl` breaks it), so this
-#   is a guess, stated as one, not a measured fact. Safe to guess wrong:
-#   the exact-name-match fix below (KNOT 7 continued, the resolution loop)
-#   means a wrong guess resolves to ABSENT, never to the WRONG resource --
-#   it fails exactly like an unconfirmed name should, not silently.
+#   RULED, not a guess (F/CTO ruling, BACKLOG.md §7.36 item 68, 2026-09-20 —
+#   trivial naming decision, cited here rather than re-litigated): `pfin-
+#   pdf-render` / `pfin-provider-sync`. No Coolify application by either
+#   name exists yet (pending scripts/provision-worker.sh), but the NAME
+#   itself is no longer a stated best guess — it is the name
+#   scripts/provision-worker.sh's own table and scripts/record-coolify-
+#   uuids.sh's own PDF_RENDER_APP_NAME/PROVIDER_SYNC_APP_NAME defaults
+#   create and resolve against. (Historical note, kept for why the "pfin-
+#   <slug>" pattern was never trustworthy on its own: `pfin-back-etl` was
+#   always the counter-example that pattern-extension alone would have
+#   gotten wrong.) The exact-name-match resolution loop below (KNOT 7
+#   continued) still means a name that doesn't exist YET resolves to
+#   ABSENT, never to the WRONG resource -- unaffected by this ruling, no
+#   logic change.
 #
 # IDEMPOTENCE
 #   Unconditional overwrite when a name has a non-empty local .env value,
@@ -337,7 +344,8 @@ AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
 
 # Resource names -- overridable, defaulting to real Coolify APPLICATION
 # names, not the conceptual manifest keys (KNOT 7 explains the mapping
-# decision and which of these four are confirmed vs. a stated guess).
+# decision and which of these four are CONFIRMED-created vs. RULED-named
+# but not yet created — F/CTO ruling, BACKLOG.md §7.36 item 68).
 APP_RESOURCE_NAME="${APP_RESOURCE_NAME:-pfin-app}"
 ETL_RESOURCE_NAME="${ETL_RESOURCE_NAME:-pfin-back-etl}"
 PDF_RESOURCE_NAME="${PDF_RESOURCE_NAME:-pfin-pdf-render}"
@@ -534,7 +542,8 @@ if unmapped:
 # without a matching identity-map entry, which that check cannot see
 # (it only looks at secret NAMES, never at the logical keys SECRET_
 # RESOURCE_MAP's values name). See this script's own header KNOT 7 for
-# which of these four are CONFIRMED Coolify names vs. a stated guess.
+# which of these four are CONFIRMED-created Coolify names vs. RULED-named
+# but not yet created (F/CTO ruling, BACKLOG.md §7.36 item 68, 2026-09-20).
 RESOURCE_IDENTITY_MAP = {
     "app": app_name,
     "etl": etl_name,

@@ -49,10 +49,20 @@
 #     to the migrator application (see MIGRATOR_SERVICE_UUID above), NOT
 #     the Supabase-stack application (scripts/migrator-scheduled-task.md's
 #     own "Resource attachment" section).
+#   ETL_UUID / PDF_RENDER_UUID / PROVIDER_SYNC_UUID — ⚠ NEW, BACKLOG.md
+#     §7.36 item 68 (2026-09-20): the three worker Coolify applications
+#     scripts/provision-worker.sh creates (default names "pfin-back-etl" /
+#     "pfin-pdf-render" / "pfin-provider-sync" — the SAME names
+#     scripts/push-production-secrets.sh's RESOURCE_IDENTITY_MAP resolves,
+#     kept in sync deliberately). Same "absent → info, not failure"
+#     treatment as APP_UUID above: none of the three is guaranteed to exist
+#     yet, and a resource that hasn't been provisioned should not fail this
+#     script's run, only leave that one UUID unset.
 #
 # Override the names this script searches for via env vars
 # (MIGRATOR_APP_NAME / SUPABASE_STACK_APP_NAME / WEB_APP_NAME /
-# MIGRATOR_TASK_NAME) if a rebuild ever uses different resource names —
+# MIGRATOR_TASK_NAME / ETL_APP_NAME / PDF_RENDER_APP_NAME /
+# PROVIDER_SYNC_APP_NAME) if a rebuild ever uses different resource names —
 # never hardcode a second copy of this script's defaults elsewhere.
 
 set -euo pipefail
@@ -95,6 +105,12 @@ MIGRATOR_APP_NAME="${MIGRATOR_APP_NAME:-pfin-migrator}"
 SUPABASE_STACK_APP_NAME="${SUPABASE_STACK_APP_NAME:-pfin-supabase-stack}"
 WEB_APP_NAME="${WEB_APP_NAME:-pfin-app}"
 MIGRATOR_TASK_NAME="${MIGRATOR_TASK_NAME:-migrator-db-push}"
+# BACKLOG.md §7.36 item 68 -- same defaults as
+# scripts/push-production-secrets.sh's ETL_RESOURCE_NAME / PDF_RESOURCE_NAME
+# / PROVIDER_SYNC_RESOURCE_NAME and scripts/provision-worker.sh's own table.
+ETL_APP_NAME="${ETL_APP_NAME:-pfin-back-etl}"
+PDF_RENDER_APP_NAME="${PDF_RENDER_APP_NAME:-pfin-pdf-render}"
+PROVIDER_SYNC_APP_NAME="${PROVIDER_SYNC_APP_NAME:-pfin-provider-sync}"
 
 APPLY=0
 for arg in "$@"; do
@@ -153,6 +169,38 @@ else
   info "no application named '$WEB_APP_NAME' found yet — leaving APP_UUID unset (create it per runbook §7.1 first, or override WEB_APP_NAME)"
 fi
 
+# BACKLOG.md §7.36 item 68 -- same "absent -> info, not failure" shape as
+# APP_UUID above; none of the three workers is guaranteed to exist yet.
+ETL_UUID="$(api GET /applications | jqp "
+d=json.load(sys.stdin)
+m=[a for a in d if a['name']=='$ETL_APP_NAME']
+print(m[0]['uuid'] if m else '')")"
+if [[ -n "$ETL_UUID" ]]; then
+  ok "ETL_UUID ($ETL_APP_NAME) — $ETL_UUID"
+else
+  info "no application named '$ETL_APP_NAME' found yet — leaving ETL_UUID unset (create it with scripts/provision-worker.sh $ETL_APP_NAME first, or override ETL_APP_NAME)"
+fi
+
+PDF_RENDER_UUID="$(api GET /applications | jqp "
+d=json.load(sys.stdin)
+m=[a for a in d if a['name']=='$PDF_RENDER_APP_NAME']
+print(m[0]['uuid'] if m else '')")"
+if [[ -n "$PDF_RENDER_UUID" ]]; then
+  ok "PDF_RENDER_UUID ($PDF_RENDER_APP_NAME) — $PDF_RENDER_UUID"
+else
+  info "no application named '$PDF_RENDER_APP_NAME' found yet — leaving PDF_RENDER_UUID unset (create it with scripts/provision-worker.sh $PDF_RENDER_APP_NAME first, or override PDF_RENDER_APP_NAME)"
+fi
+
+PROVIDER_SYNC_UUID="$(api GET /applications | jqp "
+d=json.load(sys.stdin)
+m=[a for a in d if a['name']=='$PROVIDER_SYNC_APP_NAME']
+print(m[0]['uuid'] if m else '')")"
+if [[ -n "$PROVIDER_SYNC_UUID" ]]; then
+  ok "PROVIDER_SYNC_UUID ($PROVIDER_SYNC_APP_NAME) — $PROVIDER_SYNC_UUID"
+else
+  info "no application named '$PROVIDER_SYNC_APP_NAME' found yet — leaving PROVIDER_SYNC_UUID unset (create it with scripts/provision-worker.sh $PROVIDER_SYNC_APP_NAME first, or override PROVIDER_SYNC_APP_NAME)"
+fi
+
 MIGRATOR_TASK_UUID=""
 if [[ -n "$MIGRATOR_SERVICE_UUID" ]]; then
   MIGRATOR_TASK_UUID="$(api GET "/applications/$MIGRATOR_SERVICE_UUID/scheduled-tasks" | jqp "
@@ -202,3 +250,6 @@ record_kv MIGRATOR_SERVICE_UUID "$MIGRATOR_SERVICE_UUID"
 record_kv SUPABASE_STACK_UUID "$SUPABASE_STACK_UUID"
 record_kv APP_UUID "$APP_UUID"
 record_kv MIGRATOR_TASK_UUID "$MIGRATOR_TASK_UUID"
+record_kv ETL_UUID "$ETL_UUID"
+record_kv PDF_RENDER_UUID "$PDF_RENDER_UUID"
+record_kv PROVIDER_SYNC_UUID "$PROVIDER_SYNC_UUID"

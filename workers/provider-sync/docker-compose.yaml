@@ -26,11 +26,30 @@
 # │ the deploy-time external-reachability negative smoke (CA-2, runbook §10).     │
 # │ Multi-layer per Sec CA-3 — do not collapse to a single layer.                │
 # │                                                                              │
-# │ CA-4 PREREQUISITE: this service AND the api/ web-app MUST live in the SAME    │
-# │ Coolify PROJECT, or `http://provider-sync:8081` does not resolve (internal    │
-# │ DNS is per-project). Cross-project placement breaks internal reach AND tempts │
-# │ a public-Domain "fix" — the exact regression §10 fences. See runbook §7.      │
+# │ CA-4 PREREQUISITE, RESTATED CORRECTLY (ADR-073, 2026-09-19 — the           │
+# │ "same Coolify project" premise this paragraph previously stated is         │
+# │ FALSIFIED; corrected in place here, not silently): this service AND the   │
+# │ api/ web-app MUST be attached to the SAME DOCKER NETWORK, or               │
+# │ `http://provider-sync:8081` does not resolve. Coolify project/environment  │
+# │ membership grants NO attachment at all — the reach comes from the          │
+# │ `external:` network block below, naming the Supabase stack's own network   │
+# │ by name (the SAME network api/docker-compose.yaml attaches `app` to).      │
+# │ Cross-network placement breaks internal reach AND tempts a public-Domain   │
+# │ "fix" — the exact regression §10 fences. See runbook §3/§7.               │
 # └─────────────────────────────────────────────────────────────────────────────┘
+#
+# fence-provider-sync-private-bind: target
+#
+# NETWORK ATTACHMENT — BACKLOG.md §7.36 item 68 (F/CTO-ruled fleet
+# convention, 2026-09-19). This service also needs DIRECT-Postgres reach to
+# `db` (TenantBoundClient, login role authenticator/pfin_provider_sync post-
+# §6.2 cutover) — the SAME stack-network attachment discharges both the CA-4
+# app-reachability prerequisite above AND the DB-reach dependency, because
+# `app` is attached to that same stack network too (api/docker-compose.yaml).
+# PROVIDER_SYNC_STACK_NETWORK_NAME is its OWN uniquely-named var (same
+# per-resource-name discipline as MIGRATOR_STACK_NETWORK_NAME /
+# APP_STACK_NETWORK_NAME), populated by scripts/provision-worker.sh
+# pfin-provider-sync.
 #
 # TRANSPORT posture is UNCHANGED from the Dockerfile: direct-Postgres via
 # TenantBoundClient (PFIN_DB_*, login role authenticator), OFF the RT-26 allowlist
@@ -103,3 +122,16 @@ services:
       # override, add it in Coolify with an explicit POSITIVE INTEGER value (never blank). Contract
       # documented in .env.example. (Contrast ADMISSION_PROBE_PUBLIC_URLS: z.string().optional()
       # accepts "" safely, so a ${...} ref is fine there — only the coerced-number key has this trap.)
+    networks:
+      - default
+
+# Top-level network definition for the `default` name the service above
+# joins — ADR-073 mechanism (b): an `external:` network naming the
+# Supabase-stack application's own Docker network. Discharges BOTH the CA-4
+# app-reachability prerequisite (the same network `app` itself attaches to,
+# api/docker-compose.yaml) AND the direct-Postgres `db` dependency — see the
+# NETWORK ATTACHMENT header comment above.
+networks:
+  default:
+    name: ${PROVIDER_SYNC_STACK_NETWORK_NAME:?PROVIDER_SYNC_STACK_NETWORK_NAME must be set to the Supabase-stack application's Docker network name -- measured at provisioning by scripts/provision-worker.sh pfin-provider-sync. Do NOT default this to a guessed value.}
+    external: true
