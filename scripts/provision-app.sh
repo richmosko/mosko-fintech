@@ -62,6 +62,11 @@
 #      resolved from the stack's OWN live resource, never a hardcoded
 #      project/environment name (see the PROJECT/ENVIRONMENT RESOLUTION
 #      note below for the exact mechanism and its stated uncertainty).
+#      The create body carries both `project_uuid` AND `environment_uuid`
+#      (MEASURED team-lead 2026-09-20: Coolify 422s on `project_uuid`
+#      missing -- see the PROJECT/ENVIRONMENT RESOLUTION note), both
+#      UUID_RE-guarded before entering the JSON body, same as
+#      `server_uuid`.
 #   3. Read the stack's live Docker network (same `docker inspect`
 #      lookup provision-migrator-app.sh already uses) and set
 #      `APP_STACK_NETWORK_NAME` on `pfin-app`'s own env store,
@@ -91,11 +96,28 @@
 #   absent, falls back to the BY-NAME project/environment lookup
 #   provision-migrator-app.sh already uses (PROJECT_NAME/ENVIRONMENT_NAME
 #   env-var overrides, same defaults). Which path actually fires is
-#   PRINTED, not silently chosen -- this has NOT been independently
-#   measured against a live Coolify response as of this script's
-#   authoring (DevOps does not touch the box); if the live shape differs
-#   from either guess, fix the python here, do not silently trust
-#   whichever path happened to return something.
+#   PRINTED, not silently chosen.
+#   MEASURED (team-lead, 2026-09-20, stage A step 1 --apply): on the real
+#   box, preflight's own printed line showed a resolved project uuid
+#   (not a placeholder), confirming path (b) is the one that actually
+#   fires against this Coolify's live `/applications/<uuid>` response --
+#   path (a)'s nested `environment.uuid` field is NOT present on this
+#   Coolify (4.3.18)'s response shape, so path (a) remains unexercised in
+#   practice, not merely unmeasured. Both paths now resolve a real
+#   `project_uuid` regardless (see "WHAT THIS SCRIPT DOES" item 2's own
+#   note) -- previously path (a) left `project_uuid` unresolved on a
+#   FALSE premise (below).
+#   MEASURED (team-lead, 2026-09-20): `POST /applications/public` 422s
+#   with `{"project_uuid":["This field is required."]}` when
+#   `project_uuid` is omitted from the create body -- this script's own
+#   prior comment here claimed "Coolify's create endpoint accepts
+#   environment_uuid alone alongside server_uuid, per provision-
+#   migrator-app.sh's own create body," which was WRONG on its own cited
+#   source: `provision-migrator-app.sh`'s create body sends BOTH
+#   `project_uuid` AND `environment_uuid` (that script's own project/
+#   environment resolution is unconditionally BY-NAME, never nested-field
+#   path (a) at all) -- it was never actually tested that `environment_uuid`
+#   alone would work, and it does not.
 #
 # USAGE
 #   BOX_IP=<box-ip> scripts/provision-app.sh          # preflight: read-only
@@ -182,7 +204,19 @@ def api(token, method, path, body=None):
         die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
     config = 'header = "Authorization: Bearer ' + token + '"\n'
     tmppath = None
-    cmd = ["curl", "-fsS", "-K", "-", "-X", method]
+    # Sec-adjacent finding, PR #836 follow-up (team-lead, 2026-09-20 --apply):
+    # `-f` makes curl discard the response BODY on a non-2xx status, so a
+    # 422 died with only curl's own generic "(22) returned error 422" text
+    # -- the operator had to manually replay the exact request on the box
+    # to see Coolify's own `{"errors": {...}}` payload naming the missing
+    # field. Dropped `-f`; `-w '\n%{http_code}'` appends the status code as
+    # its own trailing line instead, parsed off below before json.loads --
+    # every existing successful call path is unaffected (the appended line
+    # is stripped before parsing, never handed to a caller). This is a
+    # provision-app.sh-local fix; the same `-fsS` shape is a pre-existing,
+    # repo-wide pattern across other scripts/*.sh Coolify API helpers, not
+    # swept here (out of this PR's scope; flagged to team-lead separately).
+    cmd = ["curl", "-sS", "-K", "-", "-X", method, "-w", "\n%{http_code}"]
     if body is not None:
         fd, tmppath = tempfile.mkstemp(prefix="pfin-app-body-")
         os.write(fd, body.encode())
@@ -195,8 +229,16 @@ def api(token, method, path, body=None):
         if tmppath:
             os.unlink(tmppath)
     if result.returncode != 0:
-        die(f"Coolify API {method} {path} failed: exit {result.returncode} ({result.stderr.decode(errors='replace').strip()[:200]})")
-    out = result.stdout.decode()
+        # curl itself failed BEFORE getting a response (DNS/connect/etc) --
+        # no HTTP status or body to show, same shape as before.
+        die(f"Coolify API {method} {path} failed: curl exit {result.returncode} ({result.stderr.decode(errors='replace').strip()[:200]})")
+    raw = result.stdout.decode()
+    out, _, code = raw.rpartition("\n")
+    if not code.isdigit():
+        die(f"Coolify API {method} {path}: could not parse an HTTP status code off curl's own -w output -- refusing to guess success or failure. Raw tail: {raw[-200:]!r}")
+    status = int(code)
+    if not (200 <= status < 300):
+        die(f"Coolify API {method} {path} -> HTTP {status}: {out.strip()[:500]}")
     return json.loads(out) if out.strip() else None
 PY
 
@@ -216,7 +258,25 @@ print(json.dumps(result) if result is not None else '')
 PYEOF
 REMOTE
 }
-jqp() { python3 -c "import json,sys;$1"; }
+jqp() {
+  # Team-lead finding (PR #836 follow-up, 2026-09-20 --apply): every
+  # `api ... | jqp ...` call site pipes api()'s stdout into this
+  # function regardless of api()'s own exit status (a pipe always runs
+  # both sides) -- when api() fails, it already printed its OWN clean
+  # diagnostic to stderr (relayed from the remote's die()) and produced
+  # EMPTY stdout, but jqp still ran `json.load(sys.stdin)` on that empty
+  # input and crashed with an unrelated, confusing Python traceback on
+  # TOP of the real error. Every one of this script's own api()-into-jqp
+  # call sites returns a JSON array or object on success (never an empty
+  # body) -- an empty stdin here is therefore always the upstream
+  # failure's own symptom, never a legitimate empty success. Exit quietly
+  # (no new message -- api()'s own die() already said what happened);
+  # `set -e`/pipefail still stop the script on this nonzero exit.
+  local input
+  input="$(cat)"
+  [[ -n "$input" ]] || exit 1
+  printf '%s' "$input" | python3 -c "import json,sys;$1"
+}
 
 step "Preflight — the Supabase-stack application must already be deployed"
 STACK_APP_JSON="$(api GET /applications | jqp "
@@ -248,12 +308,20 @@ RESOLVE_PATH="$(sed -n 1p <<<"$RESOLVE_OUT")"
 if [[ "$RESOLVE_PATH" == "PATH_A" ]]; then
   ENV_UUID="$(sed -n 2p <<<"$RESOLVE_OUT")"
   info "resolved via path (a): stack's own nested 'environment.uuid' field — $ENV_UUID"
-  # PROJECT_UUID is not separately needed by the create call once ENV_UUID
-  # is known (Coolify's create endpoint accepts environment_uuid alone
-  # alongside server_uuid, per provision-migrator-app.sh's own create
-  # body) -- left unresolved on this path; the Plan printout says so
-  # rather than fabricating a value.
-  PROJECT_UUID="<not resolved on path (a) -- not required for creation>"
+  # MEASURED (team-lead, 2026-09-20): Coolify's create endpoint REQUIRES
+  # project_uuid (422 "This field is required." when omitted) -- see this
+  # script's own header PROJECT/ENVIRONMENT RESOLUTION note for the full
+  # correction. path (a) does not carry a project reference alongside
+  # the nested environment.uuid field, so it resolves project_uuid via
+  # the same BY-NAME lookup path (b) already uses (PROJECT_NAME override
+  # applies here too) -- this is resolving project_uuid only; ENV_UUID
+  # is still path (a)'s own nested-field value, not re-derived.
+  PROJECT_JSON="$(api GET /projects | jqp "
+d=json.load(sys.stdin)
+m=[p for p in d if p['name']=='$PROJECT_NAME']
+print(json.dumps(m[0]) if m else '')")"
+  [[ -n "$PROJECT_JSON" ]] || die "path (a) resolved environment.uuid but the project_uuid the create call also requires could not be found by name: project '$PROJECT_NAME' does not exist. Fix PROJECT_NAME, or investigate whether the stack's own resource actually lives under a different project than PROJECT_NAME names."
+  PROJECT_UUID="$(echo "$PROJECT_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
 else
   info "path (a) unavailable (no stack.environment.uuid) — falling back to BY-NAME lookup (PROJECT_NAME='$PROJECT_NAME', ENVIRONMENT_NAME='$ENVIRONMENT_NAME')"
   PROJECT_JSON="$(api GET /projects | jqp "
@@ -262,7 +330,6 @@ m=[p for p in d if p['name']=='$PROJECT_NAME']
 print(json.dumps(m[0]) if m else '')")"
   [[ -n "$PROJECT_JSON" ]] || die "path (b) fallback failed too: project '$PROJECT_NAME' does not exist. Fix PROJECT_NAME/ENVIRONMENT_NAME, or fix path (a)'s field-path guess in this script against the stack's actual live JSON shape."
   PROJECT_UUID="$(echo "$PROJECT_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
-  [[ "$PROJECT_UUID" =~ $UUID_RE ]] || die "resolved project uuid '$PROJECT_UUID' does not match the expected uuid shape -- refusing to use it in a remote command."
   ENV_JSON="$(api GET "/projects/$PROJECT_UUID/environments" | jqp "
 d=json.load(sys.stdin)
 m=[e for e in d if e['name']=='$ENVIRONMENT_NAME']
@@ -270,6 +337,7 @@ print(json.dumps(m[0]) if m else '')")"
   [[ -n "$ENV_JSON" ]] || die "path (b) fallback failed too: environment '$ENVIRONMENT_NAME' does not exist under project $PROJECT_UUID."
   ENV_UUID="$(echo "$ENV_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
 fi
+[[ "$PROJECT_UUID" =~ $UUID_RE ]] || die "resolved project uuid '$PROJECT_UUID' does not match the expected uuid shape -- refusing to use it in a remote command or JSON body."
 [[ "$ENV_UUID" =~ $UUID_RE ]] || die "resolved environment uuid '$ENV_UUID' does not match the expected uuid shape -- refusing to use it in a remote command or JSON body."
 ok "environment resolved — $ENV_UUID (project: $PROJECT_UUID)"
 
@@ -387,7 +455,7 @@ print(m[0]['uuid'] if m else '')")"
   CREATE_BODY="$(python3 -c "
 import json
 print(json.dumps({
-  'environment_uuid': '$ENV_UUID',
+  'project_uuid': '$PROJECT_UUID', 'environment_uuid': '$ENV_UUID',
   'server_uuid': '$SERVER_UUID',
   'git_repository': '$GIT_REPOSITORY', 'git_branch': '$GIT_BRANCH',
   'build_pack': 'dockercompose', 'name': '$APP_NAME',
