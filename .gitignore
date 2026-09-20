@@ -2,6 +2,12 @@
 .env
 .env.*
 !.env.example
+# scripts/ci/fence-push-secrets-strikes.sh's own fixtures -- push-production-
+# secrets.sh reads "$REPO_ROOT/.env" by exact filename, so its offline test
+# fixtures must be named exactly `.env` too. Fixture strings only (see
+# their own header comments), never a real credential.
+!tests/fixtures/ci/push-secrets/repo-root/.env
+!tests/fixtures/ci/push-secrets/repo-root-unmapped/.env
 
 # Local working files (planning drafts, scratch)
 temp/
