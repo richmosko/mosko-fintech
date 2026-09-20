@@ -48,12 +48,21 @@
 #   --compose-service defaults to `app`.
 #
 # EXIT CODES
-#   0  200 response whose body starts with the PDF magic bytes (%PDF)
-#   1  a real failure: any other status, a body that does not start with
-#      %PDF, the signing key absent from the sibling container's own env,
-#      or ambiguous (>1) running container match
-#   2  a precondition this smoke could not even attempt under (box
-#      unreachable, resource/container not found)
+#   0  VERIFIED -- 200 response whose body starts with the PDF magic
+#      bytes (%PDF)
+#   1  REFUSED -- any other status, a body that does not start with
+#      %PDF, the signing key absent from the sibling container's own
+#      env, or ambiguous (>1) running container match
+#   2  FAILED -- a precondition this smoke could not even attempt under
+#      (box unreachable, resource/container not found)
+#
+# ORCHESTRATOR CONTRACT (BACKLOG.md §7.36 item 68 W-5's provision.sh will
+# call this directly): non-interactive, no prompts, no `read`. Idempotent
+# -- each run mints its own fresh, single-use JWT (a new nonce every
+# time) and renders a fixed, harmless HTML string; no state is created or
+# mutated on either side, safe to re-run any number of times. Every fact
+# used (container id, signing key) is resolved LIVE from the sibling
+# container's own env each run, never cached.
 
 set -euo pipefail
 

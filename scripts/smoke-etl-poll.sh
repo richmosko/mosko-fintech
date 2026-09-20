@@ -56,13 +56,22 @@
 #   ETL_APP_NAME (default pfin-back-etl) is env-var-overridable.
 #
 # EXIT CODES
-#   0  the worker exited 0 AND at least one pfin.nav_daily row exists
-#      for today
-#   1  a real failure: the worker exited non-zero, OR it exited 0 but no
-#      row exists for today (a silent no-op), OR ambiguous (>1) running
+#   0  VERIFIED -- the worker exited 0 AND at least one pfin.nav_daily
+#      row exists for today
+#   1  REFUSED -- the worker exited non-zero, OR it exited 0 but no row
+#      exists for today (a silent no-op), OR ambiguous (>1) running
 #      container match
-#   2  a precondition this smoke could not even attempt under (box
-#      unreachable, resource/container not found)
+#   2  FAILED -- a precondition this smoke could not even attempt under
+#      (box unreachable, resource/container not found)
+#
+# ORCHESTRATOR CONTRACT (BACKLOG.md §7.36 item 68 W-5's provision.sh will
+# call this directly): non-interactive, no prompts, no `read`. Idempotent
+# by construction -- `run_nav_daily.py`'s own INSERT is `on conflict
+# (users_id, nav_date) do nothing` (see below), so re-running this smoke
+# any number of times in one day is safe: a repeat run still exits 0 as
+# long as the row-presence check holds, never fails on "already ran
+# today." Every fact used (container id, row count) is resolved LIVE
+# each run, never cached.
 
 set -euo pipefail
 

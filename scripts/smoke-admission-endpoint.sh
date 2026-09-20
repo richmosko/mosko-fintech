@@ -73,15 +73,23 @@
 #   sibling under test is a different resource.
 #
 # EXIT CODES
-#   0  every negative check refused AND every positive check matched its
-#      expected status (000/000/empty-fqdn, 200/401/400)
-#   1  a real failure: any negative check WAS reachable (an exposure --
-#      escalate, do not re-run and hope), any positive check returned
-#      the wrong status, a Domain IS assigned, or ambiguous (>1) running
-#      container match (Sec F4 discipline -- never silently pick one)
-#   2  a precondition this smoke could not even attempt under (box
-#      unreachable, provider-sync/sibling resource not found, no running
-#      container found for the compose service at all)
+#   0  VERIFIED -- every negative check refused AND every positive check
+#      matched its expected status (000/000/empty-fqdn, 200/401/400)
+#   1  REFUSED -- a real finding: any negative check WAS reachable (an
+#      exposure -- escalate, do not re-run and hope), any positive check
+#      returned the wrong status, a Domain IS assigned, or ambiguous (>1)
+#      running container match (Sec F4 discipline -- never silently pick
+#      one)
+#   2  FAILED -- a precondition this smoke could not even attempt under
+#      (box unreachable, provider-sync/sibling resource not found, no
+#      running container found for the compose service at all)
+#
+# ORCHESTRATOR CONTRACT (BACKLOG.md §7.36 item 68 W-5's provision.sh will
+# call this directly): non-interactive, no prompts, no `read`. Idempotent
+# -- pure read/probe, no state mutation, safe to re-run any number of
+# times with identical semantics. Every fact used is resolved LIVE from
+# Coolify's API / the box / the sibling container's own env each run --
+# nothing is cached or read from a prior invocation's own output.
 
 set -euo pipefail
 

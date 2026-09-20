@@ -80,12 +80,27 @@
 #   SSH/API call is made.
 #
 # EXIT CODES
-#   0  clean run (preflight, or --apply that created/confirmed the task)
-#   1  a real failure: unresolvable application, a live task that
-#      disagrees with this table (refuses to mutate it), a post-create
-#      read-back mismatch
-#   2  structural/usage error: unrecognised <task-name>, missing BOX_IP,
-#      unreachable box
+#   0  VERIFIED -- preflight (no --apply): plan printed, nothing touched.
+#      --apply: the task now exists on the box, byte-exact read-back
+#      confirmed (whether just created, or already present and matching
+#      -- idempotent either way, printed as "already matches -- nothing
+#      to change" on a no-op re-run, never a silent success with no
+#      signal of which branch fired).
+#   1  REFUSED -- unresolvable application, a live task that disagrees
+#      with this table (refuses to mutate it -- a human decision, not
+#      this script's to make), a post-create read-back mismatch, or
+#      ambiguous (>1) same-named task
+#   2  FAILED -- structural/usage error: unrecognised <task-name>,
+#      missing BOX_IP, unreachable box
+#
+# ORCHESTRATOR CONTRACT (BACKLOG.md §7.36 item 68 W-5's provision.sh will
+# call this directly, once per <task-name>): non-interactive, no
+# prompts, no `read`. Idempotent -- a matching existing task is left
+# alone and reported as such, not re-created; the ONLY state mutation
+# (task creation) is gated behind --apply, mirroring every sibling
+# scripts/provision-*.sh in this repo. Every fact used (application
+# uuid, existing task fields) is resolved LIVE from the Coolify API each
+# run, never cached or read from a prior invocation's own output.
 
 set -euo pipefail
 
