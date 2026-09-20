@@ -39,24 +39,25 @@ One file: [`scripts/provision.env.example`](../scripts/provision.env.example) �
 
 Every step: preflight first (no flag), read the plan, then `--apply`. Stop on non-zero exit. Scripts are idempotent — re-running a done step reports "already satisfies."
 
+Row order follows original section order §1→§3→§4→§6.x→§7.1(app)→§7.2(workers)→§5(secrets)→§2(DNS)→§8/§9/§10→GitHub CI setup, **with one deliberate deviation from that grouping, flagged where it happens**: §5 (secrets push) is sequenced *after* §7.1/§7.2 create their target Coolify resources, not before §6.x — the runbook's own [ADR-072](../DECISIONS.md#adr-072)-era ratified note says this script "runs functionally after §7, not before it, despite being numbered §5," and `push-production-secrets.sh` fails closed on a missing resource. Placing it earlier would encode a wrong step order into this table, which doubles as the spec for a future `scripts/provision.sh`.
+
 | # | What | Command | Expected (last line) | Status | Reason |
 |---|---|---|---|---|---|
-| 1 | Provision + harden the box, install Coolify, bootstrap the admin account | `scripts/provision-vps.sh --apply` | `BOX_IP=<ip>` printed | SCRIPTED | |
-| 2 | Stand up the Supabase stack; mint real JWT keys | `scripts/standup.sh --apply` (wraps step 1 + this) | verification battery passes | SCRIPTED | |
-| 3 | Database bootstrap: create `pfin_owner`/`migrator`, apply migrations, create the vault decrypt view | `psql -U supabase_admin -f supabase/roles.sql` → `-f supabase/auth-grants.sql` → engine-backstop `REVOKE`s → `\password migrator` + `ALTER ROLE migrator LOGIN` → role-comment files → `docker compose exec migrator supabase db push --yes --db-url "$PROD_DB_URL"` → `psql -U supabase_admin -f supabase/post-step-vault-view.sql` (full command text: script headers / archive §6.3) | ownership census: every `pfin` object owned by `pfin_owner`; `bootstrap_complete = t`; exactly one decrypt view | BY-HAND | interactive-credential moment — gated on **SELF-395** (client-side SCRAM scripting, SECURITY-GATED, not yet built; [ADR-072](../DECISIONS.md#adr-072) Decision 6) |
-| 4 | Activate `pfin_etl` login | `scripts/db-role-handoff.sh pfin_etl --apply` | verified handoff, `PFIN_DB_PASSWORD` pushed | SCRIPTED | |
-| 5 | Activate `pfin_provider_sync` login | `scripts/db-role-handoff.sh pfin_provider_sync --apply` | verified handoff, `PFIN_DB_PASSWORD` pushed | SCRIPTED | |
-| 6 | Generate the CI-trigger keypair | `ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519_ci_migrate` | keypair created, never committed | BY-HAND | interactive-credential moment |
-| 7 | Wire the CI trigger (`ci-migrate` user, forced command, orchestration script, scoped Coolify token) | `scripts/provision-vps.sh --apply` (re-run, now with `CI_MIGRATE_SSH_PUBKEY`/`MIGRATOR_SERVICE_UUID`/`MIGRATOR_TASK_UUID`/`APP_UUID` set) | idempotent apply completes | SCRIPTED | |
-| 8 | Add `CI_MIGRATE_SSH_PRIVATE_KEY` GitHub Actions secret; `PROD_SSH_HOST` GitHub Actions variable; `production-migrator` GitHub Environment with F/CTO as required reviewer | repo Settings → Secrets and variables → Actions; → Environments | all three saved | BY-HAND | interactive-credential moment — F/CTO `!`-step |
-| 9 | Push the mapped production secrets to their Coolify resources | `scripts/push-production-secrets.sh --apply` | names-only report, grouped by resource | SCRIPTED | |
-| 10 | Create the `app`/`etl`/`pdf-render`/`provider-sync` Coolify resources, deploy | `scripts/provision-app.sh --apply`; `scripts/provision-worker.sh --apply` (×3); `scripts/deploy-app.sh --require-network --resolve-host` | resources exist, networks attached, healthy | SCRIPTED | |
-| 11 | DNS — snapshot existing records, point A/AAAA at the box, lower TTL ahead of cutover | registrar console | records resolve to `<box-ip>` from ≥2 public resolvers | BY-HAND | interactive-credential moment |
-| 12 | Re-establish Coolify → Discord notifications | Coolify dashboard → Notifications | test event received | BY-HAND | NOT YET SCRIPTED — no BACKLOG item booked; flagging for one |
-| 13 | Flip the `pfin` Data-API exposure (after the VETO/measurement gates in archive §6.9 pass) | `scripts/coolify-env.sh set pfin-supabase-stack PGRST_DB_SCHEMAS=public,graphql_public,pfin --apply --deploy --post-check '...'` (full post-check string: script header) | exit 0 | SCRIPTED | |
-| 14 | Smoke-test: CA-2/CA-7 negative+positive reachability, TZ-1 pin read-back, RLS isolation, PDF round-trip, ETL poll, Discord fires | see archive §10 for the exact commands | all pass | BY-HAND | one-time measurement — ship-block gate on §15 |
-| 15 | Cutover: confirm step 14 is green, then tear down the incumbent `pfindash.com` stack | F/CTO go/no-go | incumbent retired | BY-HAND | **one-way door — F/CTO decision, not a probe** |
-| — | GitHub Environment reviewer approval, **every** migrator trigger fire (push or `workflow_dispatch`) | Actions tab → Review deployments | approved | BY-HAND | interactive-credential moment — Sec-ruled required-reviewer gate, recurs on every fire, not just at setup |
+| 1 | Provision + harden the box, install Coolify, bootstrap the admin account (§1+§3) | `scripts/provision-vps.sh --apply` | `BOX_IP=<ip>` printed | SCRIPTED | |
+| 2 | Stand up the Supabase stack; mint real JWT keys (§4) | `scripts/standup.sh --apply` (wraps step 1 + this) | verification battery passes | SCRIPTED | |
+| 3 | Database bootstrap: create `pfin_owner`/`migrator`, apply migrations, create the vault decrypt view (§6.3) | `psql -U supabase_admin -f supabase/roles.sql` → `-f supabase/auth-grants.sql` → engine-backstop `REVOKE`s → `\password migrator` + `ALTER ROLE migrator LOGIN` → role-comment files → `docker compose exec migrator supabase db push --yes --db-url "$PROD_DB_URL"` → `psql -U supabase_admin -f supabase/post-step-vault-view.sql` (full command text: script headers / archive §6.3) | ownership census: every `pfin` object owned by `pfin_owner`; `bootstrap_complete = t`; exactly one decrypt view | BY-HAND | interactive-credential moment — gated on **SELF-395** (client-side SCRAM scripting, SECURITY-GATED, not yet built; [ADR-072](../DECISIONS.md#adr-072) Decision 6) |
+| 4 | Activate `pfin_etl` login (§6.1) | `scripts/db-role-handoff.sh pfin_etl --apply` | verified handoff, `PFIN_DB_PASSWORD` pushed | SCRIPTED | |
+| 5 | Activate `pfin_provider_sync` login (§6.2) | `scripts/db-role-handoff.sh pfin_provider_sync --apply` | verified handoff, `PFIN_DB_PASSWORD` pushed | SCRIPTED | |
+| 6 | Create the `app` Coolify resource, deploy (§7.1) | `scripts/provision-app.sh --apply`; `scripts/deploy-app.sh --require-network --resolve-host` | resource exists, network attached, healthy | SCRIPTED | |
+| 7 | Create `etl`/`pdf-render`/`provider-sync` Coolify resources, deploy (§7.2 — still devops/W-3-owned; folds into this table's shape once W-3 lands) | `scripts/provision-worker.sh --apply` (×3) | resources exist, networks attached, healthy | SCRIPTED | |
+| 8 | Push the mapped production secrets to their Coolify resources — **sequenced here, after step 6/7, see the note above** (§5) | `scripts/push-production-secrets.sh --apply` | names-only report, grouped by resource | SCRIPTED | |
+| 9 | DNS — snapshot existing records, point A/AAAA at the box, lower TTL ahead of cutover (§2) | registrar console | records resolve to `<box-ip>` from ≥2 public resolvers | BY-HAND | NOT YET SCRIPTED — [BACKLOG §7.36 item 72](../BACKLOG.md) books `assign-app-domain.sh` |
+| 10 | Flip the `pfin` Data-API exposure (after the VETO/measurement gates in archive §6.9 pass) (§6.9) | `scripts/coolify-env.sh set pfin-supabase-stack PGRST_DB_SCHEMAS=public,graphql_public,pfin --apply --deploy --post-check '...'` (full post-check string: script header) | exit 0 | SCRIPTED | |
+| 11 | Re-establish Coolify → Discord notifications (§8) | Coolify dashboard → Notifications | test event received | BY-HAND | NOT YET SCRIPTED — [BACKLOG §7.36 item 74](../BACKLOG.md) books measuring/scripting this |
+| 12 | Smoke-test: CA-2/CA-7 negative+positive reachability, TZ-1 pin read-back, RLS isolation, PDF round-trip, ETL poll, Discord fires (§10) | see archive §10 for the exact commands | all pass | BY-HAND | one-time measurement — ship-block gate on step 13 |
+| 13 | Cutover: confirm step 12 is green, then tear down the incumbent `pfindash.com` stack (§9) | F/CTO go/no-go | incumbent retired | BY-HAND | **one-way door — F/CTO decision, not a probe** |
+| 14 | GitHub CI setup for the migrator trigger — keypair, `.env` UUIDs, box-side wiring, then the GitHub-side secret/variable/Environment (§6.4) | keypair: `ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519_ci_migrate`; box side: `scripts/provision-vps.sh --apply` (re-run, with `CI_MIGRATE_SSH_PUBKEY`/`MIGRATOR_SERVICE_UUID`/`MIGRATOR_TASK_UUID`/`APP_UUID` set); GitHub side: repo Settings → Secrets and variables → Actions; → Environments | keypair created; box apply idempotent; secret/variable/Environment all saved | box side SCRIPTED, GitHub side BY-HAND | GitHub side: NOT YET SCRIPTED — [BACKLOG §7.36 item 73](../BACKLOG.md) books `github-ci-setup.sh` |
+| — | GitHub Environment reviewer approval, **every** migrator trigger fire (push or `workflow_dispatch`), from step 14 onward | Actions tab → Review deployments | approved | BY-HAND | interactive-credential moment — Sec-ruled required-reviewer gate, recurs on every fire, not just at setup |
 
 **§4.1's TimeZone-pin verification (Sec-gated CI anchor — this exact block is fenced by `scripts/ci/check-tz-sweep-identical.py`, kept token-identical to (T3) in `supabase/tests/01_session_timezone.sql`; do not reword):**
 ```sh
@@ -69,23 +70,24 @@ psql "$PROD_DB_URL" -Atc \
     where s.setrole <> 0
       and c ilike 'timezone=%'"
 ```
-Required: zero rows. Run after step 3, before step 14. `PGRST_DB_SCHEMAS` ruled literal ([ADR-023](../DECISIONS.md#adr-023)): `PGRST_DB_SCHEMAS=public,graphql_public,pfin`.
+Required: zero rows. Run after step 3, before step 12. `PGRST_DB_SCHEMAS` ruled literal ([ADR-023](../DECISIONS.md#adr-023)): `PGRST_DB_SCHEMAS=public,graphql_public,pfin`.
 
-**Done looks like:** the `app` URL answers over TLS; step 14's smoke gate is fully green; Discord received at least one deploy notification.
+**Done looks like:** the `app` URL answers over TLS; step 12's smoke gate is fully green; Discord received at least one deploy notification.
 
 **Resuming after a stop:** no `--from <step>` flag exists yet (that's `scripts/provision.sh`'s own future job — not yet built, this table is its spec). Every script above is preflight-safe and idempotent — re-run from the step that failed; confirm its preflight output shows the prior steps already satisfied before passing `--apply`.
 
 **Unavoidable manual moments, in one place:**
 - Every credential Part 1 names (account creation, API token minting) — no script can do this for you.
 - Step 3's database bootstrap (`\password migrator`, the supervised SQL sequence) — gated on SELF-395.
-- Steps 6/8: the CI-trigger keypair and the three GitHub settings — one-time, credential/account moments.
-- The GitHub Environment reviewer click — recurs on **every** migrator fire, by Sec's own ruling; not a setup-only step.
-- Step 11 (DNS) and step 15 (cutover) — registrar console access and a one-way F/CTO decision, respectively.
-- Step 12 (Discord webhook) — no script yet; flagged, not booked to a BACKLOG item.
+- Step 9 (DNS) — registrar console access; [BACKLOG §7.36 item 72](../BACKLOG.md) books the scripting gap.
+- Step 11 (Discord webhook) — [BACKLOG §7.36 item 74](../BACKLOG.md) books measuring whether it's even scriptable.
+- Step 13 (cutover) — a one-way F/CTO decision, not a probe; deliberately not scripted.
+- Step 14's GitHub side (secret/variable/Environment) — [BACKLOG §7.36 item 73](../BACKLOG.md) books `github-ci-setup.sh`.
+- The GitHub Environment reviewer click — recurs on **every** migrator trigger fire from step 14 onward, by Sec's own ruling; not a setup-only step, and not something item 73's script covers.
 
 ---
 
-**§7 (Workers)** — this file previously carried §7's full prose inline, byte-identical, pending a separate conversion PR (W-3). It has now moved to the archive, verbatim, at Sec's/team-lead's instruction, and folds into this Part-3 shape once W-3 lands; the current `etl`/`pdf-render`/`provider-sync` container contracts referenced by Part 3 step 10 are unchanged by this move.
+**§7 (Workers)** — this file previously carried §7's full prose inline, byte-identical, pending a separate conversion PR (W-3). It has now moved to the archive, verbatim, at Sec's/team-lead's instruction, and folds into this Part-3 shape once W-3 lands; the current `etl`/`pdf-render`/`provider-sync` container contracts referenced by Part 3 step 7 are unchanged by this move.
 
 **§11 (GDPR erasure)** is not a stand-up step — it's an operational routine (not yet built; Sec joint-review gates it at build time). Full FK-cascade ordering requirement: archive §11.
 
