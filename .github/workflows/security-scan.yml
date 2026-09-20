@@ -2820,12 +2820,17 @@ jobs:
     # scripts/ci/fence-provision-app-strikes.sh proves the three refuse
     # independently naming the offending predicate, that all-zero
     # proceeds, and that a failed on-box read refuses naming "unknown"
-    # rather than "0" -- offline via a PATH-shadowed fake ssh/curl/docker
-    # -- see that script's own header for what each of its six scenarios
+    # rather than "0" -- offline via a PATH-shadowed fake ssh/curl/docker.
+    # A second live finding the same day (team-lead, first --apply):
+    # `POST /applications/public` 422'd on a missing required
+    # `project_uuid` field -- fixed, and scenario 7 (CREATE-HAPPY) now
+    # exercises the create path under --apply, asserting fake-curl's
+    # unconditional required-key check on the POSTed body passes -- see
+    # that script's own header for what each of its seven scenarios
     # proves.
     steps:
       - uses: actions/checkout@v4
-      - name: offline strike-proofs (all-zero proceeds; containers/images/env/failed-read refuse independently)
+      - name: offline strike-proofs (all-zero proceeds; containers/images/env/failed-read refuse independently; create-body watcher)
         run: bash scripts/ci/fence-provision-app-strikes.sh
 
   fence-smoke-pfin-exposure-strikes:
