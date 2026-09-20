@@ -97,7 +97,31 @@
 # deploys (BACKLOG.md §7.36 item 26, Sec-ruled non-secret production
 # override; docs/deployment-runbook.md §5/§7). Same non-manifest-name
 # status, same independent-refusal backstop.
-SET_ALLOWLIST=(PGRST_DB_SCHEMAS MIGRATOR_DB_USER PUBLIC_SUPABASE_URL PUBLIC_SUPABASE_ANON_KEY PFIN_DB_SSLMODE)
+#
+# PFIN_DB_HOST / PFIN_DB_PORT / PFIN_DB_NAME / PFIN_DB_USER -- added for
+# item 68's W-2 (worker DB-role handoff; docs/deployment-runbook.md §7.2).
+# All four are non-secret connection-shape config, not credentials -- the
+# credential is PFIN_DB_PASSWORD, which stays OFF this allowlist (it IS a
+# secrets-manifest.yml production_only name, so the manifest-refusal check
+# above would reject it even if someone added it here; scripts/db-role-
+# handoff.sh is its own, separate, dedicated write path). Confirmed
+# non-manifest names (checked against secrets-manifest.yml at the same PR
+# that added this entry). Values per worker, per docs/deployment-runbook.md
+# §4/§6 (the stack's own internal service DNS, not each worker's local-dev
+# .env.example default): PFIN_DB_HOST=db, PFIN_DB_PORT=5432,
+# PFIN_DB_NAME=postgres (the actual database name -- "pfin" is the SCHEMA,
+# not the database), PFIN_DB_USER=pfin_etl or pfin_provider_sync.
+#
+# PLAID_ENV -- added for provider-sync's deploy. Non-secret Plaid API tier
+# selector ("sandbox"/"production"), already declared as such in
+# workers/provider-sync/.env.example ("non-secret — Plaid API tier").
+#
+# ADMISSION_PROBE_PUBLIC_URLS -- added for provider-sync's SELF-279 CA-2
+# recurring reachability probe. Non-secret by construction (public https
+# FQDNs, comma-separated; unset/empty is fail-safe no-op per
+# workers/provider-sync/.env.example's own "non-secret" declaration) --
+# never a credential, never a URL carrying embedded creds (Note N1 there).
+SET_ALLOWLIST=(PGRST_DB_SCHEMAS MIGRATOR_DB_USER PUBLIC_SUPABASE_URL PUBLIC_SUPABASE_ANON_KEY PFIN_DB_SSLMODE PFIN_DB_HOST PFIN_DB_PORT PFIN_DB_NAME PFIN_DB_USER PLAID_ENV ADMISSION_PROBE_PUBLIC_URLS)
 # MIGRATOR_DB_PASSWORD is delete-only, never settable here (it is minted
 # ONLY by scripts/provision-migrator-app.sh's own mint-if-absent step,
 # ADR-072 Amendment 4 Decision B -- routing it through this script's

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-db-role-handoff-strikes.sh to drive
+# scripts/db-role-handoff.sh's remote python driver against CANNED Coolify
+# API responses instead of a live box. Same shape as
+# tests/fixtures/ci/provision-worker/fake-curl / tests/fixtures/ci/
+# provision-app/fake-curl. scripts/db-role-handoff.sh itself is never
+# modified or made aware this exists.
+#
+# Endpoints covered ($FAKE_CURL_MODE selects which fixture shape):
+#   GET /applications -- returns the stack app (pfin-supabase-stack) always,
+#     plus the target resource ($FAKE_RESOURCE_NAME) UNLESS
+#     $FAKE_CURL_MODE is "resource-absent".
+#   PATCH .../envs/bulk -- validates the PATCHed body has a non-empty
+#     `data` array of {key, value} objects with key == PFIN_DB_PASSWORD and
+#     a 64-char value; 200 empty body on success, 400 otherwise.
+#
+# Logs its OWN ARGV (never the -K config FILE's contents, never a
+# --data-binary body FILE's contents) to $FAKE_CURL_LOG, so the fence can
+# assert the fake token AND the fake credential never appear there.
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+respond() {
+  local body="$1" code="${2:-200}"
+  printf '%s\n%s' "$body" "$code"
+  exit 0
+}
+
+METHOD="GET"
+prev=""
+BODY_FILE=""
+for a in "$@"; do
+  if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  if [[ "$prev" == "--data-binary" && "$a" == @* ]]; then BODY_FILE="${a#@}"; fi
+  prev="$a"
+done
+URL="${*: -1}"
+
+RESOURCE_NAME="${FAKE_RESOURCE_NAME:-pfin-back-etl}"
+STACK_UUID="aaaa1111bbbb2222cccc3333"
+RESOURCE_UUID="dddd4444eeee5555ffff6666"
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
+  if [[ "${FAKE_CURL_MODE:-clean}" == "resource-absent" ]]; then
+    respond "$(printf '[{"uuid":"%s","name":"pfin-supabase-stack"}]' "$STACK_UUID")"
+  fi
+  respond "$(printf '[{"uuid":"%s","name":"pfin-supabase-stack"},{"uuid":"%s","name":"%s"}]' \
+    "$STACK_UUID" "$RESOURCE_UUID" "$RESOURCE_NAME")"
+fi
+
+if [[ "$METHOD" == "PATCH" && "$URL" == *"/envs/bulk" ]]; then
+  if [[ -z "$BODY_FILE" || ! -f "$BODY_FILE" ]]; then
+    respond '{"message":"Content-Type must be application/json"}' 400
+  fi
+  if ! python3 -c "
+import json, sys
+d = json.load(open('$BODY_FILE'))
+rows = d.get('data')
+if not isinstance(rows, list) or not rows:
+    sys.exit(1)
+for r in rows:
+    if r.get('key') != 'PFIN_DB_PASSWORD' or len(r.get('value', '')) != 64:
+        sys.exit(1)
+" >/dev/null 2>&1; then
+    respond '{"message":"malformed PFIN_DB_PASSWORD PATCH body"}' 400
+  fi
+  respond '{}'
+fi
+
+respond '{}'

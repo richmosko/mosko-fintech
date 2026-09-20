@@ -3616,6 +3616,33 @@ jobs:
       - name: offline strike-proofs (3 resources x 7 scenarios + unknown-name refusal)
         run: bash scripts/ci/fence-provision-worker-strikes.sh
 
+  fence-db-role-handoff-strikes:
+    name: db-role-handoff.sh — two-statement handoff + credential-transport strike-proofs
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 68, W-2 (docs/deployment-runbook.md §6.1/§6.2
+    # DB-role credential handoff, scripted). Sec joint-review is mandatory
+    # on the PR this fence ships in (secrets + DB roles), per that item's
+    # own routing — this CI job runs unconditionally like every sibling
+    # strike-proof, the joint-review gate is a merge condition, not a CI
+    # condition. scripts/ci/fence-db-role-handoff-strikes.sh proves: role-
+    # missing refuses; already-LOGIN-without-rotate refuses; rotate-before-
+    # LOGIN refuses; a missing target Coolify resource refuses before any
+    # credential is generated; a simulated cleartext echo in psql's own
+    # output is caught by the script's own guard (not merely a non-zero
+    # exit); psql's real exit-0-on-"Passwords didn't match" behaviour
+    # (measured locally against a throwaway Postgres instance, not
+    # assumed) is caught by a string guard, not the exit code alone; a
+    # post-handoff catalog-verify mismatch refuses; a failed connect-AS-
+    # the-role check refuses; a Coolify env-store readback length
+    # mismatch refuses; and both roles' full happy paths (initial handoff
+    # + rotate) succeed end to end — offline via a PATH-shadowed fake
+    # ssh/docker/curl (tests/fixtures/ci/db-role-handoff/fake-curl), never
+    # a live box, never a real Postgres.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (12 scenarios — see the fence script's own header for the full list)
+        run: bash scripts/ci/fence-db-role-handoff-strikes.sh
+
   fence-push-secrets-strikes:
     name: push-production-secrets.sh — resource-resolution + secret-transport strike-proofs
     runs-on: ubuntu-latest

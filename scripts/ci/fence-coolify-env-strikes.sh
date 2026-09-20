@@ -173,6 +173,22 @@ run_scenario "manifest refusal holds even with a WIDENED SET_ALLOWLIST" 1 ok \
   set abc123def456ghi789jk01 SUPABASE_SERVICE_ROLE_KEY=x || FAIL=1
 COOLIFY_ENV_SH="$COOLIFY_ENV_SH_SAVED"
 
+# 5. BACKLOG.md §7.36 item 68 (W-2): the six new SET_ALLOWLIST additions
+#    (PFIN_DB_HOST / PFIN_DB_PORT / PFIN_DB_NAME / PFIN_DB_USER / PLAID_ENV
+#    / ADMISSION_PROBE_PUBLIC_URLS) must each (a) actually be present in
+#    the committed SET_ALLOWLIST array and (b) NOT collide with a
+#    secrets-manifest.yml-declared name -- the exact risk class this
+#    script's own header warns about ("if a name that is genuinely secret
+#    is ever proposed for SET_ALLOWLIST, that is the wrong fix"). Each
+#    name is struck by running a real preflight `set` call (no --apply)
+#    against it -- if either condition were false, the manifest-refusal
+#    die() (scenario 1's own mechanism) would fire and this would exit 1
+#    naming the offending name, not 0.
+for NEW_NAME in PFIN_DB_HOST PFIN_DB_PORT PFIN_DB_NAME PFIN_DB_USER PLAID_ENV ADMISSION_PROBE_PUBLIC_URLS; do
+  run_scenario "new allowlist name '$NEW_NAME' resolves (present + non-manifest)" 0 ok \
+    set abc123def456ghi789jk01 "${NEW_NAME}=x" || FAIL=1
+done
+
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
   echo "FATAL: one or more coolify-env.sh strike-proofs did not behave as specified -- failing closed." >&2
