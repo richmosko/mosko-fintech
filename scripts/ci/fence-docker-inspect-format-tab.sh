@@ -6,15 +6,16 @@
 # template, a backslash escape sequence in the format string's LITERAL
 # TEXT never expands -- it passes through as the two literal characters
 # backslash + the letter. Only a string-literal ACTION -- `{{"\t"}}`,
-# `{{"\n"}}` -- expands to the real control character. A downstream
+# `{{"\n"}}`, `{{"\r"}}` -- expands to the real control character. A downstream
 # `awk -F'\t'`/`cut -f`/line-split against that output then never finds
 # the delimiter it expects, and a `$1=="true"` (or similar) test, or a
 # per-line loop, silently never matches / never iterates.
 #
 # MEASURED live (run 7, realrun7.clean.log, team-lead's own box read;
-# re-measured locally this PR, both \t and \n, via a real container and
+# re-measured locally this PR, \t, \n AND \r, via a real container and
 # `od -c` for unambiguous byte inspection -- Sec's own independent
-# measurement agrees):
+# measurement agrees on \t/\n; \r measured this round per team-lead's
+# own queued-item request to cover the full class, not just \t/\n):
 #   docker inspect --format '{{.State.Running}}\t{{.Id}}'
 #     -> literal bytes: t r u e \ t 4 6 4 6 ...          (backslash, t)
 #   docker inspect --format '{{.State.Running}}{{"\t"}}{{.Id}}'
@@ -23,21 +24,24 @@
 #     -> literal bytes: t r u e \ n 4 6 4 6 ...          (backslash, n)
 #   docker inspect --format '{{.State.Running}}{{"\n"}}{{.Id}}'
 #     -> t r u e <LF> 4 6 4 6 ...                         (real newline)
+#   docker inspect --format '{{.State.Running}}\r{{.Id}}'
+#     -> literal bytes: t r u e \ r 1 1 6 1 ...           (backslash, r)
+#   docker inspect --format '{{.State.Running}}{{"\r"}}{{.Id}}'
+#     -> t r u e <CR> 1 1 6 1 ...                          (real CR byte)
 # scripts/smoke-pfin-exposure.sh:177's bare-\t form printed the literal
 # bytes `true\t2f1e...` against a container that was genuinely Up,
 # restarts=0 -- the smoke died "no running container found" on a fully
 # successful deploy. The SAME class of defect this repo already found
 # and fixed once for \t (PR #841, scripts/deploy-app.sh:441, and every
 # scripts/smoke-*.sh sibling except this one) -- this fence exists so a
-# future instance, of either escape, is caught by CI rather than by a
-# human reading a run log.
+# future instance, of any of these escapes, is caught by CI rather than
+# by a human reading a run log.
 #
-# ⚠ SCOPED TO \t AND \n ONLY, THE TWO MEASURED HERE -- NOT a general
-# "any backslash escape" claim. \r almost certainly behaves identically
-# (same Go text/template escape-handling mechanism) but was not
-# measured in this review; extend ESCAPES below (and re-measure) before
-# relying on this fence for \r. No live \n instance exists in this tree
-# as of this fence's own addition (swept, see CATCH CRITERION) --
+# SCOPED TO \t, \n AND \r -- THE THREE MEASURED HERE -- NOT a general
+# "any backslash escape" claim (e.g. \\, \", \a, \b, \f, \v are not
+# covered; extend ESCAPES below and re-measure before relying on this
+# fence for one of those). No live \n or \r instance exists in this
+# tree as of this fence's own addition (swept, see CATCH CRITERION) --
 # migrator-cutover-verify.sh:156's own leg 9 already uses the CORRECT
 # `{{println .}}` idiom for its own per-line need.
 #
@@ -57,15 +61,17 @@
 # CATCH CRITERION -- for every `docker inspect` invocation in
 # `scripts/*.sh` (top-level only, matching fence-heredoc-stdin-drain.sh's
 # own scope note) that carries a `--format '<template>'`: after removing
-# every well-formed `{{"\t"}}`/`{{"\n"}}` action (both the plain and the
-# bash-double-quote-escaped `{{\"\\t\"}}`/`{{\"\\n\"}}` source forms this
-# tree's own sshx() convention produces), a literal `\t` or `\n`
-# remaining anywhere in the template is a violation. Positive-controlled
-# during development: a scratch copy of scripts/smoke-pfin-exposure.sh
-# with line 177 reverted to the pre-fix bare-`\t` form reddens this
-# fence (and only this fence's finding for that file); the same scratch
-# copy re-fixed, and every other scripts/*.sh file as committed, is
-# clean at both escapes.
+# every well-formed `{{"\t"}}`/`{{"\n"}}`/`{{"\r"}}` action (both the
+# plain and the bash-double-quote-escaped `{{\"\\t\"}}`/`{{\"\\n\"}}`/
+# `{{\"\\r\"}}` source forms this tree's own sshx() convention
+# produces), a literal `\t`, `\n` or `\r` remaining anywhere in the
+# template is a violation. Positive-controlled during development: a
+# scratch copy of scripts/smoke-pfin-exposure.sh with line 177 reverted
+# to the pre-fix bare-`\t` form reddens this fence (and only this
+# fence's finding for that file); a scratch `\r` violation (dropped in,
+# then removed) reddens at the right line, and the correct `{{"\r"}}`
+# form does not false-positive; every scripts/*.sh file as committed is
+# clean at all three escapes.
 #
 # Structural / source-literal, same convention as fence-heredoc-stdin-
 # drain.sh and fence-boolean-cast-pairing.sh -- parses the tree's own
@@ -93,13 +99,15 @@ import re, sys, os
 CALL = re.compile(r"docker inspect(?:(?!--format).)*--format '([^']*)'")
 COMMENT_LINE = re.compile(r'^\s*#')
 
-# Sec F-1 (PR #860 review): widened from \t alone to every MEASURED
-# escape in this class. Each entry: (escape char as it appears bare in
-# the template text, the two well-formed string-literal-action source
-# forms that legitimately produce it).
+# Sec F-1 (PR #860 review) + team-lead's own queued follow-up: widened
+# from \t alone to every MEASURED escape in this class. Each entry:
+# (escape char as it appears bare in the template text, the two
+# well-formed string-literal-action source forms that legitimately
+# produce it).
 ESCAPES = [
     ('t', ['{{\\"\\\\t\\"}}', '{{"\\t"}}']),
     ('n', ['{{\\"\\\\n\\"}}', '{{"\\n"}}']),
+    ('r', ['{{\\"\\\\r\\"}}', '{{"\\r"}}']),
 ]
 
 def scan_file(path):
@@ -139,10 +147,10 @@ else
 fi
 
 if [[ $RC -ne 0 ]]; then
-  echo "FAIL: [docker-inspect-format-tab-treewide] one or more 'docker inspect --format' templates carry a literal, never-expanding backslash escape (\\t or \\n; the #841 defect class, run-7 stop). Offending site(s):" >&2
+  echo "FAIL: [docker-inspect-format-tab-treewide] one or more 'docker inspect --format' templates carry a literal, never-expanding backslash escape (\\t, \\n, or \\r; the #841 defect class, run-7 stop). Offending site(s):" >&2
   printf '%s\n' "$FINDINGS" >&2
   exit 1
 fi
 
-echo "OK: [docker-inspect-format-tab-treewide] zero 'docker inspect --format' templates carry a bare, never-expanding \\t or \\n in any scripts/*.sh."
+echo "OK: [docker-inspect-format-tab-treewide] zero 'docker inspect --format' templates carry a bare, never-expanding \\t, \\n, or \\r in any scripts/*.sh."
 exit 0
