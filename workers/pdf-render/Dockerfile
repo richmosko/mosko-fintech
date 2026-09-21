@@ -50,12 +50,23 @@ WORKDIR /app
 # run headless, not its desktop-integration extras (a smaller attack surface,
 # not a functional requirement). NOT a Postgres client — does not trip RT-22.
 # Versions pinned (hadolint DL3008) to the Debian bookworm candidates measured
-# at authoring time (2026-09-05, arm64 + amd64 both carry these in bookworm's
-# repos) — reproducible builds trade against staying current with Debian's own
-# security patches automatically; bumping this pin is a routine maintenance
-# task, not a one-way door.
+# at authoring time -- reproducible builds trade against staying current with
+# Debian's own security patches automatically; bumping this pin is a routine
+# maintenance task, not a one-way door. RE-MEASURED 2026-09-21 (run-10 stop,
+# team-lead): the 2026-09-05 chromium pin (152.0.7977.75-1~deb12u1) was
+# SUPERSEDED by a security update and no longer resolves -- Coolify's build
+# failed `E: Version '152.0.7977.75-1~deb12u1' for 'chromium' was not found`
+# (apt exit 100). Bumped to the live candidate MEASURED on the box
+# (debian:bookworm-slim, aarch64, `apt-get update && apt-cache policy
+# chromium`, 2026-09-21): 153.0.8010.52-1~deb12u1. fonts-liberation's
+# candidate is UNCHANGED (1:1.07.4-11, re-checked same command) -- not
+# re-pinned. ⚠ ARCH MEASURED ARM64 ONLY (the box this was checked on) -- no
+# CI job builds this image on amd64 to cross-check there; if one starts to,
+# verify the same candidate resolves before trusting this pin cross-arch.
+# See BACKLOG.md §7.36 (DevOps) for the booked pin-drift detector that would
+# catch a live-repo supersession like this before a deploy, not during one.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      chromium=152.0.7977.75-1~deb12u1 \
+      chromium=153.0.8010.52-1~deb12u1 \
       fonts-liberation=1:1.07.4-11 \
     && rm -rf /var/lib/apt/lists/*
 
