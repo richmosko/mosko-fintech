@@ -4232,6 +4232,32 @@ jobs:
       - name: offline strike-proof (box-ip-absent-refuses / box-ip-present-proceeds)
         run: bash scripts/ci/fence-mint-jwt-boxip-strikes.sh
 
+  fence-supabase-stack-healthy-check-strikes:
+    name: provision-supabase-stack.sh — db-data-volume healthy-check strike-proofs
+    runs-on: ubuntu-latest
+    # team-lead follow-up (live provision.sh run, main 29f116a2,
+    # 2026-09-20): a stack provisioned 2026-09-09, fully healthy, hit the
+    # OLD unconditional "db-data volume exists -> refuse" guard on a plain
+    # re-run, breaking provision.sh's own re-run = no-op contract.
+    # 🔒 SECURITY-SENSITIVE -- Sec joint-review mandatory: this is a
+    # CONTROL CHANGE to a poisoned-volume safety guard (the guard itself
+    # still exists and still refuses whenever health cannot be confirmed).
+    # ⚠ EXTRACTION, NOT DUPLICATION -- this fence does not re-run the
+    # whole 1200+-line target script; it extracts the REAL
+    # check_stack_already_healthy() function and the REAL db-data-volume
+    # dispatcher VERBATIM from the live script (between marker-comment
+    # pairs), byte-for-byte what ships, never a hand-copied stand-in.
+    # scripts/ci/fence-supabase-stack-healthy-check-strikes.sh proves: no
+    # volume -> deploys as always; volume + all four health probes pass
+    # (N/7 containers, api-gw 200, Postgres reachable+v17, all four init-
+    # marker role passwords set) -> skips the deploy, VERIFIED; volume +
+    # any ONE probe failing (each isolated individually) -> still
+    # refuses, exactly as before -- this branch is not a loosening.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (no-volume-deploys / healthy-volume-skips-deploy / unhealthy-volume-refuses / containers-not-all-healthy / gateway-not-200 / wrong-pg-version)
+        run: bash scripts/ci/fence-supabase-stack-healthy-check-strikes.sh
+
   required-unfiltered:
     name: required-unfiltered — required contexts cannot be skipped
     runs-on: ubuntu-latest

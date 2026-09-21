@@ -247,8 +247,8 @@ STEP_REQUIRES=(
   "record-uuids"             # nonsecret-env
   "nonsecret-env"            # secrets
   "secrets"                  # mint-jwt
-  "db-bootstrap"             # etl-role -- the role must exist (055/116 migrations)
-  "db-bootstrap"             # provider-sync-role
+  "db-bootstrap,provision-resources" # etl-role -- the role must exist (055/116 migrations) AND the pfin-back-etl resource db-role-handoff.sh strictly resolves and pushes PFIN_DB_PASSWORD onto (live --dry-run, 2026-09-20 -- missing before, see live_done_provision_resources() below for why)
+  "db-bootstrap,provision-resources" # provider-sync-role -- same, against pfin-provider-sync
   "mint-jwt"                 # deploy-app -- Sec's own named "milder" example
   "secrets"                  # deploy-workers
   "deploy-workers"           # scheduled-tasks
@@ -391,6 +391,179 @@ is_satisfied_status() {
   esac
 }
 
+# live_done_provision_resources -- team-lead follow-up (live --dry-run,
+# 2026-09-20): provision-resources' own PREFLIGHT_RC is NOT a reliable
+# "does pfin-app/pfin-back-etl/pfin-pdf-render/pfin-provider-sync exist
+# now" signal -- provision-app.sh's and provision-worker.sh's own
+# preflights report 0/VERIFIED when it is SAFE TO CREATE the resource,
+# which is also what they report when nothing exists yet (the standard
+# preflight contract across this whole registry: "I can assess state
+# without error", not "the target condition is met" -- STEP_REQUIRES'
+# own header above already named this as a known limitation). record-
+# uuids' own preflight is worse for this purpose, not better: by its own
+# design ("absent -> info, not failure" -- see its own header) it reports
+# VERIFIED even when a worker app is missing, since leaving that ONE
+# uuid unset is not an error for record-uuids' OWN job.
+# The fix reuses record-coolify-uuids.sh's own preflight OUTPUT (not its
+# exit code) -- it already performs the exact live Coolify lookup for
+# all four app names and already prints a distinct "no application named
+# 'X' found yet" line per absent one; this is the only place in the
+# registry that already does this exact check for free. Never invents a
+# new live API call inside provision.sh itself (this file is the
+# REGISTRY, not the logic -- see this file's own header) -- it re-shells
+# out to the same existing script.
+# Memoized: called from potentially many steps' own classification walk
+# in the same dry run (nonsecret-env, secrets, mint-jwt, deploy-app,
+# etl-role, provider-sync-role, deploy-workers all transitively depend on
+# provision-resources) -- one live re-check per dry run, not one per
+# dependent step.
+# Sec F-3 (PR #852 AMBER review), three fixes to the original version:
+#
+# (i) The old version discarded record-coolify-uuids.sh's own exit code
+#     entirely (`|| true`) and defaulted to PROVISION_RESOURCES_LIVE_DONE=1
+#     ("done") whenever the "no application named ... found" grep simply
+#     didn't match -- including when that script DIED for an unrelated
+#     reason (it strictly `die`s, not `info`s, on a missing migrator/
+#     stack app -- see its own MIGRATOR_APP_NAME/SUPABASE_STACK_APP_NAME
+#     lookups) and never printed anything resembling that line. A crash
+#     is not evidence of health. Now a non-zero rc without a matching
+#     "absent" line is a THIRD state, "unknown" -- distinct from both "0"
+#     (confirmed absent) and "1" (confirmed present) in the memo, logged
+#     as such, and treated as not-blocking (same as "1") for
+#     step_live_blocker's purposes -- never silently reported as "done".
+#
+# (ii) The old version treated require_box_ip failing (BOX_IP unset) the
+#      SAME as "confirmed absent" (PROVISION_RESOURCES_LIVE_DONE=0,
+#      blocking). BOX_IP is a single global value -- if it's unset here,
+#      it's unset for every OTHER step's own require_box_ip gate too, so
+#      forcing this live check to report "blocked by provision-resources"
+#      would misattribute EVERY dependent step's independent BOX_IP-unset
+#      failure to this one specific cause instead of letting each step's
+#      own genuine "would likely fail" reason show. Now BOX_IP-unset
+#      skips the live check entirely (same "unknown", not-blocking
+#      outcome as (i) -- this function has no way to know provision-
+#      resources' real state without it).
+#
+# (iii) The old version hardcoded the four literal app-name strings in
+#       its grep pattern. record-coolify-uuids.sh's own default names are
+#       the SAME four *_APP_NAME variables (WEB_APP_NAME/ETL_APP_NAME/
+#       PDF_RENDER_APP_NAME/PROVIDER_SYNC_APP_NAME) that script itself
+#       resolves from the environment with the identical defaults -- an
+#       operator override of one of those env vars would silently break
+#       the hardcoded match. Resolve the same way instead, so an override
+#       here tracks whatever that script would actually print.
+PROVISION_RESOURCES_LIVE_DONE=""
+live_done_provision_resources() {
+  if [[ -z "$PROVISION_RESOURCES_LIVE_DONE" ]]; then
+    if ! require_box_ip; then
+      # >&2, not the bare info() convention used elsewhere in this file --
+      # this function's stdout is captured via $(...) by step_live_blocker
+      # (both directly and through its own recursive call), which is
+      # itself captured via $(...) by every caller that computes
+      # "culprit". Any stdout text emitted here becomes PART OF that
+      # captured value, silently corrupting the BLOCKED-BY step name with
+      # this entire message -- caught by a strike against this fence
+      # ITSELF (scenario 19/20 first failed with the whole info() line
+      # printed as the "BLOCKED-BY" target instead of "provision-
+      # resources").
+      info "BOX_IP unset -- skipping the live provision-resources check entirely (state UNKNOWN, not blocking; each step's own preflight already fails at its own require_box_ip gate for the same reason, so its genuine cause shows instead of being misattributed here)" >&2
+      PROVISION_RESOURCES_LIVE_DONE="unknown"
+    else
+      local out rc web_name etl_name pdf_name provider_name
+      web_name="${WEB_APP_NAME:-pfin-app}"
+      etl_name="${ETL_APP_NAME:-pfin-back-etl}"
+      pdf_name="${PDF_RENDER_APP_NAME:-pfin-pdf-render}"
+      provider_name="${PROVIDER_SYNC_APP_NAME:-pfin-provider-sync}"
+      set +e
+      out="$(bash "$SCRIPTS/record-coolify-uuids.sh" 2>&1)"
+      rc=$?
+      set -e
+      if printf '%s' "$out" | grep -qE "no application named '($web_name|$etl_name|$pdf_name|$provider_name)' found"; then
+        PROVISION_RESOURCES_LIVE_DONE=0
+      elif [[ "$rc" != "0" ]]; then
+        info "record-coolify-uuids.sh exited non-zero (rc=$rc) without naming a missing resource -- provision-resources live state is UNKNOWN, not blocking (never treated as confirmed done)" >&2
+        PROVISION_RESOURCES_LIVE_DONE="unknown"
+      else
+        PROVISION_RESOURCES_LIVE_DONE=1
+      fi
+    fi
+  fi
+  [[ "$PROVISION_RESOURCES_LIVE_DONE" == "1" || "$PROVISION_RESOURCES_LIVE_DONE" == "unknown" ]]
+}
+
+# step_live_blocker <key> -- prints the step key whose live done-
+# predicate is false; prints nothing if <key> is itself live-done (or
+# was never run this invocation -- unknown, never blocking, same
+# convention as result_status_for's own return-1 case).
+#
+# NOT a generic unbounded walk -- deliberately narrow, for a reason
+# proven by a strike: an EARLIER draft of this function recursed through
+# EVERY satisfied step's own STEP_REQUIRES unconditionally, and broke a
+# genuinely-independent classification (ca1-gate's own preflight failing
+# on its own merits, with deploy-workers/secrets/nonsecret-env all
+# LEGITIMATELY VERIFIED, rc=0) by tracing all the way back through that
+# chain to a totally unrelated failure further upstream (record-uuids,
+# in a scenario where IT independently failed for its own reason) --
+# misattributing blame across steps that had nothing to do with each
+# other, just because they happened to share a distant common ancestor.
+# A step's own genuinely-passing preflight (rc=0, VERIFIED/SKIPPED/
+# MANUAL) is trusted as final UNLESS that step is itself one of the two
+# steps KNOWN to be lenient about resource existence (record-uuids'
+# "absent -> info, not failure" design; provision-resources' own
+# preflight reporting "safe to create" for both "doesn't exist" and
+# "already exists") -- only for those two does this function look past
+# a satisfied recorded status.
+# `provision-resources` gets TWO independent checks, either can convict:
+# (a) its own recorded dry-run status this run (a genuine preflight
+# failure, e.g. provision-app.sh itself erroring -- unrelated to
+# resource existence), (b) live_done_provision_resources()'s live
+# re-check (catches the resource-existence case specifically, which (a)
+# cannot see when provision-resources' own preflight reads VERIFIED for
+# the lenient reason). `record-uuids`, when its OWN recorded status
+# reads satisfied, recurses ONE level into its own declared
+# STEP_REQUIRES (provision-resources) rather than trusting that
+# satisfied reading at face value -- record-uuids has no other
+# prerequisite worth walking through, so this stays a single, bounded
+# extra hop, not a generic recursive walk.
+step_live_blocker() {
+  local key="$1"
+  if [[ "$key" == "provision-resources" ]]; then
+    local status
+    status="$(result_status_for "$key")" && {
+      if ! is_satisfied_status "$status"; then
+        printf '%s' "$key"
+        return 0
+      fi
+    }
+    live_done_provision_resources && return 0
+    printf '%s' "$key"
+    return 0
+  fi
+  local status
+  status="$(result_status_for "$key")" || return 0
+  if ! is_satisfied_status "$status"; then
+    printf '%s' "$key"
+    return 0
+  fi
+  if [[ "$key" == "record-uuids" ]]; then
+    local idx reqs_key
+    idx="$(step_index "$key")" || return 0
+    reqs_key="${STEP_REQUIRES[$idx]:-}"
+    [[ -n "$reqs_key" ]] || return 0
+    local sub_list sub culprit
+    IFS=',' read -r -a sub_list <<< "$reqs_key"
+    for sub in "${sub_list[@]}"; do
+      [[ -n "$sub" ]] || continue
+      culprit="$(step_live_blocker "$sub")"
+      if [[ -n "$culprit" ]]; then
+        printf '%s' "$culprit"
+        return 0
+      fi
+    done
+  fi
+  return 0
+}
+
 # print_summary_and_exit <failed-step-key> <exit-code> -- prints the
 # resume hint, the summary table so far, and exits. Single choke point so
 # every stop path (preflight MANUAL/FAILED, apply MANUAL/FAILED) prints
@@ -408,7 +581,36 @@ print_summary_and_exit() {
 # returns the underlying script's own exit code, or 4 for a MANUAL step.
 
 run_provision_vps()      { bash "$SCRIPTS/provision-vps.sh" ${1:+--apply}; }
-run_standup()             { bash "$SCRIPTS/standup.sh" ${1:+--apply}; }
+
+# live_done_standup -- team-lead follow-up (live --dry-run, 2026-09-20):
+# standup.sh's own preflight ALWAYS reported VERIFIED trivially --
+# provision-supabase-stack.sh's own preflight always prints "would
+# create/mint/deploy" and exits 0, whether or not the stack is already
+# fully live, so a real run ALWAYS proceeded to --apply regardless of
+# actual state -- discovering only deep into the apply (after mint/
+# secrets/mount calls already ran) that a stack provisioned 2026-09-09,
+# fully healthy, hit the poisoned-volume guard. provision-supabase-
+# stack.sh's own fix (the db-data-volume three-way branch, Sec-reviewed)
+# makes a real re-apply of standup SAFE either way -- this is a
+# SEPARATE, genuinely CHEAP check, evaluated BEFORE --apply is ever
+# called, so a healthy re-run skips the (individually idempotent but not
+# free) project/secrets/mount churn entirely and the dry-run classifier's
+# "VERIFIED (dry-run)" claim becomes true, not trivial. Reuses
+# provision-supabase-stack.sh's own new --check-healthy mode (the SAME
+# check_stack_already_healthy() function the poisoned-volume guard
+# itself calls) -- never a second, divergent implementation.
+live_done_standup() {
+  require_box_ip || return 1
+  bash "$SCRIPTS/provision-supabase-stack.sh" --check-healthy
+}
+
+run_standup() {
+  if live_done_standup; then
+    ok "standup: stack already provisioned and healthy -- VERIFIED without applying"
+    return 0
+  fi
+  bash "$SCRIPTS/standup.sh" ${1:+--apply}
+}
 
 run_db_bootstrap() { bash "$SCRIPTS/db-bootstrap.sh" ${1:+--apply}; }
 
@@ -708,21 +910,23 @@ for ((i = START_IDX; i <= END_IDX; i++)); do
       # ALSO fails its own preflight for the exact same underlying
       # reason (its own resource, built by an earlier step, was never
       # actually created either). Distinguish that expected cascade from
-      # an independent failure by checking whether THIS step's own
-      # declared STEP_REQUIRES prerequisite was itself satisfied earlier
-      # in this SAME dry run.
+      # an independent failure via step_live_blocker (above) -- a bare
+      # one-hop check is not enough: an INTERMEDIATE
+      # prerequisite's own recorded status can itself be misleadingly
+      # "satisfied" (record-uuids' "absent -> info, not failure" design
+      # is the concrete case that broke a one-hop check -- see
+      # live_done_provision_resources's own comment).
       blocked_by=""
       reqs_i="${STEP_REQUIRES[$i]:-}"
       if [[ -n "$reqs_i" ]]; then
         IFS=',' read -r -a req_list_i <<< "$reqs_i"
         for req_i in "${req_list_i[@]}"; do
           [[ -n "$req_i" ]] || continue
-          prior_status="$(result_status_for "$req_i")" && {
-            if ! is_satisfied_status "$prior_status"; then
-              blocked_by="$req_i"
-              break
-            fi
-          }
+          culprit="$(step_live_blocker "$req_i")"
+          if [[ -n "$culprit" ]]; then
+            blocked_by="$culprit"
+            break
+          fi
         done
       fi
       if [[ -n "$blocked_by" ]]; then

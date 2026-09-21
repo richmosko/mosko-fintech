@@ -57,8 +57,19 @@
 #   decrypting server-side and testing non-empty — never by ciphertext
 #   length, which is meaningless: Laravel's `encrypted` cast produces a
 #   non-trivial blob even for an empty string). Mounts: the materialize
-#   script it calls is already idempotent. Deploy: refuses to redeploy onto
-#   a poisoned `db-data` volume rather than silently reproducing 2026-09-10.
+#   script it calls is already idempotent. Deploy: a pre-existing `db-data`
+#   volume is a THREE-WAY branch (team-lead follow-up, live --dry-run,
+#   2026-09-20 -- the old unconditional refusal broke `provision.sh`'s own
+#   "re-run = no-op" contract against a stack that was genuinely healthy) --
+#   (a) no volume -> deploy, as always; (b) volume present AND
+#   check_stack_already_healthy() (see that function's own header for the
+#   exact four-probe definition of "healthy" -- this is a Sec-reviewed
+#   CONTROL, not a loosening of one) confirms it -> "already provisioned
+#   and healthy, nothing to deploy", VERIFIED, skips the deploy call but
+#   still runs the full verification battery; (c) volume present and NOT
+#   confirmed healthy -> the same refusal as before (2026-09-10's poisoned-
+#   mount incident), naming `docker compose ... down -v` as the manual,
+#   never-automatic destroy path.
 #
 # SCOPE — READ BEFORE ASSUMING THIS REPLACES §5
 #   This mints/sets the 8 Supabase-stack secrets named in secrets-manifest.yml's
@@ -172,12 +183,29 @@ BASE_DIRECTORY="/infra/supabase"
 DOCKER_COMPOSE_LOCATION="/docker-compose.yml"
 
 APPLY=0
+CHECK_HEALTHY=0
 for arg in "$@"; do
   case "$arg" in
     --apply) APPLY=1 ;;
-    *) echo "unknown flag: $arg" >&2; echo "usage: $0 [--apply]" >&2; exit 2 ;;
+    # --check-healthy (team-lead follow-up, live --dry-run, 2026-09-20):
+    # a FAST, read-only, live done-predicate -- resolves the application
+    # by name (the same lookup the main Preflight step below performs
+    # anyway) then calls check_stack_already_healthy() and stops, WITHOUT
+    # ever reaching project/environment/application creation, secrets
+    # minting, or mount materialization. Exists so provision.sh's own
+    # run_standup() can ask "is this already done?" BEFORE ever calling
+    # `standup.sh --apply` -- the live defect this whole fix addresses
+    # was discovered by --apply running several idempotent-but-not-free
+    # steps before finally reaching the (then-unconditional) poisoned-
+    # volume refusal. Mutually exclusive with --apply (checked below).
+    --check-healthy) CHECK_HEALTHY=1 ;;
+    *) echo "unknown flag: $arg" >&2; echo "usage: $0 [--apply] | [--check-healthy]" >&2; exit 2 ;;
   esac
 done
+if [[ $APPLY -eq 1 && $CHECK_HEALTHY -eq 1 ]]; then
+  echo "FATAL: --apply and --check-healthy are mutually exclusive -- --check-healthy is a read-only probe, never paired with a mutating run." >&2
+  exit 2
+fi
 
 die()  { printf '\n\033[31mFAIL\033[0m  %s\n' "$*" >&2; exit 1; }
 ok()   { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
@@ -244,6 +272,137 @@ api() {
   fi
 }
 jqp() { python3 -c "import json,sys;$1"; }
+# FENCE-EXTRACT-FUNC-BEGIN: check-stack-already-healthy-func -- scripts/ci/fence-supabase-stack-healthy-check-strikes.sh
+# extracts this function VERBATIM (between these markers) rather than
+# hand-duplicating its logic, so the fence can never silently drift from
+# what actually ships. Keep marker lines exactly as they are. Defined THIS
+# early (before the main Preflight step) so --check-healthy (below) can call
+# it without running any of the project/environment/application creation
+# logic that follows.
+# check_stack_already_healthy -- team-lead follow-up (live --dry-run,
+# 2026-09-20): a stack provisioned 2026-09-09, fully healthy, hit the OLD
+# unconditional "db-data volume exists -> refuse" guard on a plain re-run
+# of this script, breaking provision.sh's own re-run = no-op contract.
+# This is a CONTROL CHANGE (Sec review required) -- the poisoned-volume
+# refusal below still exists and still fires whenever this cannot prove
+# the volume is genuinely healthy; this function is the new, PRECISE
+# DEFINITION of "healthy" for that purpose, not a loosening of the guard.
+#
+# WHAT "HEALTHY" MEANS HERE -- five READ-ONLY checks, all reused from
+# elsewhere in this file (never a new, heavier mechanism invented just for
+# this): (1) N/7 containers report Docker health=healthy (same query the
+# "Verification battery" step below already runs after a fresh deploy);
+# (2) api-gw answers GET /auth/v1/health with HTTP 200, probed from
+# inside the supavisor container -- no API key needed for that path, same
+# probe() shape mint-supabase-jwt-keys.sh's own --verify-live already
+# uses; (3) Postgres is reachable and reports major version 17 (same
+# `select server_version` query below); (4) the STATE-BASED init marker
+# below already documents as the real proof that /docker-entrypoint-
+# initdb.d/ actually ran (Postgres runs it exactly once, ever) --
+# EXACTLY FOUR role rows (authenticator/pgbouncer/supabase_auth_admin/
+# supabase_functions_admin, cardinality itself checked -- Sec C-1, PR
+# #852 AMBER review: a single matching row used to pass this check
+# silently, since a non-empty one-line result is still non-empty) all
+# have a password set; (5) `app.settings.jwt_secret` is set and
+# non-empty, asserted server-side without retrieving the value (Sec F-2 +
+# C-4, PR #852 AMBER review -- the "Verification battery" step below
+# already treats (4) and (5) together as ONE two-part tell that init
+# scripts genuinely ran; this function only carried the first half until
+# now, and the first version of (5) here retrieved the secret into this
+# process and was fail-open on any non-canonical answer other than the
+# one error string it checked for).
+# (4) and (5) are the ones that actually answer "was this volume
+# initialized by a real deploy of THIS stack, not a bogus mount" -- (1)-
+# (3) only prove "something is currently running and answering", which a
+# poisoned-but-since-patched-around volume could also produce. ALL FIVE
+# must pass; any single failure means "not confirmed healthy" and the
+# caller refuses exactly as before.
+check_stack_already_healthy() {
+  local containers=0
+  for _ in $(seq 1 5); do
+    containers="$(sshx "docker ps --filter 'label=com.docker.compose.project=$APP_UUID' --filter 'health=healthy' --format '{{.Names}}'" | wc -l | tr -d ' ')"
+    [[ "$containers" == "7" ]] && break
+    sleep 2
+  done
+  info "healthy-check (1/5): $containers/7 containers healthy"
+  if [[ "$containers" != "7" ]]; then info "healthy-check FAILED at (1/5): expected 7 healthy containers, got $containers"; return 1; fi
+
+  local gw_status
+  gw_status="$(sshx "docker compose --project-name $APP_UUID exec -T supavisor curl -s -o /dev/null -w '%{http_code}' http://api-gw:8000/auth/v1/health </dev/null" 2>/dev/null || true)"
+  info "healthy-check (2/5): api-gw GET /auth/v1/health -> HTTP ${gw_status:-<none>}"
+  if [[ "$gw_status" != "200" ]]; then info "healthy-check FAILED at (2/5): api-gw did not answer 200"; return 1; fi
+
+  local pgver
+  pgver="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc 'show server_version;'" 2>/dev/null | cut -d. -f1)"
+  info "healthy-check (3/5): Postgres server_version starts '${pgver:-<none>}'"
+  if [[ "$pgver" != "17" ]]; then info "healthy-check FAILED at (3/5): db not reachable, or not major version 17"; return 1; fi
+
+  local init_state all_pw_set=1 role has_pw init_row_count
+  init_state="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc \"select rolname||':'||(rolpassword is not null) from pg_authid where rolname in ('authenticator','pgbouncer','supabase_auth_admin','supabase_functions_admin') order by rolname;\"" 2>/dev/null || true)"
+  # Sec C-1 (PR #852 AMBER review): the OLD guard only checked "is
+  # init_state non-empty" -- a SINGLE matching role row (e.g. a partial or
+  # foreign-volume init that only happens to define 'authenticator')
+  # passed this check silently, since a non-empty string with one line is
+  # still non-empty. Count rows explicitly and require exactly 4 -- the
+  # cardinality itself is part of the proof, not just presence.
+  init_row_count="$(printf '%s\n' "$init_state" | grep -c ':' || true)"
+  if [[ "$init_row_count" != "4" ]]; then
+    info "healthy-check FAILED at (4/5): expected 4 role rows, got $init_row_count -- pg_authid does not carry all four init-marker roles (a partial or foreign-volume init)"
+    return 1
+  fi
+  while IFS=: read -r role has_pw; do
+    [[ -z "$role" ]] && continue
+    info "healthy-check (4/5): role $role password set: $has_pw"
+    [[ "$has_pw" == "true" ]] || all_pw_set=0
+  done < <(printf '%s\n' "$init_state")
+  if [[ "$all_pw_set" != "1" ]]; then
+    info "healthy-check FAILED at (4/5): not all four roles have a password set -- init scripts did not run against this volume (or it is from a different/bogus mount)"
+    return 1
+  fi
+
+  # Sec F-2 (PR #852 AMBER review): the "Verification battery" step
+  # further down (run after a FRESH deploy) treats the role-password
+  # state AND app.settings.jwt_secret's presence as ONE two-part tell
+  # that init scripts genuinely ran -- "ok all four role passwords set +
+  # app.settings.jwt_secret present" is that step's own closing line.
+  # check_stack_already_healthy() only carried the first half; this adds
+  # the second so --check-healthy's own live done-predicate proves the
+  # SAME two-part tell the archive's own procedure relies on, not a
+  # narrower one.
+  #
+  # Sec C-4 (PR #852 AMBER review round 2): the ORIGINAL version here
+  # (`show app.settings.jwt_secret;`, refuse only on the literal
+  # "unrecognized configuration parameter" substring) was fail-open on
+  # every OTHER non-canonical answer -- an empty result (psql/container
+  # gone), a different error string, or the GUC explicitly set to the
+  # empty string all read as "healthy" (a negative-only check: "absence
+  # of one string" instead of "presence of the expected positive
+  # token"). It also RETRIEVED the secret's actual value into this
+  # script's own process via `2>&1` to see that error text at all --
+  # `secrets-manifest.yml` classes JWT_SECRET production_only, and this
+  # file's own header (SS3 CORRECTED 2026-09-11) names exactly one value
+  # that legitimately crosses into local memory (SMTP_PASS); this probe
+  # silently added a second, and unlike the "Verification battery" step
+  # below (which only runs once, after a fresh deploy), this probe runs
+  # on EVERY `provision.sh --dry-run` (live_done_standup calls
+  # --check-healthy every time). `current_setting(name, true)` moves the
+  # boolean decision server-side -- returns NULL (never an error) for an
+  # unset GUC, so a two-arg equality test collapses "unset", "empty",
+  # "unreachable db", and "dead psql" into the SAME refusal, and the
+  # secret's value never leaves Postgres at all.
+  local jwt_present
+  jwt_present="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc \"select current_setting('app.settings.jwt_secret', true) <> '';\"" 2>/dev/null || true)"
+  info "healthy-check (5/5): app.settings.jwt_secret present: '${jwt_present:-<none>}' (value never leaves Postgres)"
+  if [[ "$jwt_present" != "t" ]]; then
+    info "healthy-check FAILED at (5/5): app.settings.jwt_secret is unset, empty, or the db did not answer -- init scripts did not run against this volume"
+    return 1
+  fi
+
+  ok "healthy-check: all five probes pass -- this db-data volume was genuinely initialized by a real deploy of this stack"
+  return 0
+}
+# FENCE-EXTRACT-FUNC-END: check-stack-already-healthy-func
+
 
 step "Preflight — project / environment / application (name-keyed lookup)"
 
@@ -316,6 +475,21 @@ else:
 else
   [[ -n "${PROJECT_UUID:-}" && -n "${ENV_UUID:-}" ]] || info "project/environment must exist (or be created) before the application"
   info "application '$APP_NAME' does not exist — would create with build_pack=dockercompose, base_directory=$BASE_DIRECTORY, docker_compose_location=$DOCKER_COMPOSE_LOCATION, branch=$GIT_BRANCH"
+fi
+
+if [[ $CHECK_HEALTHY -eq 1 ]]; then
+  step "--check-healthy: live done-predicate only, stopping here"
+  if [[ -z "${APP_UUID:-}" ]]; then
+    echo "NOT VERIFIED: application '$APP_NAME' does not exist yet." >&2
+    exit 1
+  fi
+  if check_stack_already_healthy; then
+    ok "VERIFIED: stack already provisioned and healthy."
+    exit 0
+  else
+    echo "NOT VERIFIED: see the healthy-check output above for which probe failed." >&2
+    exit 1
+  fi
 fi
 
 step "Preflight — Source commit availability (docs/deployment-runbook.md §4, ADR-072 Amendment 6)"
@@ -862,13 +1036,28 @@ if echo "$ASSERT_OUT" | grep -q ': MISSING$'; then
 fi
 REMOTE
 
-step "Refusing to deploy onto a poisoned db-data volume"
-EXISTING_DB_VOLUME="$(sshx "docker volume ls -q --filter name=${APP_UUID}_db-data")"
-if [[ -n "$EXISTING_DB_VOLUME" ]]; then
-  die "${APP_UUID}_db-data already exists. This script does not know whether it initialized against a bogus mount at some point -- see docs/deployment-runbook.md §4 for how to confirm, and 'docker compose --project-name $APP_UUID down -v' to destroy it if it's poisoned. Refusing to deploy onto it silently."
-fi
-ok "no pre-existing db-data volume -- safe to deploy"
+# check_stack_already_healthy() now lives earlier in this file (right after
+# jqp()) so the --check-healthy flag below can call it before reaching this
+# point -- see that definition for the full "what healthy means" derivation.
 
+# FENCE-EXTRACT-DISPATCH-BEGIN: check-stack-already-healthy-dispatch -- scripts/ci/fence-supabase-stack-healthy-check-strikes.sh extracts this dispatcher block VERBATIM too (concatenated after the function extraction) so the fence can never silently drift from what actually ships.
+step "db-data volume check (idempotent-re-run guard, Sec-reviewed 2026-09-20)"
+EXISTING_DB_VOLUME="$(sshx "docker volume ls -q --filter name=${APP_UUID}_db-data")"
+NEED_DEPLOY=1
+if [[ -z "$EXISTING_DB_VOLUME" ]]; then
+  ok "no pre-existing db-data volume -- safe to deploy"
+else
+  info "${APP_UUID}_db-data already exists -- checking whether the stack is already healthy (a genuine idempotent re-run) before treating this as a poisoned volume"
+  if check_stack_already_healthy; then
+    ok "stack already provisioned and healthy -- nothing to deploy (still running the full verification battery below to confirm, not stopping at this quick check)"
+    NEED_DEPLOY=0
+  else
+    die "${APP_UUID}_db-data exists but the stack is NOT confirmed healthy (see the healthy-check output above for which probe failed) -- this script does not know whether it initialized against a bogus mount at some point. See docs/deployment-runbook.md §4 for how to confirm by hand, and 'docker compose --project-name $APP_UUID down -v' to destroy it ONLY once you've confirmed it's poisoned -- never automatic, never inferred from this failure alone. Refusing to deploy onto it silently."
+  fi
+fi
+# FENCE-EXTRACT-DISPATCH-END: check-stack-already-healthy-dispatch
+
+if [[ "$NEED_DEPLOY" == "1" ]]; then
 step "Deploying"
 DEPLOY_UUID="$(api POST "/deploy?uuid=$APP_UUID" | jqp "
 d=json.load(sys.stdin)
@@ -903,6 +1092,7 @@ print('\n'.join(e.get('output','') for e in entries[-60:]))" || true
   die "deployment $DEPLOY_UUID status=$STATUS -- see log above"
 fi
 ok "deployment finished"
+fi
 
 step "Verification battery"
 # Measured 2026-09-11: right after "deployment finished", supavisor (last
@@ -949,8 +1139,15 @@ while IFS=: read -r role has_pw; do
   info "  $role password set: $has_pw"
   [[ "$has_pw" == "true" ]] || die "role $role has no password set -- init scripts did not run (or db-data was already initialized before this deploy)"
 done < <(printf '%s\n' "$INIT_STATE")
-JWT_SETTING="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc \"show app.settings.jwt_secret;\"" 2>&1 || true)"
-[[ "$JWT_SETTING" != *"unrecognized configuration parameter"* ]] || die "app.settings.jwt_secret unset -- init scripts did not run"
+# Sec N-5 (PR #852 AMBER review round 2): identical shape to
+# check_stack_already_healthy()'s own probe (5/5), fixed there under C-4
+# for the same two reasons -- negative-only (refuses on one error string,
+# fail-open on every other non-canonical answer) and it retrieved the
+# secret's actual value into this process via `2>&1` just to see that
+# error text. `current_setting(name, true)` moves the boolean decision
+# server-side; the value never leaves Postgres.
+JWT_PRESENT="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc \"select current_setting('app.settings.jwt_secret', true) <> '';\"" 2>/dev/null || true)"
+[[ "$JWT_PRESENT" == "t" ]] || die "app.settings.jwt_secret is unset, empty, or the db did not answer -- init scripts did not run"
 ok "all four role passwords set + app.settings.jwt_secret present"
 
 ENVOY_LOG="$(sshx "docker compose --project-name $APP_UUID logs api-gw 2>&1 | tail -80")"
@@ -1050,5 +1247,9 @@ echo "$HOST_PORTS" | grep -q '^127.0.0.1:3000->' && ok "only 127.0.0.1:3000 publ
 info "External probe (run from OUTSIDE the box, this script cannot self-check it): nmap -Pn -p 5432,6543,8000,3000 $BOX_IP -- EXPECT all four filtered."
 
 step "Done"
-info "Deploy $DEPLOY_UUID finished and passed the verification battery."
+if [[ "$NEED_DEPLOY" == "1" ]]; then
+  info "Deploy $DEPLOY_UUID finished and passed the verification battery."
+else
+  info "No new deploy was needed -- the pre-existing db-data volume's stack was already healthy, and passed the verification battery."
+fi
 info "Studio, once you want to look at it: ssh -L 3000:localhost:3000 root@$BOX_IP then http://localhost:3000"

@@ -73,6 +73,21 @@
 #      BLOCKED-BY <prereq>, not counted as a genuine failure; a step
 #      whose prerequisite is satisfied but which independently fails IS
 #      counted -> exit 3, never the old unconditional exit 0.
+#  16. DRY-RUN-BLOCKED-BY-THROUGH-LENIENT-INTERMEDIATE (team-lead
+#      follow-up on 15, live --dry-run, 2026-09-20) -- record-uuids.sh's
+#      own preflight succeeds (VERIFIED) even though pfin-back-etl does
+#      not exist, by design ("absent -> info, not failure"); a one-hop
+#      BLOCKED-BY check falls through to misclassifying nonsecret-env/
+#      etl-role/provider-sync-role as independent failures. Fixed to
+#      walk one hop further, through record-uuids' own lenient status,
+#      into provision-resources's live done-predicate.
+#  17. STANDUP-LIVE-DONE-SKIPS-APPLY (team-lead follow-up, live
+#      --dry-run, 2026-09-20) -- run_standup()'s own live_done_standup()
+#      reports already-healthy -> standup.sh is never called at all,
+#      "VERIFIED without applying" prints instead.
+#  18. STANDUP-NOT-DONE-CALLS-STANDUP -- live_done_standup reports NOT
+#      healthy -> falls through to calling standup.sh normally, proving
+#      the fallback path (not just the new skip path) still works.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -280,9 +295,16 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   # etl-role's own declared STEP_REQUIRES prerequisite (db-bootstrap) is
   # live-rechecked once, in PREFLIGHT mode only, before the target step
   # runs -- a legitimate call the dependency gate itself makes, not a
-  # stray extra step being executed.
+  # stray extra step being executed. "provision-app"/"provision-worker"
+  # are ALSO now expected (team-lead follow-up, live --dry-run,
+  # 2026-09-20): etl-role's own STEP_REQUIRES was widened to
+  # "db-bootstrap,provision-resources" (it genuinely needs the
+  # pfin-back-etl resource to exist, not just the role) -- the same
+  # dependency gate now ALSO live-rechecks provision-resources' own
+  # preflight, which shells out to provision-app.sh + 3x
+  # provision-worker.sh.
   set +e
-  OTHER_CALLS="$(grep -vc "db-role-handoff\|db-bootstrap" "$CASE_LAST_DIR/calls.log" 2>/dev/null)"
+  OTHER_CALLS="$(grep -vc "db-role-handoff\|db-bootstrap\|provision-app\|provision-worker\|record-coolify-uuids" "$CASE_LAST_DIR/calls.log" 2>/dev/null)"
   set -e
   if [[ "$OTHER_CALLS" != "0" ]]; then
     echo "FAIL: [--only] a non-target, non-dependency-check script was called" >&2
@@ -492,6 +514,178 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   grep -q "^  ca1-gate .*would likely fail" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-vs-genuine] ca1-gate (independent failure, prerequisite satisfied) not reported as 'would likely fail'" >&2; FAIL=1; }
   grep -qi "would likely fail" "$CASE_LAST_DIR/out.txt" > /dev/null # sanity, already covered above
   grep -q "FAIL: [0-9]* step(s) would likely fail" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-vs-genuine] summary did not print a truthful 'would likely fail' count" >&2; FAIL=1; }
+fi
+
+# 16. DRY-RUN-BLOCKED-BY-THROUGH-LENIENT-INTERMEDIATE (team-lead follow-up
+#     on scenario 15, live --dry-run, 2026-09-20) -- record-uuids.sh's
+#     own preflight SUCCEEDS (rc=0, VERIFIED) even though pfin-back-etl
+#     does not exist, by DESIGN ("absent -> info, not failure" -- its own
+#     header). A one-hop BLOCKED-BY check (scenario 15's own mechanism,
+#     as it existed before this fix) sees nonsecret-env's DIRECT
+#     prerequisite (record-uuids) reporting VERIFIED and falls through to
+#     misclassifying nonsecret-env as an independent "would likely
+#     fail" -- the exact live defect this scenario reproduces and pins.
+#     provision-app.sh/provision-worker.sh's own preflights (provision-
+#     resources) are ALSO lenient (0 = "safe to create", not "already
+#     exists") -- provision-resources itself reads VERIFIED too, so this
+#     is not a single-hop miss, it is TWO lenient hops in a row.
+#     record-coolify-uuids.sh's own STDOUT (not its exit code) is the
+#     only place that already performs a live, strict-enough check for
+#     free -- FAKE_STDOUT_record_coolify_uuids injects its exact "no
+#     application named 'pfin-back-etl' found yet" line so
+#     live_done_provision_resources() (provision.sh's own new live-check,
+#     re-shelling out to the SAME script, memoized) has something real to
+#     grep. nonsecret-env's OWN preflight fails independently (its 2nd
+#     coolify-env.sh call, targeting pfin-back-etl, forced to rc=1) --
+#     same for etl-role/provider-sync-role (db-role-handoff.sh forced to
+#     rc=1, modeling its own STRICT "no Coolify application named" die()
+#     for the SAME missing resource -- see db-role-handoff.sh:312).
+#     etl-role/provider-sync-role's own STEP_REQUIRES was ALSO widened in
+#     this fix (was "db-bootstrap" alone, missing the pfin-back-etl/
+#     pfin-provider-sync dependency their own script strictly needs) --
+#     this scenario is the reason.
+#     Expected: ALL THREE (nonsecret-env, etl-role, provider-sync-role)
+#     read BLOCKED-BY provision-resources, not "would likely fail" --
+#     and because nothing in this scenario is an independent failure
+#     (every non-VERIFIED step traces back to the one unmet
+#     precondition), the overall dry run exits 0, not 3. Everything
+#     downstream (secrets/mint-jwt/deploy-app/deploy-workers/scheduled-
+#     tasks/smokes/ca1-gate) still reads BLOCKED-BY too, each naming its
+#     own immediate unsatisfied prerequisite -- confirmed unchanged
+#     ("via a different path", per team-lead's own note) by NOT
+#     asserting those individually here; scenario 15 already covers that
+#     shape (deploy-workers/ca1-gate BLOCKED-BY / would-likely-fail).
+# shellcheck disable=SC2054  # intentional: ONE element, "0,1" is fake-step.sh's own comma-separated per-call RC list, not two array elements
+CASE_ENV=(FAKE_RC_coolify_env=0,1 FAKE_RC_db_role_handoff=1 FAKE_STDOUT_record_coolify_uuids="no application named 'pfin-back-etl' found yet")
+run_case "dry-run BLOCKED-BY walks through a lenient intermediate step to the real cause" 0 --dry-run || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "^  provision-resources .*VERIFIED (dry-run)" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-through-lenient] provision-resources itself not reported VERIFIED (dry-run) -- this scenario's own setup assumption broke" >&2; FAIL=1; }
+  grep -q "^  record-uuids .*VERIFIED (dry-run)" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-through-lenient] record-uuids itself not reported VERIFIED (dry-run) -- this scenario's own setup assumption broke" >&2; FAIL=1; }
+  grep -q "^  nonsecret-env .*BLOCKED-BY provision-resources" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-through-lenient] nonsecret-env not reported BLOCKED-BY provision-resources -- the one-hop check regressed or was never fixed" >&2; FAIL=1; }
+  grep -q "^  etl-role .*BLOCKED-BY provision-resources" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-through-lenient] etl-role not reported BLOCKED-BY provision-resources" >&2; FAIL=1; }
+  grep -q "^  provider-sync-role .*BLOCKED-BY provision-resources" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-through-lenient] provider-sync-role not reported BLOCKED-BY provision-resources" >&2; FAIL=1; }
+  if grep -qE "^  (nonsecret-env|etl-role|provider-sync-role) .*would likely fail" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [blocked-by-through-lenient] at least one of nonsecret-env/etl-role/provider-sync-role was still misclassified as an independent 'would likely fail'" >&2
+    FAIL=1
+  fi
+fi
+
+# 17. STANDUP-LIVE-DONE-SKIPS-APPLY (team-lead follow-up, live --dry-run,
+#     2026-09-20) -- run_standup()'s own live_done_standup() reports
+#     already-healthy (provision-supabase-stack.sh --check-healthy would
+#     exit 0) -> standup.sh is NEVER called, "VERIFIED without applying"
+#     prints instead, in BOTH the preflight and apply invocations. This
+#     is the whole point of the fix: a real re-run against an already-
+#     healthy stack does not churn through standup's own (individually
+#     idempotent but not free) project/secrets/mount steps at all.
+CASE_ENV=(FAKE_RC_provision_supabase_stack=0)
+run_case "standup: live-done skips standup.sh entirely" 0 --only standup || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "already provisioned and healthy -- VERIFIED without applying" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [standup-live-done] did not print the VERIFIED-without-applying line" >&2; FAIL=1; }
+  if grep -q "^standup " "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+    echo "FAIL: [standup-live-done] standup.sh was called despite live_done_standup reporting healthy" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  fi
+  # Sec C-2 (PR #852 AMBER review): the OLD assertions above only proved
+  # standup.sh was never called -- they did NOT pin that
+  # live_done_standup() actually invokes provision-supabase-stack.sh with
+  # the literal --check-healthy flag. Dropping that flag silently (e.g. a
+  # future edit typos it, or calls the script bare) would make
+  # provision-supabase-stack.sh's OWN bare preflight run instead -- which
+  # exits 0 unconditionally, at line 205-ish, before even reaching
+  # check_stack_already_healthy() -- turning standup into a PERMANENT
+  # silent no-op regardless of real stack health. Pin both halves: the
+  # flag is present, and --apply is never paired with it on the same call.
+  CALL_LINE="$(grep '^provision-supabase-stack ' "$CASE_LAST_DIR/calls.log" 2>/dev/null || true)"
+  if [[ -z "$CALL_LINE" ]] || ! grep -qE '^provision-supabase-stack .*--check-healthy' <<<"$CALL_LINE"; then
+    echo "FAIL: [standup-live-done] provision-supabase-stack.sh was not called with --check-healthy -- live_done_standup()'s own argv is unpinned" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  elif grep -qE -- '--apply' <<<"$CALL_LINE"; then
+    echo "FAIL: [standup-live-done] provision-supabase-stack.sh's --check-healthy call also carried --apply -- a read-only probe must never be paired with a mutating flag" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  fi
+fi
+
+# 18. STANDUP-NOT-DONE-CALLS-STANDUP -- live_done_standup reports NOT
+#     healthy -> falls through to the pre-existing behavior, calling
+#     standup.sh normally (proves the fallback path still works, not
+#     just the new skip path).
+CASE_ENV=(FAKE_RC_provision_supabase_stack=1)
+run_case "standup: not live-done falls through to standup.sh" 0 --only standup || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "^standup " "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [standup-not-done] standup.sh was never called" >&2; cat "$CASE_LAST_DIR/calls.log" >&2; FAIL=1; }
+fi
+CASE_ENV=()
+
+# 19. LIVE-DONE-PROVISION-RESOURCES-UNKNOWN-RC (Sec F-3(i), PR #852 AMBER
+#     review) -- provision-resources itself never runs this invocation
+#     (--only etl-role, --skip-dependency-check so the jump-target's own
+#     prerequisite preflight isn't run either), so
+#     live_done_provision_resources() is consulted with NO recorded
+#     status to fall back on. record-coolify-uuids.sh's fake is forced to
+#     exit non-zero WITHOUT printing any "no application named ... found"
+#     line (models it dying on a missing MIGRATOR_APP_NAME/
+#     SUPABASE_STACK_APP_NAME app instead -- record-coolify-uuids.sh
+#     strictly `die`s on those two, never `info`s -- see its own header).
+#     etl-role's OWN preflight also fails independently (db-role-
+#     handoff.sh forced to rc=1). The OLD version defaulted an unmatched
+#     grep to PROVISION_RESOURCES_LIVE_DONE=1 ("done") regardless of rc --
+#     which, mechanically, also reads as "not blocking" to
+#     step_live_blocker, so this scenario cannot distinguish old from new
+#     behavior by BLOCKED-BY-vs-would-likely-fail alone. What it DOES pin
+#     is the new, explicit "UNKNOWN" log line -- proving the code took the
+#     unknown-rc branch at all rather than silently falling into the
+#     matched-or-done binary the old version had.
+CASE_ENV=(FAKE_RC_record_coolify_uuids=1 FAKE_STDOUT_record_coolify_uuids="no application named 'pfin-migrator' found -- run scripts/provision-migrator-app.sh --apply first, or override MIGRATOR_APP_NAME" FAKE_RC_db_role_handoff=1)
+run_case "live_done_provision_resources: unmatched non-zero rc is UNKNOWN, not done" 3 --only etl-role --skip-dependency-check --dry-run || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "record-coolify-uuids.sh exited non-zero (rc=1) without naming a missing resource -- provision-resources live state is UNKNOWN" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [live-done-unknown-rc] did not print the UNKNOWN-state line -- unmatched non-zero rc is being silently treated as done" >&2; cat "$CASE_LAST_DIR/out.txt" >&2; FAIL=1; }
+  grep -q "^  etl-role .*would likely fail" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [live-done-unknown-rc] etl-role not reported as its own 'would likely fail'" >&2; FAIL=1; }
+fi
+CASE_ENV=()
+
+# 20. LIVE-DONE-PROVISION-RESOURCES-SKIPS-ON-BOX-IP-UNSET (Sec F-3(ii),
+#     PR #852 AMBER review) -- BOX_IP is absent from .env entirely (a
+#     custom case dir, not the standard run_case harness's FULL_ENV, which
+#     always bakes in BOX_IP=127.0.0.1). etl-role's own require_box_ip
+#     gate fails on its own merits (rc=2) -- genuinely independent of
+#     provision-resources. --only etl-role --skip-dependency-check so the
+#     jump-target's own prerequisite preflight (which would ALSO fail
+#     require_box_ip and abort the whole run at the dependency-check gate,
+#     exit 3, before ever reaching live_done_provision_resources() at all)
+#     is not run. The OLD version's require_box_ip failure inside the live
+#     check itself set PROVISION_RESOURCES_LIVE_DONE=0 ("blocking") --
+#     which WOULD have misattributed etl-role's own BOX_IP-unset failure
+#     to "BLOCKED-BY provision-resources" instead of showing its own
+#     genuine cause. Pin BOTH: the new skip-log line fires, AND etl-role
+#     reads its own "would likely fail", never BLOCKED-BY.
+BOXIP_UNSET_DIR="$WORK/boxip-unset-case"
+mkdir -p "$BOXIP_UNSET_DIR"
+printf '%s' "$FULL_ENV" | grep -v '^BOX_IP=' > "$BOXIP_UNSET_DIR/.env"
+printf 'CI_MIGRATE_SSH_PUBKEY=%s/ci_migrate.pub\n' "$BOXIP_UNSET_DIR" >> "$BOXIP_UNSET_DIR/.env"
+: > "$BOXIP_UNSET_DIR/calls.log"
+: > "$BOXIP_UNSET_DIR/keygen.log"
+set +e
+env REPO_ROOT="$BOXIP_UNSET_DIR" SCRIPTS="$FAKE_SCRIPTS_DIR" PATH="$FAKE_BIN:$PATH" \
+  FAKE_CALL_LOG="$BOXIP_UNSET_DIR/calls.log" FAKE_COUNTER_DIR="$BOXIP_UNSET_DIR" FAKE_SSH_KEYGEN_LOG="$BOXIP_UNSET_DIR/keygen.log" \
+  bash "$PROVISION_SH" --only etl-role --skip-dependency-check --dry-run > "$BOXIP_UNSET_DIR/out.txt" 2>&1
+BOXIP_UNSET_RC=$?
+set -e
+if [[ "$BOXIP_UNSET_RC" != "3" ]]; then
+  echo "FAIL: [live-done-boxip-unset] expected exit 3, got $BOXIP_UNSET_RC" >&2
+  cat "$BOXIP_UNSET_DIR/out.txt" >&2
+  FAIL=1
+else
+  echo "OK: [live-done-boxip-unset] exit 3 as expected." >&2
+  grep -q "BOX_IP unset -- skipping the live provision-resources check entirely" "$BOXIP_UNSET_DIR/out.txt" || { echo "FAIL: [live-done-boxip-unset] did not print the skip-live-check line" >&2; cat "$BOXIP_UNSET_DIR/out.txt" >&2; FAIL=1; }
+  grep -q "^  etl-role .*would likely fail" "$BOXIP_UNSET_DIR/out.txt" || { echo "FAIL: [live-done-boxip-unset] etl-role not reported as its own 'would likely fail'" >&2; cat "$BOXIP_UNSET_DIR/out.txt" >&2; FAIL=1; }
+  if grep -q "^  etl-role .*BLOCKED-BY provision-resources" "$BOXIP_UNSET_DIR/out.txt"; then
+    echo "FAIL: [live-done-boxip-unset] etl-role was misattributed as BLOCKED-BY provision-resources instead of its own genuine BOX_IP-unset cause" >&2
+    FAIL=1
+  fi
 fi
 
 if [[ $FAIL -ne 0 ]]; then
