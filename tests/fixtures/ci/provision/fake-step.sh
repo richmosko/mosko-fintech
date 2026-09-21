@@ -12,9 +12,17 @@
 #                             once exhausted) -- lets a compound step's
 #                             Nth sub-call fail on purpose. Default "0".
 #   FAKE_CALL_LOG             if set, every invocation appends
-#                             "<name> <args...>" to this file -- lets the
-#                             fence assert which steps' --apply actually
-#                             ran (e.g. proving --dry-run never fires one).
+#                             "<name> BOX_IP=<value-or-ABSENT> <args...>"
+#                             to this file -- lets the fence assert which
+#                             steps' --apply actually ran (e.g. proving
+#                             --dry-run never fires one) AND, per-name,
+#                             whether provision.sh's own require_box_ip
+#                             mechanism (D-1, live --dry-run, 2026-09-20)
+#                             actually reached this call's environment --
+#                             the BOX_IP=<value> field is what that
+#                             scenario greps for, never presence/absence
+#                             of an argv token (this repo's own scripts
+#                             take BOX_IP via environment, never argv).
 
 set -euo pipefail
 
@@ -37,7 +45,7 @@ fi
 RC="${RC_ARR[$IDX]}"
 
 if [[ -n "${FAKE_CALL_LOG:-}" ]]; then
-  printf '%s %s\n' "$NAME" "$*" >> "$FAKE_CALL_LOG"
+  printf '%s BOX_IP=%s %s\n' "$NAME" "${BOX_IP:-<ABSENT>}" "$*" >> "$FAKE_CALL_LOG"
 fi
 
 echo "FAKE $NAME call #$CALL_N -> exit $RC (args: $*)"

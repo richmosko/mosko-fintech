@@ -61,6 +61,18 @@
 #  13. COMPOUND-STEP-PROPAGATES -- the provision-resources step's SECOND
 #      provision-worker.sh call fails -> the whole step fails, the run
 #      stops there (never reaches 'secrets').
+#  14. BOX_IP-REACHES-EVERY-SUB-SCRIPT-THAT-NEEDS-IT (D-1, live
+#      --dry-run, 2026-09-20) -- a full --dry-run walkthrough: every
+#      fake call logged under a name whose real script requires BOX_IP
+#      via the environment shows a real value, never BOX_IP=<ABSENT>.
+#      Two names (provision-migrator-app, migrator-scheduled-task) were
+#      missing this entirely until this fix.
+#  15. DRY-RUN-BLOCKED-BY-VS-GENUINE-FAILURE (D-2, live --dry-run,
+#      2026-09-20) -- a combined full --dry-run: a step whose own
+#      declared prerequisite ALSO failed this same run is classified
+#      BLOCKED-BY <prereq>, not counted as a genuine failure; a step
+#      whose prerequisite is satisfied but which independently fails IS
+#      counted -> exit 3, never the old unconditional exit 0.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -277,7 +289,12 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
     cat "$CASE_LAST_DIR/calls.log" >&2
     FAIL=1
   fi
-  if ! grep -q "^db-bootstrap $" "$CASE_LAST_DIR/calls.log" 2>/dev/null && ! grep -q "^db-bootstrap$" "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+  # Prefix match (name + a following space) -- fake-step.sh's call-log
+  # line is "<name> BOX_IP=<value> <args...>" (D-1, live --dry-run,
+  # 2026-09-20), never bare "<name>" or "<name> " alone any more, so an
+  # exact-line match would never fire regardless of dependency-check
+  # correctness.
+  if ! grep -q "^db-bootstrap " "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
     echo "FAIL: [--only] expected the dependency-check call to db-bootstrap (etl-role's own declared prerequisite) in the call log -- it may have been silently skipped" >&2
     cat "$CASE_LAST_DIR/calls.log" >&2
     FAIL=1
@@ -411,6 +428,70 @@ run_case "compound step: 2nd sub-call failing stops the whole run" 2 --from prov
 if [[ -n "${CASE_LAST_DIR:-}" ]] && grep -q "Step.*secrets --" "$CASE_LAST_DIR/out.txt" 2>/dev/null; then
   echo "FAIL: [compound propagation] the run reached the 'secrets' step despite 'provision-resources' failing" >&2
   FAIL=1
+fi
+
+# 14. BOX_IP-REACHES-EVERY-SUB-SCRIPT-THAT-NEEDS-IT (D-1, live --dry-run,
+#     2026-09-20) -- a full --dry-run walkthrough of the WHOLE registry
+#     (no --from/--only, so every step's preflight runs): every fake call
+#     logged under a name whose REAL counterpart requires BOX_IP passed
+#     via the environment (never defaulted, never self-read from .env --
+#     coolify-env.sh, provision-migrator-app.sh, migrator-scheduled-
+#     task.sh, provision-app.sh, provision-worker.sh, record-coolify-
+#     uuids.sh, push-production-secrets.sh, mint-supabase-jwt-keys.sh,
+#     db-role-handoff.sh, deploy-app.sh, every smoke-*.sh that reads it,
+#     worker-scheduled-task.sh) shows a real value, never
+#     BOX_IP=<ABSENT>. Two of these (provision-migrator-app,
+#     migrator-scheduled-task) were missing the export ENTIRELY until
+#     this fix -- caught on the real box, not by this fence (which had
+#     no BOX_IP leg before this PR). Strike: drop `require_box_ip` from
+#     one run_* function on a disposable copy of provision.sh -> that
+#     name's own call-log line(s) show BOX_IP=<ABSENT> -> this scenario
+#     goes RED.
+CASE_ENV=()
+run_case "BOX_IP reaches every sub-script that requires it" 0 --dry-run || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  BOX_IP_REQUIRED_NAMES="coolify-env provision-migrator-app migrator-scheduled-task provision-app provision-worker record-coolify-uuids push-production-secrets mint-supabase-jwt-keys db-role-handoff deploy-app smoke-admission-endpoint smoke-etl-poll smoke-pdf-roundtrip smoke-pfin-exposure smoke-ca1-env-pattern worker-scheduled-task"
+  CHECKED_ANY=0
+  for n in $BOX_IP_REQUIRED_NAMES; do
+    if grep -q "^$n " "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+      CHECKED_ANY=1
+      if grep "^$n " "$CASE_LAST_DIR/calls.log" | grep -q "BOX_IP=<ABSENT>"; then
+        echo "FAIL: [box-ip-reaches-every-sub-script] '$n' was called with BOX_IP absent from its own environment" >&2
+        grep "^$n " "$CASE_LAST_DIR/calls.log" >&2
+        FAIL=1
+      fi
+    fi
+  done
+  [[ "$CHECKED_ANY" -eq 1 ]] || { echo "FAIL: [box-ip-reaches-every-sub-script] none of the BOX_IP-required names were even called -- the call log is not what this scenario expected" >&2; FAIL=1; }
+fi
+
+# 15. DRY-RUN-BLOCKED-BY-VS-GENUINE-FAILURE (D-2, live --dry-run,
+#     2026-09-20) -- a single combined full --dry-run: provision-app.sh's
+#     fake fails (models "the box is only partially provisioned -- this
+#     resource does not exist yet"), so provision-resources itself
+#     legitimately reads "would likely fail" (its OWN declared
+#     prerequisite, pgrst-flip, is satisfied -- this is an independent
+#     failure, not a cascade). record-coolify-uuids.sh's fake is ALSO
+#     forced to fail (models "can't resolve a uuid for a resource that
+#     doesn't exist"), but record-uuids' own declared STEP_REQUIRES
+#     prerequisite is provision-resources, which just failed -- so
+#     record-uuids must be classified BLOCKED-BY provision-resources, NOT
+#     counted as an independent "would likely fail". Separately,
+#     smoke-ca1-env-pattern.sh's fake is forced to fail while its own
+#     prerequisite (deploy-workers) reports VERIFIED (its own fake
+#     defaults to 0, uninvolved in this scenario's failures) -- a truly
+#     independent failure, must read "would likely fail". Exit code must
+#     be 3 (at least one genuine "would likely fail" exists), never 0 --
+#     the exact defect this fixes: the OLD version printed "would likely
+#     fail" ten times over and still exited 0.
+CASE_ENV=(FAKE_RC_provision_app=1 FAKE_RC_record_coolify_uuids=1 FAKE_RC_smoke_ca1_env_pattern=1)
+run_case "dry-run distinguishes BLOCKED-BY from a genuine failure, exit 3" 3 --dry-run || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "^  provision-resources .*would likely fail" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-vs-genuine] provision-resources not reported as an independent 'would likely fail'" >&2; FAIL=1; }
+  grep -q "^  record-uuids .*BLOCKED-BY provision-resources" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-vs-genuine] record-uuids not reported as BLOCKED-BY provision-resources" >&2; FAIL=1; }
+  grep -q "^  ca1-gate .*would likely fail" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-vs-genuine] ca1-gate (independent failure, prerequisite satisfied) not reported as 'would likely fail'" >&2; FAIL=1; }
+  grep -qi "would likely fail" "$CASE_LAST_DIR/out.txt" > /dev/null # sanity, already covered above
+  grep -q "FAIL: [0-9]* step(s) would likely fail" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-vs-genuine] summary did not print a truthful 'would likely fail' count" >&2; FAIL=1; }
 fi
 
 if [[ $FAIL -ne 0 ]]; then
