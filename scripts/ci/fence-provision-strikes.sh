@@ -280,9 +280,16 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   # etl-role's own declared STEP_REQUIRES prerequisite (db-bootstrap) is
   # live-rechecked once, in PREFLIGHT mode only, before the target step
   # runs -- a legitimate call the dependency gate itself makes, not a
-  # stray extra step being executed.
+  # stray extra step being executed. "provision-app"/"provision-worker"
+  # are ALSO now expected (team-lead follow-up, live --dry-run,
+  # 2026-09-20): etl-role's own STEP_REQUIRES was widened to
+  # "db-bootstrap,provision-resources" (it genuinely needs the
+  # pfin-back-etl resource to exist, not just the role) -- the same
+  # dependency gate now ALSO live-rechecks provision-resources' own
+  # preflight, which shells out to provision-app.sh + 3x
+  # provision-worker.sh.
   set +e
-  OTHER_CALLS="$(grep -vc "db-role-handoff\|db-bootstrap" "$CASE_LAST_DIR/calls.log" 2>/dev/null)"
+  OTHER_CALLS="$(grep -vc "db-role-handoff\|db-bootstrap\|provision-app\|provision-worker\|record-coolify-uuids" "$CASE_LAST_DIR/calls.log" 2>/dev/null)"
   set -e
   if [[ "$OTHER_CALLS" != "0" ]]; then
     echo "FAIL: [--only] a non-target, non-dependency-check script was called" >&2
@@ -492,6 +499,60 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   grep -q "^  ca1-gate .*would likely fail" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-vs-genuine] ca1-gate (independent failure, prerequisite satisfied) not reported as 'would likely fail'" >&2; FAIL=1; }
   grep -qi "would likely fail" "$CASE_LAST_DIR/out.txt" > /dev/null # sanity, already covered above
   grep -q "FAIL: [0-9]* step(s) would likely fail" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-vs-genuine] summary did not print a truthful 'would likely fail' count" >&2; FAIL=1; }
+fi
+
+# 16. DRY-RUN-BLOCKED-BY-THROUGH-LENIENT-INTERMEDIATE (team-lead follow-up
+#     on scenario 15, live --dry-run, 2026-09-20) -- record-uuids.sh's
+#     own preflight SUCCEEDS (rc=0, VERIFIED) even though pfin-back-etl
+#     does not exist, by DESIGN ("absent -> info, not failure" -- its own
+#     header). A one-hop BLOCKED-BY check (scenario 15's own mechanism,
+#     as it existed before this fix) sees nonsecret-env's DIRECT
+#     prerequisite (record-uuids) reporting VERIFIED and falls through to
+#     misclassifying nonsecret-env as an independent "would likely
+#     fail" -- the exact live defect this scenario reproduces and pins.
+#     provision-app.sh/provision-worker.sh's own preflights (provision-
+#     resources) are ALSO lenient (0 = "safe to create", not "already
+#     exists") -- provision-resources itself reads VERIFIED too, so this
+#     is not a single-hop miss, it is TWO lenient hops in a row.
+#     record-coolify-uuids.sh's own STDOUT (not its exit code) is the
+#     only place that already performs a live, strict-enough check for
+#     free -- FAKE_STDOUT_record_coolify_uuids injects its exact "no
+#     application named 'pfin-back-etl' found yet" line so
+#     live_done_provision_resources() (provision.sh's own new live-check,
+#     re-shelling out to the SAME script, memoized) has something real to
+#     grep. nonsecret-env's OWN preflight fails independently (its 2nd
+#     coolify-env.sh call, targeting pfin-back-etl, forced to rc=1) --
+#     same for etl-role/provider-sync-role (db-role-handoff.sh forced to
+#     rc=1, modeling its own STRICT "no Coolify application named" die()
+#     for the SAME missing resource -- see db-role-handoff.sh:312).
+#     etl-role/provider-sync-role's own STEP_REQUIRES was ALSO widened in
+#     this fix (was "db-bootstrap" alone, missing the pfin-back-etl/
+#     pfin-provider-sync dependency their own script strictly needs) --
+#     this scenario is the reason.
+#     Expected: ALL THREE (nonsecret-env, etl-role, provider-sync-role)
+#     read BLOCKED-BY provision-resources, not "would likely fail" --
+#     and because nothing in this scenario is an independent failure
+#     (every non-VERIFIED step traces back to the one unmet
+#     precondition), the overall dry run exits 0, not 3. Everything
+#     downstream (secrets/mint-jwt/deploy-app/deploy-workers/scheduled-
+#     tasks/smokes/ca1-gate) still reads BLOCKED-BY too, each naming its
+#     own immediate unsatisfied prerequisite -- confirmed unchanged
+#     ("via a different path", per team-lead's own note) by NOT
+#     asserting those individually here; scenario 15 already covers that
+#     shape (deploy-workers/ca1-gate BLOCKED-BY / would-likely-fail).
+# shellcheck disable=SC2054  # intentional: ONE element, "0,1" is fake-step.sh's own comma-separated per-call RC list, not two array elements
+CASE_ENV=(FAKE_RC_coolify_env=0,1 FAKE_RC_db_role_handoff=1 FAKE_STDOUT_record_coolify_uuids="no application named 'pfin-back-etl' found yet")
+run_case "dry-run BLOCKED-BY walks through a lenient intermediate step to the real cause" 0 --dry-run || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "^  provision-resources .*VERIFIED (dry-run)" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-through-lenient] provision-resources itself not reported VERIFIED (dry-run) -- this scenario's own setup assumption broke" >&2; FAIL=1; }
+  grep -q "^  record-uuids .*VERIFIED (dry-run)" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-through-lenient] record-uuids itself not reported VERIFIED (dry-run) -- this scenario's own setup assumption broke" >&2; FAIL=1; }
+  grep -q "^  nonsecret-env .*BLOCKED-BY provision-resources" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-through-lenient] nonsecret-env not reported BLOCKED-BY provision-resources -- the one-hop check regressed or was never fixed" >&2; FAIL=1; }
+  grep -q "^  etl-role .*BLOCKED-BY provision-resources" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-through-lenient] etl-role not reported BLOCKED-BY provision-resources" >&2; FAIL=1; }
+  grep -q "^  provider-sync-role .*BLOCKED-BY provision-resources" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-through-lenient] provider-sync-role not reported BLOCKED-BY provision-resources" >&2; FAIL=1; }
+  if grep -qE "^  (nonsecret-env|etl-role|provider-sync-role) .*would likely fail" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [blocked-by-through-lenient] at least one of nonsecret-env/etl-role/provider-sync-role was still misclassified as an independent 'would likely fail'" >&2
+    FAIL=1
+  fi
 fi
 
 if [[ $FAIL -ne 0 ]]; then

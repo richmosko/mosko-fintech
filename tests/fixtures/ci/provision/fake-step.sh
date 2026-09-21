@@ -23,12 +23,27 @@
 #                             scenario greps for, never presence/absence
 #                             of an argv token (this repo's own scripts
 #                             take BOX_IP via environment, never argv).
+#   FAKE_STDOUT_<NAME>        if set, printed verbatim (its own line)
+#                             BEFORE the "FAKE ..." line, on every call to
+#                             this name -- lets a scenario simulate a real
+#                             script's own lenient/informational stdout
+#                             text (e.g. record-coolify-uuids.sh's own
+#                             "no application named 'X' found yet" line,
+#                             printed even though ITS OWN exit code is 0)
+#                             for provision.sh's live_done_provision_
+#                             resources() to grep (live --dry-run
+#                             BLOCKED-BY classifier follow-up,
+#                             2026-09-20). Never affects FAKE_RC_<NAME>.
 
 set -euo pipefail
 
 NAME="$(basename "$0" .sh)"
 VARNAME="FAKE_RC_${NAME//-/_}"
 RC_LIST="${!VARNAME:-0}"
+STDOUT_VARNAME="FAKE_STDOUT_${NAME//-/_}"
+if [[ -n "${!STDOUT_VARNAME:-}" ]]; then
+  printf '%s\n' "${!STDOUT_VARNAME}"
+fi
 
 COUNTER_FILE="${FAKE_COUNTER_DIR:-/tmp}/.fake-step-counter.$NAME"
 CALL_N=1
