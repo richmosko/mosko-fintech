@@ -197,22 +197,23 @@ step "CA-1 post-deploy container-env check ($CONTAINER)"
 # read, which is the more serious diagnosis, or the equality premise
 # below being wrong for this Coolify version/shape).
 #
-# ⚠ WHAT IS ACTUALLY MEASURED, STATED PRECISELY (Sec, PR #864 review,
-# F-1 -- an earlier draft of this comment overclaimed): `COOLIFY_
-# RESOURCE_UUID`'s PRESENCE as an injected name is measured
-# (scripts/smoke-ca1-env-pattern.sh's own header cites team-lead's live
-# `docker exec ... env | cut -d= -f1` read against a real provider-sync
-# deploy, Coolify 4.3.18, 2026-09-21 -- names only, per this repo's own
-# env-dump-leak discipline, which is EXACTLY what that fixture cannot
-# also establish a VALUE from). The EQUALITY this check asserts --
-# that the injected value equals THIS APPLICATION's own uuid, not a
-# service uuid or some other Coolify-internal id -- is INFERRED from
-# the variable's name, not yet validated against a live read-back. If
-# that premise is wrong, exit 92 will fire on a genuinely-clear
-# deployment; Sec's own mitigation (read the value on the box once
-# alongside the run-10 resume, compare it to the resolved app uuid) is
-# the intended way this gets promoted from inferred to measured --
-# tracked with team-lead, not silently assumed correct here.
+# ⚠ THE EQUALITY THIS CHECK ASSERTS IS NOW MEASURED, NOT INFERRED
+# (closes Sec's own F-1/F-2 -- an earlier draft of this comment
+# correctly flagged it as inferred-only; team-lead re-measured live
+# during run 10, 2026-09-21 ~20:35Z: `docker inspect --format
+# '{{.Config.Env}}'` read against ALL FOUR running containers on that
+# run, names only per this repo's own env-dump-leak discipline):
+#   provider-sync -- COOLIFY_RESOURCE_UUID=hmjeuhdaolhw8tlz3qi6lopi
+#   pfin-back-etl (both containers) -- COOLIFY_RESOURCE_UUID=drlazsooiksh4wakbldll5uo
+#   pfin-app -- COOLIFY_RESOURCE_UUID=7frkiyqnetb4bgev7j7sw5eg
+# In every case the injected value EQUALS that resource's own Coolify
+# application uuid -- confirmed against the SAME uuids each resource
+# resolves to via GET /applications, not assumed. `COOLIFY_RESOURCE_
+# UUID`'s bare PRESENCE as an injected name was ALSO independently
+# measured earlier (scripts/smoke-ca1-env-pattern.sh's own header,
+# team-lead, 2026-09-21, provider-sync only) -- that fixture is
+# names-only by design and could not have established the VALUE side
+# on its own; run 10's four-container read is what closes that gap.
 #
 # All three checks stay entirely inside the remote command, on data
 # already captured into $ENV_OUT there -- the outer `2>/dev/null` is
