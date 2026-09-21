@@ -3623,6 +3623,27 @@ jobs:
       - name: offline strike-proofs (3 resources x 7 scenarios + unknown-name refusal)
         run: bash scripts/ci/fence-provision-worker-strikes.sh
 
+  fence-verify-worker-ca1-clear-strikes:
+    name: verify-worker-ca1-clear.sh — CA-1 post-deploy container-env strike-proofs
+    runs-on: ubuntu-latest
+    # PR #862 review (CA-1 fix, Sec option C): scripts/verify-worker-ca1-
+    # clear.sh is the die-level, post-deploy assertion that a freshly
+    # deployed container carries no non-empty COOLIFY_FQDN/COOLIFY_URL --
+    # the check that actually stands behind admissionGuard.ts's own
+    # detectPublicRouteSignal, wired into scripts/provision.sh's
+    # run_deploy_workers(). This job was built alongside that script in
+    # PR #862 but never wired into CI -- found and fixed during the
+    # required-contexts promotion sweep, not caught at #862 review time.
+    # scripts/ci/fence-verify-worker-ca1-clear-strikes.sh proves 5
+    # scenarios offline via a PATH-shadowed fake ssh, never a live box:
+    # clean (exit 0), route-signal-present (exit 1, the finding),
+    # container-not-found / box-unreachable / BOX_IP-missing (each exit 2,
+    # a precondition failure distinct from the finding).
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (clean / route-signal-present / container-not-found / box-unreachable / box-ip-missing)
+        run: bash scripts/ci/fence-verify-worker-ca1-clear-strikes.sh
+
   fence-smoke-admission-endpoint-strikes:
     name: smoke-admission-endpoint.sh — CA-2 negative + positive control strike-proofs
     runs-on: ubuntu-latest
