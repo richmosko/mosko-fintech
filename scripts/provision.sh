@@ -943,11 +943,25 @@ verify_worker_store_binds() {
 # writing) has no admission surface for CA-1's check to be meaningful
 # against -- this function returns 1 for it, and the caller logs an
 # explicit skip naming the worker and the reason, never a silent no-op.
+#
+# F-2 FIX (Sec, CA-1 identity review): the match is DELIBERATELY loose
+# -- `serve-admission` anywhere in the file, not `command:.*serve-
+# admission\.js` coupled onto one line. The tighter pattern matched
+# provider-sync's current inline-array form (`command: ["node", "dist/
+# cli/serve-admission.js"]`) but missed the equally standard multi-line
+# YAML list form (`command:\n  - node\n  - dist/cli/serve-admission.js`),
+# where `command:` and the filename are on DIFFERENT lines -- a worker
+# using that form would be silently dropped from CA-1 verification, the
+# exact gap this derivation exists to close. The loose match can also
+# fire on a COMMENTED-OUT reference; that is deliberately accepted
+# (Sec: "over-matching is the safe direction here") -- a false positive
+# merely verifies a worker that did not strictly need it (harmless), a
+# false negative skips one that did (the actual hazard).
 worker_has_admission_guard() {
   local base_dir="$1" compose_file
   compose_file="$REPO_ROOT/${base_dir#/}/docker-compose.yaml"
   [[ -f "$compose_file" ]] || die3 "worker_has_admission_guard: no docker-compose.yaml at $compose_file -- cannot derive admission-guard membership for '$base_dir'. This is a hard stop, not a silent skip: a missing compose file where one is expected is a bigger problem than the check it would have gated."
-  grep -qE 'command:.*serve-admission\.js' "$compose_file"
+  grep -q 'serve-admission' "$compose_file"
 }
 
 # CA-1 post-deploy gate (Sec ruling, PR #862 review, option C; identity

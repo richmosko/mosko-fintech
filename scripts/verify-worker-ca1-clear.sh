@@ -175,7 +175,28 @@ step "CA-1 post-deploy container-env check ($CONTAINER)"
 # env dump across the wire (same discipline every other env-read in
 # this repo follows; COOLIFY_FQDN/URL are non-secret here, but the
 # convention is the convention regardless of this call's own payload).
-ROUTE_SIGNAL="$(sshx "docker exec $CONTAINER env | grep -E '^(COOLIFY_FQDN|COOLIFY_URL)=.' || true" </dev/null 2>/dev/null || true)"
+#
+# F-1 FIX (Sec, CA-1 identity review): the OLD form ended this capture
+# in `2>/dev/null || true`, which absorbed a FAILED `docker exec`
+# (container died between stage 2 and this check, a docker daemon
+# hiccup, a transient ssh drop) EXACTLY the same as a clean "no match"
+# grep -- either way ROUTE_SIGNAL came back empty and this script
+# printed "CA-1 clear... confirmed" for a property it never actually
+# observed. Fail-open on the one check that exists to be authoritative.
+# Fixed: the remote body now signals a FAILED `docker exec` distinctly
+# (exit 90) from a genuine "no match" (grep's OWN `|| true`, unchanged,
+# still absorbs grep's normal exit-1-on-no-match) -- and the outer
+# `2>/dev/null` is REMOVED so a real error's stderr reaches the
+# operator (Sec: "the stderr is the operator's only clue").
+set +e
+ROUTE_SIGNAL="$(sshx "ENV_OUT=\$(docker exec $CONTAINER env) || exit 90; printf '%s\n' \"\$ENV_OUT\" | grep -E '^(COOLIFY_FQDN|COOLIFY_URL)=.' || true" </dev/null)"
+SSHX_RC=$?
+set -e
+if [[ "$SSHX_RC" -eq 90 ]]; then
+  die2 "docker exec $CONTAINER env FAILED on the box -- the container may have died between resolution (stage 2) and this check, or this was a transient docker/ssh error. This is a READ FAILURE, not a clean result: CA-1 state is UNVERIFIED, not confirmed clear. Re-run this check; do not treat this deploy as done on the strength of this run. See stderr above for the underlying error."
+elif [[ "$SSHX_RC" -ne 0 ]]; then
+  die2 "the CA-1 env check itself failed unexpectedly (ssh/remote exit $SSHX_RC) -- CA-1 state is UNVERIFIED. See stderr above for the underlying error."
+fi
 if [[ -n "$ROUTE_SIGNAL" ]]; then
   die "CA-1 FINDING: container '$CONTAINER' (resolved from '$APP_QUERY', compose service '$COMPOSE_SERVICE') carries a non-empty Coolify route signal after deploy -- $(printf '%s' "$ROUTE_SIGNAL" | cut -d= -f1 | tr '\n' ' ')-- this is the exact signal admissionGuard.ts's detectPublicRouteSignal reacts to; if the guard did NOT refuse to boot on this deploy, investigate why immediately (a guard regression is worse than this finding). Do not treat this deploy as done."
 fi

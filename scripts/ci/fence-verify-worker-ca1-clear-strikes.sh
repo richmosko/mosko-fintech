@@ -50,6 +50,14 @@
 #      names --service as required, before any network call.
 #   8. BOX-UNREACHABLE -- ssh's own reachability probe fails -> exit 2.
 #   9. BOX-IP-MISSING -- BOX_IP unset -> exit 2.
+#  10. STAGE-3-READ-FAILS (Sec F-1, CA-1 identity review -- the merge
+#      condition this rewrite exists to close) -- resolution succeeds
+#      (stages 1+2), but `docker exec <container> env` ITSELF fails on
+#      the box (container died between resolution and this check, a
+#      docker daemon hiccup, a transient ssh drop) -> MUST exit non-zero
+#      and MUST NOT print "CA-1 clear... confirmed" -- the exact
+#      fail-open the OLD `2>/dev/null || true` form let through
+#      (a failed read and a clean "no match" both came back empty).
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -106,6 +114,10 @@ if [[ "\$*" == *"inspect"* && "\$*" == *"State.Running"* ]]; then
   exit 0
 fi
 if [[ "\$*" == *"exec"* && "\$*" == *" env"* ]]; then
+  if [[ "\${FAKE_EXEC_ENV_FAILS:-0}" == "1" ]]; then
+    echo "Error response from daemon: Container \$2 is not running" >&2
+    exit 1
+  fi
   printf '%s' "\${FAKE_ROUTE_SIGNAL:-}"
   exit 0
 fi
@@ -153,6 +165,7 @@ fi
 CMD="\${@: -1}"
 CMD_REWRITTEN="\$(printf '%s' "\$CMD" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
 PATH="$FAKE_BIN:\$PATH" FAKE_COMPOSE_CIDS="\${FAKE_COMPOSE_CIDS-$REAL_SHAPE_CID}" FAKE_ROUTE_SIGNAL="\${FAKE_ROUTE_SIGNAL:-}" \\
+  FAKE_EXEC_ENV_FAILS="\${FAKE_EXEC_ENV_FAILS:-0}" \\
   bash -c "\$CMD_REWRITTEN"
 EOF
 chmod +x "$FAKE_BIN/ssh"
@@ -244,6 +257,17 @@ if [[ "$NOIP_RC" != 2 ]]; then
   FAIL=1
 else
   echo "OK: [box-ip-missing] exit 2 as expected." >&2
+fi
+
+# 10. STAGE-3-READ-FAILS -- Sec F-1, the merge condition this rewrite
+#     exists to close. Resolution succeeds; `docker exec ... env`
+#     itself fails on the box -- must NOT be treated the same as a
+#     clean "no match" (the OLD `2>/dev/null || true` form's fail-open).
+READFAIL_OUT="$(FAKE_EXEC_ENV_FAILS=1 \
+  run_scenario "stage-3-read-fails: refuses, never prints the clear message" 2 pfin-provider-sync --service provider-sync)" || FAIL=1
+if [[ -n "${READFAIL_OUT:-}" ]]; then
+  grep -qF "READ FAILURE" <<<"$READFAIL_OUT" || { echo "FAIL: [stage-3-read-fails] refusal did not name it as a read failure." >&2; FAIL=1; }
+  grep -qF "CA-1 clear" <<<"$READFAIL_OUT" && { echo "FAIL: [stage-3-read-fails] the fail-open message ('CA-1 clear') is STILL present alongside the refusal -- this is exactly the property F-1 exists to remove." >&2; FAIL=1; }
 fi
 
 if [[ $FAIL -ne 0 ]]; then
