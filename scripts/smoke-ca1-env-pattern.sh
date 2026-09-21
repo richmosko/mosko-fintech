@@ -31,32 +31,49 @@
 # up automatically on the next run, and this script can never drift from
 # what the container is actually running.
 #
-# ⚠ SUBJECT A IS STRUCTURALLY UNFIRABLE WITH THE CURRENT LIST -- stated
+# ⚠ SUBJECT A WAS STRUCTURALLY UNFIRABLE WITH THE ORIGINAL LIST -- stated
 # plainly, not glossed (Sec F-3, PR #849 review). ROUTE_SIGNAL_REFERENCE
-# below is DERIVED FROM the same `PUBLIC_ROUTE_ENV_MATCHERS` families it
+# below was DERIVED FROM the same `PUBLIC_ROUTE_ENV_MATCHERS` families it
 # is checked against (one representative example per matcher family,
 # read off the matchers' own code comments) -- a 1:1 mapping, not an
-# independent measurement. Every pinned name therefore matches by
-# construction, EVERY RUN: the only two reachable outcomes are "every
-# pinned name that is injected is matched" (exit 0) or "none of the
-# pinned names are injected at all" (exit 0, trivially clean, the "none
-# injected" branch below). This gate CANNOT currently produce the
-# Subject A finding it exists to catch (an injected route-signal name
-# matched by NO pattern) -- proving the control's own logic (the
-# inversion itself, and the trivially-clean branch) is what this
-# script's fence does; proving this PINNED LIST reflects live reality is
-# a separate, unmet precondition. BACKLOG §7.36 item 80 books capturing
-# a real Coolify deploy's own injected-name set into a committed,
-# version-named fixture to replace this pin -- until that lands, treat
-# every VERIFIED from this script as "the control logic is sound," never
-# as "this Coolify version's env surface was actually checked."
+# independent measurement, at the time BACKLOG §7.36 item 80 was booked.
 #
-# No prior live cross-check of Coolify 4.3.18's actual injected-var set
-# exists anywhere in this repo (grepped for the
-# temp/self212-devops-ca1-coolify-route-envvars.md file the code's own
-# comment cites -- absent, never committed; a temp/ loss, now load-
-# bearing). Update this comment, and ROUTE_SIGNAL_REFERENCE, the day
-# item 80 lands -- do not read this pinned set as "measured" until then.
+# PARTIALLY MEASURED NOW (team-lead, live `docker exec <container> env |
+# cut -d= -f1` read against a real `pfin-provider-sync` dockercompose
+# deploy, Coolify 4.3.18, NO domain assigned, 2026-09-21, CA-1 run-8
+# stop -- names only, per this repo's own env-dump-leak discipline):
+# `COOLIFY_FQDN` and `COOLIFY_URL` ARE genuinely injected on a real
+# deploy of this shape (that is what run-8's own admission-guard refusal
+# was reacting to) -- so this gate's "every pinned name that is injected
+# is matched" branch is now a claim about a REAL injected name on a REAL
+# deploy, not a hypothetical. `SERVICE_FQDN_APP`/`SERVICE_URL_APP` were
+# CONFIRMED ABSENT on this same deploy (dockercompose, no domain) -- kept
+# in ROUTE_SIGNAL_REFERENCE regardless, since a different Coolify
+# resource shape (a plain Dockerfile-pack app, or one WITH a domain) may
+# still inject them; their absence here is a fact about THIS shape, not
+# a reason to stop checking for them.
+#
+# `COOLIFY_CONTAINER_NAME`/`COOLIFY_BRANCH`/`COOLIFY_RESOURCE_UUID` were
+# ALSO measured as injected on this same deploy -- DELIBERATELY NOT
+# added to ROUTE_SIGNAL_REFERENCE below. This is not an oversight: this
+# script's own refusal logic (see the UNMATCHED check near the bottom)
+# treats every name in ROUTE_SIGNAL_REFERENCE that IS injected as a
+# route-signal claim -- if it's not matched by any pattern, that is a
+# die()-worthy FINDING. These three names are not route signals by any
+# reasonable reading (a branch name or a resource uuid reveals nothing
+# about a public route) and `PUBLIC_ROUTE_ENV_MATCHERS` correctly does
+# not match them -- adding them here would turn a correct non-match into
+# a FALSE finding. BACKLOG item 80's own AC (sourcing this list from a
+# committed full-env-name fixture) is NOT taken as literally as written
+# for exactly this reason -- see BACKLOG.md item 80's own updated text
+# for the full reasoning, flagged there for Sec/team-lead review rather
+# than decided unilaterally.
+#
+# STILL NOT FULLY MEASURED: `ADMISSION_PUBLIC_URL` (the Subject B benign
+# control -- deliberately not a real Coolify-injected name, used to
+# prove this gate does not over-fire) was not re-verified this round;
+# its own absence from any real deploy's env is exactly the point of it
+# being a control, not a live-measured fact worth re-stating each time.
 #
 # USAGE
 #   BOX_IP=<box-ip> scripts/smoke-ca1-env-pattern.sh [--compose-service <name>]

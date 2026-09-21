@@ -1,0 +1,28 @@
+# Measured 2026-09-21 (team-lead, CA-1 run-8 stop) — `docker exec
+# <container> env | cut -d= -f1` (names only, per this repo's own
+# env-dump-leak discipline) against a real `pfin-provider-sync`
+# dockercompose deploy, Coolify 4.3.18, NO domain assigned.
+#
+# NOT a full env dump — team-lead relayed only the COOLIFY_*/SERVICE_*
+# -prefixed names relevant to CA-1 (the ones a route-signal matcher
+# could plausibly need to recognize), consistent with the "names only"
+# discipline applied to the full read. Do not treat this file as an
+# exhaustive env-name capture for this container.
+#
+# Confirmed present:
+COOLIFY_FQDN
+COOLIFY_URL
+COOLIFY_CONTAINER_NAME
+COOLIFY_BRANCH
+COOLIFY_RESOURCE_UUID
+#
+# Confirmed ABSENT on this shape (dockercompose, no domain) — listed
+# here for completeness, NOT as present names:
+#   SERVICE_FQDN_* (any)
+#   SERVICE_URL_* (any)
+#
+# BACKLOG.md item 80: this fixture is the evidence half of that item's
+# remaining AC. Whether `smoke-ca1-env-pattern.sh`'s ROUTE_SIGNAL_REFERENCE
+# gets sourced from a fixture like this one (full name set + an
+# exclusion list for non-route-signal names) or stays a hand-curated
+# list is an open design ruling — see that item's own text.
