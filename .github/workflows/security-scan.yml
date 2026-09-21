@@ -4207,6 +4207,31 @@ jobs:
       - name: offline strike-proofs (already-bootstrapped-clean / already-bootstrapped-census-bad / partial-state / preflight-no-apply / phase1-roles-fail / credential-mismatch / credential-cleartext-leak / phase2-push-fails / phase2-no-completion-line / phase2-census-bad-after-push / phase2-bootstrap-not-complete-after-push / phase3-source-pin / happy-path-full-apply / resource-absent / unknown-flag / structural-worktree-guard-pin)
         run: bash scripts/ci/fence-db-bootstrap-strikes.sh
 
+  fence-mint-jwt-boxip-strikes:
+    name: mint-supabase-jwt-keys.sh — BOX_IP-required-not-defaulted strike-proof
+    runs-on: ubuntu-latest
+    # team-lead follow-up on the provision.sh D-1 BOX_IP sweep (PR #850,
+    # 2026-09-20): mint-supabase-jwt-keys.sh carried a hardcoded
+    # `${BOX_IP:-188.245.166.206}` default -- the exact silent-fall-
+    # through-to-prod shape the 2026-09-11 incident already fixed in
+    # every sibling script. Masked because provision.sh's own
+    # run_mint_jwt() never passed BOX_IP through either, so every
+    # orchestrated run silently relied on this default, which happened
+    # to equal the real prod box's IP and "worked" by accident.
+    # ⚠ NARROW, SINGLE-GUARD FENCE -- no strike-proof exists for the
+    # REST of mint-supabase-jwt-keys.sh (a full one is a separate, larger
+    # undertaking, out of scope here). This fence proves exactly the one
+    # guard this fix added.
+    # scripts/ci/fence-mint-jwt-boxip-strikes.sh proves: BOX_IP unset
+    # refuses with the required-not-defaulted message before any network
+    # call; BOX_IP set never triggers that message and instead reaches
+    # the script's own next real check (a fake ssh that always fails,
+    # proving BOX_IP specifically was not what stopped it).
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proof (box-ip-absent-refuses / box-ip-present-proceeds)
+        run: bash scripts/ci/fence-mint-jwt-boxip-strikes.sh
+
   required-unfiltered:
     name: required-unfiltered — required contexts cannot be skipped
     runs-on: ubuntu-latest
