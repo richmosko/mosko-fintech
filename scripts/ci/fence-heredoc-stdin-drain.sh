@@ -226,7 +226,28 @@ def scan_file(path):
                 # intermediate curl-flag line is NOT a stdin redirect and
                 # correctly does not satisfy SAFE_MARKERS, which requires
                 # the LEADING `<`).
-                window = [raw] + [lines[j].rstrip('\n') for j in range(i + 1, min(i + 7, n))]
+                #
+                # Sec C-2a (PR #856 round 2) -- TRUNCATE the window at the
+                # next risk-matching line, don't let it run the full 6
+                # regardless. Measured: db-role-handoff.sh's bind-check
+                # block has TWO risky lines close together (the injected
+                # strike, and the block's own real `docker compose ...
+                # exec -T db psql ... <<< ...` a few lines later) -- the
+                # untruncated window let an injected, genuinely
+                # UNREDIRECTED exec "borrow" the LATER line's own `<<<`
+                # marker as if it were its own, going undetected for every
+                # insertion point within 6 lines of that later line (Sec's
+                # own table: caught at :474-:481, silently missed at
+                # :482-:487, where the later line's `<<<` first enters the
+                # window). A safe-marker belonging to a DIFFERENT
+                # statement was never a valid witness for THIS one.
+                lookahead = []
+                for j in range(i + 1, min(i + 7, n)):
+                    jline = lines[j].rstrip('\n')
+                    if (DOCKER_RISK.search(jline) or NESTED_SSH.search(jline)) and not COMMENT_LINE.match(jline):
+                        break
+                    lookahead.append(jline)
+                window = [raw] + lookahead
                 safe = any(any(m in w for m in SAFE_MARKERS) for w in window)
                 if not safe and HEREDOC_OPEN_ANY.search(raw):
                     safe = True  # opens its own nested heredoc -- explicit stdin source
