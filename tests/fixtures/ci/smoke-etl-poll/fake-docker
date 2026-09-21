@@ -45,6 +45,16 @@ fi
 # row-count check against pfin.nav_daily) -- distinguish by the literal SQL
 # text each embeds, since both otherwise match "python3 -c".
 if [[ "$ARGS" == *"python3 -c"* && "$ARGS" == *"pfin.account"* ]]; then
+  # Sec F-6 (PR #848 round-2 review) -- same class as the nav_daily branch
+  # below: PFIN_DB_USER (pfin_etl) is NOINHERIT with no direct table
+  # privileges; a real Postgres would 42501 this SELECT without an explicit
+  # `set local role service_role` first. REFUSE unless the invocation's own
+  # SQL text proves the guard is present -- this strikes a regression that
+  # drops the line at :204.
+  if [[ "$ARGS" != *"set local role service_role"* ]]; then
+    echo "CONN_ERROR permission denied for schema pfin (simulated 42501 -- no 'set local role service_role' in the invocation)" >&2
+    exit 2
+  fi
   if [[ "${FAKE_TENANT_MODE:-ok}" == "conn-error" ]]; then
     echo "CONN_ERROR could not connect" >&2
     exit 2
