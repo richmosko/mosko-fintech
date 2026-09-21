@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+#
+# fake-gh -- offline stand-in for the GitHub CLI, used by
+# scripts/ci/fence-github-ci-setup-strikes.sh. State that must persist
+# ACROSS calls within one script invocation (e.g. "gh variable set" then
+# a later "gh variable get" seeing the new value) lives in files under
+# $FAKE_STATE_DIR, seeded once per scenario by the fence. Matched by
+# PREFIX (case), not exact string equality -- robust to whatever --repo
+# value the real script's own REPO_SLUG resolves to.
+
+set -euo pipefail
+
+ARGS="$*"
+STATE="${FAKE_STATE_DIR:?FAKE_STATE_DIR must be set}"
+
+case "$ARGS" in
+  "auth status")
+    exit "${FAKE_GH_AUTH_RC:-0}"
+    ;;
+  "repo view --json nameWithOwner -q .nameWithOwner")
+    printf '%s\n' "${FAKE_REPO_SLUG:-owner/repo}"
+    exit 0
+    ;;
+  "api user --jq .login")
+    printf '%s\n' "${FAKE_REVIEWER_LOGIN:-fcto}"
+    exit 0
+    ;;
+  "api user --jq .id")
+    printf '%s\n' "${FAKE_REVIEWER_ID:-12345}"
+    exit 0
+    ;;
+  "secret list --json name,updatedAt")
+    if [[ "${FAKE_SECRET_PRESENT:-0}" == "1" ]]; then
+      echo '[{"name":"CI_MIGRATE_SSH_PRIVATE_KEY","updatedAt":"2026-01-01T00:00:00Z"}]'
+    else
+      echo '[]'
+    fi
+    exit 0
+    ;;
+  "variable get PROD_SSH_HOST"*)
+    if [[ -f "$STATE/var_PROD_SSH_HOST" ]]; then
+      cat "$STATE/var_PROD_SSH_HOST"
+    else
+      printf '%s' "${FAKE_VAR_INITIAL:-}"
+    fi
+    exit 0
+    ;;
+  "api repos/"*"/environments/"*)
+    # GET (read live, both preflight AND the post-PUT read-back). Reviewer
+    # STATE lives in $STATE/env_reviewers.json as a JSON array of
+    # {type,id,login} entries -- written verbatim by the PUT branch below
+    # from whatever body the real script actually sent, so a read-back
+    # here reflects exactly what the script's own GET-then-merge produced
+    # (Sec F-4b, PR #849 review) -- this fixture never does the merging
+    # itself, only stores/echoes what it was given, same discipline as
+    # the deploy-app.sh family's own state files.
+    EXISTS=0
+    [[ -f "$STATE/env_exists" ]] && EXISTS=1
+    [[ "${FAKE_ENV_EXISTS:-0}" == "1" ]] && EXISTS=1
+    if [[ "$EXISTS" != "1" ]]; then
+      echo '{"message":"Not Found"}' >&2
+      exit 1
+    fi
+    if [[ -f "$STATE/env_reviewers.json" ]]; then
+      REVIEWERS_JSON="$(cat "$STATE/env_reviewers.json")"
+    elif [[ -n "${FAKE_ENV_REVIEWER_LOGIN:-}" ]]; then
+      REVIEWERS_JSON="$(printf '[{"type":"User","id":%s,"login":"%s"}]' "${FAKE_ENV_REVIEWER_ID:-777}" "$FAKE_ENV_REVIEWER_LOGIN")"
+    else
+      REVIEWERS_JSON="[]"
+    fi
+    # A real PUT body carries only {type,id} (never login -- see the real
+    # script's own merge logic); real GitHub resolves and returns the
+    # login server-side on the next GET. Simulate that resolution here
+    # from the two known identities this fence ever mints, so a
+    # read-back after a GET-then-merge PUT is not missing logins the
+    # real API would have filled back in.
+    python3 -c "
+import json, sys
+reviewers = json.loads(sys.argv[1])
+known = {}
+if sys.argv[2]:
+    known[int(sys.argv[2])] = sys.argv[3]
+if sys.argv[4]:
+    known[int(sys.argv[4])] = sys.argv[5]
+for r in reviewers:
+    if 'login' not in r and r.get('id') in known:
+        r['login'] = known[r['id']]
+entries = [{'reviewer': r} for r in reviewers]
+print(json.dumps({'protection_rules': [{'type': 'required_reviewers', 'reviewers': entries}]} if entries else {'protection_rules': []}))
+" "$REVIEWERS_JSON" "${FAKE_REVIEWER_ID:-}" "${FAKE_REVIEWER_LOGIN:-}" "${FAKE_ENV_REVIEWER_ID:-777}" "${FAKE_ENV_REVIEWER_LOGIN:-}"
+    exit 0
+    ;;
+  "secret set CI_MIGRATE_SSH_PRIVATE_KEY --repo "*)
+    cat > /dev/null  # consume stdin (the "private key" file content), never echoed
+    touch "$STATE/secret_set_called"
+    exit "${FAKE_SECRET_SET_RC:-0}"
+    ;;
+  "variable set PROD_SSH_HOST --repo "*)
+    if [[ "${FAKE_VAR_SET_TAKES_EFFECT:-1}" == "1" ]]; then
+      # last word is the --body value
+      printf '%s' "${*: -1}" > "$STATE/var_PROD_SSH_HOST"
+    fi
+    exit "${FAKE_VAR_SET_RC:-0}"
+    ;;
+  "api --method PUT repos/"*"--input -")
+    # Persist exactly what the real script sent (the reviewers array it
+    # computed via its own GET-then-merge) -- this fixture never re-
+    # derives or "helps" the merge; it only stores what it was given, so
+    # the fence's assertions test the REAL script's own merge logic, not
+    # this fixture's.
+    BODY="$(cat)"
+    touch "$STATE/env_exists"
+    if [[ "${FAKE_ENV_PUT_TAKES_EFFECT:-1}" == "1" ]]; then
+      python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+print(json.dumps(d.get('reviewers', [])))
+" "$BODY" > "$STATE/env_reviewers.json"
+    fi
+    echo '{}'
+    exit "${FAKE_ENV_PUT_RC:-0}"
+    ;;
+  *)
+    echo "FAKE GH: unrecognised invocation: $ARGS" >&2
+    exit 1
+    ;;
+esac

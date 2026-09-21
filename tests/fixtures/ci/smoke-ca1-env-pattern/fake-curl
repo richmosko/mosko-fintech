@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-smoke-ca1-env-pattern-strikes.sh to drive
+# scripts/smoke-ca1-env-pattern.sh's remote python driver against a
+# canned Coolify API response instead of a live box. Same shape as
+# tests/fixtures/ci/pgrst-exposure-gates/fake-curl (identical
+# PY_API_HELPER text, no -w status-code suffix -- bare JSON only).
+#
+# GET /applications resolves the provider-sync app (pfin-provider-sync).
+# $FAKE_CURL_MODE=resource-absent omits it.
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+respond() {
+  printf '%s' "$1"
+  exit 0
+}
+
+METHOD="GET"
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  prev="$a"
+done
+URL="${*: -1}"
+
+APP_UUID="dddd4444eeee5555ffff6666"
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
+  if [[ "${FAKE_CURL_MODE:-clean}" == "resource-absent" ]]; then
+    respond '[]'
+  fi
+  respond "$(printf '[{"uuid":"%s","name":"pfin-provider-sync"}]' "$APP_UUID")"
+fi
+
+respond '{}'
