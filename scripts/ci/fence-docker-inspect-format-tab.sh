@@ -1,49 +1,71 @@
 #!/usr/bin/env bash
 #
 # fence-docker-inspect-format-tab.sh -- tree-wide structural fence for the
-# #841-class defect (run-7 stop, team-lead's own brief, 2026-09-21):
-# inside a Go template, `\t` in the format string's LITERAL TEXT never
-# expands -- it passes through as the two literal characters backslash,
-# t. Only a string-literal ACTION, `{{"\t"}}`, expands to a real tab. A
-# downstream `awk -F'\t'`/`cut -f` split against that output then never
-# finds the delimiter it expects, and a `$1=="true"` (or similar) test
-# silently never matches.
+# #841-class defect (run-7 stop, team-lead's own brief, 2026-09-21;
+# widened to the general class, Sec F-1, PR #860 review): inside a Go
+# template, a backslash escape sequence in the format string's LITERAL
+# TEXT never expands -- it passes through as the two literal characters
+# backslash + the letter. Only a string-literal ACTION -- `{{"\t"}}`,
+# `{{"\n"}}` -- expands to the real control character. A downstream
+# `awk -F'\t'`/`cut -f`/line-split against that output then never finds
+# the delimiter it expects, and a `$1=="true"` (or similar) test, or a
+# per-line loop, silently never matches / never iterates.
 #
-# MEASURED live (run 7, realrun7.clean.log, team-lead's own box read):
-# scripts/smoke-pfin-exposure.sh:177's `docker inspect --format
-# '{{.State.Running}}\t{{.Id}}\t{{.Created}}'` printed the literal bytes
-# `true\t2f1e...` (confirmed via `cat -A` -- no ^I anywhere) against a
-# container that was genuinely Up, restarts=0 -- the smoke died "no
-# running container found" on a fully successful deploy. The SAME class
-# of defect this repo already found and fixed once (PR #841,
-# scripts/deploy-app.sh:441, and every scripts/smoke-*.sh sibling except
-# this one) -- this fence exists so the THIRD instance is the last one
-# found by a human reading a run log rather than by CI.
+# MEASURED live (run 7, realrun7.clean.log, team-lead's own box read;
+# re-measured locally this PR, both \t and \n, via a real container and
+# `od -c` for unambiguous byte inspection -- Sec's own independent
+# measurement agrees):
+#   docker inspect --format '{{.State.Running}}\t{{.Id}}'
+#     -> literal bytes: t r u e \ t 4 6 4 6 ...          (backslash, t)
+#   docker inspect --format '{{.State.Running}}{{"\t"}}{{.Id}}'
+#     -> t r u e <TAB> 4 6 4 6 ...                        (real tab)
+#   docker inspect --format '{{.State.Running}}\n{{.Id}}'
+#     -> literal bytes: t r u e \ n 4 6 4 6 ...          (backslash, n)
+#   docker inspect --format '{{.State.Running}}{{"\n"}}{{.Id}}'
+#     -> t r u e <LF> 4 6 4 6 ...                         (real newline)
+# scripts/smoke-pfin-exposure.sh:177's bare-\t form printed the literal
+# bytes `true\t2f1e...` against a container that was genuinely Up,
+# restarts=0 -- the smoke died "no running container found" on a fully
+# successful deploy. The SAME class of defect this repo already found
+# and fixed once for \t (PR #841, scripts/deploy-app.sh:441, and every
+# scripts/smoke-*.sh sibling except this one) -- this fence exists so a
+# future instance, of either escape, is caught by CI rather than by a
+# human reading a run log.
+#
+# ⚠ SCOPED TO \t AND \n ONLY, THE TWO MEASURED HERE -- NOT a general
+# "any backslash escape" claim. \r almost certainly behaves identically
+# (same Go text/template escape-handling mechanism) but was not
+# measured in this review; extend ESCAPES below (and re-measure) before
+# relying on this fence for \r. No live \n instance exists in this tree
+# as of this fence's own addition (swept, see CATCH CRITERION) --
+# migrator-cutover-verify.sh:156's own leg 9 already uses the CORRECT
+# `{{println .}}` idiom for its own per-line need.
 #
 # SCOPE -- `docker inspect ... --format '...'` specifically. Deliberately
 # NOT `docker ps`/`docker images`/`docker compose ... ps ... --format`:
 # team-lead's own measurement (this brief) confirms Docker's `ps`/
-# `images` formatter PRE-PROCESSES `\t` into a real tab before printing
-# (`docker inspect` does not -- it hands the format string straight to
-# Go's text/template engine with no such pre-processing). Every
-# `docker ps --format '...\t...'` site in this tree (scripts/deploy-
-# app.sh:451, scripts/smoke-pfin-exposure.sh:186, and others) is
-# therefore CORRECT as written and must stay green -- this fence does
-# not touch them; matching on the literal substring "docker inspect" is
-# what keeps them out of scope structurally, not a separate allowlist
-# that could drift.
+# `images` formatter PRE-PROCESSES these escapes into real control
+# characters before printing (`docker inspect` does not -- it hands the
+# format string straight to Go's text/template engine with no such
+# pre-processing). Every `docker ps --format '...\t...'` site in this
+# tree (scripts/deploy-app.sh:451, scripts/smoke-pfin-exposure.sh:186,
+# and others) is therefore CORRECT as written and must stay green --
+# this fence does not touch them; matching on the literal substring
+# "docker inspect" is what keeps them out of scope structurally, not a
+# separate allowlist that could drift.
 #
 # CATCH CRITERION -- for every `docker inspect` invocation in
 # `scripts/*.sh` (top-level only, matching fence-heredoc-stdin-drain.sh's
 # own scope note) that carries a `--format '<template>'`: after removing
-# every well-formed `{{"\t"}}` action (both the plain and the bash-
-# double-quote-escaped `{{\"\\t\"}}` source forms this tree's own sshx()
-# convention produces), a literal `\t` remaining anywhere in the
-# template is a violation. Positive-controlled during development: a
-# scratch copy of scripts/smoke-pfin-exposure.sh with line 177 reverted
-# to the pre-fix bare-`\t` form reddens this fence (and only this
-# fence's finding for that file); the same scratch copy re-fixed, and
-# every other scripts/*.sh file as committed, is clean.
+# every well-formed `{{"\t"}}`/`{{"\n"}}` action (both the plain and the
+# bash-double-quote-escaped `{{\"\\t\"}}`/`{{\"\\n\"}}` source forms this
+# tree's own sshx() convention produces), a literal `\t` or `\n`
+# remaining anywhere in the template is a violation. Positive-controlled
+# during development: a scratch copy of scripts/smoke-pfin-exposure.sh
+# with line 177 reverted to the pre-fix bare-`\t` form reddens this
+# fence (and only this fence's finding for that file); the same scratch
+# copy re-fixed, and every other scripts/*.sh file as committed, is
+# clean at both escapes.
 #
 # Structural / source-literal, same convention as fence-heredoc-stdin-
 # drain.sh and fence-boolean-cast-pairing.sh -- parses the tree's own
@@ -71,12 +93,14 @@ import re, sys, os
 CALL = re.compile(r"docker inspect(?:(?!--format).)*--format '([^']*)'")
 COMMENT_LINE = re.compile(r'^\s*#')
 
-# Both source forms a `--format '...'` template can carry a well-formed
-# string-literal tab action in, in this tree: the bash-double-quote-
-# escaped form sshx()'s own "..." wrapping produces (`{{\"\\t\"}}`), and
-# the plain form (`{{"\t"}}`) for a call not inside a double-quoted
-# wrapper.
-GOOD_FORMS = ['{{\\"\\\\t\\"}}', '{{"\\t"}}']
+# Sec F-1 (PR #860 review): widened from \t alone to every MEASURED
+# escape in this class. Each entry: (escape char as it appears bare in
+# the template text, the two well-formed string-literal-action source
+# forms that legitimately produce it).
+ESCAPES = [
+    ('t', ['{{\\"\\\\t\\"}}', '{{"\\t"}}']),
+    ('n', ['{{\\"\\\\n\\"}}', '{{"\\n"}}']),
+]
 
 def scan_file(path):
     with open(path) as f:
@@ -88,11 +112,12 @@ def scan_file(path):
             continue
         for m in CALL.finditer(line):
             template = m.group(1)
-            stripped = template
-            for good in GOOD_FORMS:
-                stripped = stripped.replace(good, '')
-            if '\\t' in stripped:
-                findings.append((i + 1, line.strip()))
+            for esc_char, good_forms in ESCAPES:
+                stripped = template
+                for good in good_forms:
+                    stripped = stripped.replace(good, '')
+                if '\\' + esc_char in stripped:
+                    findings.append((i + 1, esc_char, line.strip()))
     return findings
 
 root = sys.argv[1]
@@ -101,9 +126,9 @@ for fn in sorted(os.listdir(root)):
     path = os.path.join(root, fn)
     if not (os.path.isfile(path) and fn.endswith('.sh')):
         continue
-    for lineno, text in scan_file(path):
+    for lineno, esc_char, text in scan_file(path):
         any_findings = True
-        print(f"{path}:{lineno}: 'docker inspect --format' template carries a literal \\\\t outside a {{\"\\\\t\"}} string-literal action -- it will never expand to a real tab (the #841 defect class) -- {text}")
+        print(f"{path}:{lineno}: 'docker inspect --format' template carries a literal \\\\{esc_char} outside a {{\"\\\\{esc_char}\"}} string-literal action -- it will never expand to a real control character (the #841 defect class) -- {text}")
 sys.exit(1 if any_findings else 0)
 PYEOF
 
@@ -114,10 +139,10 @@ else
 fi
 
 if [[ $RC -ne 0 ]]; then
-  echo "FAIL: [docker-inspect-format-tab-treewide] one or more 'docker inspect --format' templates carry a literal, never-expanding \\t (the #841 defect class, run-7 stop). Offending site(s):" >&2
+  echo "FAIL: [docker-inspect-format-tab-treewide] one or more 'docker inspect --format' templates carry a literal, never-expanding backslash escape (\\t or \\n; the #841 defect class, run-7 stop). Offending site(s):" >&2
   printf '%s\n' "$FINDINGS" >&2
   exit 1
 fi
 
-echo "OK: [docker-inspect-format-tab-treewide] zero 'docker inspect --format' templates carry a bare, never-expanding \\t in any scripts/*.sh."
+echo "OK: [docker-inspect-format-tab-treewide] zero 'docker inspect --format' templates carry a bare, never-expanding \\t or \\n in any scripts/*.sh."
 exit 0
