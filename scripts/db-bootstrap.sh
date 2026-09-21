@@ -39,37 +39,64 @@
 # THREE PHASES
 #   Phase 1 (pre-step, supabase_admin, THIS script, scripted): roles.sql
 #     -> auth-grants.sql -> CREATE SCHEMA pfin + the engine-backstop
-#     REVOKEs -> the migrator credential handoff, FIVE legs (A-E), same
-#     shape as db-role-handoff.sh's own (that script's header has the full
-#     derivation; not re-derived here):
-#       A) \password migrator + ALTER ROLE migrator LOGIN (generate
-#          locally, deliver as a 0600 seed, never argv, never an env
-#          dump), -v ON_ERROR_STOP=1 on the psql invocation.
+#     REVOKEs -> the migrator credential handoff, FOUR legs (A/B/C/E --
+#     no leg D; see PATH A below), same B/C shape as db-role-handoff.sh's
+#     own (that script's header has the full derivation; not re-derived
+#     here):
+#       A) READ, DON'T MINT (Sec VETO-1 r2 ruling, PR #849 review --
+#          PATH A, team-lead's call). db-bootstrap no longer generates
+#          its own credential. `provision-migrator-app.sh` (step 3,
+#          BEFORE this script runs) already mint-if-absent's
+#          MIGRATOR_DB_PASSWORD into the `pfin-migrator` Coolify
+#          resource's OWN env store, AND deploys the migrator container
+#          with that value compose-interpolated into PROD_DB_URL at
+#          deploy time (`infra/supabase/migrator/docker-compose.yaml`).
+#          That deploy already happened by the time db-bootstrap runs --
+#          the RUNNING CONTAINER's own PROD_DB_URL is therefore already
+#          correct, by construction, for whatever value is in the store
+#          right now. This leg reads that SAME value (box-side, via the
+#          coolify tinker mechanism leg E already used for E -- Coolify's
+#          public API never returns a secret's real value, so this is
+#          NOT a `GET /envs` call) and sets the Postgres role's password
+#          to it via `\password migrator` + `ALTER ROLE migrator LOGIN`,
+#          -v ON_ERROR_STOP=1. REFUSES (exit 2, precondition) if the
+#          store holds no MIGRATOR_DB_PASSWORD -- run
+#          provision-migrator-app.sh first. The value never leaves the
+#          box, never touches this script's own local process, never
+#          touches argv on either side -- same seed-file discipline as
+#          before, just sourced box-side instead of generated laptop-
+#          side. What r1's mint-then-push (leg D) got backwards: minting
+#          a SECOND value and pushing it to reconcile the store is
+#          strictly redundant with just reading the ONE value that
+#          already exists and is already what the running container
+#          uses -- one authoritative source, not two reconciled after
+#          the fact. Tradeoff, stated: db-bootstrap no longer controls
+#          credential FRESHNESS -- rotation is db-role-handoff.sh's job
+#          (`--rotate`, which already pushes a new value then requires a
+#          redeploy) unchanged by this script.
 #       B) catalog verify -- rolcanlogin + pg_authid.rolpassword IS NOT
 #          NULL, re-read fresh.
 #       C) connect AS migrator over -h db (never -h localhost -- the
 #          container-internal loopback trust-path hazard db-role-
-#          handoff.sh's own header documents) with the generated
-#          credential, asserting a password prompt WAS observed, no
-#          cleartext leak, and current_user echoes back 'migrator'.
-#       D) 🔒 push the SAME credential onto the `pfin-migrator` Coolify
-#          resource's own env store as MIGRATOR_DB_PASSWORD (Sec VETO-1,
-#          PR #849 review). WITHOUT this leg, the Postgres role's actual
-#          password (this leg's PW) and the migrator container's own
-#          PROD_DB_URL (built from provision-migrator-app.sh's
-#          INDEPENDENTLY minted MIGRATOR_DB_PASSWORD -- a different random
-#          value, minted when that resource was first created) diverge:
-#          Phase 2 auth-fails, and the re-run then hits the partial-state
-#          guard below permanently (no scripted repair exists). This leg
-#          is the reconciliation -- the two values must be the SAME one,
-#          and leg A's freshly-generated PW is the one already proven live
-#          (by legs B/C) against the actual Postgres role, so it is what
-#          gets pushed, overwriting whatever provision-migrator-app.sh
-#          minted.
-#       E) hash-bound readback -- production row only (is_preview=false),
-#          exactly one match, a truncated SHA-256 of the stored value must
-#          match the same truncated hash of the credential this run
-#          generated (never the plaintext value, on either side).
+#          handoff.sh's own header documents) with the credential read
+#          in leg A, asserting a password prompt WAS observed, no
+#          cleartext leak, and current_user echoes back EXACTLY
+#          'migrator' as its own output ROW (Sec F-1b, PR #849 r2 review
+#          -- a substring `grep -qF "migrator"` over the WHOLE capture is
+#          satisfied by the prompt line itself, `Password for user
+#          migrator: `, and can never fail independently of the prompt
+#          check; fixed to match the psql output row exactly).
+#       E) Sanity re-read, box-side, both computed box-side (Sec VETO-1
+#          r2: the r1 form -- "does the store match what we just read
+#          from the store" -- was a tautology). Re-queries the store's
+#          CURRENT MIGRATOR_DB_PASSWORD (a fresh tinker read, not the
+#          leg-A value held in memory) and compares its hash against the
+#          hash of the value the ROLE was actually just set to (leg A's
+#          own PW). A mismatch means the store changed between leg A's
+#          read and this point -- e.g. a concurrent rotation -- and the
+#          role was just set to a value that is no longer what
+#          `PROD_DB_URL` will read on the NEXT deploy; refuses rather
+#          than reporting a false VERIFIED.
 #     Then the 055/116/117/118/119 role-comment files, run directly
 #     (idempotent -- each file's own guard degrades to a WARNING and
 #     reports the pre-step already ran, never a silent skip).
@@ -287,21 +314,27 @@ SQL
 REMOTE
 ok "engine-backstop REVOKEs applied"
 
-step "Phase 1: migrator credential handoff -- legs A-E, same shape as scripts/db-role-handoff.sh's own (generate locally, deliver as a 0600 seed, never argv, never an env dump; see this script's own header for what each leg proves and why leg D is Sec-mandatory)"
-PW="$(openssl rand -hex 32)"
-[[ ${#PW} -eq 64 ]] || die "generated credential is ${#PW} chars, expected 64 -- refusing to proceed with a malformed value."
-SEED_FILE="/root/.pfin/_dbbootstrap_migrator_seed.$$.env"
-printf '%s' "$PW" | sshx "umask 077; mkdir -p /root/.pfin; cat > $SEED_FILE"
-unset PW
-sshx "env STACK_UUID=\"$STACK_UUID\" MIGRATOR_UUID=\"$MIGRATOR_UUID\" SEED_FILE=\"$SEED_FILE\" bash -s" <<'REMOTE'
+step "Phase 1: migrator credential handoff -- legs A/B/C/E (no leg D; PATH A, Sec VETO-1 r2 ruling -- read the existing credential from pfin-migrator's own env store, never mint a second one). See this script's own header for the full derivation."
+sshx "env STACK_UUID=\"$STACK_UUID\" MIGRATOR_UUID=\"$MIGRATOR_UUID\" bash -s" <<'REMOTE'
 set -e
 umask 077
-trap 'shred -u "$SEED_FILE" 2>/dev/null || rm -f "$SEED_FILE"' EXIT
-PW="$(cat "$SEED_FILE")"
-[ -n "$PW" ] || { echo "FATAL: seed file read as empty -- refusing to proceed." >&2; exit 1; }
-[ "${#PW}" -eq 64 ] || { echo "FATAL: seed file credential is ${#PW} chars, expected 64." >&2; exit 1; }
 
-echo "== A. \\password migrator + ALTER ROLE ... LOGIN =="
+echo "== A. Reading the existing MIGRATOR_DB_PASSWORD from pfin-migrator's own env store (box-side; Coolify's public API never returns a secret's real value, so this uses the same tinker mechanism leg E's readback already relies on -- never a GET /envs call) =="
+PW="$(docker exec coolify php artisan tinker --execute="
+\$app = \App\Models\Application::where('uuid','$MIGRATOR_UUID')->firstOrFail();
+\$row = \$app->environment_variables()->where('key', 'MIGRATOR_DB_PASSWORD')->where('is_preview', false)->first();
+echo \$row ? (string) \$row->value : '';
+" 2>/dev/null | tail -1 | tr -d ' \n')"
+if [ -z "$PW" ]; then
+  echo "FATAL: pfin-migrator's env store holds no MIGRATOR_DB_PASSWORD (is_preview=false) -- run scripts/provision-migrator-app.sh first (it mint-if-absent's this value, and deploys the container with it already compose-interpolated into PROD_DB_URL)." >&2
+  exit 2
+fi
+if [ "${#PW}" -ne 64 ]; then
+  echo "FATAL: the store's MIGRATOR_DB_PASSWORD is ${#PW} chars, expected 64 (provision-migrator-app.sh mints via token_hex(32)) -- refusing to use a malformed value." >&2
+  exit 2
+fi
+
+echo "== A. \\password migrator + ALTER ROLE ... LOGIN, using the value just read (never generated here) =="
 PSQL_SCRIPT="$(printf '\\password migrator\n%s\n%s\nALTER ROLE migrator LOGIN;\n' "$PW" "$PW")"
 # set +e / set -e bracket the assignment deliberately -- under the
 # outer `set -e`, a plain `OUT="$(cmd)"` where cmd exits non-zero kills
@@ -351,66 +384,19 @@ if [ $CONNECT_RC -ne 0 ]; then
   echo "FATAL: could not connect AS migrator with the generated credential (exit $CONNECT_RC) -- the handoff did not take effect end to end." >&2
   exit 1
 fi
-if ! printf '%s' "$CONNECT_OUT" | grep -qF "migrator"; then
-  echo "FATAL: connected but current_user did not echo back 'migrator'." >&2
+# Sec F-1b (PR #849 r2 review): match the psql output ROW exactly, not a
+# substring of the WHOLE capture -- a bare `grep -qF "migrator"` is
+# already satisfied by the prompt line itself ("Password for user
+# migrator: "), so it could never fail independently of the prompt
+# check above. Anchored to a whitespace-tolerant EXACT row match instead
+# (psql's own column output pads with leading/trailing spaces).
+if ! printf '%s' "$CONNECT_OUT" | grep -qE '^[[:space:]]*migrator[[:space:]]*$'; then
+  echo "FATAL: connected but current_user did not echo back 'migrator' as its own output row." >&2
   exit 1
 fi
 echo "OK: connected AS migrator over a non-loopback, password-prompted path with the generated credential; current_user confirmed."
 
-echo "== D. Pushing the SAME credential onto pfin-migrator's env store as MIGRATOR_DB_PASSWORD (Sec VETO-1, PR #849 review -- see this script's own header) =="
-TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-python3 - "$TOKEN" "$MIGRATOR_UUID" "$SEED_FILE" <<'PYEOF'
-import json, subprocess, sys, tempfile, os
-
-token, resource_uuid, seed_file = sys.argv[1], sys.argv[2], sys.argv[3]
-
-def die(msg):
-    print(f"FAIL: {msg}", file=sys.stderr)
-    sys.exit(1)
-
-def api(method, path, body=None):
-    if '"' in token or "\n" in token:
-        die("Coolify API token contains an unexpected character -- refusing")
-    config = 'header = "Authorization: Bearer ' + token + '"\n'
-    tmppath = None
-    cmd = ["curl", "-sS", "-K", "-", "-X", method, "-w", "\n%{http_code}"]
-    if body is not None:
-        fd, tmppath = tempfile.mkstemp(prefix="pfin-dbbootstrap-body-")
-        os.write(fd, body.encode())
-        os.close(fd)
-        cmd += ["-H", "Content-Type: application/json", "--data-binary", f"@{tmppath}"]
-    cmd += [f"http://localhost:8000/api/v1{path}"]
-    try:
-        result = subprocess.run(cmd, input=config.encode(), capture_output=True)
-    finally:
-        if tmppath:
-            os.unlink(tmppath)
-    if result.returncode != 0:
-        die(f"Coolify API {method} {path} failed: curl exit {result.returncode} ({result.stderr.decode(errors='replace').strip()[:200]})")
-    raw = result.stdout.decode()
-    out, _, code = raw.rpartition("\n")
-    if not code.isdigit():
-        die("could not parse an HTTP status code off curl's own -w output")
-    status = int(code)
-    if not (200 <= status < 300):
-        die(f"Coolify API {method} {path} -> HTTP {status}: {out.strip()[:500]}")
-    return json.loads(out) if out.strip() else None
-
-# Same shape as db-role-handoff.sh's own leg D -- the value is read from
-# the seed file's PATH (a non-secret argument), never from this process's
-# own argv.
-with open(seed_file) as f:
-    pw = f.read()
-if len(pw) != 64:
-    die(f"seed file credential is {len(pw)} chars, expected 64 -- refusing to push a malformed value")
-
-api("PATCH", f"/applications/{resource_uuid}/envs/bulk", json.dumps({"data": [
-    {"key": "MIGRATOR_DB_PASSWORD", "value": pw},
-]}))
-print("PATCHED MIGRATOR_DB_PASSWORD onto pfin-migrator (value never printed).")
-PYEOF
-
-echo "== E. Hash-bound readback -- production row only, exactly one match, bound to the ACTUAL generated credential (never the value itself) =="
+echo "== E. Sanity re-read (Sec VETO-1 r2 review) -- the store's CURRENT MIGRATOR_DB_PASSWORD must still hash-match the value the role was just set to; a mismatch means the store changed between leg A's read and now (e.g. a concurrent rotation), and the role would be set to a value that will NOT be what the next deploy's PROD_DB_URL reads =="
 EXPECTED_HASH="$(printf '%s' "$PW" | sha256sum | cut -c1-16)"
 READBACK_OUT="$(docker exec coolify php artisan tinker --execute="
 \$app = \App\Models\Application::where('uuid','$MIGRATOR_UUID')->firstOrFail();
@@ -424,12 +410,12 @@ if [ "$READBACK_COUNT" != "1" ]; then
   exit 1
 fi
 if [ "$READBACK_HASH" != "$EXPECTED_HASH" ]; then
-  echo "FATAL: MIGRATOR_DB_PASSWORD is present (one production row) but its truncated hash does not match the credential this run generated -- the store holds a DIFFERENT value than what was pushed. Refusing. (Hash only -- neither value is ever read back or printed.)" >&2
+  echo "FATAL: the store's CURRENT MIGRATOR_DB_PASSWORD no longer hash-matches the value the migrator role was just set to (leg A's own read) -- it changed between the initial read and now. Refusing rather than reporting a false VERIFIED against a value the next deploy will not actually use." >&2
   exit 1
 fi
-echo "OK: MIGRATOR_DB_PASSWORD present on pfin-migrator (production row, exactly one match), hash-bound to the generated credential confirmed (value never printed)."
+echo "OK: the store's current MIGRATOR_DB_PASSWORD still hash-matches what the role was set to -- no drift between read and set (value never printed)."
 REMOTE
-ok "migrator: LOGIN + password set; MIGRATOR_DB_PASSWORD pushed to pfin-migrator and hash-verified"
+ok "migrator: LOGIN + password set from pfin-migrator's own existing MIGRATOR_DB_PASSWORD (read, not minted); sanity re-read confirms no drift"
 
 step "Phase 1: role-comment files (055/116/117/118/119, run directly -- idempotent, each file's own guard degrades to a WARNING on a pre-existing role, never a silent skip)"
 for f in 055_pfin_etl_role 116_pfin_provider_sync_role 117_pfin_etl_role_comment_c1_reattribution 118_migrator_role 119_migrator_role_comment_amendment3_recitation; do
