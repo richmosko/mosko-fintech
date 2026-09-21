@@ -121,9 +121,49 @@
 # empty). That path is NOT built here -- it is a rare, destructive,
 # judgment-laden recovery action, not a first-bootstrap step. This
 # script's own preflight detects "already bootstrapped" (bootstrap_complete
-# = t) and reports success as a no-op; it detects "partially bootstrapped"
+# = true) and reports success as a no-op; it detects "partially bootstrapped"
 # (some but not all of Phase 1/2/3 landed) and REFUSES rather than
 # guessing which repair path applies.
+#
+# MEASURED BLAST RADIUS OF THE bootstrap_complete PREDICATE BUG
+# (team-lead's live --from standup run, main d44a19b0, 2026-09-21) -- the
+# `t` vs `true` mismatch (see BOOTSTRAP_COMPLETE below) plus the
+# `|| echo 'f'` fail-open meant a database bootstrapped since 2026-09-19
+# read as "not bootstrapped" on BOTH the preflight AND the --apply call,
+# and the --apply call proceeded to actually re-run against it. What
+# that one live run actually did, recorded here so a future incident
+# doesn't have to re-derive it from scratch: Phase 1 re-ran roles.sql,
+# auth-grants.sql, the engine-backstop REVOKEs, and the 055/116/117/
+# 118/119 role-comment files -- every one an idempotent NOTICE-skip
+# against the pre-existing objects, no schema change. The migrator
+# credential handoff's leg A (`\password migrator`) reset the role's
+# password to the SAME value already in the Coolify store (leg A always
+# runs unconditionally by design -- PATH A, Sec VETO-1 r2 ruling -- so
+# this part is not new exposure, just an unnecessary repeat). What
+# actually happened at leg B onward and at Phase 2 is a SEPARATE,
+# independently-found defect (Sec VETO-1, PR #854 review), corrected in
+# the same PR as this predicate fix: a `docker compose exec -T` call
+# inside a heredoc-fed remote `bash -s` block without a stdin redirect
+# DRAINS the rest of that heredoc's own bytes, so leg B's own catalog-
+# verify comparison, ALL of leg C (the trust-path detection), and leg E
+# (the store-drift readback) never actually ran that day -- the log shows
+# neither leg B's own OK/FATAL line nor leg C's/E's banners anywhere,
+# even though the outer script still printed its "sanity re-read confirms
+# no drift" success line (false: no re-read happened). Phase 2's own
+# `supabase db push` call has the identical defect -- its completion-line
+# check never ran either, so "reported a no-op" could not actually be
+# confirmed from that log; only that the outer script printed "migration
+# sweep applied" regardless of what the push itself did. No data is known
+# to have been lost or corrupted, but this MEASURED BLAST RADIUS note
+# should be read as "what the outer script printed", not "what was
+# verified" for everything from leg B onward in that run. The run then
+# genuinely FAILED at Phase 2 verify, because bootstrap_complete was
+# STILL misread as false even after Phase 1/2 ran -- which is what
+# surfaced the ORIGINAL predicate bug, independent of the stdin-drain
+# defect. The fix below addresses both: not doing unnecessary re-apply
+# work on every re-run, refusing cleanly instead of guessing on a failed
+# read, AND (see legs B/Phase-2-push below) not silently skipping the
+# checks that would have caught either problem.
 #
 # USAGE
 #   scripts/db-bootstrap.sh              # preflight: read-only, prints the plan
@@ -132,7 +172,7 @@
 #   BOX_IP is read from .env (script-written by provision-vps.sh --apply).
 #
 # EXIT CODES
-#   0  VERIFIED -- bootstrap_complete = t, the ownership census shows
+#   0  VERIFIED -- bootstrap_complete = true, the ownership census shows
 #      every pfin object owned by pfin_owner (zero postgres/migrator-
 #      owned), and Phase 3's own assertion (the decrypt-view file itself)
 #      exited 0.
@@ -245,30 +285,96 @@ ok "stack: $STACK_APP_NAME -> $STACK_UUID; migrator: $MIGRATOR_APP_NAME -> $MIGR
 
 psql_admin() {
   # psql_admin <sql> -- runs one statement/script as supabase_admin inside the db service, -tAc form for scalar reads.
+  # `</dev/null` (Sec VETO-1 / team-lead's tree-wide follow-up, PR #854) --
+  # this exec is the LAST line of its own heredoc today, so nothing
+  # currently gets drained by it, but that is a position-dependent
+  # accident, not a guarantee -- a future line added after it inside this
+  # same heredoc would silently reacquire the exact defect this PR fixes
+  # elsewhere. Redirect defensively, unconditionally.
   sshx "env STACK_UUID=\"$STACK_UUID\" bash -s" <<REMOTE
 set -e
-docker compose --project-name "\$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc "$1"
+docker compose --project-name "\$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc "$1" </dev/null
 REMOTE
 }
 
+# read_gate <description-for-errors> <sql> -- team-lead's live --from
+# standup finding, 2026-09-21: the OLD bootstrap_complete read used
+# `2>/dev/null | tr -d ' \n' || echo 'f'` -- a FAILED read (psql/ssh/
+# docker error) was silently converted into the specific answer "not
+# bootstrapped", which this script then trusted and proceeded to a full
+# Phase 1->3 re-apply against an already-bootstrapped, live database. A
+# failed read is UNKNOWN, never a specific value -- this helper refuses
+# immediately (exit 2) rather than ever falling through to a caller with
+# a guessed answer. Every gating read in this script goes through this,
+# not just the one team-lead's brief named -- a fail-open here is the
+# SAME defect class regardless of which read it sits on.
+read_gate() {
+  # Sec N-1 (PR #854 review), two fixes:
+  # (a) stderr is captured SEPARATELY from stdout via a temp file, not
+  #     folded into $out with `2>&1` -- benign stderr on a SUCCESSFUL
+  #     read (ssh's own "Warning: Permanently added ... to the list of
+  #     known hosts" on a first connect under
+  #     StrictHostKeyChecking=accept-new, or a docker compose WARN line)
+  #     would otherwise become part of the parsed VALUE and trip this
+  #     function's own caller-side parse guards -- a new refusal path on
+  #     the success case the fix did not require. Diagnostic text stays
+  #     available for the die2 message on the failure path either way.
+  # (b) `if out=$(cmd); then rc=0; else rc=$?; fi`, never `set +e; ...;
+  #     set -e` -- the exact pattern flagged as this PR's own defect #4
+  #     in provision.sh (an unconditional `set -e` at a helper's end
+  #     flips errexit back ON if the CALLER had it off). No live call
+  #     site of read_gate is currently inside such a bracket, so this was
+  #     latent, not exploitable -- fixed anyway since the cost is zero
+  #     and it is the exact trap already found and fixed once this PR.
+  local desc="$1" sql="$2" out err_file err rc
+  err_file="$(mktemp)"
+  if out="$(psql_admin "$sql" 2>"$err_file")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  err="$(cat "$err_file")"
+  rm -f "$err_file"
+  if [[ "$rc" -ne 0 ]]; then
+    die2 "could not read $desc (rc=$rc): $err -- refusing to guess; this state is UNKNOWN, never treated as a specific value."
+  fi
+  printf '%s' "$out" | tr -d ' \n'
+}
+
 step "Preflight: migrator credential state (query per archive §6.3 -- the branch-gate, not a guess)"
-MIGRATOR_STATE="$(psql_admin "select r.rolcanlogin::text || '|' || (a.rolpassword is not null)::text from pg_catalog.pg_roles r join pg_catalog.pg_authid a on a.rolname = r.rolname where r.rolname = 'migrator';" | tr -d ' \n')"
+# Sec measurement, 2026-09-21 (reproduced locally against a throwaway
+# initdb instance before shipping this fix, not just trusted): an
+# explicit `::text` cast on a boolean value or expression -- as EVERY
+# query in this file uses, for concatenation -- prints the LITERAL
+# WORDS "true"/"false", never the abbreviated "t"/"f" a bare boolean
+# COLUMN's own psql rendering would show. The comparisons below used to
+# read "t"/"f"/"t|t" and so never matched a real "true"/"false" answer,
+# on EVERY query in this file that casts a boolean, not just the one
+# team-lead's brief measured -- fixed uniformly here.
+MIGRATOR_STATE="$(read_gate "migrator credential state" "select r.rolcanlogin::text || '|' || (a.rolpassword is not null)::text from pg_catalog.pg_roles r join pg_catalog.pg_authid a on a.rolname = r.rolname where r.rolname = 'migrator';")"
+if [[ -n "$MIGRATOR_STATE" && ! "$MIGRATOR_STATE" =~ ^(true|false)\|(true|false)$ ]]; then
+  die2 "migrator credential state read returned unparseable output ('$MIGRATOR_STATE') -- refusing to guess; expected empty (role absent) or a 'true|false'-shaped pair."
+fi
 info "migrator rolcanlogin|password_set = '${MIGRATOR_STATE:-<role absent>}'"
 
 step "Preflight: bootstrap_complete (a row exists for migration 118 -- never a bare row count)"
-BOOTSTRAP_COMPLETE="$(psql_admin "select exists(select 1 from supabase_migrations.schema_migrations where version = '118')::text;" 2>/dev/null | tr -d ' \n' || echo 'f')"
-info "bootstrap_complete = ${BOOTSTRAP_COMPLETE:-f}"
+BOOTSTRAP_COMPLETE="$(read_gate "bootstrap_complete" "select exists(select 1 from supabase_migrations.schema_migrations where version = '118')::text;")"
+if [[ "$BOOTSTRAP_COMPLETE" != "true" && "$BOOTSTRAP_COMPLETE" != "false" ]]; then
+  die2 "bootstrap_complete read returned unparseable output ('$BOOTSTRAP_COMPLETE') -- refusing to guess; expected exactly 'true' or 'false'."
+fi
+info "bootstrap_complete = $BOOTSTRAP_COMPLETE"
 
-if [[ "$BOOTSTRAP_COMPLETE" == "t" ]]; then
+if [[ "$BOOTSTRAP_COMPLETE" == "true" ]]; then
   step "Already bootstrapped -- verifying the ownership census before reporting VERIFIED"
-  CENSUS_BAD="$(psql_admin "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and pg_get_userbyid(c.relowner) not in ('pfin_owner');" | tr -d ' \n')"
-  [[ "$CENSUS_BAD" == "0" ]] || die "bootstrap_complete=t but the ownership census shows $CENSUS_BAD non-pfin_owner-owned pfin object(s) -- the pfin_owner sweep broke somewhere. Investigate by hand; this script does not auto-repair an ownership mismatch."
+  CENSUS_BAD="$(read_gate "ownership census" "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and pg_get_userbyid(c.relowner) not in ('pfin_owner');")"
+  [[ "$CENSUS_BAD" =~ ^[0-9]+$ ]] || die2 "ownership census read returned unparseable output ('$CENSUS_BAD') -- refusing to guess; expected a non-negative integer."
+  [[ "$CENSUS_BAD" == "0" ]] || die "bootstrap_complete=true but the ownership census shows $CENSUS_BAD non-pfin_owner-owned pfin object(s) -- the pfin_owner sweep broke somewhere. Investigate by hand; this script does not auto-repair an ownership mismatch."
   ok "ownership census clean (zero non-pfin_owner-owned pfin objects) -- VERIFIED, nothing to do"
   exit 0
 fi
 
-if [[ "$MIGRATOR_STATE" == "t|t" ]]; then
-  die "migrator already has LOGIN + a password set, but bootstrap_complete=f -- a PARTIAL bootstrap state (Phase 1's credential step ran, but migration 118 never landed). This script refuses to guess whether Phase 2 needs a re-run or something else broke; investigate by hand (see docs/archive/deployment-runbook-rationale-2026-09-20.md §6.3's own recovery guidance) before re-running."
+if [[ "$MIGRATOR_STATE" == "true|true" ]]; then
+  die "migrator already has LOGIN + a password set, but bootstrap_complete=false -- a PARTIAL bootstrap state (Phase 1's credential step ran, but migration 118 never landed). This script refuses to guess whether Phase 2 needs a re-run or something else broke; investigate by hand (see docs/archive/deployment-runbook-rationale-2026-09-20.md §6.3's own recovery guidance) before re-running."
 fi
 
 if [[ "$APPLY" -eq 0 ]]; then
@@ -376,14 +482,31 @@ if printf '%s' "$OUT" | grep -qi "didn't match"; then echo "FATAL: password conf
 echo "OK: migrator credential handoff completed (exit 0, no mismatch, no cleartext echo)."
 
 echo "== B. Catalog verify (rolcanlogin + pg_authid.rolpassword IS NOT NULL, re-read fresh) =="
+# ⚠ `</dev/null` is load-bearing, not cosmetic (Sec VETO-1, PR #854
+# review, live-confirmed against team-lead's own 2026-09-21 run). This
+# remote script is fed to `bash -s` on ssh's OWN stdin, and `docker
+# compose exec -T` ATTACHES and DRAINS stdin -- without the redirect,
+# THIS call eats the rest of this heredoc's bytes before bash ever reads
+# them, bash hits EOF and exits 0, and everything after it (leg B's own
+# comparison below, ALL of leg C's trust-path detection, and leg E's
+# store-drift readback) silently never runs, while the OUTER script still
+# prints its own "ok" success line. Measured live: realrun3.log prints
+# the "== B." banner below, then NEITHER this leg's own OK/FATAL line NOR
+# leg C's "== C." banner NOR leg E's readback line appear anywhere, yet
+# the outer script's "migrator: LOGIN + password set ... sanity re-read
+# confirms no drift" line still printed -- a false OK, not a caught
+# failure. Same defect class as mint-supabase-jwt-keys.sh's 2026-09-11
+# item (2a). Every `docker compose exec -T` inside a heredoc-fed remote
+# block needs this, whether or not the command itself reads stdin --
+# docker drains it regardless (measured).
 VERIFY="$(docker compose --project-name "$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc \
-  "select rolcanlogin::text || '|' || (select (rolpassword is not null)::text from pg_authid where rolname='migrator') from pg_roles where rolname='migrator';")"
+  "select rolcanlogin::text || '|' || (select (rolpassword is not null)::text from pg_authid where rolname='migrator') from pg_roles where rolname='migrator';" </dev/null)"
 VERIFY_TRIMMED="$(printf '%s' "$VERIFY" | tr -d ' \n')"
-if [ "$VERIFY_TRIMMED" != "t|t" ]; then
-  echo "FATAL: post-handoff catalog verify expected 't|t' (rolcanlogin|has_password), got '$VERIFY_TRIMMED'." >&2
+if [ "$VERIFY_TRIMMED" != "true|true" ]; then
+  echo "FATAL: post-handoff catalog verify expected 'true|true' (rolcanlogin|has_password), got '$VERIFY_TRIMMED'." >&2
   exit 1
 fi
-echo "OK: catalog confirms rolcanlogin=t and a password is set."
+echo "OK: catalog confirms rolcanlogin=true and a password is set."
 
 echo "== C. Connect AS migrator over a non-loopback path with the generated credential (-h db, never -h localhost -- see db-role-handoff.sh's own header for the container-internal trust-path hazard this avoids; UNMEASURED on the production target, same bound as that script states) =="
 set +e
@@ -454,8 +577,18 @@ set -e
 # `OUT="$(cmd)"` under `set -e` would kill this script at the assignment
 # on a genuine push failure, before RC=$? and echo "$OUT" (the actual
 # supabase/docker error text) are ever reached.
+# ⚠ `</dev/null` is load-bearing, not cosmetic (Sec VETO-1, PR #854
+# review, live-confirmed against team-lead's own 2026-09-21 run). This
+# remote script is fed to `bash -s` on ssh's OWN stdin, and `docker
+# compose exec -T` ATTACHES and DRAINS stdin -- without the redirect,
+# THIS call eats the rest of this heredoc's bytes, bash hits EOF and
+# exits 0, and the RC check + completion-line grep below silently never
+# run. Measured live: realrun3.log never contains "Finished supabase db
+# push" anywhere, yet the outer script's "ok migration sweep applied"
+# line still printed -- the check that would have told a no-op apart
+# from a genuinely failed push never executed at all.
 set +e
-OUT="$(docker compose --project-name "$MIGRATOR_UUID" exec -T migrator sh -c 'supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace' 2>&1)"
+OUT="$(docker compose --project-name "$MIGRATOR_UUID" exec -T migrator sh -c 'supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace' </dev/null 2>&1)"
 RC=$?
 set -e
 echo "$OUT"
@@ -468,17 +601,19 @@ REMOTE
 ok "migration sweep applied"
 
 step "Phase 2 verify: ownership census + bootstrap_complete (never a bare ledger row count -- the archive's own stated trap)"
-CENSUS_BAD="$(psql_admin "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and pg_get_userbyid(c.relowner) not in ('pfin_owner');" | tr -d ' \n')"
+CENSUS_BAD="$(read_gate "ownership census" "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and pg_get_userbyid(c.relowner) not in ('pfin_owner');")"
+[[ "$CENSUS_BAD" =~ ^[0-9]+$ ]] || die2 "ownership census read returned unparseable output ('$CENSUS_BAD') -- refusing to guess; expected a non-negative integer."
 [[ "$CENSUS_BAD" == "0" ]] || die "ownership census shows $CENSUS_BAD non-pfin_owner-owned pfin object(s) after Phase 2 -- the pair broke somewhere in the apply. Do NOT proceed to Phase 3/§7; do not paper over it with a manual ALTER ... OWNER TO."
 ok "ownership census clean"
-BOOTSTRAP_COMPLETE="$(psql_admin "select exists(select 1 from supabase_migrations.schema_migrations where version = '118')::text;" | tr -d ' \n')"
-[[ "$BOOTSTRAP_COMPLETE" == "t" ]] || die "bootstrap_complete=f after Phase 2 (no ledger row for migration 118) -- the apply did not actually land 118. Investigate before Phase 3."
-ok "bootstrap_complete = t"
+BOOTSTRAP_COMPLETE="$(read_gate "bootstrap_complete" "select exists(select 1 from supabase_migrations.schema_migrations where version = '118')::text;")"
+[[ "$BOOTSTRAP_COMPLETE" == "true" || "$BOOTSTRAP_COMPLETE" == "false" ]] || die2 "bootstrap_complete read returned unparseable output ('$BOOTSTRAP_COMPLETE') -- refusing to guess; expected exactly 'true' or 'false'."
+[[ "$BOOTSTRAP_COMPLETE" == "true" ]] || die "bootstrap_complete=false after Phase 2 (no ledger row for migration 118) -- the apply did not actually land 118. Investigate before Phase 3."
+ok "bootstrap_complete = true"
 
 step "Phase 3 (post-step, supabase_admin): post-step-vault-view.sql -- creates pfin.decrypted_source_credential, transfers to pfin_owner, asserts exactly one decrypt view (its own assertion IS the pass/fail signal, not re-implemented here)"
 psql_admin_file "$REPO_ROOT/supabase/post-step-vault-view.sql" || die "supabase/post-step-vault-view.sql failed (its own assertion block is the failure signal -- see the output above for which leg)"
 ok "post-step-vault-view.sql applied and self-asserted"
 
 step "Done"
-info "Phase 1 -> 2 -> 3 complete: bootstrap_complete=t, ownership census clean, decrypt view asserted by its own file. §6.1/§6.2 worker-role handoffs (scripts/db-role-handoff.sh) are the next step, unchanged."
+info "Phase 1 -> 2 -> 3 complete: bootstrap_complete=true, ownership census clean, decrypt view asserted by its own file. §6.1/§6.2 worker-role handoffs (scripts/db-role-handoff.sh) are the next step, unchanged."
 exit 0

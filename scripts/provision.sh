@@ -616,9 +616,110 @@ run_db_bootstrap() { bash "$SCRIPTS/db-bootstrap.sh" ${1:+--apply}; }
 
 run_pgrst_gates() { bash "$SCRIPTS/pgrst-exposure-gates.sh"; }
 
+# live_done_pgrst_flip -- db-bootstrap-fix follow-up, 2026-09-21:
+# coolify-env.sh's own `set` action has NO "already matches, skip" check
+# at all -- its Step 4 preflight read is purely informational (prints the
+# current value, changes nothing), and Step 5 (`--apply`) unconditionally
+# PATCHes, then (with `--deploy`, which THIS caller always passes) always
+# redeploys the whole pfin-supabase-stack, even when PGRST_DB_SCHEMAS is
+# already exactly the desired value. Same "always mutates on re-run"
+# defect class as standup's/db-bootstrap's own fixes this same PR, on a
+# lower-stakes but real target: every re-run of `provision.sh --from
+# pgrst-flip` (or a full run past an already-flipped box) triggers a full
+# stack redeploy for no reason. Reuses coolify-env.sh's own Step-4
+# preflight-read OUTPUT (never a second, divergent Coolify API call) --
+# same "reuse the existing script's own live check" discipline as
+# live_done_standup/live_done_provision_resources above. A non-zero rc or
+# an unparseable read is "unknown", never treated as done (falls through
+# to the real call, safe either way -- PATCHing an already-correct value
+# is a no-op on the store side, just not a free one).
+#
+# Sec C-1 (PR #854 review) -- the STORE read alone is not sufficient and
+# was a real gap, not a style nit: PostgREST reads PGRST_DB_SCHEMAS from
+# its OWN environment at CONTAINER START, so a store-correct-but-not-
+# redeployed box would report VERIFIED here while the RUNNING container
+# still served the previous schema set -- backwards on the direction
+# that matters (a NARROWED exposure that never actually took effect
+# would read as "already flipped", the opposite of fail-closed). Fixed
+# by requiring BOTH the store AND the running container to match before
+# reporting done -- scripts/pgrst-schemas-live-check.sh does the
+# container-side half (reusing scripts/ci/fence-pgrst-schemas-live.sh's
+# own exact-string, order-sensitive comparison, the same shape
+# coolify-env.sh's own header already documents as the correct
+# `--post-check` probe for this exact value, extracted so this done-
+# predicate can call it BEFORE deciding whether to apply, not only
+# after). The container check only runs once the store already looks
+# correct -- if the store itself doesn't match, we already know we're
+# not done and the container's state is moot.
+PGRST_SCHEMAS_DESIRED="public,graphql_public,pfin"
+PGRST_FLIP_LIVE_DONE=""
+live_done_pgrst_flip() {
+  if [[ -z "$PGRST_FLIP_LIVE_DONE" ]]; then
+    if ! require_box_ip; then
+      PGRST_FLIP_LIVE_DONE="unknown"
+    else
+      local out rc current container_rc
+      # `if out=$(cmd); then rc=0; else rc=$?; fi` deliberately, NOT
+      # `set +e; out=$(cmd); rc=$?; set -e` -- this helper is called from
+      # run_pgrst_flip while INSIDE the main loop's own `set +e; run_step
+      # ...; set -e` bracket (preflight call), where the ambient errexit
+      # state is already OFF. An unconditional `set -e` at the end of
+      # THIS helper would flip it back ON mid-bracket -- bash's errexit is
+      # shell-wide, not scoped to a function -- so the very next bare
+      # command in run_pgrst_flip (the real coolify-env.sh call, once this
+      # returns "not done") would abort the ENTIRE provision.sh process on
+      # a non-zero exit instead of returning it to the caller (caught by
+      # this file's own fence, live --dry-run against the fence's fake
+      # scripts: the process hard-stopped mid-run with no further output
+      # or exit-code handling at all). Testing the assignment as an `if`
+      # condition captures $? without ever touching global errexit state.
+      if out="$(bash "$SCRIPTS/coolify-env.sh" set pfin-supabase-stack "PGRST_DB_SCHEMAS=$PGRST_SCHEMAS_DESIRED" 2>&1)"; then
+        rc=0
+      else
+        rc=$?
+      fi
+      if [[ "$rc" -ne 0 ]]; then
+        info "coolify-env.sh preflight read for pgrst-flip exited non-zero (rc=$rc) -- pgrst-flip live state is UNKNOWN, not blocking (never treated as confirmed done)" >&2
+        PGRST_FLIP_LIVE_DONE="unknown"
+      else
+        current="$(printf '%s\n' "$out" | grep -E '^[[:space:]]*PGRST_DB_SCHEMAS=' | tail -1 | cut -d= -f2-)"
+        if [[ "$current" != "$PGRST_SCHEMAS_DESIRED" ]]; then
+          PGRST_FLIP_LIVE_DONE=0
+        else
+          # Store matches -- Sec C-1: that alone does not prove the
+          # RUNNING container serves this value (PostgREST reads it at
+          # container start, not live from the store). Same `if cmd;
+          # then rc=0; else rc=$?; fi` discipline as the store read above
+          # -- this is also called from inside the caller's own set+e
+          # bracket.
+          if bash "$SCRIPTS/pgrst-schemas-live-check.sh"; then
+            container_rc=0
+          else
+            container_rc=$?
+          fi
+          if [[ "$container_rc" -eq 0 ]]; then
+            PGRST_FLIP_LIVE_DONE=1
+          elif [[ "$container_rc" -eq 1 ]]; then
+            info "store's PGRST_DB_SCHEMAS matches, but the RUNNING rest container serves a different value -- not done until a redeploy actually takes effect." >&2
+            PGRST_FLIP_LIVE_DONE=0
+          else
+            info "pgrst-schemas-live-check.sh could not even attempt the container read (rc=$container_rc) -- pgrst-flip live state is UNKNOWN, not blocking (never treated as confirmed done)" >&2
+            PGRST_FLIP_LIVE_DONE="unknown"
+          fi
+        fi
+      fi
+    fi
+  fi
+  [[ "$PGRST_FLIP_LIVE_DONE" == "1" ]]
+}
+
 run_pgrst_flip() {
   require_box_ip || return 2
-  bash "$SCRIPTS/coolify-env.sh" set pfin-supabase-stack PGRST_DB_SCHEMAS=public,graphql_public,pfin ${1:+--apply --deploy}
+  if live_done_pgrst_flip; then
+    ok "pgrst-flip: PGRST_DB_SCHEMAS already = $PGRST_SCHEMAS_DESIRED on pfin-supabase-stack -- VERIFIED without a PATCH or redeploy"
+    return 0
+  fi
+  bash "$SCRIPTS/coolify-env.sh" set pfin-supabase-stack "PGRST_DB_SCHEMAS=$PGRST_SCHEMAS_DESIRED" ${1:+--apply --deploy}
 }
 
 run_migrator_app() { require_box_ip || return 2; bash "$SCRIPTS/provision-migrator-app.sh" ${1:+--apply}; }
@@ -651,8 +752,64 @@ run_secrets() { require_box_ip || return 2; bash "$SCRIPTS/push-production-secre
 
 run_mint_jwt() { require_box_ip || return 2; bash "$SCRIPTS/mint-supabase-jwt-keys.sh" ${1:+--apply --app-name pfin-app --verify-live}; }
 
-run_etl_role()             { require_box_ip || return 2; bash "$SCRIPTS/db-role-handoff.sh" pfin_etl ${1:+--apply}; }
-run_provider_sync_role()   { require_box_ip || return 2; bash "$SCRIPTS/db-role-handoff.sh" pfin_provider_sync ${1:+--apply}; }
+# handoff_adopt_check <role> -- true if db-role-handoff.sh's own preflight
+# reports EXACTLY the (LOGIN + password already set, worker resource's
+# store carries no PFIN_DB_PASSWORD) INCONSISTENT shape -- byte-matched
+# against that script's own die() text (same "reuse the existing script's
+# own live check, never a second divergent read" discipline as
+# live_done_provision_resources/live_done_pgrst_flip above). Team-lead's
+# own live measurement, 2026-09-21: pfin_etl and pfin_provider_sync BOTH
+# already carry LOGIN+password (2026-09-19 work) while no worker
+# resource/store value exists yet for either -- exactly this shape, on
+# both roles. db-role-handoff.sh's own gate correctly refuses this as
+# INCONSISTENT by design (it cannot tell "prior credential unrecoverable"
+# apart from "a concurrent run is mid-flight"); that is this repo's own
+# operational call to make, not that script's, per team-lead's brief.
+# Any OTHER inconsistent shape (most notably a store value already
+# present with the role still NOLOGIN) does NOT match this grep and stays
+# a hard refusal, unchanged.
+handoff_adopt_check() {
+  local role="$1" out rc
+  # Same `if out=$(cmd); then rc=0; else rc=$?; fi` discipline as
+  # live_done_pgrst_flip above, for the identical reason: this helper is
+  # called from run_etl_role/run_provider_sync_role while INSIDE the main
+  # loop's own `set +e; run_step ...; set -e` bracket, where errexit is
+  # already OFF -- an unconditional `set -e` here would flip it back ON
+  # mid-bracket and abort the whole process on the very next failing bare
+  # command downstream (measured against this fence).
+  if out="$(bash "$SCRIPTS/db-role-handoff.sh" "$role" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  [[ "$rc" -ne 0 ]] || return 1
+  printf '%s' "$out" | grep -qF "rolcanlogin=true has_password=true store_has_PFIN_DB_PASSWORD=false"
+}
+
+# handoff_role_run <role> <mode: "" or "--apply"> -- wraps db-role-
+# handoff.sh <role> with the adopt-by-rotation escape hatch above. On the
+# adoptable shape: preflight mode (mode="") reports 0/informational
+# without ever calling db-role-handoff.sh a second time (nothing to
+# apply yet); apply mode re-invokes db-role-handoff.sh <role> --apply
+# --rotate instead of a plain handoff, logging why. Any other state
+# (fresh, already fully handed off, or a genuine mismatch) falls through
+# to the plain call, unchanged from before this wrapper existed.
+handoff_role_run() {
+  local role="$1" mode="$2"
+  if handoff_adopt_check "$role"; then
+    if [[ -n "$mode" ]]; then
+      warn "$role: adopting by rotation: prior credential unrecoverable (role already LOGIN+password, worker resource's store carries no PFIN_DB_PASSWORD) -- re-invoking db-role-handoff.sh --apply --rotate instead of a plain handoff"
+      bash "$SCRIPTS/db-role-handoff.sh" "$role" --apply --rotate
+      return $?
+    fi
+    info "$role: preflight shows the adopt-by-rotation shape (LOGIN+password already set, no store value) -- --apply will re-invoke db-role-handoff.sh --apply --rotate rather than a plain handoff"
+    return 0
+  fi
+  bash "$SCRIPTS/db-role-handoff.sh" "$role" ${mode:+--apply}
+}
+
+run_etl_role()             { require_box_ip || return 2; handoff_role_run pfin_etl "${1:-}"; }
+run_provider_sync_role()   { require_box_ip || return 2; handoff_role_run pfin_provider_sync "${1:-}"; }
 
 run_deploy_app() {
   require_box_ip || return 2

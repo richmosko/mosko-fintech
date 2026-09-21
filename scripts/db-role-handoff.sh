@@ -148,7 +148,7 @@
 #       branch does NOT re-verify the store's current value still matches
 #       Postgres's actual live password — a stale value left over from a
 #       half-completed `--rotate` (Postgres and the store fell out of
-#       sync mid-run) reads t|t|t and is reported VERIFIED here exactly
+#       sync mid-run) reads true|true|t and is reported VERIFIED here exactly
 #       the same as a genuinely consistent state. Printed loudly on every
 #       no-op run (not just here); the repair for suspected drift is
 #       `--apply --rotate`, which regenerates and re-pushes a coherent
@@ -173,6 +173,25 @@
 #   caveat mint-supabase-jwt-keys.sh's own header states) — this script
 #   prints that reminder but does not trigger the restart itself, so a
 #   redeploy decision stays a deliberate, separate operator step (W-3).
+#
+# BOOLEAN-CAST PREDICATE BUG (found 2026-09-21 while building provision.sh's
+# own adopt-by-rotation wrapper around this script's preflight -- same
+# defect class as scripts/db-bootstrap.sh's own fix this same PR, reproduced
+# locally against a throwaway initdb instance before shipping, not just
+# reasoned about: `select <boolexpr>::text` prints the LITERAL WORDS
+# "true"/"false", never the abbreviated "t"/"f" a bare boolean COLUMN's own
+# psql rendering shows -- true of a raw column cast via `::text` exactly as
+# much as a literal, confirmed by measurement, not assumed). THREE sites in
+# this file compared a `::text`-cast read against literal "t"/"f"/"t|t" and
+# so could NEVER match a real answer: the --rotate LOGIN gate (would refuse
+# "not yet LOGIN" against an ALREADY-LOGIN role), the preflight fresh/
+# already-handed-off classification (would misreport BOTH consistent states
+# as INCONSISTENT), and the post-handoff catalog verify (would refuse EVERY
+# successful --apply run, initial or rotate, with "expected 't|t'"). Fixed
+# uniformly here to compare against "true"/"false"/"true|true" -- STORE_HAS_PW
+# is unaffected (it is assigned "t"/"f" literally by this script's OWN case
+# statement below, never read via ::text from psql, so its comparisons are
+# correct as written).
 #
 # USAGE
 #   BOX_IP=<box-ip> scripts/db-role-handoff.sh <pfin_etl|pfin_provider_sync>            # preflight
@@ -357,10 +376,14 @@ step "Preflight — live role state (read-only; pg_roles + pg_authid, via 'supab
 # pg_authid"; pg_roles.rolpassword is the constant '********' regardless
 # of state, per §6.1's own documented reason not to use it). See this
 # script's own header for the full judgment-call statement.
+# `</dev/null` (Sec VETO-1 / team-lead's tree-wide follow-up, PR #854) --
+# this exec is the LAST line of its own heredoc today, so nothing
+# currently gets drained by it, but that is a position-dependent
+# accident, not a guarantee -- redirect defensively, unconditionally.
 ROLE_STATE="$(sshx "env STACK_UUID=\"$STACK_UUID\" ROLE=\"$ROLE\" bash -s" <<'REMOTE'
 set -e
 docker compose --project-name "$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc \
-  "select coalesce((select rolcanlogin::text from pg_roles where rolname='$ROLE'), 'ABSENT'), coalesce((select (rolpassword is not null)::text from pg_authid where rolname='$ROLE'), 'ABSENT');"
+  "select coalesce((select rolcanlogin::text from pg_roles where rolname='$ROLE'), 'ABSENT'), coalesce((select (rolpassword is not null)::text from pg_authid where rolname='$ROLE'), 'ABSENT');" </dev/null
 REMOTE
 )"
 ROLE_EXISTS_FIELD="$(echo "$ROLE_STATE" | cut -d'|' -f1)"
@@ -398,19 +421,29 @@ echo \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->where('is
 REMOTE
 )"
 info "store: PFIN_DB_PASSWORD (is_preview=false) row count on '$RESOURCE_NAME' = ${STORE_COUNT:-<none>}"
+# Sec F-2 (PR #854 review): STORE_HAS_PW normalized to "true"/"false" --
+# same vocabulary as ROLCANLOGIN/HAS_PASSWORD below, even though this
+# value is bash-assigned by this `case`, never psql-cast, so it was
+# never subject to the t/true predicate bug itself. One die() message
+# mixing two boolean vocabularies (this one still "t"/"f" while the
+# other two read "true"/"false") is exactly the shape a FUTURE t->true
+# sweep "fixes" by editing the die() text alone, silently breaking
+# provision.sh's own handoff_adopt_check() byte-match against it (that
+# grep, and the ONE OTHER site below, are this value's only two
+# consumers -- normalizing here is safe).
 case "$STORE_COUNT" in
-  0) STORE_HAS_PW=f ;;
-  1) STORE_HAS_PW=t ;;
+  0) STORE_HAS_PW=false ;;
+  1) STORE_HAS_PW=true ;;
   *) die "PFIN_DB_PASSWORD (is_preview=false) readback on '$RESOURCE_NAME' found '$STORE_COUNT' matching row(s), expected 0 or 1 -- refusing to trust an ambiguous store state." ;;
 esac
 
 if [[ $ROTATE -eq 1 ]]; then
-  [[ "$ROLCANLOGIN" == "t" ]] || die "role '$ROLE' is not yet LOGIN -- this is an INITIAL handoff, not a rotation. Omit --rotate."
+  [[ "$ROLCANLOGIN" == "true" ]] || die "role '$ROLE' is not yet LOGIN -- this is an INITIAL handoff, not a rotation. Omit --rotate."
 else
   # Sec-reviewed CONTROL, not a loosening: the refusal below still fires
   # on any state that is neither "fully fresh" nor "fully handed off" --
   # only the two CONSISTENT states are treated as non-refusals now.
-  if [[ "$ROLCANLOGIN" == "t" && "$HAS_PASSWORD" == "t" && "$STORE_HAS_PW" == "t" ]]; then
+  if [[ "$ROLCANLOGIN" == "true" && "$HAS_PASSWORD" == "true" && "$STORE_HAS_PW" == "true" ]]; then
     ok "role '$ROLE' already has LOGIN + a password set, and '$RESOURCE_NAME' already carries a production PFIN_DB_PASSWORD -- already handed off, nothing to do."
     # Sec F-1 (PR #852 AMBER review), option (a)+(c): this no-op path is
     # EXISTENCE-only -- it does not prove the store's CURRENT value is the
@@ -428,17 +461,17 @@ else
     # plaintext, materially more machinery than this preflight check
     # otherwise needs. Given that, the residual (a stale value from a
     # half-completed --rotate, where Postgres and the store fell out of
-    # sync mid-run, would still read t|t|t and report VERIFIED here) is
+    # sync mid-run, would still read true|true|t and report VERIFIED here) is
     # documented, not silently accepted -- see this file's own IDEMPOTENCY
     # header -- and surfaced loudly on every no-op run, not just in a
     # comment nobody re-reads.
     echo "⚠ existence-only check: this confirms the role has LOGIN+password AND the store carries SOME PFIN_DB_PASSWORD row -- it does NOT re-verify that value still matches Postgres's live password (e.g. after a half-completed --rotate). If you suspect drift, run --apply --rotate to re-establish a coherent value from scratch." >&2
     printf '\n\033[32mVERIFIED\033[0m  already handed off -- no-op, whether or not --apply was passed. Pass --apply --rotate to rotate the established credential.\n'
     exit 0
-  elif [[ "$ROLCANLOGIN" == "f" && "$HAS_PASSWORD" == "f" && "$STORE_HAS_PW" == "f" ]]; then
+  elif [[ "$ROLCANLOGIN" == "false" && "$HAS_PASSWORD" == "false" && "$STORE_HAS_PW" == "false" ]]; then
     : # genuinely fresh -- fall through to the existing Plan/Apply flow, unchanged.
   else
-    die "role '$ROLE' / '$RESOURCE_NAME' state is INCONSISTENT -- rolcanlogin=$ROLCANLOGIN has_password=$HAS_PASSWORD store_has_PFIN_DB_PASSWORD=$STORE_HAS_PW. Expected either ALL THREE false (fresh -- safe to run --apply) or ALL THREE true (already handed off -- nothing to do); a partial/mismatched combination needs investigation by hand before this script can safely proceed either way. This is NOT the --rotate case -- pass --apply --rotate only when you are intentionally rotating an already-established credential (rolcanlogin=t, has_password=t)."
+    die "role '$ROLE' / '$RESOURCE_NAME' state is INCONSISTENT -- rolcanlogin=$ROLCANLOGIN has_password=$HAS_PASSWORD store_has_PFIN_DB_PASSWORD=$STORE_HAS_PW. Expected either ALL THREE false (fresh -- safe to run --apply) or ALL THREE true (already handed off -- nothing to do); a partial/mismatched combination needs investigation by hand before this script can safely proceed either way. This is NOT the --rotate case -- pass --apply --rotate only when you are intentionally rotating an already-established credential (rolcanlogin=true, has_password=true)."
   fi
 fi
 
@@ -506,14 +539,27 @@ fi
 echo "OK: two-statement handoff script completed (exit 0, no mismatch, no cleartext echo)."
 
 step_r "B. Catalog verify (rolcanlogin + pg_authid.rolpassword IS NOT NULL, as supabase_admin)"
+# ⚠ `</dev/null` is load-bearing, not cosmetic (Sec VETO-1, PR #854
+# review, found while reviewing db-bootstrap.sh's identical shape --
+# live-confirmed there against team-lead's own 2026-09-21 run). This
+# remote script is fed to `bash -s` on ssh's OWN stdin, and `docker
+# compose exec -T` ATTACHES and DRAINS stdin -- without the redirect,
+# THIS call eats the rest of this heredoc's bytes, bash hits EOF and
+# exits 0, and everything after it silently never runs: this leg's own
+# comparison below, ALL of leg C's trust-path detection (Sec VETO V-1,
+# PR #846 -- the `-h localhost` -> `-h db` fix), and leg D/E's Coolify
+# push + hash-bound readback. Same defect class as mint-supabase-jwt-
+# keys.sh's 2026-09-11 item (2a). Every `docker compose exec -T` inside a
+# heredoc-fed remote block needs this, whether or not the command itself
+# reads stdin -- docker drains it regardless (measured).
 VERIFY="$(docker compose --project-name "$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc \
-  "select rolcanlogin::text || '|' || (select (rolpassword is not null)::text from pg_authid where rolname='$ROLE') from pg_roles where rolname='$ROLE';")"
+  "select rolcanlogin::text || '|' || (select (rolpassword is not null)::text from pg_authid where rolname='$ROLE') from pg_roles where rolname='$ROLE';" </dev/null)"
 VERIFY_TRIMMED="$(printf '%s' "$VERIFY" | tr -d ' \n')"
-if [ "$VERIFY_TRIMMED" != "t|t" ]; then
-  echo "FATAL: post-handoff catalog verify expected 't|t' (rolcanlogin|has_password), got '$VERIFY_TRIMMED'." >&2
+if [ "$VERIFY_TRIMMED" != "true|true" ]; then
+  echo "FATAL: post-handoff catalog verify expected 'true|true' (rolcanlogin|has_password), got '$VERIFY_TRIMMED'." >&2
   exit 1
 fi
-echo "OK: catalog confirms rolcanlogin=t and a password is set."
+echo "OK: catalog confirms rolcanlogin=true and a password is set."
 
 step_r "C. Connect AS $ROLE over a non-loopback path with the generated credential (forces password auth)"
 # Sec VETO V-1 (PR #846 review) -- CORRECTED IN PLACE, not merely amended:

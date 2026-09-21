@@ -88,6 +88,34 @@
 #  18. STANDUP-NOT-DONE-CALLS-STANDUP -- live_done_standup reports NOT
 #      healthy -> falls through to calling standup.sh normally, proving
 #      the fallback path (not just the new skip path) still works.
+#  19. PGRST-FLIP-LIVE-DONE-SKIPS-APPLY (db-bootstrap-fix follow-up,
+#      2026-09-21) -- coolify-env.sh's own preflight read already shows
+#      PGRST_DB_SCHEMAS at the desired value -> live_done_pgrst_flip()
+#      reports done, memoized across preflight+apply -> exactly ONE
+#      "coolify-env" call for the whole run, never a PATCH or --deploy.
+#  20. PGRST-FLIP-NOT-DONE-CALLS-APPLY -- not live-done -> falls through
+#      to a real --apply --deploy call once the apply phase runs.
+#  21. ETL-ROLE-ADOPT-BY-ROTATION (team-lead's own live measurement,
+#      2026-09-21: pfin_etl/pfin_provider_sync already carry LOGIN+
+#      password with no worker-resource store value yet) --
+#      db-role-handoff.sh's own preflight reports EXACTLY the adoptable
+#      INCONSISTENT shape (LOGIN+password, no store value) on both the
+#      preflight-phase and apply-phase probes -> the third, real call
+#      carries --apply --rotate, never a plain --apply handoff.
+#  22. ETL-ROLE-NOT-ADOPTABLE-UNCHANGED -- a DIFFERENT INCONSISTENT shape
+#      (store value present, role still NOLOGIN) never triggers the
+#      adopt path -- stays a hard refusal via the plain call, same as
+#      before this wrapper existed.
+#  23. PGRST-FLIP-PROBE-READ-FAILS-NOT-TREATED-AS-DONE -- the live-done
+#      probe's own coolify-env.sh call exits non-zero -> UNKNOWN, never
+#      silently treated as done; falls through to the real call, which
+#      fails for the same genuine reason.
+#  24. PGRST-FLIP-STORE-MATCHES-CONTAINER-DOESNT (Sec C-1) -- the store
+#      matches but the RUNNING container (pgrst-schemas-live-check.sh)
+#      does not -> not done, falls through to a real --apply --deploy.
+#  25. PGRST-FLIP-CONTAINER-CHECK-UNREACHABLE (Sec C-1) -- the store
+#      matches but the container check itself cannot be attempted (rc=2)
+#      -> UNKNOWN, not done, falls through to a real call.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -555,8 +583,23 @@ fi
 #     ("via a different path", per team-lead's own note) by NOT
 #     asserting those individually here; scenario 15 already covers that
 #     shape (deploy-workers/ca1-gate BLOCKED-BY / would-likely-fail).
+#     FAKE_STDOUT_coolify_env (db-bootstrap-fix follow-up, 2026-09-21):
+#     pgrst-flip's own live_done_pgrst_flip() now probes "coolify-env"
+#     ONCE before ever reaching the real call (see live_done_pgrst_flip's
+#     own header) -- without this, that probe would consume the FIRST
+#     slot of FAKE_RC_coolify_env's "0,1" cycle, pgrst-flip's own
+#     (unrelated to this scenario) fallback call would consume the
+#     SECOND, and nonsecret-env's three calls -- what "0,1" was actually
+#     aimed at -- would shift by one position, breaking pgrst-flip itself
+#     (misclassified "would likely fail") without changing what this
+#     scenario is trying to prove. Printing the desired value on every
+#     "coolify-env" call lets pgrst-flip's own probe see itself as
+#     already-flipped and return VERIFIED without a second call at all --
+#     restoring the exact call-count/index alignment this scenario's
+#     "0,1" cycle already assumed. nonsecret-env's own calls ignore this
+#     stdout (they only check exit codes), so it is a no-op there.
 # shellcheck disable=SC2054  # intentional: ONE element, "0,1" is fake-step.sh's own comma-separated per-call RC list, not two array elements
-CASE_ENV=(FAKE_RC_coolify_env=0,1 FAKE_RC_db_role_handoff=1 FAKE_STDOUT_record_coolify_uuids="no application named 'pfin-back-etl' found yet")
+CASE_ENV=(FAKE_RC_coolify_env=0,1 FAKE_RC_db_role_handoff=1 FAKE_STDOUT_record_coolify_uuids="no application named 'pfin-back-etl' found yet" FAKE_STDOUT_coolify_env="      PGRST_DB_SCHEMAS=public,graphql_public,pfin")
 run_case "dry-run BLOCKED-BY walks through a lenient intermediate step to the real cause" 0 --dry-run || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   grep -q "^  provision-resources .*VERIFIED (dry-run)" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [blocked-by-through-lenient] provision-resources itself not reported VERIFIED (dry-run) -- this scenario's own setup assumption broke" >&2; FAIL=1; }
@@ -686,6 +729,125 @@ else
     echo "FAIL: [live-done-boxip-unset] etl-role was misattributed as BLOCKED-BY provision-resources instead of its own genuine BOX_IP-unset cause" >&2
     FAIL=1
   fi
+fi
+
+# 19. PGRST-FLIP-LIVE-DONE-SKIPS-APPLY (db-bootstrap-fix follow-up,
+#     2026-09-21) -- coolify-env.sh's own preflight read for pgrst-flip
+#     already shows PGRST_DB_SCHEMAS at the desired value ->
+#     live_done_pgrst_flip() reports done, memoized -> the WHOLE run
+#     (preflight AND apply) makes exactly ONE "coolify-env" call, never a
+#     PATCH, never --deploy -- proving a re-run of an already-flipped box
+#     does not redeploy the stack for no reason.
+CASE_ENV=(FAKE_STDOUT_coolify_env="      PGRST_DB_SCHEMAS=public,graphql_public,pfin")
+run_case "pgrst-flip: live-done skips PATCH/deploy entirely" 0 --only pgrst-flip || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "already = public,graphql_public,pfin on pfin-supabase-stack -- VERIFIED without a PATCH or redeploy" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [pgrst-flip-live-done] did not print the VERIFIED-without-PATCH line" >&2; FAIL=1; }
+  CALLN="$(grep -c "^coolify-env " "$CASE_LAST_DIR/calls.log" 2>/dev/null || echo 0)"
+  if [[ "$CALLN" != "1" ]]; then
+    echo "FAIL: [pgrst-flip-live-done] expected exactly 1 coolify-env call (the live-done probe, memoized across preflight+apply), got $CALLN" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  fi
+  if grep -q "^coolify-env .*--apply\|^coolify-env .*--deploy" "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+    echo "FAIL: [pgrst-flip-live-done] coolify-env.sh was called with --apply or --deploy despite live_done_pgrst_flip reporting done" >&2
+    FAIL=1
+  fi
+fi
+
+# 20. PGRST-FLIP-NOT-DONE-CALLS-APPLY -- no FAKE_STDOUT match (the
+#     default) -> live_done_pgrst_flip reports NOT done -> falls through
+#     to the real call, WITH --apply --deploy once the apply phase runs,
+#     proving the fallback path (not just the new skip path) still works.
+CASE_ENV=()
+run_case "pgrst-flip: not live-done falls through to a real --apply --deploy" 0 --only pgrst-flip || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "^coolify-env .*--apply --deploy" "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [pgrst-flip-not-done] no coolify-env call carried --apply --deploy" >&2; cat "$CASE_LAST_DIR/calls.log" >&2; FAIL=1; }
+fi
+
+# 21. ETL-ROLE-ADOPT-BY-ROTATION (team-lead's own named live measurement,
+#     2026-09-21: pfin_etl/pfin_provider_sync already carry LOGIN+password
+#     from 2026-09-19 work, with no worker-resource store value for
+#     either yet) -- db-role-handoff.sh's own preflight reports EXACTLY
+#     the adoptable INCONSISTENT shape (rolcanlogin=true has_password=true
+#     store_has_PFIN_DB_PASSWORD=false) on BOTH the preflight-phase probe and
+#     the apply-phase's own re-probe (the live state does not change
+#     between them -- nothing mutates during a probe) -> the THIRD call
+#     is the real one, and it carries --apply --rotate, never a plain
+#     --apply handoff.
+CASE_ENV=(FAKE_RC_db_role_handoff=1,1,0 FAKE_STDOUT_db_role_handoff="FAIL  role 'pfin_etl' / 'pfin-back-etl' state is INCONSISTENT -- rolcanlogin=true has_password=true store_has_PFIN_DB_PASSWORD=false. Expected either ALL THREE false (fresh) or ALL THREE true (already handed off).")
+run_case "etl-role: adopt-by-rotation shape re-invokes --apply --rotate" 0 --only etl-role || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "adopting by rotation: prior credential unrecoverable" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [etl-role-adopt] did not print the adopting-by-rotation line" >&2; FAIL=1; }
+  CALLN="$(grep -c "^db-role-handoff " "$CASE_LAST_DIR/calls.log" 2>/dev/null || echo 0)"
+  if [[ "$CALLN" != "3" ]]; then
+    echo "FAIL: [etl-role-adopt] expected exactly 3 db-role-handoff calls (preflight probe, apply-phase probe, the real --rotate call), got $CALLN" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  fi
+  grep -q "^db-role-handoff .*pfin_etl --apply --rotate" "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [etl-role-adopt] no db-role-handoff call carried '--apply --rotate'" >&2; cat "$CASE_LAST_DIR/calls.log" >&2; FAIL=1; }
+  if grep -qE "^db-role-handoff BOX_IP=\S+ pfin_etl --apply$" "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+    echo "FAIL: [etl-role-adopt] a plain '--apply' (no --rotate) handoff was invoked -- the adopt path must never fall through to a plain handoff on this shape" >&2
+    FAIL=1
+  fi
+fi
+
+# 22. ETL-ROLE-NOT-ADOPTABLE-UNCHANGED -- the default (no adoptable-shape
+#     stdout) -- proves the adopt wrapper does not engage on an ordinary
+#     state (fresh, already-done, or any OTHER mismatch): falls straight
+#     through to a plain call, never --rotate, same as scenario 7's own
+#     "--only runs exactly one step" already exercises for the happy
+#     path -- this scenario pins the NEGATIVE case explicitly (a
+#     mismatch shape that is NOT the one adoptable shape must still
+#     refuse as INCONSISTENT via the plain call, not be silently adopted).
+CASE_ENV=(FAKE_RC_db_role_handoff=1 FAKE_STDOUT_db_role_handoff="FAIL  role 'pfin_etl' / 'pfin-back-etl' state is INCONSISTENT -- rolcanlogin=false has_password=false store_has_PFIN_DB_PASSWORD=true. Expected either ALL THREE false (fresh) or ALL THREE true (already handed off).")
+run_case "etl-role: a different mismatch shape is never adopted" 2 --only etl-role || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  if grep -q "adopting by rotation" "$CASE_LAST_DIR/out.txt" 2>/dev/null; then
+    echo "FAIL: [etl-role-not-adoptable] the adopt-by-rotation path fired on a non-matching INCONSISTENT shape" >&2
+    FAIL=1
+  fi
+  if grep -q -- "--rotate" "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+    echo "FAIL: [etl-role-not-adoptable] db-role-handoff.sh was invoked with --rotate on a non-adoptable shape" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  fi
+fi
+
+# 23. PGRST-FLIP-PROBE-READ-FAILS-NOT-TREATED-AS-DONE -- coolify-env.sh's
+#     own preflight read (the live-done probe) exits non-zero (box
+#     unreachable, API error, whatever) -> live_done_pgrst_flip() must
+#     report UNKNOWN, never silently "done" -- falls through to the real
+#     call, which fails identically and for the same genuine reason
+#     (never masked as a false VERIFIED).
+CASE_ENV=(FAKE_RC_coolify_env=1)
+run_case "pgrst-flip: a failed live-done probe is UNKNOWN, not done" 2 --only pgrst-flip || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "pgrst-flip live state is UNKNOWN, not blocking" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [pgrst-flip-probe-fails] did not print the UNKNOWN-state line" >&2; cat "$CASE_LAST_DIR/out.txt" >&2; FAIL=1; }
+  grep -q "already = public,graphql_public,pfin" "$CASE_LAST_DIR/out.txt" 2>/dev/null && { echo "FAIL: [pgrst-flip-probe-fails] falsely reported VERIFIED-without-PATCH despite a failed probe read" >&2; FAIL=1; }
+fi
+
+# 24. PGRST-FLIP-STORE-MATCHES-CONTAINER-DOESNT (Sec C-1, PR #854 review)
+#     -- the store's own preflight read matches the desired value, but
+#     pgrst-schemas-live-check.sh (the RUNNING container's own reported
+#     value) does not -> NOT done (a store-correct-but-not-yet-
+#     redeployed box must never report VERIFIED) -> falls through to the
+#     real --apply --deploy call once the apply phase runs.
+CASE_ENV=(FAKE_STDOUT_coolify_env="      PGRST_DB_SCHEMAS=public,graphql_public,pfin" FAKE_RC_pgrst_schemas_live_check=1)
+run_case "pgrst-flip: store matches but running container does not -- not done" 0 --only pgrst-flip || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "store's PGRST_DB_SCHEMAS matches, but the RUNNING rest container serves a different value" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [pgrst-flip-container-mismatch] did not print the store-vs-container mismatch line" >&2; cat "$CASE_LAST_DIR/out.txt" >&2; FAIL=1; }
+  grep -q "^coolify-env .*--apply --deploy" "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [pgrst-flip-container-mismatch] no coolify-env call carried --apply --deploy despite the container not yet matching" >&2; cat "$CASE_LAST_DIR/calls.log" >&2; FAIL=1; }
+fi
+
+# 25. PGRST-FLIP-CONTAINER-CHECK-UNREACHABLE (Sec C-1, PR #854 review) --
+#     the store matches, but pgrst-schemas-live-check.sh itself cannot
+#     even attempt the read (rc=2, e.g. box unreachable) -> UNKNOWN, never
+#     silently treated as done -> falls through to the real call.
+CASE_ENV=(FAKE_STDOUT_coolify_env="      PGRST_DB_SCHEMAS=public,graphql_public,pfin" FAKE_RC_pgrst_schemas_live_check=2)
+run_case "pgrst-flip: container check unreachable -- UNKNOWN, not done" 0 --only pgrst-flip || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "pgrst-schemas-live-check.sh could not even attempt the container read" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [pgrst-flip-container-unreachable] did not print the UNKNOWN-state line for the container check" >&2; cat "$CASE_LAST_DIR/out.txt" >&2; FAIL=1; }
+  grep -q "^coolify-env .*--apply --deploy" "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [pgrst-flip-container-unreachable] no coolify-env call carried --apply --deploy despite the container check being unreachable" >&2; cat "$CASE_LAST_DIR/calls.log" >&2; FAIL=1; }
 fi
 
 if [[ $FAIL -ne 0 ]]; then

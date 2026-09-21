@@ -35,7 +35,7 @@
 #       tinker call produces NO output at all (crashed/unreachable) ->
 #       refuses the same way, "refusing to trust an ambiguous store
 #       state".
-#   3. ROTATE-BUT-NOT-YET-LOGIN -- preflight reads 'f|f' and --rotate IS
+#   3. ROTATE-BUT-NOT-YET-LOGIN -- preflight reads 'false|false' and --rotate IS
 #      passed -> refuses, naming "not yet LOGIN".
 #   4. RESOURCE-ABSENT  -- the target Coolify resource does not exist ->
 #      refuses BEFORE any credential is generated or any psql call is
@@ -50,18 +50,18 @@
 #      mismatch-string guard fires and refuses, rather than trusting the
 #      exit code alone.
 #   7. CATALOG-VERIFY-MISMATCH -- step B's post-handoff read returns
-#      anything other than 't|t' -> refuses.
+#      anything other than 'true|true' -> refuses.
 #   8. CONNECT-AS-ROLE-FAILS -- step C's TCP connect-as-the-role exits
 #      non-zero -> refuses ("did not take effect end to end").
 #   9. READBACK-COUNT-MISMATCH -- step E's hash-bound readback (Sec F-2,
 #      PR #846 review) finds anything other than exactly ONE is_preview=
 #      false 'PFIN_DB_PASSWORD' row on the target resource -> refuses,
 #      never falling back to `->first()`'s silent pick.
-#   10. HAPPY-PATH-INITIAL -- role absent LOGIN/password ('f|f'), resource
+#   10. HAPPY-PATH-INITIAL -- role absent LOGIN/password ('false|false'), resource
 #       present, every downstream step succeeds -> exits 0, PATCH body
 #       carries a 64-char PFIN_DB_PASSWORD, seed-file path never leaks the
 #       token or the credential into $FAKE_CURL_LOG.
-#   11. HAPPY-PATH-ROTATE -- role already LOGIN ('t|t'), --rotate passed
+#   11. HAPPY-PATH-ROTATE -- role already LOGIN ('true|true'), --rotate passed
 #       -> exits 0, the \password-only (no ALTER ROLE LOGIN line) script
 #       shape is exercised.
 #   12. PROVIDER-SYNC-HAPPY-PATH -- same shapes as #10, spot-checked
@@ -110,6 +110,14 @@ DB_ROLE_HANDOFF_SH="$REPO_ROOT/scripts/db-role-handoff.sh"
 
 [[ -x "$FIXTURE_DIR/fake-curl" ]] || { echo "FATAL: $FIXTURE_DIR/fake-curl missing or not executable" >&2; exit 2; }
 [[ -f "$DB_ROLE_HANDOFF_SH" ]] || { echo "FATAL: $DB_ROLE_HANDOFF_SH not found" >&2; exit 2; }
+
+# Sec VETO-1 (PR #854 review) -- the per-site structural pin that used to
+# live here (leg-B catalog verify) is now superseded by
+# scripts/ci/fence-heredoc-stdin-drain.sh, a tree-wide structural fence
+# over every scripts/*.sh (team-lead's own follow-up ruling: the pin must
+# be tree-wide, not scoped to individual files) -- never two divergent
+# implementations of the same source-literal check living in different
+# fences. Run that fence, not a copy of it here.
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -183,12 +191,12 @@ if [[ "$ARGS" == *"artisan tinker --execute"* ]]; then
 fi
 
 if [[ "$ARGS" == *"coalesce((select rolcanlogin"* ]]; then
-  echo "${FAKE_ROLE_STATE:-f|f}"
+  echo "${FAKE_ROLE_STATE:-false|false}"
   exit 0
 fi
 
 if [[ "$ARGS" == *"rolcanlogin::text ||"* ]]; then
-  echo "${FAKE_VERIFY_STATE:-t|t}"
+  echo "${FAKE_VERIFY_STATE:-true|true}"
   exit 0
 fi
 
@@ -350,7 +358,7 @@ run_scenario() {
   # <store_count> (team-lead follow-up, 2026-09-20): the NEW preflight
   # store-count check's own answer -- "does '$resource_name' already
   # carry a production PFIN_DB_PASSWORD row". Defaults to 0 (matches
-  # every pre-existing "f|f" scenario's own fresh-state assumption,
+  # every pre-existing "false|false" scenario's own fresh-state assumption,
   # unaffected by this parameter's addition); scenarios exercising the
   # already-handed-off / mismatched-state logic set it explicitly.
   local desc="$1" expect_exit="$2" role="$3" apply_flag="$4" curl_mode="$5" \
@@ -406,14 +414,14 @@ assert_output_contains() {
 FAIL=0
 
 # 1. ROLE-MISSING
-OUT1="$(run_scenario "role-missing: refuses" 1 pfin_etl --apply clean "ABSENT|ABSENT" "t|t" 0 0 0 0 "")" || FAIL=1
+OUT1="$(run_scenario "role-missing: refuses" 1 pfin_etl --apply clean "ABSENT|ABSENT" "true|true" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "role-missing" "${OUT1:-}" "does not exist" || FAIL=1
 
 # 2. ALREADY-HANDED-OFF-VERIFIED-NO-OP (team-lead follow-up, live
 #    --dry-run, provision.sh sweep, 2026-09-20 -- REPLACES the OLD
 #    "already-login-no-rotate: refuses" scenario, which tested exactly
 #    the defect this fix closes). Role already LOGIN + password set
-#    ('t|t') AND the worker resource already carries a production
+#    ('true|true') AND the worker resource already carries a production
 #    PFIN_DB_PASSWORD row -> VERIFIED, exit 0, no-op -- even with --apply
 #    passed, even without --rotate. This is what actually restores
 #    provision.sh's "re-run = no-op" contract for etl-role/provider-
@@ -421,7 +429,7 @@ assert_output_contains "role-missing" "${OUT1:-}" "does not exist" || FAIL=1
 #    pass over an already-successfully-handed-off role, the exact same
 #    class of defect provision-supabase-stack.sh's db-data-volume guard
 #    had.
-OUT2="$(run_scenario "already-handed-off: VERIFIED no-op" 0 pfin_etl --apply clean "t|t" "t|t" 0 0 0 0 "" 0 0 "" 0 1)" || FAIL=1
+OUT2="$(run_scenario "already-handed-off: VERIFIED no-op" 0 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1)" || FAIL=1
 assert_output_contains "already-handed-off" "${OUT2:-}" "already handed off" || FAIL=1
 assert_output_contains "already-handed-off" "${OUT2:-}" "VERIFIED" || FAIL=1
 # Sec F-1 (PR #852 AMBER review), option (a)+(c) -- this no-op path is
@@ -436,7 +444,7 @@ assert_output_contains "already-handed-off" "${OUT2:-}" "existence-only check" |
 #     which row is authoritative -- pins the message this repurposed
 #     scenario 2 (and the OLD version's die() at line ~386) has always
 #     had, but which no fence scenario exercised until now.
-OUT2D="$(run_scenario "ambiguous-store-state: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "" 0 0 "" 0 2)" || FAIL=1
+OUT2D="$(run_scenario "ambiguous-store-state: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 2)" || FAIL=1
 assert_output_contains "ambiguous-store-state" "${OUT2D:-}" "refusing to trust an ambiguous store state" || FAIL=1
 
 # 2e. STORE-READ-FAILED (Sec N-3, PR #852 AMBER review round 2) -- the
@@ -448,7 +456,7 @@ assert_output_contains "ambiguous-store-state" "${OUT2D:-}" "refusing to trust a
 #     (with the colon) silently defaulted an explicit empty string back
 #     to "0" ("fresh"), masking exactly the scenario meant to prove the
 #     refusal fires on this path too.
-OUT2E="$(run_scenario "store-read-failed: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "" 0 0 "" 0 "")" || FAIL=1
+OUT2E="$(run_scenario "store-read-failed: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 "")" || FAIL=1
 assert_output_contains "store-read-failed" "${OUT2E:-}" "refusing to trust an ambiguous store state" || FAIL=1
 
 # 2b. MISMATCH-LOGIN-NO-STORE-VALUE (team-lead's own named strike --
@@ -459,7 +467,7 @@ assert_output_contains "store-read-failed" "${OUT2E:-}" "refusing to trust an am
 #     -- refuses, naming "INCONSISTENT". The guard must still fire; this
 #     is not a loosening, only the ALL-THREE-true and ALL-THREE-false
 #     states are non-refusals now.
-OUT2B="$(run_scenario "mismatch-login-no-store-value: refuses" 1 pfin_etl --apply clean "t|t" "t|t" 0 0 0 0 "" 0 0 "" 0 0)" || FAIL=1
+OUT2B="$(run_scenario "mismatch-login-no-store-value: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 0)" || FAIL=1
 assert_output_contains "mismatch-login-no-store-value" "${OUT2B:-}" "INCONSISTENT" || FAIL=1
 
 # 2c. MISMATCH-STORE-VALUE-NO-LOGIN (team-lead's own named strike --
@@ -469,43 +477,43 @@ assert_output_contains "mismatch-login-no-store-value" "${OUT2B:-}" "INCONSISTEN
 #     Coolify but died before the DB ALTER) -- refuses rather than
 #     silently minting ANOTHER credential over an already-populated
 #     store.
-OUT2C="$(run_scenario "mismatch-store-value-no-login: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "" 0 0 "" 0 1)" || FAIL=1
+OUT2C="$(run_scenario "mismatch-store-value-no-login: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 1)" || FAIL=1
 assert_output_contains "mismatch-store-value-no-login" "${OUT2C:-}" "INCONSISTENT" || FAIL=1
 
 # 3. ROTATE-BUT-NOT-YET-LOGIN
-OUT3="$(run_scenario "rotate-but-not-yet-login: refuses" 1 pfin_etl "--apply --rotate" clean "f|f" "t|t" 0 0 0 0 "")" || FAIL=1
+OUT3="$(run_scenario "rotate-but-not-yet-login: refuses" 1 pfin_etl "--apply --rotate" clean "false|false" "true|true" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "rotate-but-not-yet-login" "${OUT3:-}" "not yet LOGIN" || FAIL=1
 
 # 4. RESOURCE-ABSENT -- structural precondition, refuses before any psql call
-OUT4="$(run_scenario "resource-absent: refuses" 1 pfin_etl --apply resource-absent "f|f" "t|t" 0 0 0 0 "")" || FAIL=1
+OUT4="$(run_scenario "resource-absent: refuses" 1 pfin_etl --apply resource-absent "false|false" "true|true" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "resource-absent" "${OUT4:-}" "no Coolify application named" || FAIL=1
 
 # 5. CLEARTEXT-IN-OUTPUT
-OUT5="$(run_scenario "cleartext-in-output: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 1 "")" || FAIL=1
+OUT5="$(run_scenario "cleartext-in-output: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 1 "")" || FAIL=1
 assert_output_contains "cleartext-in-output" "${OUT5:-}" "cleartext value appeared" || FAIL=1
 
 # 6. PASSWORD-MISMATCH
-OUT6="$(run_scenario "password-mismatch: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 1 0 0 "")" || FAIL=1
+OUT6="$(run_scenario "password-mismatch: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 1 0 0 "")" || FAIL=1
 assert_output_contains "password-mismatch" "${OUT6:-}" "confirmation mismatch" || FAIL=1
 
 # 7. CATALOG-VERIFY-MISMATCH
-OUT7="$(run_scenario "catalog-verify-mismatch: refuses" 1 pfin_etl --apply clean "f|f" "f|t" 0 0 0 0 "")" || FAIL=1
-assert_output_contains "catalog-verify-mismatch" "${OUT7:-}" "expected 't|t'" || FAIL=1
+OUT7="$(run_scenario "catalog-verify-mismatch: refuses" 1 pfin_etl --apply clean "false|false" "false|true" 0 0 0 0 "")" || FAIL=1
+assert_output_contains "catalog-verify-mismatch" "${OUT7:-}" "expected 'true|true'" || FAIL=1
 
 # 8. CONNECT-AS-ROLE-FAILS
-OUT8="$(run_scenario "connect-as-role-fails: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 1 0 0 0 "")" || FAIL=1
+OUT8="$(run_scenario "connect-as-role-fails: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 1 0 0 0 "")" || FAIL=1
 assert_output_contains "connect-as-role-fails" "${OUT8:-}" "did not take effect end to end" || FAIL=1
 
 # 9. READBACK-COUNT-MISMATCH (Sec F-2)
-OUT9="$(run_scenario "readback-count-mismatch: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 0)" || FAIL=1
+OUT9="$(run_scenario "readback-count-mismatch: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 0)" || FAIL=1
 assert_output_contains "readback-count-mismatch" "${OUT9:-}" "expected exactly 1" || FAIL=1
 
 # 10. HAPPY-PATH-INITIAL
-OUT10="$(run_scenario "happy-path-initial: succeeds" 0 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "")" || FAIL=1
+OUT10="$(run_scenario "happy-path-initial: succeeds" 0 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "happy-path-initial" "${OUT10:-}" "hash-bound to the generated credential confirmed" || FAIL=1
 
 # 11. HAPPY-PATH-ROTATE
-OUT11="$(run_scenario "happy-path-rotate: succeeds" 0 pfin_etl "--apply --rotate" clean "t|t" "t|t" 0 0 0 0 "")" || FAIL=1
+OUT11="$(run_scenario "happy-path-rotate: succeeds" 0 pfin_etl "--apply --rotate" clean "true|true" "true|true" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "happy-path-rotate" "${OUT11:-}" "hash-bound to the generated credential confirmed" || FAIL=1
 if [[ -n "${OUT11:-}" ]] && ! grep -qF "ROTATE" <<<"$OUT11"; then
   echo "FAIL: [happy-path-rotate] plan did not print the ROTATE mode line -- the rotate branch may not have actually fired." >&2
@@ -513,7 +521,7 @@ if [[ -n "${OUT11:-}" ]] && ! grep -qF "ROTATE" <<<"$OUT11"; then
 fi
 
 # 12. Same shapes for the OTHER role, spot-check (provider-sync's own resource name resolves)
-OUT12="$(run_scenario "provider-sync happy-path-initial: succeeds" 0 pfin_provider_sync --apply clean "f|f" "t|t" 0 0 0 0 "")" || FAIL=1
+OUT12="$(run_scenario "provider-sync happy-path-initial: succeeds" 0 pfin_provider_sync --apply clean "false|false" "true|true" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "provider-sync happy-path-initial" "${OUT12:-}" "hash-bound to the generated credential confirmed" || FAIL=1
 
 # 13. TRUST-PATH-NO-PROMPT (Sec VETO V-1, PR #846 review) -- paired golden
@@ -522,14 +530,14 @@ assert_output_contains "provider-sync happy-path-initial" "${OUT12:-}" "hash-bou
 #     fabricated syntax-error message (the measured 127.0.0.1/32 `trust`
 #     rule shape). Before the V-1 fix this scenario exited 0 (false OK);
 #     the new missing-prompt guard must now refuse it -- exit 1.
-OUT13="$(run_scenario "trust-path-no-prompt: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "" 1)" || FAIL=1
+OUT13="$(run_scenario "trust-path-no-prompt: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 1)" || FAIL=1
 assert_output_contains "trust-path-no-prompt" "${OUT13:-}" "no password prompt was observed" || FAIL=1
 
 # 14. READBACK-HASH-MISMATCH (Sec F-2) -- exactly one production row exists,
 #     but its value's truncated hash does NOT match the credential this run
 #     generated (a stale/different secret already occupying the key) ->
 #     refuses, proving the count-only check from #9 is not the only guard.
-OUT14="$(run_scenario "readback-hash-mismatch: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "" 0 1)" || FAIL=1
+OUT14="$(run_scenario "readback-hash-mismatch: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 1)" || FAIL=1
 assert_output_contains "readback-hash-mismatch" "${OUT14:-}" "DIFFERENT value than what was pushed" || FAIL=1
 
 # 15. PFIN-DB-USER-MISMATCH-INITIAL (Sec F-4) -- provider-sync's own
@@ -537,14 +545,14 @@ assert_output_contains "readback-hash-mismatch" "${OUT14:-}" "DIFFERENT value th
 #     handing off pfin_provider_sync) -- a NON-fatal warning, not a
 #     refusal, since this is the expected, documented staging flow
 #     (docs/deployment-runbook.md §7.2). Must still exit 0.
-OUT15="$(run_scenario "pfin-db-user-mismatch-initial: warns, succeeds" 0 pfin_provider_sync --apply clean "f|f" "t|t" 0 0 0 0 "" 0 0 authenticator)" || FAIL=1
+OUT15="$(run_scenario "pfin-db-user-mismatch-initial: warns, succeeds" 0 pfin_provider_sync --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 authenticator)" || FAIL=1
 assert_output_contains "pfin-db-user-mismatch-initial" "${OUT15:-}" "EXPECTED mid-cutover staging state" || FAIL=1
 
 # 16. PFIN-DB-USER-MISMATCH-ROTATE (Sec F-4) -- --rotate implies the role
 #     is already LOGIN'd and PFIN_DB_USER should already match; a mismatch
 #     here means a credential is being rotated for a role the resource
 #     isn't even wired to use -- refuses.
-OUT16="$(run_scenario "pfin-db-user-mismatch-rotate: refuses" 1 pfin_etl "--apply --rotate" clean "t|t" "t|t" 0 0 0 0 "" 0 0 authenticator)" || FAIL=1
+OUT16="$(run_scenario "pfin-db-user-mismatch-rotate: refuses" 1 pfin_etl "--apply --rotate" clean "true|true" "true|true" 0 0 0 0 "" 0 0 authenticator)" || FAIL=1
 assert_output_contains "pfin-db-user-mismatch-rotate" "${OUT16:-}" "refusing to rotate a credential for a role the resource is not configured to use" || FAIL=1
 
 # 17. CONNECT-CLEARTEXT-LEAK (Sec F-6, PR #846 review) -- dedicated strike
@@ -554,7 +562,7 @@ assert_output_contains "pfin-db-user-mismatch-rotate" "${OUT16:-}" "refusing to 
 #     and cannot absorb this strike; only the CONNECT_OUT `grep -qF "$PW"`
 #     guard can catch a plausible transport/echo bug leaking the
 #     credential elsewhere in an otherwise-normal connection's output.
-OUT17="$(run_scenario "connect-cleartext-leak: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "" 0 0 "" 1)" || FAIL=1
+OUT17="$(run_scenario "connect-cleartext-leak: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 1)" || FAIL=1
 assert_output_contains "connect-cleartext-leak" "${OUT17:-}" "the credential's cleartext value appeared in the connect-as-role step's own captured output" || FAIL=1
 
 # 18. STEP-C-STRUCTURAL-PIN (Sec F-7, PR #846 review) -- a source-literal

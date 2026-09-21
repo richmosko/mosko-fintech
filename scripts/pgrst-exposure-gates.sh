@@ -137,19 +137,33 @@ REMOTE
 ok "resolved '$STACK_APP_NAME' -> $STACK_UUID"
 
 psql_scalar() {
+  # `</dev/null` (Sec VETO-1 / team-lead's tree-wide follow-up, PR #854) --
+  # this exec is the LAST line of its own heredoc today, so nothing
+  # currently gets drained by it, but that is a position-dependent
+  # accident, not a guarantee -- redirect defensively, unconditionally.
   sshx "env STACK_UUID=\"$STACK_UUID\" bash -s" <<REMOTE
 set -e
-docker compose --project-name "\$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc "$1"
+docker compose --project-name "\$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc "$1" </dev/null
 REMOTE
 }
 
 step "B-1 -- VETO trigger: anon zero-grant fence (schema USAGE + every pfin relation, enumerated dynamically)"
+# Sec VETO-2 (PR #854 review) -- this query casts via `::text`, so a real
+# psql prints "true"/"false", never the abbreviated "t"/"f" a bare
+# boolean COLUMN's own rendering would show (the exact predicate bug
+# this whole PR fixes elsewhere -- found here by Sec, not by re-auditing
+# every file this PR merely edits, which db-bootstrap's `psql_admin()`
+# neighbor twelve lines above should have prompted). The comparison
+# below used to read "t" and so could never match a real answer --
+# fail-OPEN on the exact condition B-1 exists to detect (anon holding
+# schema-level USAGE on pfin). Fixed to "true". `$GRANTED_COUNT` below is
+# an integer count, never boolean-cast, unaffected.
 ANON_USAGE="$(psql_scalar "select has_schema_privilege('anon', 'pfin', 'USAGE')::text;" | tr -d ' \n')"
-info "anon_schema_usage = $ANON_USAGE (expect f)"
+info "anon_schema_usage = $ANON_USAGE (expect false)"
 GRANTED_RELATIONS="$(psql_scalar "select n.nspname || '.' || c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and c.relkind in ('r','v','m','p') and (has_table_privilege('anon', c.oid, 'SELECT') or has_table_privilege('anon', c.oid, 'INSERT') or has_table_privilege('anon', c.oid, 'UPDATE') or has_table_privilege('anon', c.oid, 'DELETE'));")"
 GRANTED_COUNT="$(printf '%s' "$GRANTED_RELATIONS" | grep -c . || true)"
 info "pfin relations anon holds a grant on: $GRANTED_COUNT (expect 0)"
-if [[ "$ANON_USAGE" == "t" || "$GRANTED_COUNT" -ne 0 ]]; then
+if [[ "$ANON_USAGE" == "true" || "$GRANTED_COUNT" -ne 0 ]]; then
   die "B-1 VETO: anon_schema_usage=$ANON_USAGE, granted relation count=$GRANTED_COUNT -- anon must hold NEITHER before pfin is exposed. STOP -- do not proceed to the PGRST_DB_SCHEMAS flip. Offending relations:
 $GRANTED_RELATIONS"
 fi
