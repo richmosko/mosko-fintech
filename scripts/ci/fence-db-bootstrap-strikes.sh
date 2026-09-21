@@ -19,18 +19,18 @@
 #
 # Scenarios (BACKLOG.md §7.36 item 75, W-5; 🔒 SECURITY-SENSITIVE --
 # Sec joint-review mandatory on the PR this fence ships in):
-#   1. ALREADY-BOOTSTRAPPED-CLEAN -- bootstrap_complete=t, ownership
+#   1. ALREADY-BOOTSTRAPPED-CLEAN -- bootstrap_complete=true, ownership
 #      census clean -> exit 0, "VERIFIED, nothing to do", AND no Phase
 #      1/2/3 file-apply step ever ran (this fence asserts the ABSENCE of
 #      "roles.sql applied" in the captured output -- a script that
 #      re-applied everything on an already-bootstrapped box would still
 #      exit 0 here without this check).
-#   2. ALREADY-BOOTSTRAPPED-CENSUS-BAD -- bootstrap_complete=t but the
+#   2. ALREADY-BOOTSTRAPPED-CENSUS-BAD -- bootstrap_complete=true but the
 #      ownership census is dirty -> refuses, "the pfin_owner sweep broke
 #      somewhere" (proves this script does NOT treat bootstrap_complete
 #      alone as sufficient evidence).
 #   3. PARTIAL-STATE -- migrator already has LOGIN+password but
-#      bootstrap_complete=f -> refuses, "PARTIAL bootstrap state" (proves
+#      bootstrap_complete=false -> refuses, "PARTIAL bootstrap state" (proves
 #      the script refuses to GUESS a repair rather than re-running
 #      Phase 1 destructively over a half-done box).
 #   4. PREFLIGHT-NO-APPLY -- fresh box, no --apply -> exit 0, "re-run
@@ -65,7 +65,7 @@
 #      anywhere in the captured output -- scenario 8 alone (exit-0 leak)
 #      does not exercise the RC!=0 branch at all.
 #   9. LEG-B-CATALOG-VERIFY-MISMATCH -- leg A "succeeds" but the fresh
-#      post-handoff catalog re-read does not show t|t -> refuses.
+#      post-handoff catalog re-read does not show true|true -> refuses.
 #  10. LEG-C-CONNECT-FAIL -- connect AS migrator fails outright (prompt
 #      DOES appear) -> refuses, "did not take effect end to end".
 #  11. LEG-C-TRUST-PATH-NO-PROMPT -- the exact db-role-handoff.sh V-1
@@ -133,6 +133,26 @@
 #      exists, so a future edit that silently deletes it does not pass
 #      this fence by omission.
 #
+# 25-29. FAIL-OPEN SWEEP (team-lead's live --from standup finding,
+#      2026-09-21) -- the OLD bootstrap_complete read used
+#      `2>/dev/null || echo 'f'`: a FAILED read was silently converted
+#      into the specific answer "not bootstrapped", and this script then
+#      proceeded to a full re-apply against an already-bootstrapped,
+#      live database. Every gating read now goes through a shared
+#      read_gate() helper; these five scenarios prove BOTH failure modes
+#      (the read itself fails; the read succeeds but returns
+#      unparseable output) refuse, exit 2, "cannot determine ... state",
+#      never a guessed answer -- on bootstrap_complete, migrator
+#      credential state, and the ownership census reads.
+#  25. BOOTSTRAP-READ-FAILS -- refuses, "could not read
+#      bootstrap_complete".
+#  26. BOOTSTRAP-READ-GARBAGE -- refuses, "unparseable output".
+#  27. MIGRATOR-STATE-READ-GARBAGE -- refuses, "unparseable output".
+#  28. CENSUS-READ-GARBAGE (bootstrap_complete=true branch) -- refuses,
+#      "unparseable output".
+#  29. MIGRATOR-STATE-READ-FAILS -- refuses, "could not read migrator
+#      credential state".
+#
 # Exit 0 only if every scenario behaves exactly as specified above.
 
 set -euo pipefail
@@ -190,28 +210,40 @@ ARGS="$*"
 # psql_admin() scalar reads (-tAc), including leg B's catalog verify.
 if [[ "$ARGS" == *"-tAc"* ]]; then
   if [[ "$ARGS" == *"pg_catalog.pg_authid"* ]]; then
-    echo "${FAKE_MIGRATOR_STATE:-f|f}"
+    if [[ "${FAKE_MIGRATOR_STATE_READ_FAIL:-0}" == "1" ]]; then
+      echo "psql: error: connection to server on socket failed" >&2
+      exit 1
+    fi
+    # No colon -- an explicit empty override (role-absent, a VALID
+    # state, distinct from "unset -> use the compiled-in default") must
+    # survive, not get silently defaulted back (the same class of bug
+    # caught twice already in PR #852's own fences this session).
+    echo "${FAKE_MIGRATOR_STATE-false|false}"
     exit 0
   fi
   if [[ "$ARGS" == *"from pg_authid where rolname='migrator'"* ]]; then
-    echo "${FAKE_LEG_B_STATE:-t|t}"
+    echo "${FAKE_LEG_B_STATE-true|true}"
     exit 0
   fi
   if [[ "$ARGS" == *"version = '118'"* ]]; then
     # Distinguishes the PREFLIGHT read (before Phase 2 has run) from the
     # POST-PUSH verify read (after it has) via a marker file the push
     # branch below touches on its own successful completion -- a single
-    # static FAKE_BOOTSTRAP_COMPLETE value cannot model "f before the
-    # push, t after" (the actual HAPPY-PATH shape) on its own.
+    # static FAKE_BOOTSTRAP_COMPLETE value cannot model "false before
+    # the push, true after" (the actual HAPPY-PATH shape) on its own.
+    if [[ "${FAKE_BOOTSTRAP_READ_FAIL:-0}" == "1" ]]; then
+      echo "psql: error: connection to server on socket failed" >&2
+      exit 1
+    fi
     if [[ -n "${FAKE_MARKER_FILE:-}" && -f "${FAKE_MARKER_FILE:-}" ]]; then
-      echo "${FAKE_POST_PUSH_BOOTSTRAP:-t}"
+      echo "${FAKE_POST_PUSH_BOOTSTRAP-true}"
     else
-      echo "${FAKE_BOOTSTRAP_COMPLETE:-f}"
+      echo "${FAKE_BOOTSTRAP_COMPLETE-false}"
     fi
     exit 0
   fi
   if [[ "$ARGS" == *"pg_get_userbyid(c.relowner)"* ]]; then
-    echo "${FAKE_CENSUS_BAD:-0}"
+    echo "${FAKE_CENSUS_BAD-0}"
     exit 0
   fi
   echo "FAKE DOCKER: unrecognised -tAc query: $ARGS" >&2
@@ -398,7 +430,7 @@ FAKE_VARS=(FAKE_CURL_LOG FAKE_CURL_MODE FAKE_MIGRATOR_STATE FAKE_BOOTSTRAP_COMPL
   FAKE_ROLES_FAIL FAKE_AUTH_GRANTS_FAIL FAKE_VAULT_VIEW_FAIL FAKE_ROLE_COMMENT_FAIL \\
   FAKE_MARKER_FILE FAKE_POST_PUSH_BOOTSTRAP FAKE_LEG_B_STATE FAKE_CONNECT_FAIL FAKE_NO_PASSWORD_PROMPT \\
   FAKE_ECHO_PW_IN_CONNECT FAKE_WRONG_CURRENT_USER FAKE_READBACK_COUNT FAKE_READBACK_DIVERGE FAKE_STORE_PW \
-  FAKE_LEG_A_RC_LEAK)
+  FAKE_LEG_A_RC_LEAK FAKE_BOOTSTRAP_READ_FAIL FAKE_MIGRATOR_STATE_READ_FAIL)
 FORWARD=()
 for v in "\${FAKE_VARS[@]}"; do
   FORWARD+=("\$v=\${!v:-}")
@@ -419,12 +451,13 @@ EOF
 chmod +x "$FAKE_BIN/ssh"
 
 run_scenario() {
-  # run_scenario <desc> <expect_exit> <extra_flag> <curl_mode> <migrator_state> <bootstrap_complete> <census_bad> <push_fail> <push_no_completion> <mismatch> <echo_pw> <roles_fail> <vault_view_fail> <post_push_bootstrap> <leg_b_state> <connect_fail> <no_password_prompt> <echo_pw_in_connect> <wrong_current_user> <readback_count> <readback_diverge> <store_pw> <leg_a_rc_leak>
+  # run_scenario <desc> <expect_exit> <extra_flag> <curl_mode> <migrator_state> <bootstrap_complete> <census_bad> <push_fail> <push_no_completion> <mismatch> <echo_pw> <roles_fail> <vault_view_fail> <post_push_bootstrap> <leg_b_state> <connect_fail> <no_password_prompt> <echo_pw_in_connect> <wrong_current_user> <readback_count> <readback_diverge> <store_pw> <leg_a_rc_leak> [bootstrap_read_fail] [migrator_state_read_fail]
   local desc="$1" expect_exit="$2" extra_flag="$3" curl_mode="$4" migrator_state="$5" bootstrap_complete="$6" \
         census_bad="$7" push_fail="$8" push_no_completion="$9" mismatch="${10}" echo_pw="${11}" roles_fail="${12}" \
         vault_view_fail="${13}" post_push_bootstrap="${14}" leg_b_state="${15}" connect_fail="${16}" \
         no_password_prompt="${17}" echo_pw_in_connect="${18}" wrong_current_user="${19}" readback_count="${20}" \
-        readback_diverge="${21}" store_pw="${22}" leg_a_rc_leak="${23}"
+        readback_diverge="${21}" store_pw="${22}" leg_a_rc_leak="${23}" bootstrap_read_fail="${24:-0}" \
+        migrator_state_read_fail="${25:-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   local marker="$WORK/push_marker.$$.$RANDOM"
   : > "$log"
@@ -441,6 +474,7 @@ run_scenario() {
     FAKE_ECHO_PW_IN_CONNECT="$echo_pw_in_connect" FAKE_WRONG_CURRENT_USER="$wrong_current_user" \
     FAKE_READBACK_COUNT="$readback_count" FAKE_READBACK_DIVERGE="$readback_diverge" FAKE_STORE_PW="$store_pw" \
     FAKE_LEG_A_RC_LEAK="$leg_a_rc_leak" \
+    FAKE_BOOTSTRAP_READ_FAIL="$bootstrap_read_fail" FAKE_MIGRATOR_STATE_READ_FAIL="$migrator_state_read_fail" \
     bash "$TARGET_SH" $extra_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -488,36 +522,36 @@ assert_output_lacks() {
 FAIL=0
 
 # 1. ALREADY-BOOTSTRAPPED-CLEAN
-OUT1="$(run_scenario "already-bootstrapped-clean: no-op VERIFIED" 0 "" clean "f|f" t 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT1="$(run_scenario "already-bootstrapped-clean: no-op VERIFIED" 0 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "already-bootstrapped-clean" "${OUT1:-}" "VERIFIED, nothing to do" || FAIL=1
 assert_output_lacks "already-bootstrapped-clean" "${OUT1:-}" "roles.sql applied" || FAIL=1
 
 # 2. ALREADY-BOOTSTRAPPED-CENSUS-BAD
-OUT2="$(run_scenario "already-bootstrapped-census-bad: refuses" 1 "" clean "f|f" t 1 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT2="$(run_scenario "already-bootstrapped-census-bad: refuses" 1 "" clean "false|false" true 1 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "already-bootstrapped-census-bad" "${OUT2:-}" "the pfin_owner sweep broke somewhere" || FAIL=1
 
 # 3. PARTIAL-STATE
-OUT3="$(run_scenario "partial-state: refuses" 1 "" clean "t|t" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT3="$(run_scenario "partial-state: refuses" 1 "" clean "true|true" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "partial-state" "${OUT3:-}" "PARTIAL bootstrap state" || FAIL=1
 
 # 4. PREFLIGHT-NO-APPLY
-OUT4="$(run_scenario "preflight-no-apply: exit 0, no phases run" 0 "" clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT4="$(run_scenario "preflight-no-apply: exit 0, no phases run" 0 "" clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "preflight-no-apply" "${OUT4:-}" "re-run with --apply" || FAIL=1
 
 # 5. PHASE1-ROLES-FAIL
-OUT5="$(run_scenario "phase1-roles-fail: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 1 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT5="$(run_scenario "phase1-roles-fail: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 1 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "phase1-roles-fail" "${OUT5:-}" "supabase/roles.sql failed" || FAIL=1
 
 # 6. STORE-EMPTY-REFUSES (Sec VETO-1 r2 -- PATH A precondition)
-OUT6="$(run_scenario "store-empty: FAILED (exit 2)" 2 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "" 0)" || FAIL=1
+OUT6="$(run_scenario "store-empty: FAILED (exit 2)" 2 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "" 0)" || FAIL=1
 assert_output_contains "store-empty" "${OUT6:-}" "run scripts/provision-migrator-app.sh first" || FAIL=1
 
 # 7. CREDENTIAL-MISMATCH
-OUT7="$(run_scenario "credential-mismatch: refuses" 1 --apply clean "f|f" f 0 0 0 1 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT7="$(run_scenario "credential-mismatch: refuses" 1 --apply clean "false|false" false 0 0 0 1 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "credential-mismatch" "${OUT7:-}" "confirmation mismatch" || FAIL=1
 
 # 8. CREDENTIAL-CLEARTEXT-LEAK
-OUT8="$(run_scenario "credential-cleartext-leak: refuses" 1 --apply clean "f|f" f 0 0 0 0 1 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT8="$(run_scenario "credential-cleartext-leak: refuses" 1 --apply clean "false|false" false 0 0 0 0 1 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "credential-cleartext-leak" "${OUT8:-}" "cleartext value appeared" || FAIL=1
 
 # 8b. LEG-A-NONZERO-WITH-CLEARTEXT-LEAK (Sec F-2b, PR #849 r3 review) --
@@ -532,67 +566,67 @@ assert_output_contains "credential-cleartext-leak" "${OUT8:-}" "cleartext value 
 #     the assert_output_lacks below fails on that old order, since the
 #     "psql handoff script exited $RC: $OUT" message would carry the raw
 #     credential.
-OUT8B="$(run_scenario "leg-a-nonzero-with-cleartext-leak: refuses via the scrub, never prints the value" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 1)" || FAIL=1
+OUT8B="$(run_scenario "leg-a-nonzero-with-cleartext-leak: refuses via the scrub, never prints the value" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 1)" || FAIL=1
 assert_output_contains "leg-a-nonzero-with-cleartext-leak" "${OUT8B:-}" "cleartext value appeared in psql's own captured output" || FAIL=1
 assert_output_lacks "leg-a-nonzero-with-cleartext-leak" "${OUT8B:-}" "$FIXED_STORE_PW" || FAIL=1
 
 # 9. LEG-B-CATALOG-VERIFY-MISMATCH
-OUT9="$(run_scenario "leg-b-catalog-verify-mismatch: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "f|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
-assert_output_contains "leg-b-catalog-verify-mismatch" "${OUT9:-}" "post-handoff catalog verify expected 't|t'" || FAIL=1
+OUT9="$(run_scenario "leg-b-catalog-verify-mismatch: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "false|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+assert_output_contains "leg-b-catalog-verify-mismatch" "${OUT9:-}" "post-handoff catalog verify expected 'true|true'" || FAIL=1
 
 # 10. LEG-C-CONNECT-FAIL
-OUT10="$(run_scenario "leg-c-connect-fail: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 1 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT10="$(run_scenario "leg-c-connect-fail: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 1 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-c-connect-fail" "${OUT10:-}" "did not take effect end to end" || FAIL=1
 
 # 11. LEG-C-TRUST-PATH-NO-PROMPT
-OUT11="$(run_scenario "leg-c-trust-path-no-prompt: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 1 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT11="$(run_scenario "leg-c-trust-path-no-prompt: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 1 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-c-trust-path-no-prompt" "${OUT11:-}" "no password prompt was observed" || FAIL=1
 
 # 12. LEG-C-CLEARTEXT-LEAK-IN-CONNECT
-OUT12="$(run_scenario "leg-c-cleartext-leak-in-connect: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 1 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT12="$(run_scenario "leg-c-cleartext-leak-in-connect: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 1 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-c-cleartext-leak-in-connect" "${OUT12:-}" "cleartext value appeared in the connect-as-migrator step" || FAIL=1
 
 # 13. LEG-C-WRONG-CURRENT-USER (Sec F-1b, PR #849 r2 review)
-OUT13="$(run_scenario "leg-c-wrong-current-user: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 1 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT13="$(run_scenario "leg-c-wrong-current-user: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 1 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-c-wrong-current-user" "${OUT13:-}" "current_user did not echo back 'migrator'" || FAIL=1
 
 # 14. LEG-E-READBACK-COUNT-MISMATCH
-OUT14="$(run_scenario "leg-e-readback-count-mismatch: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 0 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT14="$(run_scenario "leg-e-readback-count-mismatch: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 0 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-e-readback-count-mismatch" "${OUT14:-}" "expected exactly 1" || FAIL=1
 
 # 15. LEG-E-READBACK-DIVERGE (Sec VETO-1 r2's own named scenario)
-OUT15="$(run_scenario "leg-e-readback-diverge: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 1 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT15="$(run_scenario "leg-e-readback-diverge: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 1 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-e-readback-diverge" "${OUT15:-}" "no longer hash-matches" || FAIL=1
 
 # 16. PHASE2-PUSH-FAILS
-OUT16="$(run_scenario "phase2-push-fails: refuses" 1 --apply clean "f|f" f 0 1 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT16="$(run_scenario "phase2-push-fails: refuses" 1 --apply clean "false|false" false 0 1 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "phase2-push-fails" "${OUT16:-}" "supabase db push exited" || FAIL=1
 
 # 17. PHASE2-NO-COMPLETION-LINE
-OUT17="$(run_scenario "phase2-no-completion-line: refuses" 1 --apply clean "f|f" f 0 0 1 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT17="$(run_scenario "phase2-no-completion-line: refuses" 1 --apply clean "false|false" false 0 0 1 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "phase2-no-completion-line" "${OUT17:-}" "incomplete run, not a pass" || FAIL=1
 
 # 18. PHASE2-CENSUS-BAD-AFTER-PUSH
-OUT18="$(run_scenario "phase2-census-bad-after-push: refuses" 1 --apply clean "f|f" f 1 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT18="$(run_scenario "phase2-census-bad-after-push: refuses" 1 --apply clean "false|false" false 1 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "phase2-census-bad-after-push" "${OUT18:-}" "broke somewhere in the apply" || FAIL=1
 
 # 19. PHASE2-BOOTSTRAP-NOT-COMPLETE-AFTER-PUSH -- census clean but the
 #     118 ledger row still absent after a "successful" push.
-OUT19="$(run_scenario "phase2-bootstrap-not-complete-after-push: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 f "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT19="$(run_scenario "phase2-bootstrap-not-complete-after-push: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 false "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "phase2-bootstrap-not-complete-after-push" "${OUT19:-}" "did not actually land 118" || FAIL=1
 
 # 20. PHASE3-VAULT-VIEW-FAILS -- everything up to Phase 2 verify passes;
-#     need BOOTSTRAP_COMPLETE to read t on the POST-push read but f on
-#     preflight. FAKE_BOOTSTRAP_COMPLETE is static per-run, so instead
-#     force it "t" throughout (the fixture never actually distinguishes
-#     pre/post-push reads) -- preflight sees "t" and would take the
-#     ALREADY-BOOTSTRAPPED branch instead of reaching Phase 1 at all.
-#     Route around this by using FAKE_MIGRATOR_STATE="t|t" WITHOUT
-#     bootstrap_complete=t on preflight is the PARTIAL-STATE branch
-#     (scenario 3) -- so Phase 3 in isolation cannot be reached through
-#     the CLI's own preflight gate with a single static fixture value.
-#     Exercised instead as a source-literal pin: the real script's Phase
-#     3 call site itself.
+#     need BOOTSTRAP_COMPLETE to read true on the POST-push read but
+#     false on preflight. FAKE_BOOTSTRAP_COMPLETE is static per-run, so
+#     instead force it "true" throughout (the fixture never actually
+#     distinguishes pre/post-push reads) -- preflight sees "true" and
+#     would take the ALREADY-BOOTSTRAPPED branch instead of reaching
+#     Phase 1 at all. Route around this by using
+#     FAKE_MIGRATOR_STATE="true|true" WITHOUT bootstrap_complete=true on
+#     preflight is the PARTIAL-STATE branch (scenario 3) -- so Phase 3
+#     in isolation cannot be reached through the CLI's own preflight
+#     gate with a single static fixture value. Exercised instead as a
+#     source-literal pin: the real script's Phase 3 call site itself.
 # The single-quoted pattern below is a LITERAL grep needle (matching
 # db-bootstrap.sh's own source text, "$REPO_ROOT" included verbatim),
 # not a string meant to expand here.
@@ -606,7 +640,7 @@ fi
 
 # 21. HAPPY-PATH-FULL-APPLY -- legs A/B/C/E all pass together; leg A's
 #     read and leg E's re-read both resolve to FIXED_STORE_PW.
-OUT21="$(run_scenario "happy-path-full-apply: succeeds, absent role-comment files skipped" 0 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT21="$(run_scenario "happy-path-full-apply: succeeds, absent role-comment files skipped" 0 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "happy-path-full-apply" "${OUT21:-}" "Phase 1 -> 2 -> 3 complete" || FAIL=1
 assert_output_contains "happy-path-full-apply" "${OUT21:-}" "migrator: LOGIN + password set from pfin-migrator's own existing MIGRATOR_DB_PASSWORD" || FAIL=1
 for f in 116_pfin_provider_sync_role 117_pfin_etl_role_comment_c1_reattribution 119_migrator_role_comment_amendment3_recitation; do
@@ -615,12 +649,55 @@ done
 
 # 22. RESOURCE-ABSENT (measured exit 1, not the header's documented 2 --
 #     see the note in the header comment above)
-OUT22="$(run_scenario "resource-absent: refuses" 1 --apply migrator-absent "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT22="$(run_scenario "resource-absent: refuses" 1 --apply migrator-absent "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "resource-absent" "${OUT22:-}" "expected exactly one application named" || FAIL=1
 
 # 23. UNKNOWN-FLAG
-OUT23="$(run_scenario "unknown-flag: rejected" 2 --bogus clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+OUT23="$(run_scenario "unknown-flag: rejected" 2 --bogus clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "unknown-flag" "${OUT23:-}" "unknown flag" || FAIL=1
+
+# 25-29. FAIL-OPEN SWEEP (team-lead's live --from standup finding,
+#    2026-09-21) -- the OLD bootstrap_complete read used
+#    `2>/dev/null || echo 'f'`: a FAILED read was silently converted
+#    into the specific answer "not bootstrapped", which this script then
+#    trusted and proceeded to a full re-apply against an already-
+#    bootstrapped, live database. Every gating read in this file now
+#    goes through the shared read_gate() helper -- these five scenarios
+#    prove BOTH failure modes (the read itself fails; the read succeeds
+#    but returns unparseable output) refuse (exit 2, "cannot determine
+#    ... state"), never fall through to a specific guessed answer, on
+#    the two reads team-lead named explicitly (bootstrap_complete,
+#    migrator credential state) plus the ownership census read.
+#  25. BOOTSTRAP-READ-FAILS -- the bootstrap_complete preflight read
+#      itself fails (psql/ssh error, rc!=0) -> refuses, "could not read
+#      bootstrap_complete".
+OUT25="$(run_scenario "bootstrap-read-fails: refuses" 2 "" clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 1 0)" || FAIL=1
+assert_output_contains "bootstrap-read-fails" "${OUT25:-}" "could not read bootstrap_complete" || FAIL=1
+
+#  26. BOOTSTRAP-READ-GARBAGE -- the read succeeds (rc=0) but returns
+#      neither "true" nor "false" -> refuses, "unparseable output",
+#      never silently treated as either state.
+OUT26="$(run_scenario "bootstrap-read-garbage: refuses" 2 "" clean "false|false" maybe 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0)" || FAIL=1
+assert_output_contains "bootstrap-read-garbage" "${OUT26:-}" "bootstrap_complete read returned unparseable output" || FAIL=1
+
+#  27. MIGRATOR-STATE-READ-GARBAGE -- the migrator credential state read
+#      succeeds but returns neither empty (role absent) nor a
+#      'true|false'-shaped pair -> refuses, "unparseable output".
+OUT27="$(run_scenario "migrator-state-read-garbage: refuses" 2 "" clean garbage false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0)" || FAIL=1
+assert_output_contains "migrator-state-read-garbage" "${OUT27:-}" "migrator credential state read returned unparseable output" || FAIL=1
+
+#  28. CENSUS-READ-GARBAGE -- bootstrap_complete=true (the
+#      ALREADY-BOOTSTRAPPED branch), but the ownership census read
+#      returns non-numeric output -> refuses, "unparseable output",
+#      never treated as census_bad=0 (a false VERIFIED).
+OUT28="$(run_scenario "census-read-garbage: refuses" 2 "" clean "false|false" true notanumber 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0)" || FAIL=1
+assert_output_contains "census-read-garbage" "${OUT28:-}" "ownership census read returned unparseable output" || FAIL=1
+
+#  29. MIGRATOR-STATE-READ-FAILS -- the migrator credential state read
+#      itself fails (psql/ssh error, rc!=0) -> refuses, "could not read
+#      migrator credential state".
+OUT29="$(run_scenario "migrator-state-read-fails: refuses" 2 "" clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 1)" || FAIL=1
+assert_output_contains "migrator-state-read-fails" "${OUT29:-}" "could not read migrator credential state" || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
