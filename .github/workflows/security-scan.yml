@@ -4285,6 +4285,60 @@ jobs:
       - name: tree-wide boolean-cast pairing scan (scripts/*.sh)
         run: bash scripts/ci/fence-boolean-cast-pairing.sh
 
+  probe-branch-protection-token-scope-default:
+    # TEMPORARY, one-shot measurement job (control leg: NO explicit
+    # `permissions:` block, i.e. whatever this repo's default workflow
+    # token permissions are -- the shape every other job in this file
+    # already runs under). Team-lead asked whether CI's GITHUB_TOKEN can
+    # read branches/main/protection, for a possible future live-divergence
+    # check against .github/required-contexts.tsv (NOT being built now --
+    # measurement only). required_unfiltered.py's own printed output
+    # already ASSERTS "CI's GITHUB_TOKEN does not have [this]" -- that
+    # claim has never actually been tested live, per this role's own
+    # standing discipline (verify a claim before repeating it). This job
+    # and its sibling below will be REMOVED in the very next commit once
+    # the result is captured in required-contexts.tsv's header and the PR
+    # body -- neither is meant to survive as a permanent CI job.
+    name: "PROBE A (temporary) -- GITHUB_TOKEN branch-protection read, default permissions"
+    runs-on: ubuntu-latest
+    steps:
+      - name: attempt read of branches/main/protection, NO explicit permissions grant
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          CODE=$(curl -s -o /tmp/resp.json -w '%{http_code}' \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/branches/main/protection")
+          echo "MEASUREMENT (no permissions: block on this job) http_code=$CODE"
+          cat /tmp/resp.json
+
+  probe-branch-protection-token-scope-admin-grant:
+    # TEMPORARY, one-shot measurement job (test leg: explicit
+    # `permissions: administration: read` -- the ONE grant GitHub's docs
+    # say can unlock this read for a GITHUB_TOKEN without a PAT). See the
+    # sibling job above for full rationale; this one isolates whether the
+    # read is unlockable at all via an in-workflow grant, vs blocked
+    # entirely regardless of what this workflow asks for.
+    name: "PROBE B (temporary) -- GITHUB_TOKEN branch-protection read, administration:read granted"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      administration: read
+    steps:
+      - name: attempt read of branches/main/protection, WITH administration:read granted above
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          CODE=$(curl -s -o /tmp/resp.json -w '%{http_code}' \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/branches/main/protection")
+          echo "MEASUREMENT (administration: read granted on this job) http_code=$CODE"
+          cat /tmp/resp.json
+
   fence-tinker-write-allowlist:
     name: tinker --execute write-verb allowlist fence (tree-wide, sha-pinned)
     runs-on: ubuntu-latest

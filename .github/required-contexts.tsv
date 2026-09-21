@@ -188,34 +188,55 @@ security-scan.yml	fence-provision-strikes	provision.sh — orchestrator control-
 security-scan.yml	fence-heredoc-stdin-drain	heredoc-fed remote blocks — docker exec stdin-drain fence (tree-wide)
 security-scan.yml	fence-boolean-cast-pairing	psql boolean reads — cast/comparison vocabulary pairing fence (tree-wide)
 
-# --- Fourth batch: PR #862 (CA-1 fix) fences, added 2026-09-21 (parked PR #855
-# widened per team-lead ruling, F-CTO decides) ---
-# All six ran advisory-only through PR #862's entire review (three fail-opens
-# found and closed in fence-tinker-write-allowlist.sh alone, each by Sec's own
-# strike or by DevOps's own inversion testing -- never by a required-context
-# gate, because there wasn't one). Same "run-always by construction, no paths
-# filter" shape as every other row in this file -- verified live against
-# security-scan.yml's own workflow-level `on:` block (no paths:) and each job
-# individually (no job-level `paths:` or `if:`), not assumed from the batch-3
-# precedent above. Job display names read live from security-scan.yml, not
-# retyped from memory.
+# --- Fourth batch: PR #862 (CA-1 fix) fences, added 2026-09-21 (parked PR
+# #855 widened per team-lead ruling, F-CTO decides) ---
+# CRITERION (team-lead, this widening): include a row ONLY if the job exists
+# to enforce a specific Sec condition or ADR clause, not merely "this is a
+# fence" -- a pure strike battery scoped to one script's own behavior, or a
+# general hygiene check, stays OUT even when it is well-tested and even when
+# it is advisory-only today. That excludes four PR #862 candidates that were
+# considered and DELIBERATELY LEFT OUT of this list on that basis (their CI
+# jobs still exist and still run on every PR -- this is a required-CONTEXT
+# decision, not a "should this fence exist" decision):
+#   - fence-verify-worker-ca1-clear-strikes -- strike battery for one script
+#     (verify-worker-ca1-clear.sh)'s own CA-1 post-deploy check.
+#   - fence-provision-worker-strikes -- strike battery for one script
+#     (provision-worker.sh)'s own delete-guard logic.
+#   - fence-deploy-app-strikes -- strike battery for one script
+#     (deploy-app.sh)'s own identity-guard logic.
+#   - fence-pgrst-exposure-gates-strikes -- strike battery for one script
+#     (pgrst-exposure-gates.sh)'s own pre-flip gate logic.
+# Two DO meet the criterion -- both tree-wide structural fences enforcing a
+# specific, named Sec finding across the whole tree, not one script's own
+# correctness:
+#   - fence-tinker-write-allowlist enforces Sec's PR #862-review ruling that
+#     every Eloquent write destined for a tinker --execute call (or every
+#     statically-unresolvable --execute body) must carry a marker in a
+#     sha256-pinned allowlist -- the fence IS the enforcement of that ruling,
+#     not a test of one script. Its job runs BOTH the real-tree scan AND its
+#     own 6-scenario golden-test battery (fence-tinker-write-allowlist-
+#     strikes.sh) as two steps of the SAME job -- one required context here,
+#     not two; both steps must pass for the job (and the context) to report
+#     success.
+#   - fence-docker-inspect-format-tab enforces Sec's PR #861-review finding
+#     (generalized from a literal \t to any bare backslash-escape in a
+#     `docker inspect --format` template) tree-wide across scripts/*.sh, the
+#     same posture as fence-heredoc-stdin-drain and fence-boolean-cast-
+#     pairing already above.
+# Verified live against security-scan.yml's own workflow-level `on:` block
+# (no paths:) and each job individually (no job-level `paths:` or `if:`), not
+# assumed from the batch-3 precedent above. Job display names read live from
+# security-scan.yml, not retyped from memory.
 #
-# fence-tinker-write-allowlist's job runs BOTH the real-tree scan AND its own
-# 6-scenario golden-test battery (fence-tinker-write-allowlist-strikes.sh) as
-# two steps of the SAME job -- there is one required context here, not two;
-# both steps must pass for the job (and the context) to report success.
-#
-# fence-verify-worker-ca1-clear-strikes was built in PR #862 alongside
-# scripts/verify-worker-ca1-clear.sh but was NEVER WIRED into any CI workflow
-# at all -- not even advisory. Found during this promotion sweep (grepped
-# .github/workflows/ for the script name -- zero hits) and fixed in the same
-# commit as this file's edit, not left for a future PR to discover cold.
-security-scan.yml	fence-tinker-write-allowlist	tinker --execute write-verb allowlist fence (tree-wide, sha-pinned)
-security-scan.yml	fence-verify-worker-ca1-clear-strikes	verify-worker-ca1-clear.sh — CA-1 post-deploy container-env strike-proofs
-security-scan.yml	fence-provision-worker-strikes	provision-worker.sh — delete-if-empty-shell guard + unknown-name refusal strike-proofs
-security-scan.yml	fence-deploy-app-strikes	deploy-app.sh — identity-guard strike-proofs
-security-scan.yml	fence-docker-inspect-format-tab	docker inspect --format templates — literal-tab fence (tree-wide)
-security-scan.yml	fence-pgrst-exposure-gates-strikes	pgrst-exposure-gates.sh — pre-flip gate strike-proofs
+# fence-verify-worker-ca1-clear-strikes.sh's JOB was built in PR #862
+# alongside scripts/verify-worker-ca1-clear.sh but was NEVER WIRED into any
+# CI workflow at all -- not even advisory. Found during this promotion sweep
+# (grepped .github/workflows/ for the script name -- zero hits) and the job
+# was added in the same commit that first drafted this batch, so it now runs
+# advisory on every PR like its siblings above -- just not listed here as a
+# required context, per the criterion this batch applies.
+security-scan.yml	fence-tinker-write-allowlist	tinker --execute write-verb allowlist fence (tree-wide, sha-pinned) -- enforces: Sec ruling, PR #862 review (tinker-write allowlist)
+security-scan.yml	fence-docker-inspect-format-tab	docker inspect --format templates — literal-tab fence (tree-wide) -- enforces: Sec finding, PR #861 review (generalized escape-class)
 
 # The fence that enforces this file, listed in it deliberately. If
 # `required-unfiltered` is not itself a required context, someone can break it and
