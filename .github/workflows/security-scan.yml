@@ -4188,7 +4188,7 @@ jobs:
     # bootstrapped box is a clean no-op (and genuinely never re-runs any
     # phase -- asserted by the ABSENCE of "roles.sql applied" in the
     # captured output, not just the exit code); a dirty ownership census
-    # refuses even when bootstrap_complete=t; a partial-bootstrap state
+    # refuses even when bootstrap_complete=true; a partial-bootstrap state
     # refuses rather than guessing a repair; roles.sql / the credential
     # handoff (mismatch AND cleartext-leak, both) / the push (failure AND
     # a missing completion line, both) / the post-push census / the
@@ -4196,7 +4196,11 @@ jobs:
     # their own failure mode; the happy path applies every present role-
     # comment file and explicitly SKIPS (never silently omits or fatally
     # errors on) the three deliberately-absent ones; and an unknown flag
-    # is rejected. This PR also fixes a real defect this fence caught:
+    # is rejected. Sec F-3 (PR #854 review): "bootstrap_complete=t" above
+    # corrected to "bootstrap_complete=true" -- this workflow comment
+    # itself went stale the moment the boolean-cast predicate fix below
+    # landed, even though this file's own delta was untouched by that PR.
+    # This PR also fixes a real defect this fence caught:
     # two `OUT="$(cmd 2>&1)"` remote-script assignments lacked the
     # set +e / set -e bracket scripts/db-role-handoff.sh's own identical
     # mechanism uses, so a genuine command failure was silently killing
@@ -4206,6 +4210,59 @@ jobs:
       - uses: actions/checkout@v4
       - name: offline strike-proofs (already-bootstrapped-clean / already-bootstrapped-census-bad / partial-state / preflight-no-apply / phase1-roles-fail / credential-mismatch / credential-cleartext-leak / phase2-push-fails / phase2-no-completion-line / phase2-census-bad-after-push / phase2-bootstrap-not-complete-after-push / phase3-source-pin / happy-path-full-apply / resource-absent / unknown-flag / structural-worktree-guard-pin)
         run: bash scripts/ci/fence-db-bootstrap-strikes.sh
+
+  fence-heredoc-stdin-drain:
+    name: heredoc-fed remote blocks — docker exec stdin-drain fence (tree-wide)
+    runs-on: ubuntu-latest
+    # Sec VETO-1 (PR #854 review), widened tree-wide by team-lead's own
+    # ruling. A `docker compose exec` (any form, `-T` or not) or an
+    # interactive `docker exec -i`/`-it`, invoked inside a heredoc body
+    # fed to `bash -s`/`sh -s` (this repo's own `sshx()`/`sshx_in()`-over-
+    # ssh convention) ATTACHES and DRAINS stdin regardless of whether the
+    # invoked command reads it -- without a redirect, the call eats the
+    # rest of the heredoc's own bytes, bash hits EOF and exits 0, and
+    # every later line in that block silently never runs while the
+    # caller still prints its own success line. Live-confirmed against
+    # team-lead's own 2026-09-21 run (scripts/db-bootstrap.sh's leg B and
+    # its Phase 2 `supabase db push` completion check both silently
+    # skipped while the run reported success past them). Structural /
+    # source-literal -- scripts/ci/fence-heredoc-stdin-drain.sh parses the
+    # tree's own scripts/*.sh text for the shape and executes nothing.
+    # Supersedes the two per-file structural pins removed from
+    # fence-db-bootstrap-strikes.sh and fence-db-role-handoff-strikes.sh
+    # in this same PR -- this ONE job is what now covers both of those
+    # scripts (plus every other scripts/*.sh file) tree-wide; their own
+    # jobs above no longer carry this check.
+    steps:
+      - uses: actions/checkout@v4
+      - name: tree-wide stdin-drain scan (scripts/*.sh)
+        run: bash scripts/ci/fence-heredoc-stdin-drain.sh
+
+  fence-boolean-cast-pairing:
+    name: psql boolean reads — cast/comparison vocabulary pairing fence (tree-wide)
+    runs-on: ubuntu-latest
+    # Sec VETO-2 (PR #854 review), generalized to a fence by team-lead's
+    # own ruling: `select <boolexpr>::text` prints the literal words
+    # "true"/"false"; the SAME expression uncast prints psql's own
+    # abbreviated "t"/"f". A cast read compared against "t"/"f", or an
+    # UNCAST read compared against "true"/"false", can never match a real
+    # answer -- the exact defect this PR fixes four separate times over
+    # (scripts/db-bootstrap.sh x2, scripts/db-role-handoff.sh,
+    # scripts/pgrst-exposure-gates.sh's own B-1 anon-zero-grant VETO
+    # trigger, found by Sec in a file this PR merely edited for an
+    # unrelated fix). ⚠ NOT a literal `t`->`true` sweep -- Sec's own
+    # measured counter-example, scripts/provision-supabase-stack.sh's
+    # `JWT_PRESENT == "t"`, reads an UNCAST expression and is CORRECT;
+    # this fence correlates each comparison with its own nearest
+    # preceding psql-shaped read and flags only a MISMATCHED pairing.
+    # Positive-controlled both directions (a broken cast-vs-abbreviated
+    # pairing, and a broken uncast-vs-fullword pairing) plus the known-
+    # correct JWT_PRESENT pairing, which must stay green. Structural /
+    # source-literal, same convention as fence-heredoc-stdin-drain.sh.
+    steps:
+      - uses: actions/checkout@v4
+      - name: tree-wide boolean-cast pairing scan (scripts/*.sh)
+        run: bash scripts/ci/fence-boolean-cast-pairing.sh
 
   fence-mint-jwt-boxip-strikes:
     name: mint-supabase-jwt-keys.sh — BOX_IP-required-not-defaulted strike-proof

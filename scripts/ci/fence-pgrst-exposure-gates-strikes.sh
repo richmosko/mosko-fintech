@@ -86,7 +86,7 @@ if [[ "$ARGS" != *"-tAc"* ]]; then
 fi
 
 if [[ "$ARGS" == *"has_schema_privilege('anon', 'pfin', 'USAGE')"* ]]; then
-  echo "${FAKE_ANON_USAGE:-f}"
+  echo "${FAKE_ANON_USAGE:-false}"
   exit 0
 fi
 
@@ -216,40 +216,40 @@ assert_output_contains() {
 FAIL=0
 
 # 1. HAPPY-PATH
-OUT1="$(run_scenario "happy-path: all three gates clean" 0 "" clean 0 f "" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
+OUT1="$(run_scenario "happy-path: all three gates clean" 0 "" clean 0 false "" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
 assert_output_contains "happy-path" "${OUT1:-}" "safe to proceed to the PGRST_DB_SCHEMAS flip" || FAIL=1
 
 # 2. B1-VETO-USAGE
-OUT2="$(run_scenario "b1-veto-usage: refuses" 1 "" clean 0 t "" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
+OUT2="$(run_scenario "b1-veto-usage: refuses" 1 "" clean 0 true "" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
 assert_output_contains "b1-veto-usage" "${OUT2:-}" "B-1 VETO" || FAIL=1
 
 # 3. B1-VETO-GRANTED-RELATION -- USAGE clean, but one table-level grant
-OUT3="$(run_scenario "b1-veto-granted-relation: refuses" 1 "" clean 0 f "pfin.accounts\n" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
+OUT3="$(run_scenario "b1-veto-granted-relation: refuses" 1 "" clean 0 false "pfin.accounts\n" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
 assert_output_contains "b1-veto-granted-relation" "${OUT3:-}" "B-1 VETO" || FAIL=1
 
 # 4. B2-MISMATCH
-OUT4="$(run_scenario "b2-mismatch: refuses" 1 "" clean 0 f "" "$((REAL_COUNT + 1))" "025_aal2_step_up_backstop")" || FAIL=1
+OUT4="$(run_scenario "b2-mismatch: refuses" 1 "" clean 0 false "" "$((REAL_COUNT + 1))" "025_aal2_step_up_backstop")" || FAIL=1
 assert_output_contains "b2-mismatch" "${OUT4:-}" "does not equal this checkout's migration-file count" || FAIL=1
 
 # 5. B3-ZERO
-OUT5="$(run_scenario "b3-zero: refuses" 1 "" clean 0 f "" "$REAL_COUNT" "")" || FAIL=1
+OUT5="$(run_scenario "b3-zero: refuses" 1 "" clean 0 false "" "$REAL_COUNT" "")" || FAIL=1
 assert_output_contains "b3-zero" "${OUT5:-}" "expected exactly one ledger row matching '025%'" || FAIL=1
 
 # 6. B3-MULTIPLE
-OUT6="$(run_scenario "b3-multiple: refuses" 1 "" clean 0 f "" "$REAL_COUNT" "025_aal2_step_up_backstop\n025_aal2_step_up_backstop_dup")" || FAIL=1
+OUT6="$(run_scenario "b3-multiple: refuses" 1 "" clean 0 false "" "$REAL_COUNT" "025_aal2_step_up_backstop\n025_aal2_step_up_backstop_dup")" || FAIL=1
 assert_output_contains "b3-multiple" "${OUT6:-}" "expected exactly one ledger row matching '025%'" || FAIL=1
 
 # 7. RESOURCE-ABSENT (measured exit 1, not the header's documented 2 --
 #    see the scenario comment above)
-OUT7="$(run_scenario "resource-absent: refuses" 1 "" stack-absent 0 f "" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
+OUT7="$(run_scenario "resource-absent: refuses" 1 "" stack-absent 0 false "" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
 assert_output_contains "resource-absent" "${OUT7:-}" "expected exactly one application" || FAIL=1
 
 # 8. BOX-UNREACHABLE
-OUT8="$(run_scenario "box-unreachable: FAILED (exit 2)" 2 "" clean 1 f "" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
+OUT8="$(run_scenario "box-unreachable: FAILED (exit 2)" 2 "" clean 1 false "" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
 assert_output_contains "box-unreachable" "${OUT8:-}" "not reachable over SSH" || FAIL=1
 
 # 9. UNKNOWN-FLAG -- this script has no --apply and no flags at all
-OUT9="$(run_scenario "unknown-flag: rejected" 2 "--apply" clean 0 f "" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
+OUT9="$(run_scenario "unknown-flag: rejected" 2 "--apply" clean 0 false "" "$REAL_COUNT" "025_aal2_step_up_backstop")" || FAIL=1
 assert_output_contains "unknown-flag" "${OUT9:-}" "unknown flag" || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
