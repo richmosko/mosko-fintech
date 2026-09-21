@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#
+# fake-docker -- offline stand-in for docker, used by
+# scripts/ci/fence-smoke-pdf-roundtrip-strikes.sh. Handles container
+# resolution and the `docker exec ... node -e ...` round-trip probe,
+# canning the probe's OWN output rather than re-executing real Node
+# (the real JWT-minting logic is validated separately, offline, by hand
+# -- see this fence's own header).
+
+set -euo pipefail
+
+ARGS="$*"
+
+if [[ "$ARGS" == *"compose --project-name"*"ps -q"* ]]; then
+  echo "container-abc123"
+  if [[ "${FAKE_CONTAINERS:-1}" == "2" ]]; then
+    echo "container-def456"
+  fi
+  exit 0
+fi
+
+if [[ "$ARGS" == *"inspect --format"* ]]; then
+  ID="${*: -1}"
+  printf 'true\t%s\t2026-01-01T00:00:00Z\n' "$ID"
+  exit 0
+fi
+
+if [[ "$ARGS" == *"exec"*"node -e"* ]]; then
+  printf '%s %s %s\n' "${FAKE_STATUS:-200}" "${FAKE_MAGIC:-PDF_MAGIC_OK}" "${FAKE_BYTES:-1234}"
+  exit 0
+fi
+
+echo "FAKE DOCKER: unrecognised invocation: $ARGS" >&2
+exit 1

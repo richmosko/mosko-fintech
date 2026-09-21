@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+#
+# fake-docker -- offline stand-in for docker, used by
+# scripts/ci/fence-smoke-etl-poll-strikes.sh. Handles container
+# resolution (compose ps -q / inspect), the PRE-CHECK active-tenant
+# count (`docker exec ... python3 -c ...` against pfin.account, Sec F-3
+# / F/CTO ruling 2026-09-20), the worker run
+# (`docker exec ... python run_nav_daily.py`), and the row-count
+# read-back (`docker exec ... python3 -c ...` against pfin.nav_daily).
+
+set -euo pipefail
+
+ARGS="$*"
+
+if [[ "$ARGS" == *"compose --project-name"*"ps -q"* ]]; then
+  echo "container-abc123"
+  if [[ "${FAKE_CONTAINERS:-1}" == "2" ]]; then
+    echo "container-def456"
+  fi
+  exit 0
+fi
+
+if [[ "$ARGS" == *"inspect --format"* ]]; then
+  ID="${*: -1}"
+  printf 'true\t%s\t2026-01-01T00:00:00Z\n' "$ID"
+  exit 0
+fi
+
+if [[ "$ARGS" == *"run_nav_daily.py"* ]]; then
+  if [[ "${FAKE_WORKER_MODE:-ok}" == "fail" ]]; then
+    echo "Traceback: something broke" >&2
+    exit 1
+  fi
+  if [[ "${FAKE_WORKER_MODE:-ok}" == "no-completion-line" ]]; then
+    echo "started, then nothing"
+    exit 0
+  fi
+  echo "Starting daily-NAV checkpoint run at 2026-01-01T00:00:00Z"
+  echo "Finished at 2026-01-01T00:05:00Z (elapsed: 0:05:00) -- summary: {'ok': 3}"
+  exit 0
+fi
+
+# Sec F-3 / F/CTO ruling 2026-09-20: TWO distinct python3 -c invocations now
+# exist (the pre-check tenant count against pfin.account, and the post-run
+# row-count check against pfin.nav_daily) -- distinguish by the literal SQL
+# text each embeds, since both otherwise match "python3 -c".
+if [[ "$ARGS" == *"python3 -c"* && "$ARGS" == *"pfin.account"* ]]; then
+  # Sec F-6 (PR #848 round-2 review) -- same class as the nav_daily branch
+  # below: PFIN_DB_USER (pfin_etl) is NOINHERIT with no direct table
+  # privileges; a real Postgres would 42501 this SELECT without an explicit
+  # `set local role service_role` first. REFUSE unless the invocation's own
+  # SQL text proves the guard is present -- this strikes a regression that
+  # drops the line at :204.
+  if [[ "$ARGS" != *"set local role service_role"* ]]; then
+    echo "CONN_ERROR permission denied for schema pfin (simulated 42501 -- no 'set local role service_role' in the invocation)" >&2
+    exit 2
+  fi
+  if [[ "${FAKE_TENANT_MODE:-ok}" == "conn-error" ]]; then
+    echo "CONN_ERROR could not connect" >&2
+    exit 2
+  fi
+  echo "${FAKE_TENANT_COUNT:-1}"
+  exit 0
+fi
+
+if [[ "$ARGS" == *"python3 -c"* && "$ARGS" == *"pfin.nav_daily"* ]]; then
+  # Sec V-2 (PR #848 round-2 review) -- PFIN_DB_USER (pfin_etl) is
+  # NOINHERIT with no direct table privileges; a real Postgres would
+  # 42501 this exact SELECT without an explicit `set local role
+  # service_role` first (same class as the pre-check above, which
+  # already does this correctly). REFUSE (simulate the real 42501 as a
+  # CONN_ERROR) unless the invocation's own SQL text proves the guard is
+  # present -- this is what strikes a regression that drops the line.
+  if [[ "$ARGS" != *"set local role service_role"* ]]; then
+    echo "CONN_ERROR permission denied for schema pfin (simulated 42501 -- no 'set local role service_role' in the invocation)" >&2
+    exit 2
+  fi
+  if [[ "${FAKE_COUNT_MODE:-ok}" == "conn-error" ]]; then
+    echo "CONN_ERROR could not connect" >&2
+    exit 2
+  fi
+  echo "${FAKE_COUNT:-3}"
+  exit 0
+fi
+
+echo "FAKE DOCKER: unrecognised invocation: $ARGS" >&2
+exit 1
