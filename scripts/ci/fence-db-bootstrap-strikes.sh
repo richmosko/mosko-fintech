@@ -171,6 +171,32 @@ else
   echo "OK: [structural-worktree-guard-pin] $TARGET_SH still carries its own worktree-refusal guard text." >&2
 fi
 
+# Sec VETO-1 (PR #854 review) -- structural pins: `docker compose exec -T`
+# inside a heredoc-fed remote `bash -s` block MUST redirect its own stdin
+# (`</dev/null` here), or it ATTACHES and DRAINS the rest of that
+# heredoc's own bytes -- bash hits EOF, exits 0, and every later leg in
+# that block silently never runs while the caller still prints success
+# (live-confirmed: team-lead's own 2026-09-21 run showed leg B's own
+# OK/FATAL line, leg C's banner, and leg E's readback ALL absent, yet the
+# outer script printed its "sanity re-read confirms no drift" line
+# anyway). This fence's own `ssh`/`docker` fakes never reach a real
+# docker, so they cannot observe stdin-draining behaviorally -- these are
+# source-literal pins, the only thing standing between a silently-removed
+# redirect and a false green.
+if ! grep -qF "from pg_roles where rolname='migrator';\" </dev/null)\"" "$TARGET_SH"; then
+  echo "FAIL: [heredoc-stdin-drain-pin: leg-B-catalog-verify] $TARGET_SH's leg-B catalog-verify docker exec no longer redirects stdin -- it will silently drain the rest of its heredoc and skip leg C/E entirely while still reporting success." >&2
+  exit 1
+else
+  echo "OK: [heredoc-stdin-drain-pin: leg-B-catalog-verify] $TARGET_SH's leg-B catalog verify redirects its own stdin." >&2
+fi
+
+if ! grep -qF "exec -T migrator sh -c 'supabase db push --yes --db-url \"\$PROD_DB_URL\" --workdir /workspace' </dev/null" "$TARGET_SH"; then
+  echo "FAIL: [heredoc-stdin-drain-pin: phase2-db-push] $TARGET_SH's Phase 2 db push docker exec no longer redirects stdin -- it will silently drain the rest of its heredoc and skip its own completion-line check while still reporting success." >&2
+  exit 1
+else
+  echo "OK: [heredoc-stdin-drain-pin: phase2-db-push] $TARGET_SH's Phase 2 db push redirects its own stdin." >&2
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 

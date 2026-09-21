@@ -525,8 +525,21 @@ fi
 echo "OK: two-statement handoff script completed (exit 0, no mismatch, no cleartext echo)."
 
 step_r "B. Catalog verify (rolcanlogin + pg_authid.rolpassword IS NOT NULL, as supabase_admin)"
+# ⚠ `</dev/null` is load-bearing, not cosmetic (Sec VETO-1, PR #854
+# review, found while reviewing db-bootstrap.sh's identical shape --
+# live-confirmed there against team-lead's own 2026-09-21 run). This
+# remote script is fed to `bash -s` on ssh's OWN stdin, and `docker
+# compose exec -T` ATTACHES and DRAINS stdin -- without the redirect,
+# THIS call eats the rest of this heredoc's bytes, bash hits EOF and
+# exits 0, and everything after it silently never runs: this leg's own
+# comparison below, ALL of leg C's trust-path detection (Sec VETO V-1,
+# PR #846 -- the `-h localhost` -> `-h db` fix), and leg D/E's Coolify
+# push + hash-bound readback. Same defect class as mint-supabase-jwt-
+# keys.sh's 2026-09-11 item (2a). Every `docker compose exec -T` inside a
+# heredoc-fed remote block needs this, whether or not the command itself
+# reads stdin -- docker drains it regardless (measured).
 VERIFY="$(docker compose --project-name "$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc \
-  "select rolcanlogin::text || '|' || (select (rolpassword is not null)::text from pg_authid where rolname='$ROLE') from pg_roles where rolname='$ROLE';")"
+  "select rolcanlogin::text || '|' || (select (rolpassword is not null)::text from pg_authid where rolname='$ROLE') from pg_roles where rolname='$ROLE';" </dev/null)"
 VERIFY_TRIMMED="$(printf '%s' "$VERIFY" | tr -d ' \n')"
 if [ "$VERIFY_TRIMMED" != "true|true" ]; then
   echo "FATAL: post-handoff catalog verify expected 'true|true' (rolcanlogin|has_password), got '$VERIFY_TRIMMED'." >&2

@@ -139,15 +139,31 @@
 # credential handoff's leg A (`\password migrator`) reset the role's
 # password to the SAME value already in the Coolify store (leg A always
 # runs unconditionally by design -- PATH A, Sec VETO-1 r2 ruling -- so
-# this part is not new exposure, just an unnecessary repeat). Phase 2
-# (`supabase db push`) ran and reported a no-op (no pending migrations).
-# The run then genuinely FAILED at Phase 2 verify, because
-# bootstrap_complete was STILL misread as false even after a real (if
-# redundant) apply -- which is what surfaced the bug rather than letting
-# it silently succeed twice. No data was lost or corrupted; the fix
-# below is about not doing this unnecessary, non-zero-risk work again on
-# every re-run, and about refusing cleanly instead of guessing when a
-# read genuinely fails.
+# this part is not new exposure, just an unnecessary repeat). What
+# actually happened at leg B onward and at Phase 2 is a SEPARATE,
+# independently-found defect (Sec VETO-1, PR #854 review), corrected in
+# the same PR as this predicate fix: a `docker compose exec -T` call
+# inside a heredoc-fed remote `bash -s` block without a stdin redirect
+# DRAINS the rest of that heredoc's own bytes, so leg B's own catalog-
+# verify comparison, ALL of leg C (the trust-path detection), and leg E
+# (the store-drift readback) never actually ran that day -- the log shows
+# neither leg B's own OK/FATAL line nor leg C's/E's banners anywhere,
+# even though the outer script still printed its "sanity re-read confirms
+# no drift" success line (false: no re-read happened). Phase 2's own
+# `supabase db push` call has the identical defect -- its completion-line
+# check never ran either, so "reported a no-op" could not actually be
+# confirmed from that log; only that the outer script printed "migration
+# sweep applied" regardless of what the push itself did. No data is known
+# to have been lost or corrupted, but this MEASURED BLAST RADIUS note
+# should be read as "what the outer script printed", not "what was
+# verified" for everything from leg B onward in that run. The run then
+# genuinely FAILED at Phase 2 verify, because bootstrap_complete was
+# STILL misread as false even after Phase 1/2 ran -- which is what
+# surfaced the ORIGINAL predicate bug, independent of the stdin-drain
+# defect. The fix below addresses both: not doing unnecessary re-apply
+# work on every re-run, refusing cleanly instead of guessing on a failed
+# read, AND (see legs B/Phase-2-push below) not silently skipping the
+# checks that would have caught either problem.
 #
 # USAGE
 #   scripts/db-bootstrap.sh              # preflight: read-only, prints the plan
@@ -439,21 +455,26 @@ if printf '%s' "$OUT" | grep -qi "didn't match"; then echo "FATAL: password conf
 echo "OK: migrator credential handoff completed (exit 0, no mismatch, no cleartext echo)."
 
 echo "== B. Catalog verify (rolcanlogin + pg_authid.rolpassword IS NOT NULL, re-read fresh) =="
+# ⚠ `</dev/null` is load-bearing, not cosmetic (Sec VETO-1, PR #854
+# review, live-confirmed against team-lead's own 2026-09-21 run). This
+# remote script is fed to `bash -s` on ssh's OWN stdin, and `docker
+# compose exec -T` ATTACHES and DRAINS stdin -- without the redirect,
+# THIS call eats the rest of this heredoc's bytes before bash ever reads
+# them, bash hits EOF and exits 0, and everything after it (leg B's own
+# comparison below, ALL of leg C's trust-path detection, and leg E's
+# store-drift readback) silently never runs, while the OUTER script still
+# prints its own "ok" success line. Measured live: realrun3.log prints
+# the "== B." banner below, then NEITHER this leg's own OK/FATAL line NOR
+# leg C's "== C." banner NOR leg E's readback line appear anywhere, yet
+# the outer script's "migrator: LOGIN + password set ... sanity re-read
+# confirms no drift" line still printed -- a false OK, not a caught
+# failure. Same defect class as mint-supabase-jwt-keys.sh's 2026-09-11
+# item (2a). Every `docker compose exec -T` inside a heredoc-fed remote
+# block needs this, whether or not the command itself reads stdin --
+# docker drains it regardless (measured).
 VERIFY="$(docker compose --project-name "$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc \
-  "select rolcanlogin::text || '|' || (select (rolpassword is not null)::text from pg_authid where rolname='migrator') from pg_roles where rolname='migrator';")"
+  "select rolcanlogin::text || '|' || (select (rolpassword is not null)::text from pg_authid where rolname='migrator') from pg_roles where rolname='migrator';" </dev/null)"
 VERIFY_TRIMMED="$(printf '%s' "$VERIFY" | tr -d ' \n')"
-# team-lead's live --from standup finding, 2026-09-21 -- reproduced
-# locally against a throwaway initdb instance before shipping: an
-# explicit `::text` cast on a boolean prints "true"/"false", never
-# "t"/"f" -- this leg's own query casts twice via `::text` for the same
-# reason the outer script's queries do (concatenation), so it carries
-# the identical predicate bug even though it runs inside a different
-# remote sub-shell. Read-failure handling is unaffected here: this
-# whole remote script runs under `set -e`, so a genuinely failed psql
-# call already aborts at the VERIFY="$(...)" assignment, before this
-# comparison is ever reached -- fail-closed by construction, unlike the
-# outer script's bootstrap_complete read, which explicitly defeated
-# that with `|| echo 'f'`.
 if [ "$VERIFY_TRIMMED" != "true|true" ]; then
   echo "FATAL: post-handoff catalog verify expected 'true|true' (rolcanlogin|has_password), got '$VERIFY_TRIMMED'." >&2
   exit 1
@@ -529,8 +550,18 @@ set -e
 # `OUT="$(cmd)"` under `set -e` would kill this script at the assignment
 # on a genuine push failure, before RC=$? and echo "$OUT" (the actual
 # supabase/docker error text) are ever reached.
+# ⚠ `</dev/null` is load-bearing, not cosmetic (Sec VETO-1, PR #854
+# review, live-confirmed against team-lead's own 2026-09-21 run). This
+# remote script is fed to `bash -s` on ssh's OWN stdin, and `docker
+# compose exec -T` ATTACHES and DRAINS stdin -- without the redirect,
+# THIS call eats the rest of this heredoc's bytes, bash hits EOF and
+# exits 0, and the RC check + completion-line grep below silently never
+# run. Measured live: realrun3.log never contains "Finished supabase db
+# push" anywhere, yet the outer script's "ok migration sweep applied"
+# line still printed -- the check that would have told a no-op apart
+# from a genuinely failed push never executed at all.
 set +e
-OUT="$(docker compose --project-name "$MIGRATOR_UUID" exec -T migrator sh -c 'supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace' 2>&1)"
+OUT="$(docker compose --project-name "$MIGRATOR_UUID" exec -T migrator sh -c 'supabase db push --yes --db-url "$PROD_DB_URL" --workdir /workspace' </dev/null 2>&1)"
 RC=$?
 set -e
 echo "$OUT"
