@@ -73,11 +73,22 @@ def _normalize_expr(expr):
     return "".join(text.split()).lower()
 
 
-def check_workflow(doc, job_id):
+def check_workflow(doc, job_id, expected_context=None):
     """Return a list of violation strings for `job_id` within parsed workflow `doc`.
 
     Empty list == compliant. Every distinguishable failure gets its own message:
     a fence whose red does not say what is wrong is a fence that gets discounted.
+
+    `expected_context`, when given, is the manifest's own context field for this
+    row -- checked byte-exact against the job's own rendered `name:` (falling
+    back to the job id, GitHub's own default when no `name:` is set). Sec, PR
+    #855 review: `required_unfiltered.py` previously checked only that a
+    manifested job EXISTS and is UNSKIPPABLE -- never that the manifest's
+    context STRING actually matches what that job reports. A context matching
+    no job's name never reports at all, hangs Pending forever at sync time, and
+    is recoverable only by an F/CTO branch-protection edit -- proven live by
+    appending ` XYZZY-NOT-A-REAL-CONTEXT` to a manifest row and observing this
+    checker still print `OK` for it before this check existed.
     """
     violations = []
 
@@ -117,6 +128,18 @@ def check_workflow(doc, job_id):
         return violations
 
     job = jobs[job_id] or {}
+
+    if expected_context is not None:
+        rendered_name = job.get("name", job_id)
+        if rendered_name != expected_context:
+            violations.append(
+                f"manifest context {expected_context!r} does not byte-exactly "
+                f"match job `{job_id}`'s own rendered name {rendered_name!r} -- "
+                f"this context will never report, hangs Pending forever once "
+                f"required, and deadlocks every PR. Fix the manifest row or the "
+                f"job's `name:` so they agree exactly."
+            )
+
     if "if" in job:
         violations.append(
             f"job `{job_id}` carries a job-level `if:` — a skipped job reports "
@@ -191,8 +214,11 @@ CLEAN = {
 }
 
 SELFTEST_CASES = [
-    # (label, doc, job_id, must_be_flagged)
-    ("clean workflow", CLEAN, "good", False),
+    # (label, doc, job_id, expected_context, must_be_flagged)
+    # expected_context=None means "not under test here" -- the byte-equality
+    # check is skipped for that case, same as calling check_workflow() without
+    # the argument at all (main()'s pre-#855 call shape).
+    ("clean workflow", CLEAN, "good", None, False),
     (
         "paths under pull_request",
         {
@@ -200,6 +226,7 @@ SELFTEST_CASES = [
             "jobs": {"good": {"runs-on": "ubuntu-latest"}},
         },
         "good",
+        None,
         True,
     ),
     (
@@ -209,6 +236,7 @@ SELFTEST_CASES = [
             "jobs": {"good": {"runs-on": "ubuntu-latest"}},
         },
         "good",
+        None,
         True,
     ),
     (
@@ -218,9 +246,10 @@ SELFTEST_CASES = [
             "jobs": {"good": {"runs-on": "ubuntu-latest", "if": "false"}},
         },
         "good",
+        None,
         True,
     ),
-    ("job named in manifest is absent", CLEAN, "nonexistent", True),
+    ("job named in manifest is absent", CLEAN, "nonexistent", None, True),
     # `on` parsed as the YAML boolean True — the real-world shape, since PyYAML does
     # this to every workflow file in this repo. If this case ever stops being
     # flagged-or-clean correctly, the checker has stopped reading real workflows.
@@ -228,9 +257,10 @@ SELFTEST_CASES = [
         "boolean-True `on` key (YAML 1.1 on/off)",
         {True: {"pull_request": {"paths": ["x/**"]}}, "jobs": {"good": {}}},
         "good",
+        None,
         True,
     ),
-    ("missing `on` block entirely", {"jobs": {"good": {}}}, "good", True),
+    ("missing `on` block entirely", {"jobs": {"good": {}}}, "good", None, True),
     # --- Step/job-level evasions (Sec F-1, 2026-08-10). A job-only checker passed
     # all of these. Each discriminator below gets its own probe, because an added
     # check with no probe is the next gutted checker.
@@ -247,6 +277,7 @@ SELFTEST_CASES = [
             },
         },
         "good",
+        None,
         True,
     ),
     (
@@ -256,6 +287,7 @@ SELFTEST_CASES = [
             "jobs": {"good": {"steps": [{"name": "teardown", "if": "always()"}]}},
         },
         "good",
+        None,
         False,
     ),
     (
@@ -265,6 +297,7 @@ SELFTEST_CASES = [
             "jobs": {"good": {"steps": [{"name": "teardown", "if": "${{ always() }}"}]}},
         },
         "good",
+        None,
         False,
     ),
     (
@@ -280,6 +313,7 @@ SELFTEST_CASES = [
             },
         },
         "good",
+        None,
         True,
     ),
     (
@@ -289,6 +323,7 @@ SELFTEST_CASES = [
             "jobs": {"good": {"continue-on-error": True, "steps": [{"name": "x"}]}},
         },
         "good",
+        None,
         True,
     ),
     (
@@ -298,6 +333,7 @@ SELFTEST_CASES = [
             "jobs": {"good": {"steps": [{"name": "x", "continue-on-error": True}]}},
         },
         "good",
+        None,
         True,
     ),
     (
@@ -307,6 +343,7 @@ SELFTEST_CASES = [
             "jobs": {"good": {"continue-on-error": False, "steps": [{"name": "x", "continue-on-error": False}]}},
         },
         "good",
+        None,
         False,
     ),
     (
@@ -316,6 +353,30 @@ SELFTEST_CASES = [
             "jobs": {"good": {"uses": "./.github/workflows/other.yml"}},
         },
         "good",
+        None,
+        True,
+    ),
+    # --- 16th probe (Sec, PR #855 review, F-1): the manifest-context-vs-job-name
+    # byte-equality check. Proven both directions -- a mismatch (even a single
+    # appended sentinel) must flag; an exact match must not.
+    (
+        "manifest context byte-exact match — must NOT flag",
+        {
+            "on": {"pull_request": {"branches": ["main"]}},
+            "jobs": {"good": {"name": "Some real job name", "steps": [{"name": "x"}]}},
+        },
+        "good",
+        "Some real job name",
+        False,
+    ),
+    (
+        "manifest context with an appended sentinel — must flag (Sec's own probe)",
+        {
+            "on": {"pull_request": {"branches": ["main"]}},
+            "jobs": {"good": {"name": "Some real job name", "steps": [{"name": "x"}]}},
+        },
+        "good",
+        "Some real job name XYZZY-NOT-A-REAL-CONTEXT",
         True,
     ),
 ]
@@ -323,8 +384,8 @@ SELFTEST_CASES = [
 
 def run_selftest():
     failures = []
-    for label, doc, job_id, must_flag in SELFTEST_CASES:
-        got = check_workflow(doc, job_id)
+    for label, doc, job_id, expected_context, must_flag in SELFTEST_CASES:
+        got = check_workflow(doc, job_id, expected_context=expected_context)
         if bool(got) != must_flag:
             failures.append(
                 f"  case {label!r}: expected "
@@ -417,7 +478,7 @@ def main():
         doc = cache[path]
         if doc is None:
             continue
-        violations = check_workflow(doc, job_id)
+        violations = check_workflow(doc, job_id, expected_context=context)
         if violations:
             failed = True
             print(f"FAIL  {context}")
