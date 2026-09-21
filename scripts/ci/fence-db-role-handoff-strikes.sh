@@ -84,8 +84,27 @@
 #       127.0.0.1/32 `trust` pg_hba.conf rule
 #       (supabase/migrations/055_pfin_etl_role.sql:277-282) that a
 #       `-h localhost` connection from inside the db container itself
-#       would hit. The script's own missing-prompt guard must fire and
-#       refuse -- exit 1, not the historical (pre-fix) exit 0.
+#       would hit. Refuses -- exit 1, not the historical (pre-fix) exit 0.
+#       **Ordering corrected (Sec C-1, PR #856 round 1):** leg C now
+#       scrubs cleartext BEFORE checking for the missing prompt (F-2b's
+#       actual requirement) -- since this fake's own trust-path output
+#       realistically leaks the credential in the syntax-error echo (a
+#       real Postgres error includes the offending token), the cleartext
+#       scrub now fires FIRST on this exact shape. Asserts "cleartext
+#       value appeared", not "no password prompt was observed" (the OLD
+#       assertion this ordering change makes false).
+#  13b. TRUST-PATH-NO-PROMPT-CLEAN (Sec C-1 follow-up) -- the SAME
+#       trust-path bypass, but with a non-leaking syntax-error message,
+#       isolating the missing-prompt guard from the cleartext scrub so it
+#       still has its own independent strike.
+#  13c. WRONG-CURRENT-USER-FRESH-HANDOFF (Sec C-1, PR #856 round 1) --
+#       leg C's connect succeeds cleanly (prompt, no leak, exit 0) but
+#       `current_user` echoes back a DIFFERENT role -> refuses. Proves the
+#       exact-row match (this round's fix for the vacuous bare-substring
+#       defect) is load-bearing on its own.
+#  13d. WRONG-CURRENT-USER-BIND-CHECK (Sec C-1, PR #856 round 1) -- same
+#       strike against the already-handed-off bind-check's own connect
+#       (Item 4).
 #   14. READBACK-HASH-MISMATCH (Sec F-2) -- exactly one production
 #       PFIN_DB_PASSWORD row exists on the target resource, but its
 #       truncated SHA-256 does not match the credential THIS run
@@ -248,22 +267,52 @@ if [[ "$ARGS" == *"-h db"* ]]; then
     # server-log capture via log_min_error_statement would carry). NO
     # "Password for user" line is printed. Historically (pre-fix) the
     # script still saw a current_user block and exited 0; this fake still
-    # PRINTS that block, so the strike proves the missing-prompt guard is
-    # what catches this, not a change in what psql itself reports. Sec F-6
-    # (PR #846 review) -- CORRECTED comment: this scenario does NOT also
-    # prove the separate cleartext-in-CONNECT_OUT guard, even though the
-    # cleartext happens to appear in this fake's own output too -- the
-    # missing-prompt guard runs first and exits before the cleartext grep
-    # is ever reached (measured: deleting the cleartext grep alone leaves
-    # this scenario, and the whole suite, green). The cleartext guard has
-    # its OWN dedicated scenario below (FAKE_ECHO_PW_IN_CONNECT) where the
-    # prompt DOES print, so the missing-prompt guard cannot absorb the
-    # strike.
+    # PRINTS that block, so the strike proves a guard catches this, not a
+    # change in what psql itself reports.
+    #
+    # Sec C-1 (PR #856 round 1) -- ORDERING CHANGED, comment corrected:
+    # db-role-handoff.sh's leg C now scrubs cleartext BEFORE checking for
+    # the missing prompt (Sec F-2b's actual requirement, backported from
+    # the already-handed-off bind-check). Since THIS fake's own trust-path
+    # output realistically leaks the credential in the syntax-error echo
+    # (a real Postgres error message does include the offending token),
+    # the cleartext scrub now correctly fires FIRST on this exact shape --
+    # a STRONGER outcome (refused before the missing-prompt check is even
+    # reached), not a regression. This scenario now asserts THAT refusal;
+    # scenario 13b (FAKE_NO_PASSWORD_PROMPT_CLEAN) below proves the
+    # missing-prompt guard still independently catches a trust-path bypass
+    # whose error text happens not to leak the credential.
     echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$FIRST_LINE\""
     echo "LINE 1: $FIRST_LINE"
     echo " current_user "
     echo "--------------"
     echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+    exit 0
+  fi
+  if [[ "${FAKE_NO_PASSWORD_PROMPT_CLEAN:-0}" == "1" ]]; then
+    # Sec C-1 (PR #856 round 1) -- the SAME trust-path bypass as above, but
+    # with a generic (non-leaking) syntax-error message, isolating the
+    # missing-prompt guard from the cleartext scrub so it still has its
+    # OWN independent strike now that the realistic shape above is caught
+    # by the scrub first.
+    echo "psql:<stdin>:1: ERROR:  syntax error at or near a piped credential (redacted by this fake, not by db-role-handoff.sh)"
+    echo " current_user "
+    echo "--------------"
+    echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+    exit 0
+  fi
+  if [[ "${FAKE_WRONG_CURRENT_USER:-0}" == "1" ]]; then
+    # Sec C-1 (PR #856 round 1) -- everything else about this connection is
+    # normal (prompt prints, no cleartext leak, exit 0), but the row psql
+    # prints back for `select current_user;` names a DIFFERENT role. This
+    # is db-bootstrap.sh's own FAKE_WRONG_CURRENT_USER shape, mirrored here
+    # -- proves the exact-row current_user match (the fix for the
+    # vacuous-substring defect C-1 found) fires on its own, not merely
+    # because the prompt/exit-code checks also would have.
+    echo "Password for user ${FAKE_ROLE_NAME:-pfin_etl}: "
+    echo " current_user "
+    echo "--------------"
+    echo " postgres"
     exit 0
   fi
   if [[ "${FAKE_ECHO_PW_IN_CONNECT:-0}" == "1" ]]; then
@@ -355,6 +404,7 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_NO_PASSWORD_PROMPT="\$FAKE_NO_PASSWORD_PROMPT" FAKE_READBACK_HASH_MISMATCH="\$FAKE_READBACK_HASH_MISMATCH" \\
     FAKE_READBACK_USER="\$FAKE_READBACK_USER" FAKE_ECHO_PW_IN_CONNECT="\$FAKE_ECHO_PW_IN_CONNECT" \\
     FAKE_STORE_COUNT="\$FAKE_STORE_COUNT" FAKE_BIND_CHECK_PW="\$FAKE_BIND_CHECK_PW" \\
+    FAKE_NO_PASSWORD_PROMPT_CLEAN="\$FAKE_NO_PASSWORD_PROMPT_CLEAN" FAKE_WRONG_CURRENT_USER="\$FAKE_WRONG_CURRENT_USER" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -392,7 +442,7 @@ run_scenario() {
   # scenario's bind-check (including connect-fail strikes via
   # <connect_fail>) passes through this read undisturbed.
   local desc="$1" expect_exit="$2" role="$3" apply_flag="$4" curl_mode="$5" \
-        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" no_prompt_clean="${19:-0}" wrong_current_user="${20:-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   local resource_name="pfin-back-etl"
@@ -406,6 +456,7 @@ run_scenario() {
     FAKE_NO_PASSWORD_PROMPT="$no_prompt" FAKE_READBACK_HASH_MISMATCH="$hash_mismatch" \
     FAKE_READBACK_USER="$readback_user" FAKE_ECHO_PW_IN_CONNECT="$echo_pw_in_connect" \
     FAKE_STORE_COUNT="$store_count" FAKE_BIND_CHECK_PW="$bind_check_pw" \
+    FAKE_NO_PASSWORD_PROMPT_CLEAN="$no_prompt_clean" FAKE_WRONG_CURRENT_USER="$wrong_current_user" \
     bash "$DB_ROLE_HANDOFF_SH" "$role" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -571,10 +622,41 @@ assert_output_contains "provider-sync happy-path-initial" "${OUT12:-}" "hash-bou
 #     test: the fake psql's step-C branch does NOT emit "Password for
 #     user" and instead echoes the piped credential back inside a
 #     fabricated syntax-error message (the measured 127.0.0.1/32 `trust`
-#     rule shape). Before the V-1 fix this scenario exited 0 (false OK);
-#     the new missing-prompt guard must now refuse it -- exit 1.
+#     rule shape). Before the V-1 fix this scenario exited 0 (false OK).
+#     Sec C-1 (PR #856 round 1) -- leg C now scrubs cleartext BEFORE the
+#     missing-prompt check (F-2b), so on this realistic (credential-
+#     leaking) trust-path shape, the scrub now fires first -- still
+#     exit 1, but via a different, STRONGER guard. Asserts the scrub's
+#     own message, not the (now second-in-line) missing-prompt message.
 OUT13="$(run_scenario "trust-path-no-prompt: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 1)" || FAIL=1
-assert_output_contains "trust-path-no-prompt" "${OUT13:-}" "no password prompt was observed" || FAIL=1
+assert_output_contains "trust-path-no-prompt" "${OUT13:-}" "cleartext value appeared" || FAIL=1
+
+# 13b. TRUST-PATH-NO-PROMPT-CLEAN (Sec C-1 follow-up) -- the same bypass,
+#      but the fake's syntax-error text does NOT leak the credential,
+#      isolating the missing-prompt guard so it still has its own
+#      independent strike now that #13's realistic shape is caught by the
+#      scrub first.
+OUT13B="$(run_scenario "trust-path-no-prompt-clean: refuses via missing-prompt guard" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 1)" || FAIL=1
+assert_output_contains "trust-path-no-prompt-clean" "${OUT13B:-}" "no password prompt was observed" || FAIL=1
+
+# 13c. WRONG-CURRENT-USER-FRESH-HANDOFF (Sec C-1, PR #856 round 1) -- leg
+#      C's own connect (the fresh-handoff path): prompt prints normally,
+#      no cleartext leak, exit 0, but `select current_user;` echoes back a
+#      DIFFERENT role. Proves the exact-row current_user match -- the fix
+#      for C-1's vacuous-substring defect -- fires independently, not
+#      merely because the prompt/exit-code checks also would have (a bare
+#      `grep -qF "$ROLE"` over the whole capture is already satisfied by
+#      the "Password for user $ROLE:" prompt line itself).
+OUT13C="$(run_scenario "wrong-current-user-fresh-handoff: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 1)" || FAIL=1
+assert_output_contains "wrong-current-user-fresh-handoff" "${OUT13C:-}" "did not echo back 'pfin_etl' as its own output row" || FAIL=1
+
+# 13d. WRONG-CURRENT-USER-BIND-CHECK (Sec C-1, PR #856 round 1) -- the
+#      SAME strike against the already-handed-off bind-check's own
+#      connect (Item 4, run-4) -- role already LOGIN+password, store
+#      already carries a row, prompt/exit-code/cleartext all clean, but
+#      current_user echoes back a different role.
+OUT13D="$(run_scenario "wrong-current-user-bind-check: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 0 1)" || FAIL=1
+assert_output_contains "wrong-current-user-bind-check" "${OUT13D:-}" "did not echo back 'pfin_etl' as its own output row" || FAIL=1
 
 # 14. READBACK-HASH-MISMATCH (Sec F-2) -- exactly one production row exists,
 #     but its value's truncated hash does NOT match the credential this run

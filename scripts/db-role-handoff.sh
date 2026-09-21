@@ -500,8 +500,8 @@ if [ $CONNECT_RC -ne 0 ]; then
   echo "FATAL: could not connect AS $ROLE with the store's current credential (exit $CONNECT_RC) -- the store and the live role have drifted apart." >&2
   exit 1
 fi
-if ! printf '%s' "$CONNECT_OUT" | grep -qF "$ROLE"; then
-  echo "FATAL: connected but current_user did not echo back '$ROLE'." >&2
+if ! printf '%s' "$CONNECT_OUT" | grep -qE "^[[:space:]]*${ROLE}[[:space:]]*\$"; then
+  echo "FATAL: connected but current_user did not echo back '$ROLE' as its own output row." >&2
   exit 1
 fi
 echo "OK: connected AS $ROLE over a non-loopback, password-prompted path with the store's current credential; current_user confirmed."
@@ -659,24 +659,39 @@ step_r "C. Connect AS $ROLE over a non-loopback path with the generated credenti
 #    OWN connection-time prompt, piped over stdin (verified locally this
 #    PR, same mechanism as \password's own prompt) -- never PGPASSWORD
 #    (env or argv).
+# 4. Sec C-1 (PR #856 round 1) -- BACKPORTED from the already-handed-off
+#    bind-check below (Item 4, run-4 follow-up) into this ORIGINAL leg C,
+#    which must never diverge from its own copy: the scrub (2) now runs
+#    BEFORE the prompt check (Sec F-2b's actual requirement -- "scrub
+#    before OUT is ever printed, on every branch"), the scrub uses `--`
+#    (Sec N-1's option-injection guard), and the current_user match below
+#    is the F-1b-corrected exact-row form, not a bare substring (a bare
+#    `grep -qF "$ROLE"` is ALREADY satisfied by the "Password for user
+#    $ROLE:" prompt line itself, so it could never fail independently of
+#    the prompt check -- this was the actual defect: this original leg C
+#    still carried the PRE-F-1b form even though db-bootstrap.sh's own
+#    copy of this same mechanism already had the fix, and the new
+#    bind-check copied THIS site rather than db-bootstrap's corrected
+#    one). Both sites now match byte-for-byte in shape; keep them that
+#    way on any future edit.
 set +e
 CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
 CONNECT_RC=$?
 set -e
-if ! printf '%s' "$CONNECT_OUT" | grep -qF "Password for user"; then
-  echo "FATAL: no password prompt was observed connecting AS $ROLE -- this means the connection took a NON-password-authenticated path (e.g. a trust rule), which is the exact hazard this step exists to detect. Refusing regardless of exit code (this check does not trust ON_ERROR_STOP or the exit status alone)." >&2
+if printf '%s' "$CONNECT_OUT" | grep -qF -- "$PW"; then
+  echo "FATAL: the credential's cleartext value appeared in the connect-as-role step's own captured output -- refusing to proceed or print it. Investigate before retrying." >&2
   exit 1
 fi
-if printf '%s' "$CONNECT_OUT" | grep -qF "$PW"; then
-  echo "FATAL: the credential's cleartext value appeared in the connect-as-role step's own captured output -- refusing to proceed or print it. Investigate before retrying." >&2
+if ! printf '%s' "$CONNECT_OUT" | grep -qF "Password for user"; then
+  echo "FATAL: no password prompt was observed connecting AS $ROLE -- this means the connection took a NON-password-authenticated path (e.g. a trust rule), which is the exact hazard this step exists to detect. Refusing regardless of exit code (this check does not trust ON_ERROR_STOP or the exit status alone)." >&2
   exit 1
 fi
 if [ $CONNECT_RC -ne 0 ]; then
   echo "FATAL: could not connect AS $ROLE with the generated credential (exit $CONNECT_RC) -- the handoff did not take effect end to end." >&2
   exit 1
 fi
-if ! printf '%s' "$CONNECT_OUT" | grep -qF "$ROLE"; then
-  echo "FATAL: connected but current_user did not echo back '$ROLE'." >&2
+if ! printf '%s' "$CONNECT_OUT" | grep -qE "^[[:space:]]*${ROLE}[[:space:]]*\$"; then
+  echo "FATAL: connected but current_user did not echo back '$ROLE' as its own output row." >&2
   exit 1
 fi
 echo "OK: connected AS $ROLE over a non-loopback, password-prompted path with the generated credential; current_user confirmed."
