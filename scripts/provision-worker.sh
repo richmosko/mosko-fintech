@@ -542,7 +542,10 @@ step "Clearing any default Coolify-assigned domain/ports_exposes (CA-1, run-8 st
 # a domain in the first place.
 #
 # TWO FIELDS, TWO DIFFERENT MECHANISMS -- MEASURED LIVE (team-lead,
-# provider-sync hmjeuhdaolhw8tlz3qi6lopi, 2026-09-21), not guessed:
+# provider-sync hmjeuhdaolhw8tlz3qi6lopi, 2026-09-21), not guessed. Also
+# recorded durably in scripts/COOLIFY-API-MEASURED.md as COOLIFY-FACT-05
+# (this measurement was cited only from THIS comment for a while, which
+# is exactly why the facts file exists -- see that file's own header):
 #   ports_exposes -- `PATCH {"ports_exposes": ""}` on
 #     `/applications/<uuid>` -> HTTP 200, read-back confirms cleared.
 #     WORKS via the public API. This is the mechanism below.

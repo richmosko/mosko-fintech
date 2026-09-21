@@ -33,19 +33,61 @@
 #     does not authorise Let's Encrypt -- otherwise this would only ever
 #     surface later as an opaque cert-poll timeout.
 #
-# THE COOLIFY PATCH FIELD NAME IS UNMEASURED -- stated, not glossed. Every
-# sibling script that READS an application's domain(s) uses the `fqdn`
-# field on the `GET /applications/<uuid>` response (deploy-app.sh,
-# smoke-admission-endpoint.sh both read `a.get("fqdn")`), comma-separated
-# for multiple domains. Whether `PATCH /applications/<uuid>` with
-# `{"fqdn": "..."}` in the body is the correct way to SET that same field
-# is NOT measured anywhere in this repo -- no script has ever written it.
-# The preflight below prints the EXACT body this script would PATCH and
-# says so explicitly; only `--apply` actually fires it, and the apply
-# path's own read-back (a fresh GET immediately after) is what turns
-# "unmeasured" into "measured, this run" -- if the field name is wrong,
-# the read-back will show the OLD value unchanged and this script refuses
-# to report success.
+# THE COOLIFY DOMAIN-ASSIGNMENT MECHANISM IS docker_compose_domains, NOT
+# fqdn -- corrected 2026-09-21 (Sec merge condition, PR #866 review, on
+# `cfdc56b4`). This header PREVIOUSLY claimed the app-level `fqdn` PATCH
+# field name was UNMEASURED; that was FALSE, and the correct measurement
+# was already in-tree and simply had not traveled to this script. PR #862
+# measured, live, on THIS SAME build_pack (dockercompose) --
+#   PATCH {"fqdn": ""}    -> HTTP 422 "This field is not allowed."
+#   PATCH {"domains": ""} -> HTTP 422 "The domains field cannot be used
+#     for dockercompose applications. Use docker_compose_domains instead."
+# (scripts/provision-worker.sh:556; see scripts/COOLIFY-API-MEASURED.md,
+# entry COOLIFY-FACT-05, for the full citation).
+#
+# SCOPE, STATED PRECISELY (Sec F-1, PR #866 review) -- that measurement
+# used an EMPTY value (""). Whether a non-empty valid URL is accepted by
+# `fqdn`/`domains` on a dockercompose app is UNMEASURED; "This field is
+# not allowed" reads field-level (present on every request regardless of
+# value), so the honest position is "probably rejected regardless of
+# value, not proven for a non-empty one." This script does not attempt
+# the `fqdn`/`domains` PATCH at all, on any value, and uses the
+# known-accepted mechanism instead:
+#   docker_compose_domains -- an array, PATCHable (PR #862 measured only
+#     `[]`, a no-op on the app-level `fqdn` column -- confirming the
+#     ENDPOINT accepts a write to this field, not that a real domain
+#     entry then routes traffic correctly, which remains UNMEASURED
+#     until this run's own post-assignment container-env read below, and
+#     fully only at step 22's live DNS cutover). Per Coolify's own
+#     v4.3.18 OpenAPI schema (COOLIFY-FACT-06;
+#     github.com/coollabsio/coolify tag v4.3.18, openapi.yaml,
+#     `update-application-by-uuid` operation), each array element is
+#     `{"name": "<compose service>", "domain": "<comma-separated
+#     URLs>"}` -- this script PATCHes exactly one element, name="app"
+#     (this repo's own api/docker-compose.yaml service name).
+#   READ-BACK ASYMMETRY (COOLIFY-FACT-06, same source, worth stating
+#     explicitly since it shapes the read-back check below): the WRITE
+#     shape is an array; the RESPONSE model's own `docker_compose_domains`
+#     field is documented as a plain nullable STRING, not an array --
+#     Coolify evidently serializes it differently for read than it
+#     accepts it for write. The exact runtime string shape is UNMEASURED
+#     -- the read-back below splits the live comma-separated string and
+#     compares it as a SET against the intended domain set (Sec F-4, PR
+#     #866 review: a substring/containment check passes even with extra
+#     domains present, or on a superstring near-miss like
+#     "notexample.com" containing "example.com" -- neither means this
+#     app now serves EXACTLY the intended domains), and logs the raw
+#     field so a future run turns this into a measured fact (append it to
+#     COOLIFY-API-MEASURED.md).
+#   NO TINKER FALLBACK HERE (Sec explicit instruction, PR #866 review):
+#     if docker_compose_domains cannot actually route traffic, this
+#     script STOPS -- a new tinker-write proposal goes to Sec FIRST, it
+#     is never added unilaterally under this script's own scope, the
+#     same review gate the existing TINKER-WRITE-ALLOW-07 site in
+#     provision-worker.sh went through before it existed.
+# The preflight below prints the EXACT body this script would PATCH;
+# only `--apply` actually fires it, and the apply path's own read-back
+# (a fresh GET immediately after) is what confirms the write took.
 #
 # KEYS NEVER TOUCH ANY PROCESS'S OWN ARGV -- same discipline as every
 # sibling script that handles a credential, applied at BOTH hops this
@@ -82,14 +124,16 @@
 #   slower or faster LE issuance than the default bound assumes.
 #
 # EXIT CODES
-#   0  VERIFIED -- DNS records match the target state, the Coolify PATCH
-#      read-back confirms the new fqdn value, and both apex and `www`
-#      answer HTTPS 200 with a valid chain.
+#   0  VERIFIED -- DNS records match the target state, ports_exposes and
+#      docker_compose_domains PATCH read-backs both confirm the new
+#      values, and both apex and `www` answer HTTPS 200 with a valid
+#      chain.
 #   1  REFUSED -- a real finding: an existing record of an unexpected
-#      type at a target name, ambiguous (>1) application match, the
-#      Coolify read-back does not show the PATCHed value (the field-name
-#      guess was wrong), the cert poll exhausts its bound, or `www` does
-#      not serve.
+#      type at a target name, ambiguous (>1) application match, a
+#      docker_compose_domains 422 (see this script's own header --
+#      distinct from a read-back mismatch), a read-back that does not
+#      contain the target domain, the cert poll exhausts its bound, or
+#      `www` does not serve.
 #   2  FAILED -- a precondition this script could not even attempt under
 #      (missing .env names, box unreachable, Porkbun/Coolify API error).
 #
@@ -98,8 +142,8 @@
 # construction -- Porkbun's `editByNameType` overwrites in place rather
 # than duplicating, and a re-run against an already-correct state reports
 # "already matches" on every leg rather than re-issuing a write. Every
-# fact used (DNS records, the Coolify fqdn field, the live HTTPS response)
-# is resolved LIVE each run, never cached.
+# fact used (DNS records, the Coolify docker_compose_domains field, the
+# live HTTPS response) is resolved LIVE each run, never cached.
 
 set -euo pipefail
 
@@ -308,10 +352,167 @@ step "DNS diff"
 info "apex A:      $APEX_CURRENT -> $BOX_IP  [$APEX_ACTION]"
 info "www  CNAME:  $WWW_CURRENT -> $ROOT_DOMAIN  [$WWW_ACTION]"
 
-step "Coolify PATCH (Sec ask: UNMEASURED field name -- printed, never assumed)"
-COOLIFY_TARGET_FQDN="https://$ROOT_DOMAIN,https://www.$ROOT_DOMAIN"
-info "would PATCH /api/v1/applications/<uuid> body {\"fqdn\": \"$COOLIFY_TARGET_FQDN\"}"
-info "UNMEASURED: no script in this repo has ever WRITTEN this field before -- only --apply's own read-back (a fresh GET immediately after) turns this into a measured fact this run."
+# --- ports_exposes preflight (Sec availability finding, run-10 stop, MEASURED
+# live): pfin-app's ports_exposes is Coolify's OWN create-time default ('80'),
+# while api/docker-compose.yaml's `expose:` block is 3000 and the app's own
+# Dockerfile EXPOSEs 3000 (no PORT override anywhere in this repo) -- nothing
+# in this script, provision-app.sh, or provision.sh has ever SET ports_exposes
+# for the app (grep across all three: zero hits). Left uncorrected, at the DNS
+# step Coolify's router would resolve the domain to the WRONG in-container
+# port and 502 -- and this script's OWN cert-poll below (waiting for a 200 on
+# https://$ROOT_DOMAIN/) would spin to its bound and report a failure whose
+# real cause is an unrelated port misconfiguration it never looked at.
+#
+# Resolved here (before the preflight-exit gate, matching deploy-app.sh's own
+# precedent of an SSH-backed identity read during preflight, not just apply)
+# so an operator sees the mismatch before ever running --apply.
+sshx true >/dev/null 2>&1 || die2 "box at $BOX_IP not reachable over SSH with $AUTOMATION_KEY -- run scripts/provision-vps.sh first"
+sshx 'test -s /root/.pfin/coolify.env' >/dev/null 2>&1 \
+  || die2 "no /root/.pfin/coolify.env on the box -- run scripts/provision-vps.sh --apply first"
+
+read -r -d '' PY_API_HELPER <<'PY' || true
+import json, sys, subprocess
+
+def die(msg):
+    print(f"FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def api(token, method, path, body=None):
+    if '"' in token or "\n" in token:
+        die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    body_path = None
+    try:
+        cmd = ["curl", "-fsS", "-K", "-", "-X", method]
+        if body is not None:
+            config += 'header = "Content-Type: application/json"\n'
+            import tempfile, os
+            old_umask = os.umask(0o077)
+            fd, body_path = tempfile.mkstemp(dir="/root/.pfin", prefix=".curlbody.")
+            os.umask(old_umask)
+            with os.fdopen(fd, "wb") as f:
+                f.write(json.dumps(body).encode())
+            cmd += ["--data-binary", f"@{body_path}"]
+        cmd += [f"http://localhost:8000/api/v1{path}"]
+        try:
+            result = subprocess.run(cmd, input=config.encode(), capture_output=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.decode(errors='replace').strip()[:200]})")
+    finally:
+        if body_path is not None:
+            try:
+                import os
+                os.unlink(body_path)
+            except OSError:
+                pass
+    return json.loads(result.stdout.decode()) if result.stdout.strip() else None
+PY
+
+step "Resolving '$APP_NAME' (identity + ports_exposes)"
+RESOLVED_FULL="$(sshx "env app_query=$(printf '%q' "$APP_NAME") bash -s" <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "\$app_query" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, query = sys.argv[1], sys.argv[2]
+apps = api(token, "GET", "/applications")
+matches = [a for a in apps if a.get("name") == query]
+if len(matches) != 1:
+    die(f"expected exactly one application named '{query}', found {len(matches)}")
+a = matches[0]
+print(a["uuid"])
+print(a.get("base_directory") or "")
+print(a.get("build_pack") or "")
+print(a.get("ports_exposes") or "")
+PYEOF
+REMOTE
+)"
+APP_UUID="$(sed -n '1p' <<<"$RESOLVED_FULL")"
+APP_BASE_DIR_LIVE="$(sed -n '2p' <<<"$RESOLVED_FULL")"
+APP_BUILD_PACK_LIVE="$(sed -n '3p' <<<"$RESOLVED_FULL")"
+APP_PORTS_LIVE="$(sed -n '4p' <<<"$RESOLVED_FULL")"
+UUID_RE='^[a-z0-9]{20,32}$'
+[[ "$APP_UUID" =~ $UUID_RE ]] || die2 "could not resolve '$APP_NAME' to a uuid-shaped application id"
+ok "resolved '$APP_NAME' -> $APP_UUID (base_directory=$APP_BASE_DIR_LIVE, build_pack=$APP_BUILD_PACK_LIVE, ports_exposes=${APP_PORTS_LIVE:-<empty>})"
+
+# TARGET GUARD (Sec, this review): this setter must never write
+# ports_exposes against a WORKER resource -- provision-worker.sh's own
+# fqdn/ports_exposes clear (the CA-1 fix) writes `ports_exposes:""` for a
+# worker, and a caller pointing APP_NAME at a worker by mistake (it is
+# env-var-overridable) would fight that clear. TWO INDEPENDENT checks,
+# both required (Sec: belt and suspenders, derive rather than name):
+#   (a) POSITIVE identity -- base_directory/build_pack must be exactly
+#       this script's own hardcoded expectation (this script is
+#       app-specific by design, unlike deploy-app.sh's generic guard).
+#   (b) NEGATIVE worker-shape -- the resolved target's OWN docker-
+#       compose.yaml must not declare a serve-admission command
+#       override, the SAME structural grep provision.sh's
+#       worker_has_admission_guard() uses (duplicated here rather than
+#       sourced -- this repo's own convention for sibling scripts, see
+#       e.g. the api() helper above, copied verbatim rather than
+#       imported from one shared file).
+# Fails CLOSED, naming CA-1 explicitly -- corrupting a worker's
+# fqdn/ports_exposes clear via a wrong-target write here would be a
+# CA-1 regression, not merely a misconfiguration.
+EXPECT_APP_BASE_DIR="/api"
+EXPECT_APP_BUILD_PACK="dockercompose"
+[[ "$APP_BASE_DIR_LIVE" == "$EXPECT_APP_BASE_DIR" ]] \
+  || die2 "TARGET GUARD FAILED (CA-1): resolved application '$APP_NAME' ($APP_UUID) has base_directory='$APP_BASE_DIR_LIVE', expected '$EXPECT_APP_BASE_DIR' -- this script is app-specific and refuses to write ports_exposes against anything else, including a worker resource whose own CA-1 fqdn/ports_exposes clear this write could otherwise fight."
+[[ "$APP_BUILD_PACK_LIVE" == "$EXPECT_APP_BUILD_PACK" ]] \
+  || die2 "TARGET GUARD FAILED (CA-1): resolved application '$APP_NAME' ($APP_UUID) has build_pack='$APP_BUILD_PACK_LIVE', expected '$EXPECT_APP_BUILD_PACK'."
+APP_COMPOSE_FILE="$REPO_ROOT/${APP_BASE_DIR_LIVE#/}/docker-compose.yaml"
+[[ -f "$APP_COMPOSE_FILE" ]] || die2 "TARGET GUARD: no docker-compose.yaml at $APP_COMPOSE_FILE -- cannot verify this target is not a worker resource."
+if grep -q 'serve-admission' "$APP_COMPOSE_FILE"; then
+  die2 "TARGET GUARD FAILED (CA-1): resolved application '$APP_NAME' ($APP_UUID)'s own docker-compose.yaml declares a serve-admission command override -- that shape belongs to a WORKER (provider-sync), never the app resource this script exists to configure. Refusing to write ports_exposes against it."
+fi
+ok "TARGET GUARD passed: base_directory/build_pack match, no admission-guard shape in its compose."
+
+# app_compose_expose_port <file> -- the ONE expose: port, comment-
+# stripped FIRST (Sec ask: prove the parser still finds the real key
+# through a comment, not just that it happens to work on today's
+# comment-free expose: block -- this repo's own compose files are
+# comment-heavy by convention, see this very block's own header
+# comments a few lines up). Refuses (returns nothing; caller dies) on
+# zero or MORE THAN ONE match -- never "the first of several". Not a
+# general YAML/shell-quote-aware comment parser -- narrow to this one
+# read, matching this repo's low-tech grep/awk convention for compose
+# files (worker_has_admission_guard() in provision.sh is the same
+# shape) rather than introducing a YAML library dependency.
+app_compose_expose_port() {
+  local file="$1"
+  awk '
+    /^[[:space:]]*#/ { next }
+    { sub(/[[:space:]]+#.*$/, "") }
+    /^[[:space:]]*expose:[[:space:]]*$/ { in_expose=1; next }
+    in_expose && /^[[:space:]]*-[[:space:]]*"?[0-9]+"?[[:space:]]*$/ {
+      line=$0; gsub(/[^0-9]/, "", line); print line; next
+    }
+    in_expose && !/^[[:space:]]*-/ { in_expose=0 }
+  ' "$file"
+}
+EXPOSE_PORTS="$(app_compose_expose_port "$APP_COMPOSE_FILE")"
+EXPOSE_COUNT="$(printf '%s\n' "$EXPOSE_PORTS" | grep -c . || true)"
+[[ "$EXPOSE_COUNT" -eq 1 ]] \
+  || die2 "expected exactly one 'expose:' port in $APP_COMPOSE_FILE, found $EXPOSE_COUNT -- refusing to guess which one Coolify's ports_exposes should carry (never 'the first of several')."
+EXPOSE_PORT="$EXPOSE_PORTS"
+ok "compose declares expose: $EXPOSE_PORT"
+
+step "ports_exposes diff"
+info "Coolify ports_exposes:  ${APP_PORTS_LIVE:-<empty>} -> $EXPOSE_PORT"
+if [[ "$APP_PORTS_LIVE" == "$EXPOSE_PORT" ]]; then
+  ok "ports_exposes already matches the compose's own expose: port -- nothing to change"
+  PORTS_NEEDS_PATCH=0
+else
+  info "would PATCH /api/v1/applications/$APP_UUID body {\"ports_exposes\": \"$EXPOSE_PORT\"}"
+  PORTS_NEEDS_PATCH=1
+fi
+
+step "Coolify PATCH -- docker_compose_domains (Sec-corrected mechanism, PR #866 review; see this script's own header + scripts/COOLIFY-API-MEASURED.md COOLIFY-FACT-05/06)"
+COOLIFY_TARGET_DOMAIN="https://$ROOT_DOMAIN,https://www.$ROOT_DOMAIN"
+APP_COMPOSE_SERVICE="app"
+info "would PATCH /api/v1/applications/<uuid> body {\"docker_compose_domains\": [{\"name\": \"$APP_COMPOSE_SERVICE\", \"domain\": \"$COOLIFY_TARGET_DOMAIN\"}]}"
+info "known-accepted PATCH target (fqdn/domains 422-refuse on this build_pack, empty-value measured -- see header); a real domain here actually routing traffic remains UNMEASURED until this run's own post-assignment container-env read."
 
 if [[ "$APPLY" -eq 0 ]]; then
   step "Done (preflight)"
@@ -364,24 +565,61 @@ PYEOF
   ok "www CNAME -> $ROOT_DOMAIN ($WWW_ACTION)"
 fi
 
-step "Resolving '$APP_NAME' and PATCHing its Coolify domain"
+# ports_exposes PATCH -- BEFORE the domain is assigned (below), on
+# purpose: Coolify's router needs the RIGHT in-container port wired
+# before a domain routes traffic at it, or the cert-poll below spins on
+# an unrelated 502. Reuses $APP_UUID/$EXPOSE_PORT/$PORTS_NEEDS_PATCH
+# already resolved and target-guarded in the preflight above -- no
+# second resolution, no second guard check.
+if [[ "$PORTS_NEEDS_PATCH" -eq 1 ]]; then
+  step "PATCHing '$APP_NAME's ports_exposes to match its own compose"
+  NEW_PORTS="$(sshx "env app_uuid=$(printf '%q' "$APP_UUID") target_port=$(printf '%q' "$EXPOSE_PORT") bash -s" <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "\$app_uuid" "\$target_port" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, uuid, target = sys.argv[1], sys.argv[2], sys.argv[3]
+api(token, "PATCH", f"/applications/{uuid}", {"ports_exposes": target})
+readback = api(token, "GET", f"/applications/{uuid}")
+print(readback.get("ports_exposes") or "")
+PYEOF
+REMOTE
+)"
+  [[ "$NEW_PORTS" == "$EXPOSE_PORT" ]] \
+    || die "ports_exposes PATCH read-back shows '$NEW_PORTS', expected '$EXPOSE_PORT' -- investigate the live Coolify API's actual write path for this field before treating step 9 as done."
+  ok "ports_exposes PATCH read-back confirms ports_exposes = $NEW_PORTS"
+else
+  ok "ports_exposes already correct (checked in preflight) -- no PATCH issued"
+fi
+
+step "Resolving '$APP_NAME' and PATCHing its Coolify domain (docker_compose_domains -- COOLIFY-FACT-05/06)"
+# Status-preserving api() (same shape as provision-worker.sh's own,
+# ALREADY Sec-reviewed there) -- NOT the earlier `curl -fsS` shape this
+# file used for the fqdn attempt, which loses the response BODY on any
+# non-2xx (`-f` suppresses it) and therefore could never have built a
+# distinct 422 message even before the fqdn/domains mechanism was
+# retired. api_allow_status() lets exactly ONE call (the
+# docker_compose_domains PATCH below) treat one specific extra status as
+# non-fatal so this script can name it precisely; every other call still
+# dies on any non-2xx via api(), unchanged from this file's own
+# established discipline.
 read -r -d '' PY_API_HELPER <<'PY' || true
-import json, sys, subprocess
+import json, sys, subprocess, tempfile, os
 
 def die(msg):
     print(f"FAIL: {msg}", file=sys.stderr)
     sys.exit(1)
 
-def api(token, method, path, body=None):
+def _curl(token, method, path, body=None):
     if '"' in token or "\n" in token:
         die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
     config = 'header = "Authorization: Bearer ' + token + '"\n'
     body_path = None
     try:
-        cmd = ["curl", "-fsS", "-K", "-", "-X", method]
+        cmd = ["curl", "-sS", "-K", "-", "-X", method, "-w", "\n%{http_code}"]
         if body is not None:
             config += 'header = "Content-Type: application/json"\n'
-            import tempfile, os
             old_umask = os.umask(0o077)
             fd, body_path = tempfile.mkstemp(dir="/root/.pfin", prefix=".curlbody.")
             os.umask(old_umask)
@@ -389,18 +627,34 @@ def api(token, method, path, body=None):
                 f.write(json.dumps(body).encode())
             cmd += ["--data-binary", f"@{body_path}"]
         cmd += [f"http://localhost:8000/api/v1{path}"]
-        try:
-            result = subprocess.run(cmd, input=config.encode(), capture_output=True, check=True)
-        except subprocess.CalledProcessError as exc:
-            die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.decode(errors='replace').strip()[:200]})")
+        result = subprocess.run(cmd, input=config.encode(), capture_output=True)
     finally:
         if body_path is not None:
             try:
-                import os
                 os.unlink(body_path)
             except OSError:
                 pass
-    return json.loads(result.stdout.decode()) if result.stdout.strip() else None
+    if result.returncode != 0:
+        die(f"Coolify API {method} {path} failed: curl exit {result.returncode} ({result.stderr.decode(errors='replace').strip()[:200]})")
+    raw = result.stdout.decode()
+    out, _, code = raw.rpartition("\n")
+    if not code.isdigit():
+        die(f"Coolify API {method} {path}: could not parse an HTTP status code off curl's own -w output -- refusing to guess success or failure. Raw tail: {raw[-200:]!r}")
+    return int(code), out
+
+def api(token, method, path, body=None):
+    status, out = _curl(token, method, path, body)
+    if not (200 <= status < 300):
+        die(f"Coolify API {method} {path} -> HTTP {status}: {out.strip()[:500]}")
+    return json.loads(out) if out.strip() else None
+
+def api_allow_status(token, method, path, body, allowed_extra_status):
+    status, out = _curl(token, method, path, body)
+    if status == allowed_extra_status:
+        return status, out
+    if not (200 <= status < 300):
+        die(f"Coolify API {method} {path} -> HTTP {status}: {out.strip()[:500]}")
+    return status, (json.loads(out) if out.strip() else None)
 PY
 
 RESOLVED="$(sshx "env app_query=$(printf '%q' "$APP_NAME") bash -s" <<REMOTE
@@ -416,31 +670,116 @@ if len(matches) != 1:
     die(f"expected exactly one application named '{query}', found {len(matches)}")
 print(matches[0]["uuid"])
 print(matches[0].get("fqdn") or "")
+print(matches[0].get("docker_compose_domains") or "")
 PYEOF
 REMOTE
 )"
 APP_UUID="$(sed -n '1p' <<<"$RESOLVED")"
 OLD_FQDN="$(sed -n '2p' <<<"$RESOLVED")"
+OLD_COMPOSE_DOMAINS="$(sed -n '3p' <<<"$RESOLVED")"
 UUID_RE='^[a-z0-9]{20,32}$'
 [[ "$APP_UUID" =~ $UUID_RE ]] || die2 "could not resolve '$APP_NAME' to a uuid-shaped application id"
-ok "resolved '$APP_NAME' -> $APP_UUID (current fqdn: ${OLD_FQDN:-<empty>})"
+ok "resolved '$APP_NAME' -> $APP_UUID (current fqdn: ${OLD_FQDN:-<empty>}, current docker_compose_domains: ${OLD_COMPOSE_DOMAINS:-<empty>})"
 
-NEW_FQDN="$(sshx "env app_uuid=$(printf '%q' "$APP_UUID") target_fqdn=$(printf '%q' "$COOLIFY_TARGET_FQDN") bash -s" <<REMOTE
+PATCH_OUT="$(sshx "env app_uuid=$(printf '%q' "$APP_UUID") service=$(printf '%q' "$APP_COMPOSE_SERVICE") target_domain=$(printf '%q' "$COOLIFY_TARGET_DOMAIN") bash -s" <<REMOTE
 set -e
 TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
-python3 - "\$TOKEN" "\$app_uuid" "\$target_fqdn" <<'PYEOF'
+python3 - "\$TOKEN" "\$app_uuid" "\$service" "\$target_domain" <<'PYEOF'
 $PY_API_HELPER
 import sys
-token, uuid, target = sys.argv[1], sys.argv[2], sys.argv[3]
-api(token, "PATCH", f"/applications/{uuid}", {"fqdn": target})
+token, uuid, service, target = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+status, body = api_allow_status(token, "PATCH", f"/applications/{uuid}",
+    {"docker_compose_domains": [{"name": service, "domain": target}]}, 422)
+if status == 422:
+    print("PATCH_422")
+    print((body or "")[:500].replace("\n", " "))
+    sys.exit(0)
 readback = api(token, "GET", f"/applications/{uuid}")
+live = readback.get("docker_compose_domains") or ""
+print("PATCH_OK")
+print(live)
 print(readback.get("fqdn") or "")
+# Sec F-4 (PR #866 review): a CONTAINS($ROOT_DOMAIN) check passes even
+# with EXTRA domains present in the live comma-separated list, or on a
+# superstring near-miss (e.g. "notexample.com" contains "example.com")
+# -- neither means this app now serves EXACTLY the domains intended.
+# Compare SETS, not substrings, and say precisely what differs.
+intended_set = {d.strip() for d in target.split(",") if d.strip()}
+live_set = {d.strip() for d in live.split(",") if d.strip()}
+if live_set != intended_set:
+    print("DOMAIN_SET_MISMATCH")
+    print(",".join(sorted(intended_set - live_set)) or "-")
+    print(",".join(sorted(live_set - intended_set)) or "-")
 PYEOF
 REMOTE
 )"
-[[ "$NEW_FQDN" == "$COOLIFY_TARGET_FQDN" ]] \
-  || die "Coolify PATCH read-back shows fqdn='$NEW_FQDN', expected '$COOLIFY_TARGET_FQDN' -- the 'fqdn' PATCH field name guess (Sec-flagged UNMEASURED above) is likely WRONG. Investigate the live Coolify API's actual write path for domain assignment before re-running."
-ok "Coolify PATCH read-back confirms fqdn = $NEW_FQDN"
+PATCH_STATUS="$(sed -n '1p' <<<"$PATCH_OUT")"
+if [[ "$PATCH_STATUS" == "PATCH_422" ]]; then
+  PATCH_422_BODY="$(sed -n '2p' <<<"$PATCH_OUT")"
+  die "docker_compose_domains PATCH on '$APP_NAME' ($APP_UUID, build_pack=$APP_BUILD_PACK_LIVE) refused with HTTP 422: $PATCH_422_BODY -- this is the KNOWN-ACCEPTED mechanism (COOLIFY-FACT-05/06 measured only \`[]\`, never a real element; see this script's own header) so a 422 here means the ELEMENT SHAPE or SERVICE NAME is wrong, not that the field itself is refused. Investigate against scripts/COOLIFY-API-MEASURED.md before re-running -- do NOT fall back to a tinker write for domain ASSIGNMENT without a Sec proposal first (see header: no tinker fallback here)."
+fi
+NEW_COMPOSE_DOMAINS="$(sed -n '2p' <<<"$PATCH_OUT")"
+NEW_FQDN_AFTER_COMPOSE_PATCH="$(sed -n '3p' <<<"$PATCH_OUT")"
+DOMAIN_SET_CHECK="$(sed -n '4p' <<<"$PATCH_OUT")"
+if [[ "$DOMAIN_SET_CHECK" == "DOMAIN_SET_MISMATCH" ]]; then
+  MISSING_DOMAINS="$(sed -n '5p' <<<"$PATCH_OUT")"
+  EXTRA_DOMAINS="$(sed -n '6p' <<<"$PATCH_OUT")"
+  die "docker_compose_domains PATCH 200'd but the read-back domain SET does not exactly equal the intended set -- live='$NEW_COMPOSE_DOMAINS' intended='$COOLIFY_TARGET_DOMAIN' (missing: $MISSING_DOMAINS; extra: $EXTRA_DOMAINS) -- a substring/containment check would have passed this silently (extra domains route real traffic this script never intended; a superstring near-miss like 'notexample.com' containing 'example.com' would also have passed). Investigate before treating step 9 as done; do not assume success from a 200 alone."
+fi
+ok "docker_compose_domains PATCH read-back domain SET exactly matches intended: $NEW_COMPOSE_DOMAINS"
+info "app-level fqdn after this PATCH: ${NEW_FQDN_AFTER_COMPOSE_PATCH:-<empty>} -- INFORMATIONAL ONLY (whether Coolify derives/mirrors fqdn from docker_compose_domains is UNMEASURED; this script's success does not depend on it)."
+
+# Post-assignment container-env read (team-lead, Sec-adjacent ask) --
+# NAMES ONLY, box-side grep, never a value: tests whether CA-1's own
+# admission-guard-relevant surface can even SEE a compose-service domain
+# at all. Coolify only injects env at container START (same caveat as
+# provision-worker.sh's own stale-container warning), so if the app
+# hasn't been redeployed since this PATCH, there is nothing to read yet
+# -- informational, never a hard gate on this script's own exit code.
+step "Post-assignment container-env read (informational -- names only, never a value)"
+# Sec F-3 (PR #866 review): the previous `2>/dev/null || true` collapsed
+# a FAILED read (ssh/docker error) into the same empty result as "read
+# succeeded, found nothing" -- which then printed a false positive
+# "MEASURED ... CONTROL GAP" fact for a read that never actually
+# happened. A read failure is reported as a failure, distinctly, never
+# as a measurement of anything. `head -1` silently picked the first of
+# several containers on an ambiguous match -- also fixed: >1 match
+# refuses to guess, same discipline as this script's own application-
+# uuid resolution.
+set +e
+CID_RAW="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.ID}}'" </dev/null 2>&1)"
+CID_RC=$?
+set -e
+if [[ $CID_RC -ne 0 ]]; then
+  info "container-env read SKIPPED -- 'docker ps' itself failed (rc=$CID_RC): $CID_RAW -- a READ FAILURE, not a measurement of anything; never reported as a MEASURED fact."
+elif [[ -z "$CID_RAW" ]]; then
+  info "no running container for '$APP_NAME' yet -- container-env read not applicable until the next deploy picks up this domain assignment."
+else
+  CID_COUNT="$(printf '%s\n' "$CID_RAW" | grep -c .)"
+  CID_SHAPE_RE='^[a-f0-9]{6,64}$'
+  if [[ "$CID_COUNT" -gt 1 ]]; then
+    info "container-env read SKIPPED -- $CID_COUNT running containers matched name filter '$APP_UUID' ($(printf '%s' "$CID_RAW" | tr '\n' ' ')) -- ambiguous, never guessing which is authoritative."
+  elif [[ ! "$CID_RAW" =~ $CID_SHAPE_RE ]]; then
+    info "container-env read SKIPPED -- 'docker ps' returned a non-container-id-shaped value ('$CID_RAW'); refusing to pass it to docker exec."
+  else
+    EXISTING_APP_CID="$CID_RAW"
+    set +e
+    ENV_RAW="$(sshx "docker exec $EXISTING_APP_CID env" </dev/null 2>&1)"
+    ENV_RC=$?
+    set -e
+    if [[ $ENV_RC -ne 0 ]]; then
+      info "container-env read FAILED -- 'docker exec $EXISTING_APP_CID env' rc=$ENV_RC: $ENV_RAW -- a READ FAILURE, not a measurement of absence; never reported as a CONTROL GAP."
+    else
+      ENV_NAMES_FOUND="$(printf '%s\n' "$ENV_RAW" | grep -oE '^(SERVICE_FQDN_[A-Za-z0-9_]*|COOLIFY_FQDN|COOLIFY_URL)=' | cut -d= -f1 | sort -u || true)"
+      if [[ -z "$ENV_NAMES_FOUND" ]]; then
+        info "MEASURED $(date -u +%Y-%m-%d): container $EXISTING_APP_CID for '$APP_NAME' injects NONE of SERVICE_FQDN_*/COOLIFY_FQDN/COOLIFY_URL -- if this persists after a redeploy, that is a CONTROL GAP to report (CA-1's admission-guard-relevant surface would have nothing to see for this app), not something to paper over."
+      else
+        info "MEASURED $(date -u +%Y-%m-%d): container $EXISTING_APP_CID for '$APP_NAME' injects: $(printf '%s' "$ENV_NAMES_FOUND" | tr '\n' ' ')"
+      fi
+      info "Append this line to scripts/COOLIFY-API-MEASURED.md's COOLIFY-FACT-06 entry (names only, this run's date, whether a redeploy had already happened) -- this script does not write to that file itself."
+    fi
+  fi
+fi
 
 step "Polling for the Let's Encrypt cert on https://$ROOT_DOMAIN (bounded: $CERT_POLL_ATTEMPTS x ${CERT_POLL_INTERVAL_SECONDS}s)"
 CERT_OK=0
@@ -458,7 +797,7 @@ done
 
 step "Confirming www.$ROOT_DOMAIN also serves"
 WWW_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://www.$ROOT_DOMAIN/" 2>/dev/null || true)"
-[[ "$WWW_CODE" == "200" ]] || die "https://www.$ROOT_DOMAIN/ -> ${WWW_CODE:-(no response)}, expected 200 -- both domains are on the Coolify fqdn list, so www should serve directly (no HTTP redirect is configured); investigate before treating step 9 as done."
+[[ "$WWW_CODE" == "200" ]] || die "https://www.$ROOT_DOMAIN/ -> ${WWW_CODE:-(no response)}, expected 200 -- both domains are in the PATCHed docker_compose_domains entry's comma-separated 'domain' value, so www should serve directly (no HTTP redirect is configured); investigate before treating step 9 as done."
 ok "https://www.$ROOT_DOMAIN/ -> 200"
 
 step "Done"
