@@ -111,23 +111,13 @@ DB_ROLE_HANDOFF_SH="$REPO_ROOT/scripts/db-role-handoff.sh"
 [[ -x "$FIXTURE_DIR/fake-curl" ]] || { echo "FATAL: $FIXTURE_DIR/fake-curl missing or not executable" >&2; exit 2; }
 [[ -f "$DB_ROLE_HANDOFF_SH" ]] || { echo "FATAL: $DB_ROLE_HANDOFF_SH not found" >&2; exit 2; }
 
-# Sec VETO-1 (PR #854 review) -- structural pin: `docker compose exec -T`
-# inside this script's heredoc-fed remote `bash -s` block MUST redirect
-# its own stdin (`</dev/null` here), or it ATTACHES and DRAINS the rest
-# of that heredoc's own bytes -- bash hits EOF, exits 0, and leg C's
-# trust-path detection + leg D/E's Coolify push and hash-bound readback
-# all silently never run while the caller still reports success (same
-# defect, live-confirmed in db-bootstrap.sh's own identical shape against
-# team-lead's 2026-09-21 run). This fence's own `ssh`/`docker` fakes
-# never reach a real docker, so they cannot observe stdin-draining
-# behaviorally -- this is a source-literal pin, the only thing standing
-# between a silently-removed redirect and a false green.
-if ! grep -qF "from pg_roles where rolname='\$ROLE';\" </dev/null)\"" "$DB_ROLE_HANDOFF_SH"; then
-  echo "FAIL: [heredoc-stdin-drain-pin: leg-B-catalog-verify] $DB_ROLE_HANDOFF_SH's leg-B catalog-verify docker exec no longer redirects stdin -- it will silently drain the rest of its heredoc and skip leg C/D/E entirely while still reporting success." >&2
-  exit 1
-else
-  echo "OK: [heredoc-stdin-drain-pin: leg-B-catalog-verify] $DB_ROLE_HANDOFF_SH's leg-B catalog verify redirects its own stdin." >&2
-fi
+# Sec VETO-1 (PR #854 review) -- the per-site structural pin that used to
+# live here (leg-B catalog verify) is now superseded by
+# scripts/ci/fence-heredoc-stdin-drain.sh, a tree-wide structural fence
+# over every scripts/*.sh (team-lead's own follow-up ruling: the pin must
+# be tree-wide, not scoped to individual files) -- never two divergent
+# implementations of the same source-literal check living in different
+# fences. Run that fence, not a copy of it here.
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

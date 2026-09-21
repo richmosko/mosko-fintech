@@ -137,9 +137,13 @@ REMOTE
 ok "resolved '$STACK_APP_NAME' -> $STACK_UUID"
 
 psql_scalar() {
+  # `</dev/null` (Sec VETO-1 / team-lead's tree-wide follow-up, PR #854) --
+  # this exec is the LAST line of its own heredoc today, so nothing
+  # currently gets drained by it, but that is a position-dependent
+  # accident, not a guarantee -- redirect defensively, unconditionally.
   sshx "env STACK_UUID=\"$STACK_UUID\" bash -s" <<REMOTE
 set -e
-docker compose --project-name "\$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc "$1"
+docker compose --project-name "\$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc "$1" </dev/null
 REMOTE
 }
 

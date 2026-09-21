@@ -376,10 +376,14 @@ step "Preflight — live role state (read-only; pg_roles + pg_authid, via 'supab
 # pg_authid"; pg_roles.rolpassword is the constant '********' regardless
 # of state, per §6.1's own documented reason not to use it). See this
 # script's own header for the full judgment-call statement.
+# `</dev/null` (Sec VETO-1 / team-lead's tree-wide follow-up, PR #854) --
+# this exec is the LAST line of its own heredoc today, so nothing
+# currently gets drained by it, but that is a position-dependent
+# accident, not a guarantee -- redirect defensively, unconditionally.
 ROLE_STATE="$(sshx "env STACK_UUID=\"$STACK_UUID\" ROLE=\"$ROLE\" bash -s" <<'REMOTE'
 set -e
 docker compose --project-name "$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc \
-  "select coalesce((select rolcanlogin::text from pg_roles where rolname='$ROLE'), 'ABSENT'), coalesce((select (rolpassword is not null)::text from pg_authid where rolname='$ROLE'), 'ABSENT');"
+  "select coalesce((select rolcanlogin::text from pg_roles where rolname='$ROLE'), 'ABSENT'), coalesce((select (rolpassword is not null)::text from pg_authid where rolname='$ROLE'), 'ABSENT');" </dev/null
 REMOTE
 )"
 ROLE_EXISTS_FIELD="$(echo "$ROLE_STATE" | cut -d'|' -f1)"
