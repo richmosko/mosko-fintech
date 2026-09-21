@@ -173,8 +173,18 @@ ok "resolved '$APP_QUERY' -> $APP_UUID"
 # the pre-deploy and post-deploy containers can both be RUNNING. Refuse
 # on >1 match, naming all of them, in BOTH mechanisms.
 step "Finding the running container"
+# #841 defect class (run-7 stop, team-lead's own brief, 2026-09-21) --
+# MEASURED live: a bare `\t` inside a Go template's literal text never
+# expands (only a string-literal ACTION, `{{"\t"}}`, does); `docker
+# inspect --format '...\t...'` printed the literal bytes `true\t<id>`
+# against a genuinely-running, healthy container (cat -A confirmed no
+# real tab), so the downstream `awk -F'\t' '$1=="true"'` never matched
+# and this smoke died "no running container found" on a fully
+# successful deploy. Already fixed once in scripts/deploy-app.sh:441 and
+# every OTHER scripts/smoke-*.sh sibling -- this site was the one
+# instance missed. Fixed to the exact same `{{"\t"}}` form.
 if [[ -n "$COMPOSE_SERVICE" ]]; then
-  RUNNING_LIST="$(sshx "docker compose --project-name $APP_UUID ps -q $COMPOSE_SERVICE | xargs -r -I{} docker inspect --format '{{.State.Running}}\t{{.Id}}\t{{.Created}}' {} | awk -F'\t' '\$1==\"true\"{print \$2\"\t\"\$3}'")"
+  RUNNING_LIST="$(sshx "docker compose --project-name $APP_UUID ps -q $COMPOSE_SERVICE | xargs -r -I{} docker inspect --format '{{.State.Running}}{{\"\\t\"}}{{.Id}}{{\"\\t\"}}{{.Created}}' {} | awk -F'\t' '\$1==\"true\"{print \$2\"\t\"\$3}'")"
   [[ -n "$RUNNING_LIST" ]] || die "no running container found for compose service '$COMPOSE_SERVICE' under project '$APP_UUID' -- is the app deployed and healthy? (scripts/deploy-app.sh)"
   RUNNING_COUNT="$(printf '%s\n' "$RUNNING_LIST" | grep -c .)"
   [[ "$RUNNING_COUNT" -eq 1 ]] \

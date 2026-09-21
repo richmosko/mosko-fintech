@@ -31,7 +31,28 @@ if [[ "$*" == "compose "*"ps -q"* ]]; then
 fi
 if [[ "$*" == *"inspect"* && "$*" == *"State.Running"* ]]; then
   cid="${*: -1}"
-  echo -e "true\t$cid\t2026-09-19T12:00:00Z"
+  # #841 defect class (run-7 stop, 2026-09-21) -- this fake used to emit
+  # a REAL tab unconditionally, regardless of which --format string
+  # smoke-pfin-exposure.sh actually passed, which meant this fence
+  # stayed green even while the live script shipped the pre-fix bare-\t
+  # format and broke on the real box (same "the fake restates the lie"
+  # shape fence-deploy-app-strikes.sh's own D-1 fix already closed for
+  # deploy-app.sh -- mirrored here). Fixed: inspect the actual --format
+  # argument and reproduce Go template semantics faithfully -- a bare
+  # \t in the template's literal text passes through unexpanded; only a
+  # string-literal ACTION, {{"\t"}}, becomes a real tab -- so this fence
+  # can fail on the pre-fix string.
+  fmt=""
+  prev=""
+  for a in "$@"; do
+    if [[ "$prev" == "--format" ]]; then fmt="$a"; fi
+    prev="$a"
+  done
+  if [[ "$fmt" == *'{{"\t"}}'* ]]; then
+    printf 'true\t%s\t2026-09-19T12:00:00Z\n' "$cid"
+  else
+    printf 'true\\t%s\\t2026-09-19T12:00:00Z\n' "$cid"
+  fi
   exit 0
 fi
 
