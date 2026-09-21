@@ -3,9 +3,15 @@
 # fake-curl -- offline stand-in for curl, used by
 # scripts/ci/fence-db-bootstrap-strikes.sh to drive
 # scripts/db-bootstrap.sh's remote python driver against a canned Coolify
-# API response instead of a live box. Same shape as
-# tests/fixtures/ci/pgrst-exposure-gates/fake-curl (identical
-# PY_API_HELPER text, no -w status-code suffix -- bare JSON only).
+# API response instead of a live box. Two distinct callers, two distinct
+# response shapes:
+#   - the top-of-script PY_API_HELPER (resolving stack/migrator uuids):
+#     GET /applications, bare JSON, no -w suffix. Same shape as
+#     tests/fixtures/ci/pgrst-exposure-gates/fake-curl.
+#   - leg D's own inline python (pushing MIGRATOR_DB_PASSWORD, Sec
+#     VETO-1): PATCH /applications/{uuid}/envs/bulk, WITH a `-w
+#     '\n%{http_code}'` trailer (same shape as db-role-handoff.sh's own
+#     leg D) -- detected by `-w` being present in argv.
 #
 # GET /applications resolves BOTH the stack app (pfin-supabase-stack) and
 # the migrator app (pfin-migrator) in one call. $FAKE_CURL_MODE selects
@@ -13,6 +19,13 @@
 #   clean          -- both present
 #   stack-absent   -- migrator present, stack omitted
 #   migrator-absent -- stack present, migrator omitted
+#
+# PATCH .../envs/bulk validates the body carries exactly one
+# {key: MIGRATOR_DB_PASSWORD, value: <64 chars>} row, then writes a
+# truncated (16 hex char) SHA-256 of the ACTUAL received value to
+# $FAKE_PUSHED_HASH_FILE -- read back by the fake docker's leg-E tinker
+# handler, so D and E are proven to observe the SAME value, not two
+# fakes independently agreeing.
 
 set -euo pipefail
 
@@ -20,14 +33,23 @@ LOG="${FAKE_CURL_LOG:-/dev/null}"
 printf '%s\n' "$*" >> "$LOG"
 
 respond() {
-  printf '%s' "$1"
+  local body="$1"
+  if [[ "$HAS_W_FLAG" == "1" ]]; then
+    printf '%s\n%s' "$body" "${FAKE_PATCH_HTTP_STATUS:-200}"
+  else
+    printf '%s' "$body"
+  fi
   exit 0
 }
 
 METHOD="GET"
 prev=""
+BODY_FILE=""
+HAS_W_FLAG=0
 for a in "$@"; do
   if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  if [[ "$prev" == "--data-binary" && "$a" == @* ]]; then BODY_FILE="${a#@}"; fi
+  [[ "$a" == "-w" ]] && HAS_W_FLAG=1
   prev="$a"
 done
 URL="${*: -1}"
@@ -46,6 +68,27 @@ if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
   [[ -n "$MIGRATOR_ROW" ]] && ROWS+=("$MIGRATOR_ROW")
   IFS=,
   respond "[${ROWS[*]}]"
+fi
+
+if [[ "$METHOD" == "PATCH" && "$URL" == *"/envs/bulk" ]]; then
+  if [[ -z "$BODY_FILE" || ! -f "$BODY_FILE" ]]; then
+    respond '{"message":"Content-Type must be application/json"}'
+  fi
+  PUSHED_VALUE="$(python3 -c "
+import json, sys
+d = json.load(open('$BODY_FILE'))
+rows = d.get('data')
+if not isinstance(rows, list) or len(rows) != 1:
+    sys.exit(1)
+r = rows[0]
+if r.get('key') != 'MIGRATOR_DB_PASSWORD' or len(r.get('value', '')) != 64:
+    sys.exit(1)
+print(r['value'])
+")" || { respond '{"message":"malformed MIGRATOR_DB_PASSWORD PATCH body"}'; }
+  if [[ -n "${FAKE_PUSHED_HASH_FILE:-}" ]]; then
+    printf '%s' "$PUSHED_VALUE" | sha256sum | cut -c1-16 > "$FAKE_PUSHED_HASH_FILE"
+  fi
+  respond '{}'
 fi
 
 respond '{}'

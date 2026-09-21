@@ -39,12 +39,40 @@
 # THREE PHASES
 #   Phase 1 (pre-step, supabase_admin, THIS script, scripted): roles.sql
 #     -> auth-grants.sql -> CREATE SCHEMA pfin + the engine-backstop
-#     REVOKEs -> the migrator credential handoff (reuses
-#     db-role-handoff.sh's exact piped-stdin \password mechanism,
-#     adapted -- generate locally, deliver as a 0600 seed, never argv,
-#     never an env dump) -> the 055/116/117/118/119 role-comment files,
-#     run directly (idempotent -- each file's own guard degrades to a
-#     WARNING and reports the pre-step already ran, never a silent skip).
+#     REVOKEs -> the migrator credential handoff, FIVE legs (A-E), same
+#     shape as db-role-handoff.sh's own (that script's header has the full
+#     derivation; not re-derived here):
+#       A) \password migrator + ALTER ROLE migrator LOGIN (generate
+#          locally, deliver as a 0600 seed, never argv, never an env
+#          dump), -v ON_ERROR_STOP=1 on the psql invocation.
+#       B) catalog verify -- rolcanlogin + pg_authid.rolpassword IS NOT
+#          NULL, re-read fresh.
+#       C) connect AS migrator over -h db (never -h localhost -- the
+#          container-internal loopback trust-path hazard db-role-
+#          handoff.sh's own header documents) with the generated
+#          credential, asserting a password prompt WAS observed, no
+#          cleartext leak, and current_user echoes back 'migrator'.
+#       D) 🔒 push the SAME credential onto the `pfin-migrator` Coolify
+#          resource's own env store as MIGRATOR_DB_PASSWORD (Sec VETO-1,
+#          PR #849 review). WITHOUT this leg, the Postgres role's actual
+#          password (this leg's PW) and the migrator container's own
+#          PROD_DB_URL (built from provision-migrator-app.sh's
+#          INDEPENDENTLY minted MIGRATOR_DB_PASSWORD -- a different random
+#          value, minted when that resource was first created) diverge:
+#          Phase 2 auth-fails, and the re-run then hits the partial-state
+#          guard below permanently (no scripted repair exists). This leg
+#          is the reconciliation -- the two values must be the SAME one,
+#          and leg A's freshly-generated PW is the one already proven live
+#          (by legs B/C) against the actual Postgres role, so it is what
+#          gets pushed, overwriting whatever provision-migrator-app.sh
+#          minted.
+#       E) hash-bound readback -- production row only (is_preview=false),
+#          exactly one match, a truncated SHA-256 of the stored value must
+#          match the same truncated hash of the credential this run
+#          generated (never the plaintext value, on either side).
+#     Then the 055/116/117/118/119 role-comment files, run directly
+#     (idempotent -- each file's own guard degrades to a WARNING and
+#     reports the pre-step already ran, never a silent skip).
 #   Phase 2 (main pass, the migrator container, THIS script, scripted):
 #     `supabase db push --yes --db-url "$PROD_DB_URL" --workdir
 #     /workspace` inside the migrator container. PGSSLMODE=disable is
@@ -259,19 +287,21 @@ SQL
 REMOTE
 ok "engine-backstop REVOKEs applied"
 
-step "Phase 1: migrator credential handoff (same piped-stdin \\password mechanism as scripts/db-role-handoff.sh, adapted -- generate locally, deliver as a 0600 seed, never argv, never an env dump)"
+step "Phase 1: migrator credential handoff -- legs A-E, same shape as scripts/db-role-handoff.sh's own (generate locally, deliver as a 0600 seed, never argv, never an env dump; see this script's own header for what each leg proves and why leg D is Sec-mandatory)"
 PW="$(openssl rand -hex 32)"
 [[ ${#PW} -eq 64 ]] || die "generated credential is ${#PW} chars, expected 64 -- refusing to proceed with a malformed value."
 SEED_FILE="/root/.pfin/_dbbootstrap_migrator_seed.$$.env"
 printf '%s' "$PW" | sshx "umask 077; mkdir -p /root/.pfin; cat > $SEED_FILE"
 unset PW
-sshx "env STACK_UUID=\"$STACK_UUID\" SEED_FILE=\"$SEED_FILE\" bash -s" <<'REMOTE'
+sshx "env STACK_UUID=\"$STACK_UUID\" MIGRATOR_UUID=\"$MIGRATOR_UUID\" SEED_FILE=\"$SEED_FILE\" bash -s" <<'REMOTE'
 set -e
 umask 077
 trap 'shred -u "$SEED_FILE" 2>/dev/null || rm -f "$SEED_FILE"' EXIT
 PW="$(cat "$SEED_FILE")"
 [ -n "$PW" ] || { echo "FATAL: seed file read as empty -- refusing to proceed." >&2; exit 1; }
 [ "${#PW}" -eq 64 ] || { echo "FATAL: seed file credential is ${#PW} chars, expected 64." >&2; exit 1; }
+
+echo "== A. \\password migrator + ALTER ROLE ... LOGIN =="
 PSQL_SCRIPT="$(printf '\\password migrator\n%s\n%s\nALTER ROLE migrator LOGIN;\n' "$PW" "$PW")"
 # set +e / set -e bracket the assignment deliberately -- under the
 # outer `set -e`, a plain `OUT="$(cmd)"` where cmd exits non-zero kills
@@ -282,16 +312,124 @@ PSQL_SCRIPT="$(printf '\\password migrator\n%s\n%s\nALTER ROLE migrator LOGIN;\n
 # identical mechanism (missing here in an earlier draft of this file --
 # caught while building this script's own strike-proof fence, never
 # exercised against a live box).
+# Sec F-1 (PR #849 review) -- -v ON_ERROR_STOP=1 added: without it, an
+# `ALTER ROLE migrator LOGIN` failure (any reason) left psql exit 0, and
+# nothing downstream distinguished that from success -- a false VERIFIED.
 set +e
-OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -U supabase_admin -d postgres <<< "$PSQL_SCRIPT" 2>&1)"
+OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -U supabase_admin -d postgres <<< "$PSQL_SCRIPT" 2>&1)"
 RC=$?
 set -e
 if [ $RC -ne 0 ]; then echo "FATAL: psql handoff script exited $RC: $OUT" >&2; exit 1; fi
 if printf '%s' "$OUT" | grep -qi "didn't match"; then echo "FATAL: password confirmation mismatch inside \\password." >&2; exit 1; fi
 if printf '%s' "$OUT" | grep -qF "$PW"; then echo "FATAL: the credential's cleartext value appeared in psql's own captured output." >&2; exit 1; fi
 echo "OK: migrator credential handoff completed (exit 0, no mismatch, no cleartext echo)."
+
+echo "== B. Catalog verify (rolcanlogin + pg_authid.rolpassword IS NOT NULL, re-read fresh) =="
+VERIFY="$(docker compose --project-name "$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc \
+  "select rolcanlogin::text || '|' || (select (rolpassword is not null)::text from pg_authid where rolname='migrator') from pg_roles where rolname='migrator';")"
+VERIFY_TRIMMED="$(printf '%s' "$VERIFY" | tr -d ' \n')"
+if [ "$VERIFY_TRIMMED" != "t|t" ]; then
+  echo "FATAL: post-handoff catalog verify expected 't|t' (rolcanlogin|has_password), got '$VERIFY_TRIMMED'." >&2
+  exit 1
+fi
+echo "OK: catalog confirms rolcanlogin=t and a password is set."
+
+echo "== C. Connect AS migrator over a non-loopback path with the generated credential (-h db, never -h localhost -- see db-role-handoff.sh's own header for the container-internal trust-path hazard this avoids; UNMEASURED on the production target, same bound as that script states) =="
+set +e
+CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U migrator -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
+CONNECT_RC=$?
+set -e
+if ! printf '%s' "$CONNECT_OUT" | grep -qF "Password for user"; then
+  echo "FATAL: no password prompt was observed connecting AS migrator -- this means the connection took a NON-password-authenticated path (e.g. a trust rule), which is the exact hazard this step exists to detect. Refusing regardless of exit code." >&2
+  exit 1
+fi
+if printf '%s' "$CONNECT_OUT" | grep -qF "$PW"; then
+  echo "FATAL: the credential's cleartext value appeared in the connect-as-migrator step's own captured output -- refusing to proceed or print it." >&2
+  exit 1
+fi
+if [ $CONNECT_RC -ne 0 ]; then
+  echo "FATAL: could not connect AS migrator with the generated credential (exit $CONNECT_RC) -- the handoff did not take effect end to end." >&2
+  exit 1
+fi
+if ! printf '%s' "$CONNECT_OUT" | grep -qF "migrator"; then
+  echo "FATAL: connected but current_user did not echo back 'migrator'." >&2
+  exit 1
+fi
+echo "OK: connected AS migrator over a non-loopback, password-prompted path with the generated credential; current_user confirmed."
+
+echo "== D. Pushing the SAME credential onto pfin-migrator's env store as MIGRATOR_DB_PASSWORD (Sec VETO-1, PR #849 review -- see this script's own header) =="
+TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "$TOKEN" "$MIGRATOR_UUID" "$SEED_FILE" <<'PYEOF'
+import json, subprocess, sys, tempfile, os
+
+token, resource_uuid, seed_file = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def die(msg):
+    print(f"FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def api(method, path, body=None):
+    if '"' in token or "\n" in token:
+        die("Coolify API token contains an unexpected character -- refusing")
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    tmppath = None
+    cmd = ["curl", "-sS", "-K", "-", "-X", method, "-w", "\n%{http_code}"]
+    if body is not None:
+        fd, tmppath = tempfile.mkstemp(prefix="pfin-dbbootstrap-body-")
+        os.write(fd, body.encode())
+        os.close(fd)
+        cmd += ["-H", "Content-Type: application/json", "--data-binary", f"@{tmppath}"]
+    cmd += [f"http://localhost:8000/api/v1{path}"]
+    try:
+        result = subprocess.run(cmd, input=config.encode(), capture_output=True)
+    finally:
+        if tmppath:
+            os.unlink(tmppath)
+    if result.returncode != 0:
+        die(f"Coolify API {method} {path} failed: curl exit {result.returncode} ({result.stderr.decode(errors='replace').strip()[:200]})")
+    raw = result.stdout.decode()
+    out, _, code = raw.rpartition("\n")
+    if not code.isdigit():
+        die("could not parse an HTTP status code off curl's own -w output")
+    status = int(code)
+    if not (200 <= status < 300):
+        die(f"Coolify API {method} {path} -> HTTP {status}: {out.strip()[:500]}")
+    return json.loads(out) if out.strip() else None
+
+# Same shape as db-role-handoff.sh's own leg D -- the value is read from
+# the seed file's PATH (a non-secret argument), never from this process's
+# own argv.
+with open(seed_file) as f:
+    pw = f.read()
+if len(pw) != 64:
+    die(f"seed file credential is {len(pw)} chars, expected 64 -- refusing to push a malformed value")
+
+api("PATCH", f"/applications/{resource_uuid}/envs/bulk", json.dumps({"data": [
+    {"key": "MIGRATOR_DB_PASSWORD", "value": pw},
+]}))
+print("PATCHED MIGRATOR_DB_PASSWORD onto pfin-migrator (value never printed).")
+PYEOF
+
+echo "== E. Hash-bound readback -- production row only, exactly one match, bound to the ACTUAL generated credential (never the value itself) =="
+EXPECTED_HASH="$(printf '%s' "$PW" | sha256sum | cut -c1-16)"
+READBACK_OUT="$(docker exec coolify php artisan tinker --execute="
+\$app = \App\Models\Application::where('uuid','$MIGRATOR_UUID')->firstOrFail();
+\$rows = \$app->environment_variables()->where('key', 'MIGRATOR_DB_PASSWORD')->where('is_preview', false)->get();
+if (\$rows->count() !== 1) { echo \$rows->count(); } else { echo '1|' . substr(hash('sha256', (string) \$rows->first()->value), 0, 16); }
+" 2>/dev/null | tail -1 | tr -d ' \n')"
+READBACK_COUNT="${READBACK_OUT%%|*}"
+READBACK_HASH="${READBACK_OUT#*|}"
+if [ "$READBACK_COUNT" != "1" ]; then
+  echo "FATAL: MIGRATOR_DB_PASSWORD (is_preview=false) readback found $READBACK_COUNT matching row(s) on pfin-migrator, expected exactly 1 -- refusing to trust the store." >&2
+  exit 1
+fi
+if [ "$READBACK_HASH" != "$EXPECTED_HASH" ]; then
+  echo "FATAL: MIGRATOR_DB_PASSWORD is present (one production row) but its truncated hash does not match the credential this run generated -- the store holds a DIFFERENT value than what was pushed. Refusing. (Hash only -- neither value is ever read back or printed.)" >&2
+  exit 1
+fi
+echo "OK: MIGRATOR_DB_PASSWORD present on pfin-migrator (production row, exactly one match), hash-bound to the generated credential confirmed (value never printed)."
 REMOTE
-ok "migrator: LOGIN + password set"
+ok "migrator: LOGIN + password set; MIGRATOR_DB_PASSWORD pushed to pfin-migrator and hash-verified"
 
 step "Phase 1: role-comment files (055/116/117/118/119, run directly -- idempotent, each file's own guard degrades to a WARNING on a pre-existing role, never a silent skip)"
 for f in 055_pfin_etl_role 116_pfin_provider_sync_role 117_pfin_etl_role_comment_c1_reattribution 118_migrator_role 119_migrator_role_comment_amendment3_recitation; do

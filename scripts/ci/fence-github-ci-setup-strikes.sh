@@ -34,7 +34,11 @@
 #      already has a DIFFERENT reviewer before this run -> this script
 #      still succeeds (it adds/confirms the current user, never removes
 #      an existing reviewer) as long as the post-PUT read-back shows the
-#      current user named.
+#      current user named. Sec F-4b (PR #849 review) -- ALSO asserts the
+#      pre-existing reviewer is STILL present in the final state, not
+#      just that the script exits 0 (a naive single-element PUT would
+#      also exit 0 while silently dropping it; confirmed by inversion
+#      test this PR: reverting to that shape flips this scenario red).
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -121,8 +125,27 @@ run_case "variable read-back mismatch refuses" 1 --apply 1 0 0 "" 0 1 || FAIL=1
 # 6. ENV-READBACK-NO-REVIEWER-REFUSES
 run_case "environment read-back shows no reviewer, refuses" 1 --apply 1 0 0 "" 1 0 || FAIL=1
 
-# 7. EXISTING-DIFFERENT-REVIEWER-STILL-SUCCEEDS
+# 7. EXISTING-DIFFERENT-REVIEWER-STILL-SUCCEEDS -- Sec F-4b (PR #849
+#    review): assert the PRE-EXISTING reviewer actually SURVIVES the PUT
+#    (is still present in the final state), not just that the script
+#    exits 0 -- a naive single-element PUT would also exit 0 here (the
+#    current user WOULD be added successfully) while silently dropping
+#    "someone-else", and only this state-file assertion would catch that.
 run_case "existing different reviewer does not block success" 0 --apply 1 0 1 "someone-else" 1 1 || FAIL=1
+if [[ -n "${CASE_STATE_DIR:-}" ]]; then
+  if [[ ! -f "$CASE_STATE_DIR/env_reviewers.json" ]]; then
+    echo "FAIL: [existing-different-reviewer] no env_reviewers.json state was written -- the PUT never landed" >&2
+    FAIL=1
+  elif ! grep -q '"id": *777\|"id":777' "$CASE_STATE_DIR/env_reviewers.json"; then
+    echo "FAIL: [existing-different-reviewer] the pre-existing reviewer (id 777, 'someone-else') did NOT survive the PUT -- final state: $(cat "$CASE_STATE_DIR/env_reviewers.json")" >&2
+    FAIL=1
+  elif ! grep -q '"id": *999\|"id":999' "$CASE_STATE_DIR/env_reviewers.json"; then
+    echo "FAIL: [existing-different-reviewer] the current user (id 999) was never added -- final state: $(cat "$CASE_STATE_DIR/env_reviewers.json")" >&2
+    FAIL=1
+  else
+    echo "OK: [existing-different-reviewer] both the pre-existing reviewer (777) and the current user (999) survive in the final PUT body." >&2
+  fi
+fi
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

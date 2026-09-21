@@ -39,7 +39,7 @@ One file: [`scripts/provision.env.example`](../scripts/provision.env.example) �
 One script. `.env` is Part 2 — copy `scripts/provision.env.example` to `.env` first.
 
 ```sh
-scripts/provision.sh --dry-run   # preflight only, touches nothing, always exits 0
+scripts/provision.sh --dry-run   # preflight only, touches nothing, exits 0 once past preconditions
 scripts/provision.sh             # the real run
 ```
 Neither needs a `BOX_IP=` prefix — step 1 discovers/creates the box and writes `BOX_IP` into `.env` itself. `--dry-run` prints one line per step (`VERIFIED`/`SKIPPED`/`MANUAL`/`would likely fail`, each `(dry-run)`); `--list` prints the plan without running it.
@@ -50,7 +50,7 @@ Neither needs a `BOX_IP=` prefix — step 1 discovers/creates the box and writes
 
 **Three unavoidable manual moments:**
 1. **Account creation** (Part 1) — before running; no script creates an account.
-2. **Cutover** — `cutover` refuses without `--confirm-cutover`, printing the exact re-run line. Even confirmed, it still stops (exit 1): tear down the incumbent `pfindash.com` stack by hand, then confirm — a one-way F/CTO call, never scripted, never bundled into a bare `--apply`.
+2. **DNS repoint + cutover, both behind `--confirm-cutover`** — the apex A repoint (`dns`) is the user-visible go-live switch, gated the same as `cutover` itself (Sec F-6, PR #849 review): neither runs without `--confirm-cutover`. `dns` proceeds normally once passed (on this deployment it already points at the box, so it reads VERIFIED/no-op — the gate is structural, not a response to a pending change). `cutover` refuses without the flag, printing the exact re-run line; even confirmed, it still stops (exit 1): tear down the incumbent `pfindash.com` stack by hand, then confirm — a one-way F/CTO call, never scripted, never bundled into a bare `--apply`.
 3. **GitHub Environment reviewer approval** — not a `provision.sh` step (its `ci-keypair`/`github-ci` steps only wire the gate up; `db-bootstrap` applies the *initial* migration directly over SSH, bypassing it). Recurs on every **future** `ci-migrate` CI fire, Sec-ruled, out of scope for any script. ⚠ A fire-and-poll mode inside `provision.sh` (dispatch, then print/wait on the review URL instead of pointing at the Actions tab) was scoped this pass and deliberately deferred — too risky to build without a live box to verify against — [BACKLOG §7.36 item 73](../BACKLOG.md) carries the follow-up.
 
 **🔒 §4.1's TimeZone-pin verification (Sec-gated CI anchor — this exact block is fenced by `scripts/ci/check-tz-sweep-identical.py`, kept token-identical to (T3) in `supabase/tests/01_session_timezone.sql`; do not reword):**

@@ -96,6 +96,7 @@ FROM_STEP=""
 ONLY_STEP=""
 LIST_ONLY=0
 CONFIRM_CUTOVER=0
+SKIP_DEPENDENCY_CHECK=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
@@ -103,33 +104,41 @@ while [[ $# -gt 0 ]]; do
     --only) shift; ONLY_STEP="${1:-}" ;;
     --list) LIST_ONLY=1 ;;
     --confirm-cutover) CONFIRM_CUTOVER=1 ;;
-    *) echo "unknown flag: $1" >&2; echo "usage: $0 [--dry-run] [--from <step>] [--only <step>] [--list] [--confirm-cutover]" >&2; exit 3 ;;
+    --skip-dependency-check) SKIP_DEPENDENCY_CHECK=1 ;;
+    *) echo "unknown flag: $1" >&2; echo "usage: $0 [--dry-run] [--from <step>] [--only <step>] [--list] [--confirm-cutover] [--skip-dependency-check]" >&2; exit 3 ;;
   esac
   shift || true
 done
 
 # --- Ordered step registry (bash 3.2: parallel arrays, no assoc arrays) -
-# 26 steps. Re-sequenced a SECOND time after the first live-order
-# correction (team-lead, mid-session): db-bootstrap -> the §6.9
-# PGRST-exposure pre-flip gates + flip (BEFORE any Coolify resource
-# creation -- smoke-pfin-exposure.sh's default mode asserts pfin is
-# ALREADY exposed) -> the standalone migrator app + its Scheduled Task
-# -> app/worker resource creation -> every env-writing step for a
-# resource VERIFIED before that resource is ever deployed (mint-jwt is
-# the LAST env write on app, by construction) -> deploys -> scheduled
-# tasks -> smokes -> the CA-1/§10 checks -> DNS/GitHub-CI -> the
+# 26 steps. Re-sequenced a THIRD time (Sec VETO-1, PR #849 review):
+# `migrator-app` now runs BEFORE `db-bootstrap`, not after --
+# `db-bootstrap`'s Phase 2 (`docker compose --project-name $MIGRATOR_UUID
+# exec -T migrator ...`) needs a RUNNING migrator container, which
+# `migrator-app` (provision-migrator-app.sh) is what creates AND deploys;
+# `db-bootstrap.sh` also resolves the migrator app's uuid by name and
+# `die2`s if it does not exist yet. `db-bootstrap` still precedes
+# `pgrst-gates` -- B-2's live migration-ledger count is meaningless
+# against an empty (pre-bootstrap) ledger. Prior order (this session):
+# db-bootstrap -> the §6.9 PGRST-exposure pre-flip gates + flip (BEFORE
+# any Coolify resource creation -- smoke-pfin-exposure.sh's default mode
+# asserts pfin is ALREADY exposed) -> the standalone migrator app + its
+# Scheduled Task -> app/worker resource creation -> every env-writing
+# step for a resource VERIFIED before that resource is ever deployed
+# (mint-jwt is the LAST env write on app, by construction) -> deploys ->
+# scheduled tasks -> smokes -> the CA-1/§10 checks -> DNS/GitHub-CI -> the
 # DEPLOY_ON_SUCCESS flip -> cutover. Do not build this registry from
-# memory of an earlier draft -- it has moved twice already this session.
-# The unnumbered "GitHub Environment reviewer approval" row is
-# deliberately NOT a step
-# here -- it recurs on every migrator trigger fire, not once at stand-up.
+# memory of an earlier draft -- it has moved three times already this
+# session. The unnumbered "GitHub Environment reviewer approval" row is
+# deliberately NOT a step here -- it recurs on every migrator trigger
+# fire, not once at stand-up.
 STEP_KEYS=(
   provision-vps
   standup
+  migrator-app
   db-bootstrap
   pgrst-gates
   pgrst-flip
-  migrator-app
   migrator-scheduled-task
   provision-resources
   record-uuids
@@ -154,10 +163,10 @@ STEP_KEYS=(
 STEP_LABELS=(
   "Provision + harden the box, install Coolify, bootstrap the admin account (§1+§3)"
   "Stand up the Supabase stack; mint real JWT keys (§4)"
+  "Create the standalone migrator Coolify resource (ADR-072 Amendment 4)"
   "Database bootstrap: pfin_owner/migrator, migrations, vault decrypt view (§6.3)"
   "Pre-flip gates B-1/B-2/B-3: VETO trigger, migration count, 025 presence (§6.9 steps 1-3)"
   "Flip the pfin Data-API exposure (§6.9 steps 4-6)"
-  "Create the standalone migrator Coolify resource (ADR-072 Amendment 4)"
   "Create the migrator db-push Scheduled Task"
   "Create app/etl/pdf-render/provider-sync Coolify resources (§7.1/§7.2 step i)"
   "Record all Coolify resource UUIDs into .env"
@@ -178,6 +187,64 @@ STEP_LABELS=(
   "GitHub-side CI setup: Actions secret/variable, production-migrator Environment (§6.4)"
   "Flip DEPLOY_ON_SUCCESS=1 (provision-vps.sh re-run)"
   "Cutover: tear down the incumbent pfindash.com stack (§9)"
+)
+
+# --- STEP_REQUIRES (Sec F-5, PR #849 review) -- a declared, semantic
+# dependency per step (comma-separated step keys, empty = no hard
+# prerequisite). Checked ONLY for the step NAMED on --only/--from itself
+# (the jump target) -- never during a full, unfiltered run (registry
+# order already enforces it there; this closes the gap --only/--from
+# opens at the exact point of the jump).
+# SCOPE, stated plainly: the check LIVE-RE-RUNS the prerequisite's own
+# PREFLIGHT (mode "", no --apply -- read-only by every script in this
+# registry's own documented convention, safe to re-run any number of
+# times) and requires it to report VERIFIED/SKIPPED/MANUAL, never a
+# `--apply` re-run of the prerequisite itself (that would perform its
+# real side effects as a side effect of CHECKING a precondition -- wrong
+# for a gate). This is NOT a query of "has this step's resource ever
+# been fully created" for every step -- several scripts' own preflight
+# reports 0 regardless of completion state (it means "I can assess state
+# without error", not "the target condition is met"); it DOES catch an
+# ACTIVELY UNSATISFIED precondition, which is the exact case Sec named:
+# pgrst-gates has NO preflight/apply distinction at all (every call IS
+# the real, live B-1/B-2/B-3 check), so re-running it here as
+# `pgrst-flip`'s prerequisite check is the actual gate, not a proxy for
+# one. Worst instance this closes (Sec, PR #849 review): `--only
+# pgrst-flip` used to run with the VETO gate never evaluated, exposing
+# `pfin` on the Data API with no check that anon holds no grant on it.
+# `--skip-dependency-check` overrides this gate explicitly, printing what
+# it is skipping -- for a prerequisite already known-satisfied from a
+# state this check cannot observe (e.g. re-running a single downstream
+# step, well after its own prerequisites landed, where the prerequisite
+# script itself has no live way to prove "already done" via preflight
+# alone).
+STEP_REQUIRES=(
+  ""                        # provision-vps
+  "provision-vps"           # standup
+  "standup"                 # migrator-app
+  "migrator-app"            # db-bootstrap
+  "db-bootstrap"            # pgrst-gates
+  "pgrst-gates"              # pgrst-flip -- Sec's own named minimum
+  "migrator-app"            # migrator-scheduled-task
+  "pgrst-flip"               # provision-resources -- no app/worker creation before the flip (registry's own stated rule)
+  "provision-resources"      # record-uuids
+  "record-uuids"             # nonsecret-env
+  "nonsecret-env"            # secrets
+  "secrets"                  # mint-jwt
+  "db-bootstrap"             # etl-role -- the role must exist (055/116 migrations)
+  "db-bootstrap"             # provider-sync-role
+  "mint-jwt"                 # deploy-app -- Sec's own named "milder" example
+  "secrets"                  # deploy-workers
+  "deploy-workers"           # scheduled-tasks
+  "deploy-app,deploy-workers" # smokes
+  "deploy-workers"           # ca1-gate -- provider-sync must be deployed
+  "smokes"                   # remaining-checks
+  ""                          # discord -- independent notification wiring, no hard prerequisite
+  "deploy-app"               # dns
+  "provision-vps"            # ci-keypair
+  "ci-keypair"                # github-ci
+  "github-ci"                 # deploy-on-success
+  ""                          # cutover -- gated separately by --confirm-cutover, not this mechanism
 )
 
 if [[ "$LIST_ONLY" -eq 1 ]]; then
@@ -366,7 +433,26 @@ run_discord() {
   return 4
 }
 
-run_dns() { bash "$SCRIPTS/assign-app-domain.sh" ${1:+--apply}; }
+# Sec F-6 (PR #849 review): gated behind --confirm-cutover, the SAME
+# structural gate as run_cutover() below -- the apex A repoint is the
+# user-visible go-live switch (DNS resolving to the new box IS the
+# cutover, from every outside observer's point of view), so it must not
+# be reachable via a bare --apply any more than the incumbent-stack
+# tear-down is. Once --confirm-cutover is passed, this behaves exactly
+# as before (preflight then --apply as $1 dictates) -- on THIS
+# deployment DNS already points at the box (measured live, pfindash.com
+# -> this box's IP), so the step reads VERIFIED/no-op even after the
+# gate opens; the gate is structural, not a response to a real pending
+# change.
+run_dns() {
+  if [[ "$CONFIRM_CUTOVER" -ne 1 ]]; then
+    step "dns: REFUSED without --confirm-cutover"
+    info "The apex A repoint is the user-visible go-live switch (Sec F-6, PR #849 review) -- gated the same as cutover, deliberately never reachable via a bare --apply."
+    info "Re-run: scripts/provision.sh --from dns --confirm-cutover  once ready to go live."
+    return 4
+  fi
+  bash "$SCRIPTS/assign-app-domain.sh" ${1:+--apply}
+}
 
 run_ci_keypair() { run_provision_vps "$1"; }
 
@@ -452,12 +538,67 @@ step_index() {
 # --- Resolve which steps to run ------------------------------------------
 START_IDX=0
 END_IDX=$((${#STEP_KEYS[@]} - 1))
+JUMPED=0
 if [[ -n "$ONLY_STEP" ]]; then
   IDX="$(step_index "$ONLY_STEP")" || { echo "FAIL: unknown step '$ONLY_STEP' -- see --list" >&2; exit 3; }
   START_IDX="$IDX"; END_IDX="$IDX"
+  JUMPED=1
 elif [[ -n "$FROM_STEP" ]]; then
   IDX="$(step_index "$FROM_STEP")" || { echo "FAIL: unknown step '$FROM_STEP' -- see --list" >&2; exit 3; }
   START_IDX="$IDX"
+  JUMPED=1
+fi
+
+# --- Dependency check (Sec F-5, PR #849 review) -- only when --only/
+# --from actually SKIPS earlier steps (a plain unfiltered run needs none
+# of this; registry order already enforces it). For every step this
+# invocation will run, LIVE-RECHECK its declared STEP_REQUIRES
+# prerequisite's own preflight (read-only, no --apply, same call every
+# script in this registry already documents as side-effect-free) and
+# require it to report VERIFIED(0)/SKIPPED(3)/MANUAL(4) -- MANUAL counts
+# as satisfied because it is BY DEFINITION never machine-re-verifiable
+# (a human already handled it; refusing on it would make `--from <step>`
+# permanently unusable right after any MANUAL step, breaking Part 3's own
+# documented resume flow). This does NOT catch "the prerequisite step
+# has never been run at all" for a stateful step whose own preflight
+# always reports 0 regardless of completion (most resource-creation
+# scripts in this registry) -- it DOES catch an ACTIVELY UNSATISFIED
+# precondition, which is the exact case Sec named: pgrst-gates has no
+# preflight/apply distinction at all (every call is the real, live B-1/
+# B-2/B-3 check), so re-running it here as `pgrst-flip`'s prerequisite
+# check IS the real gate -- `--only pgrst-flip` can no longer expose
+# `pfin` on the Data API with the VETO gate never evaluated.
+# Only the JUMP-TARGET's own prerequisite is checked (STEP_KEYS[START_IDX]
+# -- the step named on --only/--from itself), not every step in the rest
+# of the range: once execution is proceeding forward from START_IDX in
+# this same invocation, every LATER step's own prerequisite that also
+# falls within [START_IDX, END_IDX) is satisfied by this run's own
+# sequential execution reaching it first (the registry's normal
+# ordering guarantee, unchanged); a later step whose prerequisite falls
+# BEFORE START_IDX (e.g. ci-keypair's own provision-vps, several steps
+# ahead of a `--from provision-resources`) is a real but much lower-
+# stakes gap than the one Sec named, deliberately left to
+# `--skip-dependency-check` rather than making every deep `--from` pay
+# for re-validating the whole prefix on every step.
+reqs="${STEP_REQUIRES[$START_IDX]:-}"
+if [[ "$JUMPED" -eq 1 && -n "$reqs" ]]; then
+  if [[ "$SKIP_DEPENDENCY_CHECK" -eq 1 ]]; then
+    echo "SKIPPING dependency check: '${STEP_KEYS[$START_IDX]}' declares '$reqs' as a prerequisite -- --skip-dependency-check passed, not verifying it." >&2
+  else
+    IFS=',' read -r -a req_list <<< "$reqs"
+    for req in "${req_list[@]}"; do
+      [[ -n "$req" ]] || continue
+      set +e
+      run_step "$req" ""
+      req_rc=$?
+      set -e
+      if [[ "$req_rc" != "0" && "$req_rc" != "3" && "$req_rc" != "4" ]]; then
+        echo "" >&2
+        echo "FAIL: '${STEP_KEYS[$START_IDX]}' declares '$req' as a prerequisite, and $req's own live preflight just reported rc=$req_rc (not VERIFIED/SKIPPED/MANUAL) -- refusing to jump past it. Run '$req' first, or pass --skip-dependency-check to override (prints what it is skipping)." >&2
+        exit 3
+      fi
+    done
+  fi
 fi
 
 # --- Run ------------------------------------------------------------------

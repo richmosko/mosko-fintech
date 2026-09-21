@@ -35,7 +35,19 @@
 #   6. FROM-SKIPS-EARLIER -- --from provision-resources: steps before it
 #      never run at all (absent from the call log), it and after do.
 #   7. ONLY-RUNS-EXACTLY-ONE -- --only etl-role: exactly one step's
-#      scripts run, nothing before or after.
+#      scripts run (plus its own declared dependency-check call, per
+#      scenario 7a-7c below), nothing before or after.
+#   7a. DEPENDENCY-CHECK-REFUSES-PGRST-FLIP (Sec F-5, PR #849 review's own
+#      named minimum) -- pgrst-gates' own live preflight reports a real
+#      REFUSED finding -> --only pgrst-flip refuses BEFORE calling
+#      coolify-env.sh at all -- the §6.9 VETO gate can no longer be
+#      bypassed by jumping straight to the flip.
+#   7b. DEPENDENCY-CHECK-REFUSES-DEPLOY-APP (Sec F-5's own named "milder"
+#      example) -- mint-jwt's own preflight reports a finding -> --only
+#      deploy-app refuses before calling deploy-app.sh.
+#   7c. SKIP-DEPENDENCY-CHECK-OVERRIDES -- the same unmet precondition as
+#      7a, with --skip-dependency-check passed -> proceeds, printing what
+#      it is skipping rather than silently doing so.
 #   8. LIST-NO-ENV-NEEDED -- --list works with NO .env present at all
 #      (never reaches the .env check) and runs nothing.
 #   9. ENV-MISSING-NAMES -- an .env missing operator-provided names ->
@@ -162,11 +174,34 @@ run_case() {
 # therefore "N steps VERIFIED, then a clean MANUAL stop at cutover" -- not
 # "exit 0 across the whole remaining run".
 CASE_ENV=()
-run_case "happy-path (dns -> ci-keypair -> github-ci -> deploy-on-success VERIFIED, stops at cutover)" 1 --from dns || FAIL=1
+# Sec F-6 (PR #849 review): dns is now ALSO gated behind
+# --confirm-cutover (the apex A repoint is the user-visible go-live
+# switch) -- a happy-path run reaching dns->cutover must pass it, same
+# as it always needed to for cutover's own gate.
+run_case "happy-path (dns -> ci-keypair -> github-ci -> deploy-on-success VERIFIED, stops at cutover)" 1 --from dns --confirm-cutover || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   VERIFIED_COUNT="$(grep -c ': VERIFIED' "$CASE_LAST_DIR/out.txt" 2>/dev/null || echo 0)"
   [[ "$VERIFIED_COUNT" == "4" ]] || { echo "FAIL: [happy-path] expected 4 VERIFIED steps, saw $VERIFIED_COUNT" >&2; FAIL=1; }
   grep -q -- "--from cutover" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [happy-path] resume hint does not name cutover" >&2; FAIL=1; }
+fi
+
+# 6a. DNS-REFUSES-WITHOUT-CONFIRM-CUTOVER (Sec F-6, PR #849 review) --
+#     dns alone, no --confirm-cutover -> refuses (MANUAL, exit 1),
+#     before assign-app-domain.sh is ever called.
+run_case "--only dns without --confirm-cutover refuses" 1 --only dns || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -qi "REFUSED without --confirm-cutover" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [dns-no-confirm] did not name the missing --confirm-cutover flag" >&2; FAIL=1; }
+  if grep -q "^assign-app-domain" "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+    echo "FAIL: [dns-no-confirm] assign-app-domain.sh was called despite the missing --confirm-cutover flag" >&2
+    FAIL=1
+  fi
+fi
+
+# 6b. DNS-PROCEEDS-WITH-CONFIRM-CUTOVER -- same target, --confirm-cutover
+#     passed -> proceeds normally (reaches assign-app-domain.sh).
+run_case "--only dns with --confirm-cutover proceeds" 0 --only dns --confirm-cutover || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "^assign-app-domain" "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [dns-with-confirm] assign-app-domain.sh was never called despite --confirm-cutover" >&2; FAIL=1; }
 fi
 
 # 2. SKIPPED-CONTINUES -- the smokes step's own overall result is SKIPPED
@@ -229,15 +264,67 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   # matches) is not an error here, so no `|| echo 0` fallback -- chaining
   # one would DOUBLE the captured output ("0" from grep, then another "0"
   # from the fallback) on the exact zero-matches case this checks for.
+  # "db-bootstrap" is now ALSO expected (Sec F-5, PR #849 review): --only
+  # etl-role's own declared STEP_REQUIRES prerequisite (db-bootstrap) is
+  # live-rechecked once, in PREFLIGHT mode only, before the target step
+  # runs -- a legitimate call the dependency gate itself makes, not a
+  # stray extra step being executed.
   set +e
-  OTHER_CALLS="$(grep -vc "db-role-handoff" "$CASE_LAST_DIR/calls.log" 2>/dev/null)"
+  OTHER_CALLS="$(grep -vc "db-role-handoff\|db-bootstrap" "$CASE_LAST_DIR/calls.log" 2>/dev/null)"
   set -e
   if [[ "$OTHER_CALLS" != "0" ]]; then
-    echo "FAIL: [--only] a non-target script was called" >&2
+    echo "FAIL: [--only] a non-target, non-dependency-check script was called" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  fi
+  if ! grep -q "^db-bootstrap $" "$CASE_LAST_DIR/calls.log" 2>/dev/null && ! grep -q "^db-bootstrap$" "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+    echo "FAIL: [--only] expected the dependency-check call to db-bootstrap (etl-role's own declared prerequisite) in the call log -- it may have been silently skipped" >&2
     cat "$CASE_LAST_DIR/calls.log" >&2
     FAIL=1
   fi
 fi
+
+# 7a. DEPENDENCY-CHECK-REFUSES-PGRST-FLIP (Sec F-5, PR #849 review's own
+#     named minimum) -- pgrst-gates' own preflight reports rc=1 (a real
+#     REFUSED finding, e.g. anon holds a grant) -> `--only pgrst-flip`
+#     refuses BEFORE calling coolify-env.sh at all, never exposing `pfin`
+#     on the Data API with the VETO gate unevaluated.
+CASE_ENV=(FAKE_RC_pgrst_exposure_gates=1)
+run_case "--only pgrst-flip without gates passing refuses" 3 --only pgrst-flip || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "pgrst-gates" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [pgrst-flip-dependency] did not name pgrst-gates as the unmet prerequisite" >&2; FAIL=1; }
+  if grep -q "^coolify-env" "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+    echo "FAIL: [pgrst-flip-dependency] coolify-env.sh was called despite the unmet prerequisite -- the flip was not actually prevented" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  fi
+fi
+
+# 7b. DEPENDENCY-CHECK-REFUSES-DEPLOY-APP (Sec F-5, PR #849 review's own
+#     named "milder" example) -- mint-jwt's own preflight reports rc=1 ->
+#     `--only deploy-app` refuses before calling deploy-app.sh at all.
+CASE_ENV=(FAKE_RC_mint_supabase_jwt_keys=1)
+run_case "--only deploy-app with mint-jwt not done refuses" 3 --only deploy-app || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "mint-jwt" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [deploy-app-dependency] did not name mint-jwt as the unmet prerequisite" >&2; FAIL=1; }
+  if grep -q "^deploy-app" "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+    echo "FAIL: [deploy-app-dependency] deploy-app.sh was called despite the unmet prerequisite" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  fi
+fi
+
+# 7c. SKIP-DEPENDENCY-CHECK-OVERRIDES -- the same unmet pgrst-gates
+#     precondition, but with --skip-dependency-check passed -> proceeds
+#     (reaches coolify-env.sh), printing what it skipped rather than
+#     silently doing so.
+CASE_ENV=(FAKE_RC_pgrst_exposure_gates=1)
+run_case "--skip-dependency-check overrides the gate" 0 --only pgrst-flip --skip-dependency-check || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -qi "SKIPPING dependency check" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [skip-dependency-check] did not print what it was skipping" >&2; FAIL=1; }
+  grep -q "^coolify-env" "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [skip-dependency-check] coolify-env.sh was never called -- the override did not actually let the step proceed" >&2; FAIL=1; }
+fi
+CASE_ENV=()
 
 # 8. LIST-NO-ENV-NEEDED
 NO_ENV_DIR="$WORK/no-env-case"

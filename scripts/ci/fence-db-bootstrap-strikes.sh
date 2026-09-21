@@ -45,32 +45,57 @@
 #      back -> refuses, "cleartext value appeared" (proves the guard is
 #      load-bearing, not decorative, inside db-bootstrap.sh's OWN copy of
 #      the mechanism, not just db-role-handoff.sh's).
-#   8. PHASE2-PUSH-FAILS -- `supabase db push` exits non-zero -> refuses,
+#   8. LEG-B-CATALOG-VERIFY-MISMATCH -- leg A "succeeds" but the fresh
+#      post-handoff catalog re-read does not show t|t -> refuses.
+#   9. LEG-C-CONNECT-FAIL -- connect AS migrator fails outright (prompt
+#      DOES appear) -> refuses, "did not take effect end to end".
+#  10. LEG-C-TRUST-PATH-NO-PROMPT -- the exact db-role-handoff.sh V-1
+#      hazard, re-proven inside db-bootstrap.sh's OWN copy of the
+#      mechanism: no password prompt observed -> refuses regardless of
+#      exit code.
+#  11. LEG-C-CLEARTEXT-LEAK-IN-CONNECT -- the prompt DOES print but the
+#      credential also leaks elsewhere in the connect step's own output
+#      -> refuses (proven in isolation from the missing-prompt guard).
+#  12. LEG-E-READBACK-COUNT-MISMATCH -- MIGRATOR_DB_PASSWORD resolves to
+#      zero (or >1) production rows on pfin-migrator after leg D's PATCH
+#      -> refuses, "expected exactly 1".
+#  13. LEG-E-READBACK-DIVERGE (Sec VETO-1's own named scenario, PR #849
+#      review) -- the value actually stored on pfin-migrator diverges
+#      from the credential this run generated and proved live against
+#      the Postgres role (legs A-C) -- models provision-migrator-app.sh's
+#      own independently-minted MIGRATOR_DB_PASSWORD never having been
+#      reconciled -> refuses. This is THE scenario VETO-1 exists to
+#      catch: leg D's PATCH succeeding is not enough; leg E's hash-bound
+#      readback is the guard that actually catches a divergence.
+#  14. PHASE2-PUSH-FAILS -- `supabase db push` exits non-zero -> refuses,
 #      "supabase db push exited".
-#   9. PHASE2-NO-COMPLETION-LINE -- exit 0 but the CLI's own "Finished
+#  15. PHASE2-NO-COMPLETION-LINE -- exit 0 but the CLI's own "Finished
 #      supabase db push" line is absent -> refuses, "incomplete run, not
 #      a pass" (proves exit-code alone is not trusted).
-#  10. PHASE2-CENSUS-BAD-AFTER-PUSH -- the ownership census is dirty
+#  16. PHASE2-CENSUS-BAD-AFTER-PUSH -- the ownership census is dirty
 #      immediately after the push -> refuses, "broke somewhere in the
 #      apply", before Phase 3 ever runs.
-#  11. PHASE2-BOOTSTRAP-NOT-COMPLETE-AFTER-PUSH -- migration 118 did not
+#  17. PHASE2-BOOTSTRAP-NOT-COMPLETE-AFTER-PUSH -- migration 118 did not
 #      actually land -> refuses, "did not actually land 118".
-#  12. PHASE3-VAULT-VIEW-FAILS -- post-step-vault-view.sql's own exit
+#  18. PHASE3-VAULT-VIEW-FAILS -- post-step-vault-view.sql's own exit
 #      signals failure -> refuses, "post-step-vault-view.sql failed"
 #      (this script does not re-implement that file's own assertion --
 #      a non-zero exit IS the signal, proven here).
-#  13. HAPPY-PATH-FULL-APPLY -- fresh box, --apply, every phase succeeds
-#      -> exit 0, "Phase 1 -> 2 -> 3 complete", AND the three
-#      deliberately-absent role-comment files (116/117/119) are each
-#      reported "not present in supabase/migrations/ -- skipping" rather
-#      than silently omitted or fatally missing.
-#  14. RESOURCE-ABSENT -- the migrator app does not resolve -> refuses.
+#  19. HAPPY-PATH-FULL-APPLY -- fresh box, --apply, every phase succeeds
+#      -> exit 0, "Phase 1 -> 2 -> 3 complete", legs A-E all pass
+#      together (D's PATCH and E's readback proven to observe the SAME
+#      pushed value, not two independently-scripted fakes agreeing by
+#      coincidence), AND the three deliberately-absent role-comment files
+#      (116/117/119) are each reported "not present in supabase/
+#      migrations/ -- skipping" rather than silently omitted or fatally
+#      missing.
+#  20. RESOURCE-ABSENT -- the migrator app does not resolve -> refuses.
 #      ⚠ MEASURED exit 1, not the header's documented 2 -- same
 #      `set -e`-on-assignment shape as fence-pgrst-exposure-gates-
 #      strikes.sh's own finding (pre-existing across the repo).
-#  15. UNKNOWN-FLAG -- an unrecognised argument -> FAILED (exit 2),
+#  21. UNKNOWN-FLAG -- an unrecognised argument -> FAILED (exit 2),
 #      "unknown flag".
-#  16. STRUCTURAL-WORKTREE-GUARD-PIN -- a source-literal assertion, not a
+#  22. STRUCTURAL-WORKTREE-GUARD-PIN -- a source-literal assertion, not a
 #      runtime scenario: this fence ALWAYS pre-sets REPO_ROOT (every
 #      scenario above does), which bypasses db-bootstrap.sh's own
 #      worktree-refusal block entirely by construction -- the header's
@@ -128,10 +153,14 @@ cat > "$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
 ARGS="$*"
 
-# psql_admin() scalar reads (-tAc)
+# psql_admin() scalar reads (-tAc), including leg B's catalog verify.
 if [[ "$ARGS" == *"-tAc"* ]]; then
   if [[ "$ARGS" == *"pg_catalog.pg_authid"* ]]; then
     echo "${FAKE_MIGRATOR_STATE:-f|f}"
+    exit 0
+  fi
+  if [[ "$ARGS" == *"from pg_authid where rolname='migrator'"* ]]; then
+    echo "${FAKE_LEG_B_STATE:-t|t}"
     exit 0
   fi
   if [[ "$ARGS" == *"version = '118'"* ]]; then
@@ -155,6 +184,40 @@ if [[ "$ARGS" == *"-tAc"* ]]; then
   exit 1
 fi
 
+# Leg C -- connect AS migrator (-h db).
+if [[ "$ARGS" == *"-h db"* ]]; then
+  SCRIPT_IN="$(cat)"
+  FIRST_LINE="$(printf '%s\n' "$SCRIPT_IN" | head -1)"
+  if [[ "${FAKE_CONNECT_FAIL:-0}" == "1" ]]; then
+    echo "Password for user migrator: "
+    echo "psql: error: connection failed" >&2
+    exit 2
+  fi
+  if [[ "${FAKE_NO_PASSWORD_PROMPT:-0}" == "1" ]]; then
+    # Trust-path bypass -- same shape as db-role-handoff.sh's own struck
+    # scenario: no "Password for user" line, the cleartext first-stdin-line
+    # is consumed as a bogus SQL statement instead.
+    echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$FIRST_LINE\""
+    echo " current_user "
+    echo "--------------"
+    echo " migrator"
+    exit 0
+  fi
+  if [[ "${FAKE_ECHO_PW_IN_CONNECT:-0}" == "1" ]]; then
+    echo "Password for user migrator: "
+    echo "DEBUG (simulated transport bug): last line was $FIRST_LINE"
+    echo " current_user "
+    echo "--------------"
+    echo " migrator"
+    exit 0
+  fi
+  echo "Password for user migrator: "
+  echo " current_user "
+  echo "--------------"
+  echo " migrator"
+  exit 0
+fi
+
 # Phase 2 -- supabase db push, inside the migrator container
 if [[ "$ARGS" == *"exec -T migrator sh -c"* ]]; then
   if [[ "${FAKE_PUSH_FAIL:-0}" == "1" ]]; then
@@ -169,29 +232,50 @@ if [[ "$ARGS" == *"exec -T migrator sh -c"* ]]; then
   exit 0
 fi
 
-# Migrator credential handoff -- psql -U supabase_admin -d postgres, NO
-# -v ON_ERROR_STOP=1 and NO -tAc (the piped-\password script form).
-if [[ "$ARGS" == *"exec -T db psql -U supabase_admin -d postgres"* && "$ARGS" != *"-v ON_ERROR_STOP=1"* ]]; then
-  SCRIPT_IN="$(cat)"
-  echo 'Enter new password for user "migrator": '
-  echo "Enter it again: "
-  if [[ "${FAKE_MISMATCH:-0}" == "1" ]]; then
-    echo "Passwords didn't match."
+# Leg E -- hash-bound readback via `docker exec coolify php artisan
+# tinker`. FAKE_PUSHED_HASH_FILE is written by leg D's own fake-curl PATCH
+# handler with the truncated hash of whatever value it actually received
+# -- reading it back here is what proves D and E observe the SAME value,
+# not two independently-scripted fakes that happen to agree. FAKE_READBACK_
+# DIVERGE forces a MISMATCHED hash regardless (Sec VETO-1's own named
+# scenario: the pushed and stored values diverge).
+if [[ "$ARGS" == *"tinker --execute"* && "$ARGS" == *"MIGRATOR_DB_PASSWORD"* ]]; then
+  if [[ -n "${FAKE_READBACK_COUNT:-}" ]]; then
+    echo "${FAKE_READBACK_COUNT}"
     exit 0
   fi
-  if [[ "${FAKE_ECHO_PASSWORD_IN_OUTPUT:-0}" == "1" ]]; then
-    printf '%s\n' "$SCRIPT_IN" | sed -n '2p'
+  if [[ "${FAKE_READBACK_DIVERGE:-0}" == "1" ]]; then
+    echo "1|0000000000000000"
+    exit 0
+  fi
+  if [[ -f "${FAKE_PUSHED_HASH_FILE:-/dev/null}" ]]; then
+    echo "1|$(cat "$FAKE_PUSHED_HASH_FILE")"
+  else
+    echo "0"
   fi
   exit 0
 fi
 
-# roles.sql / auth-grants.sql / role-comment files / post-step-vault-
-# view.sql / the engine-backstop REVOKEs -- all share
-# "-v ON_ERROR_STOP=1"; distinguished by their OWN stdin content, read
-# via psql_admin_file() (a local file piped over ssh's stdin) or a
-# literal nested heredoc (the REVOKEs).
+# Everything else sharing "-v ON_ERROR_STOP=1 -U supabase_admin -d
+# postgres" (no -tAc, no -h db) -- leg A's \password script, roles.sql,
+# auth-grants.sql, role-comment files, post-step-vault-view.sql, and the
+# engine-backstop REVOKEs. All distinguished by their OWN stdin content,
+# read via psql_admin_file() (a local file piped over ssh's stdin) or a
+# literal nested heredoc (leg A, the REVOKEs) -- never by call order.
 if [[ "$ARGS" == *"-v ON_ERROR_STOP=1"* ]]; then
   SCRIPT_IN="$(cat)"
+  if printf '%s' "$SCRIPT_IN" | grep -qF '\password migrator'; then
+    echo 'Enter new password for user "migrator": '
+    echo "Enter it again: "
+    if [[ "${FAKE_MISMATCH:-0}" == "1" ]]; then
+      echo "Passwords didn't match."
+      exit 0
+    fi
+    if [[ "${FAKE_ECHO_PASSWORD_IN_OUTPUT:-0}" == "1" ]]; then
+      printf '%s\n' "$SCRIPT_IN" | sed -n '2p'
+    fi
+    exit 0
+  fi
   if printf '%s' "$SCRIPT_IN" | grep -qF "revoke create on schema pfin from migrator"; then
     if [[ "${FAKE_REVOKE_FAIL:-0}" == "1" ]]; then echo "psql: error: revoke failed" >&2; exit 1; fi
     exit 0
@@ -248,7 +332,8 @@ fi
 FAKE_VARS=(FAKE_CURL_LOG FAKE_CURL_MODE FAKE_MIGRATOR_STATE FAKE_BOOTSTRAP_COMPLETE FAKE_CENSUS_BAD \\
   FAKE_PUSH_FAIL FAKE_PUSH_NO_COMPLETION_LINE FAKE_MISMATCH FAKE_ECHO_PASSWORD_IN_OUTPUT FAKE_REVOKE_FAIL \\
   FAKE_ROLES_FAIL FAKE_AUTH_GRANTS_FAIL FAKE_VAULT_VIEW_FAIL FAKE_ROLE_COMMENT_FAIL \\
-  FAKE_MARKER_FILE FAKE_POST_PUSH_BOOTSTRAP)
+  FAKE_MARKER_FILE FAKE_POST_PUSH_BOOTSTRAP FAKE_LEG_B_STATE FAKE_CONNECT_FAIL FAKE_NO_PASSWORD_PROMPT \\
+  FAKE_ECHO_PW_IN_CONNECT FAKE_READBACK_COUNT FAKE_READBACK_DIVERGE FAKE_PUSHED_HASH_FILE FAKE_PATCH_HTTP_STATUS)
 FORWARD=()
 for v in "\${FAKE_VARS[@]}"; do
   FORWARD+=("\$v=\${!v:-}")
@@ -269,12 +354,14 @@ EOF
 chmod +x "$FAKE_BIN/ssh"
 
 run_scenario() {
-  # run_scenario <desc> <expect_exit> <extra_flag> <curl_mode> <migrator_state> <bootstrap_complete> <census_bad> <push_fail> <push_no_completion> <mismatch> <echo_pw> <roles_fail> <vault_view_fail> [post_push_bootstrap]
+  # run_scenario <desc> <expect_exit> <extra_flag> <curl_mode> <migrator_state> <bootstrap_complete> <census_bad> <push_fail> <push_no_completion> <mismatch> <echo_pw> <roles_fail> <vault_view_fail> [post_push_bootstrap] [leg_b_state] [connect_fail] [no_password_prompt] [echo_pw_in_connect] [readback_count] [readback_diverge]
   local desc="$1" expect_exit="$2" extra_flag="$3" curl_mode="$4" migrator_state="$5" bootstrap_complete="$6" \
         census_bad="$7" push_fail="$8" push_no_completion="$9" mismatch="${10}" echo_pw="${11}" roles_fail="${12}" \
-        vault_view_fail="${13}" post_push_bootstrap="${14:-t}"
+        vault_view_fail="${13}" post_push_bootstrap="${14:-t}" leg_b_state="${15:-t|t}" connect_fail="${16:-0}" \
+        no_password_prompt="${17:-0}" echo_pw_in_connect="${18:-0}" readback_count="${19:-}" readback_diverge="${20:-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   local marker="$WORK/push_marker.$$.$RANDOM"
+  local hash_file="$WORK/pushed_hash.$$.$RANDOM"
   : > "$log"
   set +e
   # shellcheck disable=SC2086
@@ -285,6 +372,9 @@ run_scenario() {
     FAKE_MISMATCH="$mismatch" FAKE_ECHO_PASSWORD_IN_OUTPUT="$echo_pw" \
     FAKE_ROLES_FAIL="$roles_fail" FAKE_VAULT_VIEW_FAIL="$vault_view_fail" \
     FAKE_MARKER_FILE="$marker" FAKE_POST_PUSH_BOOTSTRAP="$post_push_bootstrap" \
+    FAKE_LEG_B_STATE="$leg_b_state" FAKE_CONNECT_FAIL="$connect_fail" FAKE_NO_PASSWORD_PROMPT="$no_password_prompt" \
+    FAKE_ECHO_PW_IN_CONNECT="$echo_pw_in_connect" FAKE_READBACK_COUNT="$readback_count" FAKE_READBACK_DIVERGE="$readback_diverge" \
+    FAKE_PUSHED_HASH_FILE="$hash_file" \
     bash "$TARGET_SH" $extra_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -360,24 +450,61 @@ assert_output_contains "credential-mismatch" "${OUT6:-}" "confirmation mismatch"
 OUT7="$(run_scenario "credential-cleartext-leak: refuses" 1 --apply clean "f|f" f 0 0 0 0 1 0 0)" || FAIL=1
 assert_output_contains "credential-cleartext-leak" "${OUT7:-}" "cleartext value appeared" || FAIL=1
 
-# 8. PHASE2-PUSH-FAILS
-OUT8="$(run_scenario "phase2-push-fails: refuses" 1 --apply clean "f|f" f 0 1 0 0 0 0 0)" || FAIL=1
-assert_output_contains "phase2-push-fails" "${OUT8:-}" "supabase db push exited" || FAIL=1
+# 8. LEG-B-CATALOG-VERIFY-MISMATCH -- leg A "succeeds" but the fresh
+#    post-handoff catalog re-read does not show t|t.
+OUT8="$(run_scenario "leg-b-catalog-verify-mismatch: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "f|t")" || FAIL=1
+assert_output_contains "leg-b-catalog-verify-mismatch" "${OUT8:-}" "post-handoff catalog verify expected 't|t'" || FAIL=1
 
-# 9. PHASE2-NO-COMPLETION-LINE
-OUT9="$(run_scenario "phase2-no-completion-line: refuses" 1 --apply clean "f|f" f 0 0 1 0 0 0 0)" || FAIL=1
-assert_output_contains "phase2-no-completion-line" "${OUT9:-}" "incomplete run, not a pass" || FAIL=1
+# 9. LEG-C-CONNECT-FAIL -- the connect-as-migrator step fails outright
+#    (prompt DOES appear -- a normal, unrelated connection failure).
+OUT9="$(run_scenario "leg-c-connect-fail: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 1)" || FAIL=1
+assert_output_contains "leg-c-connect-fail" "${OUT9:-}" "did not take effect end to end" || FAIL=1
 
-# 10. PHASE2-CENSUS-BAD-AFTER-PUSH
-OUT10="$(run_scenario "phase2-census-bad-after-push: refuses" 1 --apply clean "f|f" f 1 0 0 0 0 0 0)" || FAIL=1
-assert_output_contains "phase2-census-bad-after-push" "${OUT10:-}" "broke somewhere in the apply" || FAIL=1
+# 10. LEG-C-TRUST-PATH-NO-PROMPT -- the exact db-role-handoff.sh V-1 hazard,
+#     re-proven inside db-bootstrap.sh's own copy of the mechanism: no
+#     password prompt observed -> refuses regardless of exit code.
+OUT10="$(run_scenario "leg-c-trust-path-no-prompt: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 1)" || FAIL=1
+assert_output_contains "leg-c-trust-path-no-prompt" "${OUT10:-}" "no password prompt was observed" || FAIL=1
 
-# 11. PHASE2-BOOTSTRAP-NOT-COMPLETE-AFTER-PUSH -- census clean but the
+# 11. LEG-C-CLEARTEXT-LEAK-IN-CONNECT -- the prompt DOES print (normal
+#     connection) but the credential also leaks elsewhere in the output.
+OUT11="$(run_scenario "leg-c-cleartext-leak-in-connect: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 1)" || FAIL=1
+assert_output_contains "leg-c-cleartext-leak-in-connect" "${OUT11:-}" "cleartext value appeared in the connect-as-migrator step" || FAIL=1
+
+# 12. LEG-E-READBACK-COUNT-MISMATCH -- MIGRATOR_DB_PASSWORD resolves to
+#     zero (or >1) production rows on pfin-migrator after leg D's PATCH.
+OUT12="$(run_scenario "leg-e-readback-count-mismatch: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0)" || FAIL=1
+assert_output_contains "leg-e-readback-count-mismatch" "${OUT12:-}" "expected exactly 1" || FAIL=1
+
+# 13. LEG-E-READBACK-DIVERGE (Sec VETO-1's own named scenario, PR #849
+#     review) -- the value actually stored on pfin-migrator diverges from
+#     the credential this run generated and set on the Postgres role
+#     (models provision-migrator-app.sh's own independently-minted
+#     MIGRATOR_DB_PASSWORD never having been reconciled) -> refuses,
+#     proving leg E's hash-bound guard, not just leg D's PATCH call
+#     succeeding, is what stands between this class of bug and a false
+#     VERIFIED.
+OUT13="$(run_scenario "leg-e-readback-diverge: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 "" 1)" || FAIL=1
+assert_output_contains "leg-e-readback-diverge" "${OUT13:-}" "DIFFERENT value than what was pushed" || FAIL=1
+
+# 14. PHASE2-PUSH-FAILS
+OUT14="$(run_scenario "phase2-push-fails: refuses" 1 --apply clean "f|f" f 0 1 0 0 0 0 0)" || FAIL=1
+assert_output_contains "phase2-push-fails" "${OUT14:-}" "supabase db push exited" || FAIL=1
+
+# 15. PHASE2-NO-COMPLETION-LINE
+OUT15="$(run_scenario "phase2-no-completion-line: refuses" 1 --apply clean "f|f" f 0 0 1 0 0 0 0)" || FAIL=1
+assert_output_contains "phase2-no-completion-line" "${OUT15:-}" "incomplete run, not a pass" || FAIL=1
+
+# 16. PHASE2-CENSUS-BAD-AFTER-PUSH
+OUT16="$(run_scenario "phase2-census-bad-after-push: refuses" 1 --apply clean "f|f" f 1 0 0 0 0 0 0)" || FAIL=1
+assert_output_contains "phase2-census-bad-after-push" "${OUT16:-}" "broke somewhere in the apply" || FAIL=1
+
+# 17. PHASE2-BOOTSTRAP-NOT-COMPLETE-AFTER-PUSH -- census clean but the
 #     118 ledger row still absent after a "successful" push.
-OUT11="$(run_scenario "phase2-bootstrap-not-complete-after-push: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 f)" || FAIL=1
-assert_output_contains "phase2-bootstrap-not-complete-after-push" "${OUT11:-}" "did not actually land 118" || FAIL=1
+OUT17="$(run_scenario "phase2-bootstrap-not-complete-after-push: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 f)" || FAIL=1
+assert_output_contains "phase2-bootstrap-not-complete-after-push" "${OUT17:-}" "did not actually land 118" || FAIL=1
 
-# 12. PHASE3-VAULT-VIEW-FAILS -- everything up to Phase 2 verify passes;
+# 18. PHASE3-VAULT-VIEW-FAILS -- everything up to Phase 2 verify passes;
 #     need BOOTSTRAP_COMPLETE to read t on the POST-push read but f on
 #     preflight. FAKE_BOOTSTRAP_COMPLETE is static per-run, so instead
 #     force it "t" throughout (the fixture never actually distinguishes
@@ -400,21 +527,26 @@ else
   FAIL=1
 fi
 
-# 13. HAPPY-PATH-FULL-APPLY
-OUT13="$(run_scenario "happy-path-full-apply: succeeds, absent role-comment files skipped" 0 --apply clean "f|f" f 0 0 0 0 0 0 0)" || FAIL=1
-assert_output_contains "happy-path-full-apply" "${OUT13:-}" "Phase 1 -> 2 -> 3 complete" || FAIL=1
+# 19. HAPPY-PATH-FULL-APPLY -- now the load-bearing end-to-end proof for
+#     legs A-E all succeeding together (D's PATCH and E's readback
+#     observe the SAME value via FAKE_PUSHED_HASH_FILE, written by fake-
+#     curl and read by the fake tinker handler -- not two independently
+#     scripted fakes that happen to agree).
+OUT19="$(run_scenario "happy-path-full-apply: succeeds, absent role-comment files skipped" 0 --apply clean "f|f" f 0 0 0 0 0 0 0)" || FAIL=1
+assert_output_contains "happy-path-full-apply" "${OUT19:-}" "Phase 1 -> 2 -> 3 complete" || FAIL=1
+assert_output_contains "happy-path-full-apply" "${OUT19:-}" "MIGRATOR_DB_PASSWORD pushed to pfin-migrator and hash-verified" || FAIL=1
 for f in 116_pfin_provider_sync_role 117_pfin_etl_role_comment_c1_reattribution 119_migrator_role_comment_amendment3_recitation; do
-  assert_output_contains "happy-path-full-apply (skip $f)" "${OUT13:-}" "$f.sql not present in supabase/migrations/ -- skipping" || FAIL=1
+  assert_output_contains "happy-path-full-apply (skip $f)" "${OUT19:-}" "$f.sql not present in supabase/migrations/ -- skipping" || FAIL=1
 done
 
-# 14. RESOURCE-ABSENT (measured exit 1, not the header's documented 2 --
+# 20. RESOURCE-ABSENT (measured exit 1, not the header's documented 2 --
 #     see the note in the header comment above)
-OUT14="$(run_scenario "resource-absent: refuses" 1 --apply migrator-absent "f|f" f 0 0 0 0 0 0 0)" || FAIL=1
-assert_output_contains "resource-absent" "${OUT14:-}" "expected exactly one application named" || FAIL=1
+OUT20="$(run_scenario "resource-absent: refuses" 1 --apply migrator-absent "f|f" f 0 0 0 0 0 0 0)" || FAIL=1
+assert_output_contains "resource-absent" "${OUT20:-}" "expected exactly one application named" || FAIL=1
 
-# 15. UNKNOWN-FLAG
-OUT15="$(run_scenario "unknown-flag: rejected" 2 --bogus clean "f|f" f 0 0 0 0 0 0 0)" || FAIL=1
-assert_output_contains "unknown-flag" "${OUT15:-}" "unknown flag" || FAIL=1
+# 21. UNKNOWN-FLAG
+OUT21="$(run_scenario "unknown-flag: rejected" 2 --bogus clean "f|f" f 0 0 0 0 0 0 0)" || FAIL=1
+assert_output_contains "unknown-flag" "${OUT21:-}" "unknown flag" || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

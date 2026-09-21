@@ -14,17 +14,24 @@
 #      Let's Encrypt cert Coolify's Traefik mints once the domain resolves
 #      and routes, then confirms `www` also serves.
 #
-# WHY THIS REFUSES TO TOUCH ANYTHING BUT A/AAAA/`www` CNAME (Sec ask,
-# BACKLOG §7.36 item 72 AC) -- a registrar credential is DNS control,
-# which is cert-issuance control, which is an MITM surface (the same
-# reasoning that kept PORKBUN_API_KEY/PORKBUN_SECRET_KEY out of
+# WHY THIS REFUSES TO TOUCH ANYTHING BUT THE APEX A / `www` CNAME (Sec
+# ask, BACKLOG §7.36 item 72 AC) -- a registrar credential is DNS
+# control, which is cert-issuance control, which is an MITM surface (the
+# same reasoning that kept PORKBUN_API_KEY/PORKBUN_SECRET_KEY out of
 # provision.env.example until this item landed). The full record set is
 # READ and printed (so an MX/TXT row is visible in the diff, for operator
-# awareness) but NEVER a write target -- and if a record already exists at
-# either target name (apex, `www`) with a type this script does not
-# expect (anything other than A/AAAA at the apex, anything other than
-# A/AAAA/CNAME at `www`), it REFUSES rather than silently overwriting or
-# deleting a record it does not understand the purpose of.
+# awareness) but NEVER a write target. The refusal logic is scoped to
+# what would actually CONFLICT, not to "any type other than the one this
+# script writes" (Sec F-2, PR #849 review corrected an earlier version
+# that refused on the apex's own MX/TXT rows -- present on the REAL
+# target domain, measured live):
+#   - apex: refuses only if a CNAME/ALIAS already exists there (DNS's
+#     CNAME-exclusivity rule -- it cannot coexist with the A record this
+#     script sets). MX/TXT/NS/SRV pass through untouched.
+#   - www: refuses on anything other than A/AAAA/CNAME (unchanged).
+#   - apex CAA: refuses explicitly, by name, if a CAA record exists that
+#     does not authorise Let's Encrypt -- otherwise this would only ever
+#     surface later as an opaque cert-poll timeout.
 #
 # THE COOLIFY PATCH FIELD NAME IS UNMEASURED -- stated, not glossed. Every
 # sibling script that READS an application's domain(s) uses the `fqdn`
@@ -40,13 +47,28 @@
 # the read-back will show the OLD value unchanged and this script refuses
 # to report success.
 #
-# KEYS NEVER TOUCH ARGV -- same discipline as every sibling script that
-# handles a credential: PORKBUN_API_KEY/PORKBUN_SECRET_KEY are read from
-# `.env`, written into a LOCAL 0600 tempfile as the Porkbun JSON request
-# body (Porkbun's own API puts the key pair IN the POST body, not a
-# header -- see porkbun_api() below), passed to curl via `--data-binary
-# @file`, and unlinked in a `finally` immediately after each call. Neither
-# key is ever passed as a curl `-d`/`-H` argument, logged, or printed.
+# KEYS NEVER TOUCH ANY PROCESS'S OWN ARGV -- same discipline as every
+# sibling script that handles a credential, applied at BOTH hops this
+# script has (Sec VETO-2, PR #849 review corrected an earlier version of
+# this heading that only covered the SECOND hop and so read as a broader
+# claim than the code made true):
+#   1. python3's OWN argv -- PORKBUN_API_KEY/PORKBUN_SECRET_KEY are read
+#      from `.env`, then piped to python3's STDIN (two lines, the
+#      script's own first two reads), never passed as `sys.argv`
+#      elements -- same shape the Coolify API token already uses via
+#      `curl -K -`. The python SCRIPT BODY itself (never a secret) is
+#      written to a local 0600 tempfile and unlinked immediately after
+#      each call (porkbun_scratch_file() below), so it can still be
+#      interpolated with `$ROOT_DOMAIN`/`$BOX_IP`/etc the same way a
+#      heredoc would, without needing python3's own argv for anything
+#      secret.
+#   2. curl's OWN argv (inside that python process) -- the two keys are
+#      written into a LOCAL 0600 tempfile as the Porkbun JSON request
+#      body (Porkbun's own API puts the key pair IN the POST body, not a
+#      header -- see porkbun_api() below), passed to curl via
+#      `--data-binary @file`, and unlinked in a `finally` immediately
+#      after each call. Neither key is ever passed as a curl `-d`/`-H`
+#      argument, logged, or printed.
 #
 # USAGE
 #   scripts/assign-app-domain.sh              # preflight: read-only, prints the DNS diff + the Coolify PATCH body
@@ -166,15 +188,34 @@ def porkbun_api(api_key, secret_key, path, extra=None):
     return out
 PY
 
+# porkbun_scratch_file -- a fresh LOCAL 0600 tempfile for a python SCRIPT
+# BODY (never a credential value itself). Caller writes to it via
+# `cat > "$(porkbun_scratch_file)" <<PYEOF ... PYEOF` (the heredoc still
+# interpolates bash variables exactly as it would piping into `python3 -`
+# directly), invokes `python3 "$file" <non-secret argv>` piping
+# PORKBUN_API_KEY/PORKBUN_SECRET_KEY on stdin as the script's own first
+# two reads, then removes the file. See this script's own header (Sec
+# VETO-2, PR #849 review) for why keys move off python3's argv entirely.
+porkbun_scratch_file() {
+  local f
+  f="$(mktemp -t pfin-porkbun-py.XXXXXX)"
+  chmod 600 "$f"
+  printf '%s' "$f"
+}
+
 step "Snapshotting the live Porkbun record set for '$ROOT_DOMAIN' (read-only -- every record shown, only A/AAAA/www-CNAME are ever a write target)"
-RECORDS_JSON="$(python3 - "$PORKBUN_API_KEY" "$PORKBUN_SECRET_KEY" "$ROOT_DOMAIN" <<PYEOF
+PY_RETRIEVE_FILE="$(porkbun_scratch_file)"
+cat > "$PY_RETRIEVE_FILE" <<PYEOF
 import sys, json
-api_key, secret_key, domain = sys.argv[1], sys.argv[2], sys.argv[3]
+api_key = sys.stdin.readline().rstrip("\n")
+secret_key = sys.stdin.readline().rstrip("\n")
+domain = sys.argv[1]
 $PY_PORKBUN_HELPER
 out = porkbun_api(api_key, secret_key, f"/dns/retrieve/{domain}")
 print(json.dumps(out["records"]))
 PYEOF
-)"
+RECORDS_JSON="$(printf '%s\n%s\n' "$PORKBUN_API_KEY" "$PORKBUN_SECRET_KEY" | python3 "$PY_RETRIEVE_FILE" "$ROOT_DOMAIN")"
+rm -f "$PY_RETRIEVE_FILE"
 
 MX_TXT_COUNT="$(python3 -c "import json,sys; r=json.loads(sys.argv[1]); print(sum(1 for x in r if x['type'] in ('MX','TXT')))" "$RECORDS_JSON")"
 info "record snapshot: $(python3 -c "import json,sys; r=json.loads(sys.argv[1]); print(len(r))" "$RECORDS_JSON") total, $MX_TXT_COUNT MX/TXT (never touched by this script)"
@@ -193,16 +234,51 @@ def at(name_suffix):
 apex = at("")
 www = at("www")
 
-def refuse(where, recs, allowed):
-    bad = [r for r in recs if r["type"] not in allowed]
-    if bad:
-        print(json.dumps({"refuse": f"{where}: existing record(s) of unexpected type "
-                           f"{[r['type'] for r in bad]} -- refusing to touch anything "
-                           f"but {allowed}"}))
-        sys.exit(0)
+def refuse(msg):
+    print(json.dumps({"refuse": msg}))
+    sys.exit(0)
 
-refuse("apex", apex, {"A", "AAAA"})
-refuse("www", www, {"A", "AAAA", "CNAME"})
+# Sec F-2 (PR #849 review): only CNAME/ALIAS at the apex actually
+# CONFLICT with the A record this script sets there (the DNS CNAME
+# exclusivity rule -- a name cannot hold a CNAME/ALIAS alongside any
+# other record type). MX/TXT/NS/SRV (and anything else) pass through
+# UNTOUCHED and are never a refusal trigger. The PRIOR allowed-set
+# {"A","AAAA"} refused on ANY other type, including the real target
+# domain own MX x2 and TXT x2 rows sitting at the apex (measured live,
+# read-only: `dig +short MX pfindash.com` / `dig +short TXT
+# pfindash.com`) -- this script was never asked to understand those
+# rows, only to leave them alone, and the over-broad refusal was itself
+# the defect (it refused on the REAL domain, every run).
+#
+# NO APOSTROPHE ANYWHERE IN THIS HEREDOC BLOCK, DELIBERATELY -- one
+# inside a heredoc NESTED inside this file own outer $(...) command
+# substitution breaks the OUTER bash parser quote-tracking; the same
+# trap this file hit once already this session (the fix there was
+# identical in spirit: reword around it, do not fight it).
+apex_conflict = [r for r in apex if r["type"] in ("CNAME", "ALIAS")]
+if apex_conflict:
+    refuse(f"apex: existing {[r['type'] for r in apex_conflict]} record(s) cannot coexist "
+           f"with an A record at the same name -- refusing to overwrite or delete them")
+
+bad_www = [r for r in www if r["type"] not in ("A", "AAAA", "CNAME")]
+if bad_www:
+    refuse(f"www: existing record(s) of unexpected type {[r['type'] for r in bad_www]} -- "
+           f"refusing to touch anything but A/AAAA/CNAME")
+
+# CAA governs certificate issuance -- a CAA row at the apex that does NOT
+# authorise the Let s Encrypt CA blocks Traefik issuance outright. Left
+# unchecked, this would only ever surface later as an opaque LE-poll
+# timeout with no diagnosis. Sec F-2 (PR #849 review): name it here,
+# explicitly, the moment it is visible, rather than letting a widened
+# apex allowed-set make it reachable by this write path without a check.
+apex_caa = [r for r in apex if r["type"] == "CAA"]
+if apex_caa:
+    le_authorised = any("letsencrypt.org" in (r.get("content") or "") for r in apex_caa)
+    if not le_authorised:
+        refuse(f"apex: a CAA record exists that does not authorise the Let s Encrypt CA "
+               f"({[r.get('content') for r in apex_caa]}) -- certificate issuance will "
+               f"fail. Add a CAA record authorising letsencrypt.org (or remove the "
+               f"restrictive one) before retrying.")
 
 apex_a = [r for r in apex if r["type"] == "A"]
 www_cname = [r for r in www if r["type"] == "CNAME"]
@@ -251,30 +327,40 @@ step "Applying DNS changes"
 if [[ "$APEX_ACTION" == "none" ]]; then
   ok "apex A already correct -- nothing to change"
 else
-  python3 - "$PORKBUN_API_KEY" "$PORKBUN_SECRET_KEY" "$ROOT_DOMAIN" "$BOX_IP" "$APEX_ACTION" <<PYEOF
+  PY_APEX_FILE="$(porkbun_scratch_file)"
+  cat > "$PY_APEX_FILE" <<PYEOF
 import sys
-api_key, secret_key, domain, box_ip, action = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+api_key = sys.stdin.readline().rstrip("\n")
+secret_key = sys.stdin.readline().rstrip("\n")
+domain, box_ip, action = sys.argv[1], sys.argv[2], sys.argv[3]
 $PY_PORKBUN_HELPER
 if action == "create":
     porkbun_api(api_key, secret_key, f"/dns/create/{domain}", {"name": "", "type": "A", "content": box_ip, "ttl": "300"})
 else:
     porkbun_api(api_key, secret_key, f"/dns/editByNameType/{domain}/A/", {"content": box_ip, "ttl": "300"})
 PYEOF
+  printf '%s\n%s\n' "$PORKBUN_API_KEY" "$PORKBUN_SECRET_KEY" | python3 "$PY_APEX_FILE" "$ROOT_DOMAIN" "$BOX_IP" "$APEX_ACTION"
+  rm -f "$PY_APEX_FILE"
   ok "apex A -> $BOX_IP ($APEX_ACTION)"
 fi
 
 if [[ "$WWW_ACTION" == "none" ]]; then
   ok "www CNAME already correct -- nothing to change"
 else
-  python3 - "$PORKBUN_API_KEY" "$PORKBUN_SECRET_KEY" "$ROOT_DOMAIN" "$WWW_ACTION" <<PYEOF
+  PY_WWW_FILE="$(porkbun_scratch_file)"
+  cat > "$PY_WWW_FILE" <<PYEOF
 import sys
-api_key, secret_key, domain, action = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+api_key = sys.stdin.readline().rstrip("\n")
+secret_key = sys.stdin.readline().rstrip("\n")
+domain, action = sys.argv[1], sys.argv[2]
 $PY_PORKBUN_HELPER
 if action == "create":
     porkbun_api(api_key, secret_key, f"/dns/create/{domain}", {"name": "www", "type": "CNAME", "content": domain, "ttl": "300"})
 else:
     porkbun_api(api_key, secret_key, f"/dns/editByNameType/{domain}/CNAME/www", {"content": domain, "ttl": "300"})
 PYEOF
+  printf '%s\n%s\n' "$PORKBUN_API_KEY" "$PORKBUN_SECRET_KEY" | python3 "$PY_WWW_FILE" "$ROOT_DOMAIN" "$WWW_ACTION"
+  rm -f "$PY_WWW_FILE"
   ok "www CNAME -> $ROOT_DOMAIN ($WWW_ACTION)"
 fi
 

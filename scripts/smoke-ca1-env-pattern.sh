@@ -31,18 +31,32 @@
 # up automatically on the next run, and this script can never drift from
 # what the container is actually running.
 #
-# ⚠ THE ROUTE-SIGNAL REFERENCE LIST IS PINNED, NOT LIVE-MEASURED --
-# stated, not glossed. The AC (BACKLOG item 79) calls for "the running
-# Coolify version's own documented injected-var list, supplied as a
-# pinned input." No prior live cross-check of Coolify 4.3.18's actual
-# injected-var set exists anywhere in this repo (grepped for the
+# ⚠ SUBJECT A IS STRUCTURALLY UNFIRABLE WITH THE CURRENT LIST -- stated
+# plainly, not glossed (Sec F-3, PR #849 review). ROUTE_SIGNAL_REFERENCE
+# below is DERIVED FROM the same `PUBLIC_ROUTE_ENV_MATCHERS` families it
+# is checked against (one representative example per matcher family,
+# read off the matchers' own code comments) -- a 1:1 mapping, not an
+# independent measurement. Every pinned name therefore matches by
+# construction, EVERY RUN: the only two reachable outcomes are "every
+# pinned name that is injected is matched" (exit 0) or "none of the
+# pinned names are injected at all" (exit 0, trivially clean, the "none
+# injected" branch below). This gate CANNOT currently produce the
+# Subject A finding it exists to catch (an injected route-signal name
+# matched by NO pattern) -- proving the control's own logic (the
+# inversion itself, and the trivially-clean branch) is what this
+# script's fence does; proving this PINNED LIST reflects live reality is
+# a separate, unmet precondition. BACKLOG §7.36 item 80 books capturing
+# a real Coolify deploy's own injected-name set into a committed,
+# version-named fixture to replace this pin -- until that lands, treat
+# every VERIFIED from this script as "the control logic is sound," never
+# as "this Coolify version's env surface was actually checked."
+#
+# No prior live cross-check of Coolify 4.3.18's actual injected-var set
+# exists anywhere in this repo (grepped for the
 # temp/self212-devops-ca1-coolify-route-envvars.md file the code's own
-# comment cites -- absent, never committed). ROUTE_SIGNAL_REFERENCE
-# below is therefore derived from the matcher SOURCE's own documented
-# families (each pattern's own code comment names a representative
-# example), NOT from an independent measurement against a live Coolify
-# install. Update this list, and this comment, the day a real live
-# cross-check is performed -- do not read this pinned set as "measured."
+# comment cites -- absent, never committed; a temp/ loss, now load-
+# bearing). Update this comment, and ROUTE_SIGNAL_REFERENCE, the day
+# item 80 lands -- do not read this pinned set as "measured" until then.
 #
 # USAGE
 #   BOX_IP=<box-ip> scripts/smoke-ca1-env-pattern.sh [--compose-service <name>]
@@ -82,7 +96,9 @@ step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 for arg in "$@"; do
   case "$arg" in
     --compose-service) shift; COMPOSE_SERVICE="${1:-}" ;;
-    *) : ;;
+    # Sec F-3 (PR #849 review): every sibling script exits 2 on an
+    # unrecognised flag; this one was silently ignoring it instead.
+    *) echo "unknown flag: $arg" >&2; echo "usage: $0 [--compose-service <name>]" >&2; exit 2 ;;
   esac
   shift || true
 done

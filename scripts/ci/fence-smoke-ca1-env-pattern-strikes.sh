@@ -41,6 +41,22 @@
 #      FAILED (exit 2), "BOX_IP is required, not defaulted".
 #   9. BOX-UNREACHABLE     -- ssh's own reachability probe fails ->
 #      FAILED (exit 2).
+#  10. UNKNOWN-FLAG         -- an unrecognised argument (Sec F-3, PR #849
+#      review -- previously silently ignored via `*) : ;;`; every sibling
+#      script exits 2) -> FAILED (exit 2), "unknown flag".
+#
+# ⚠ WHAT THIS FENCE DOES NOT, AND CANNOT, PROVE -- Sec F-3 (PR #849
+# review): the target script's own pinned ROUTE_SIGNAL_REFERENCE list is
+# DERIVED FROM the same PUBLIC_ROUTE_ENV_MATCHERS families it is checked
+# against, so scenario 2's "unmatched finding" is only reachable here
+# because this fence's fake docker is TOLD which names to report
+# unmatched (FAKE_UNMATCHED_NAMES) -- it proves the SCRIPT's own control
+# flow correctly refuses when told of an inversion, never that the
+# pinned list reflects a real Coolify deploy's actual env surface (it
+# cannot, offline). BACKLOG §7.36 item 80 books the live measurement that
+# would close that gap; this fence is unaffected by it either way, since
+# it never touches the real pinned list's content, only the script's
+# reaction to whatever names claim to be unmatched.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -156,17 +172,18 @@ EOF
 chmod +x "$FAKE_BIN/ssh"
 
 run_scenario() {
-  # run_scenario <desc> <expect_exit> <box_ip> <curl_mode> <box_unreachable> <ps_ids> <running> <injected_names> <unmatched_names> <node_import_fail>
+  # run_scenario <desc> <expect_exit> <box_ip> <curl_mode> <box_unreachable> <ps_ids> <running> <injected_names> <unmatched_names> <node_import_fail> [extra_flag]
   local desc="$1" expect_exit="$2" box_ip="$3" curl_mode="$4" box_unreachable="$5" \
-        ps_ids="$6" running="$7" injected_names="$8" unmatched_names="$9" node_import_fail="${10}"
+        ps_ids="$6" running="$7" injected_names="$8" unmatched_names="$9" node_import_fail="${10}" extra_flag="${11:-}"
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   set +e
+  # shellcheck disable=SC2086
   BOX_IP="$box_ip" AUTOMATION_KEY=/dev/null \
     PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$log" FAKE_CURL_MODE="$curl_mode" FAKE_BOX_UNREACHABLE="$box_unreachable" \
     FAKE_PS_IDS="$ps_ids" FAKE_RUNNING="$running" FAKE_INJECTED_NAMES="$injected_names" \
     FAKE_UNMATCHED_NAMES="$unmatched_names" FAKE_NODE_IMPORT_FAIL="$node_import_fail" \
-    bash "$TARGET_SH" < /dev/null > "$WORK/out.$$" 2>&1
+    bash "$TARGET_SH" $extra_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
 
@@ -242,6 +259,11 @@ assert_output_contains "box-ip-missing" "${OUT8:-}" "BOX_IP is required, not def
 # 9. BOX-UNREACHABLE
 OUT9="$(run_scenario "box-unreachable: FAILED (exit 2)" 2 127.0.0.1 clean 1 fakecid1 true "$ALL5" "" 0)" || FAIL=1
 assert_output_contains "box-unreachable" "${OUT9:-}" "not reachable over SSH" || FAIL=1
+
+# 10. UNKNOWN-FLAG (Sec F-3, PR #849 review -- was previously silently
+#     ignored via `*) : ;;`; every sibling script exits 2)
+OUT10="$(run_scenario "unknown-flag: rejected" 2 127.0.0.1 clean 0 fakecid1 true "$ALL5" "" 0 --bogus)" || FAIL=1
+assert_output_contains "unknown-flag" "${OUT10:-}" "unknown flag" || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

@@ -24,6 +24,16 @@
 #   migrations land).
 # B-3: exactly one ledger row for migration 025 (025_aal2_step_up_backstop.sql).
 #
+# Sec N-5 (PR #849 review, noted, not asked for): the B-1 relation
+# enumeration uses `has_table_privilege`, which does not see column-level
+# grants, and `relkind in ('r','v','m','p')` omits foreign tables ('f')
+# and sequences ('S'); neither leg sees a role-level `ALTER DEFAULT
+# PRIVILEGES` grant that would apply to a FUTURE relation. All three are
+# subsumed by the schema-level `has_schema_privilege('anon','pfin',
+# 'USAGE') = f` leg above, which is the actually-binding fence for this
+# gate -- stated so this known scope limit of the enumeration leg is
+# never read as a gap in the control itself.
+#
 # USAGE
 #   scripts/pgrst-exposure-gates.sh              # preflight: read-only (this script is ENTIRELY read-only -- no --apply flag exists)
 #

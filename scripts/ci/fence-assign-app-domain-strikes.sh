@@ -18,16 +18,32 @@
 # any live external system's behavior.
 #
 # Scenarios:
-#   1. HAPPY-PATH PREFLIGHT -- no existing apex/www records, no --apply
-#      -> prints the diff + the Coolify PATCH plan, exit 0, nothing
-#      written (no Porkbun write call, no Coolify PATCH call).
-#   2. MX-AT-APEX-REFUSES -- an MX record sits at the apex name -> refuses
-#      before any write.
+#   1. HAPPY-PATH PREFLIGHT -- MX x2 + TXT x2 at the apex (the REAL
+#      pfindash.com shape, measured live -- Sec F-2, PR #849 review: the
+#      prior fixture used an EMPTY apex, which never exercised the actual
+#      target domain's own shape and let an over-broad refusal ship
+#      unnoticed), no --apply -> prints the diff + the Coolify PATCH
+#      plan, exit 0, nothing written (no Porkbun write call, no Coolify
+#      PATCH call), and the MX/TXT rows are visibly UNTOUCHED (no refusal
+#      fires on them).
+#   2. CNAME-AT-APEX-REFUSES (Sec F-2, PR #849 review -- replaces the old
+#      MX-at-apex scenario, which is no longer a refusal condition) -- a
+#      CNAME record sits at the apex name -> refuses before any write
+#      (the actual CNAME-exclusivity conflict this guard exists to
+#      catch).
 #   3. TXT-AT-WWW-REFUSES -- a TXT record sits at the www name -> refuses.
+#   3b. CAA-NON-LE-REFUSES (Sec F-2, PR #849 review) -- a CAA record
+#      exists at the apex that does not authorise Let's Encrypt -> refuses
+#      with the named CAA reason, before any write.
 #   4. ALREADY-CORRECT -- apex A already = BOX_IP, www CNAME already =
 #      apex -> preflight reports both actions "none", no refusal.
 #   5. KEYS-NEVER-IN-ARGV -- across every Porkbun call this fence issues,
-#      fake-curl's own leak check (FAKE_LEAK_LOG) never fires.
+#      neither fake-curl's own leak check NOR the fake python3 wrapper's
+#      (Sec VETO-2, PR #849 review -- the python3-argv witness that makes
+#      this scenario actually falsifiable; the curl-level check alone
+#      never could, since the keys never reached curl's argv even in the
+#      broken version) ever fires (both write to the same FAKE_LEAK_LOG
+#      sentinel).
 #   6. UUID-AMBIGUOUS-REFUSES -- 2 applications match APP_NAME -> refuses
 #      (Sec F4 discipline, same class as every sibling script).
 #   7. PATCH-READBACK-MISMATCH-REFUSES -- the Coolify PATCH "succeeds"
@@ -60,6 +76,33 @@ printf 'COOLIFY_API_TOKEN=fake-coolify-token-do-not-leak\n' > "$FAKE_ROOT_PFIN/c
 FAKE_BIN="$WORK/bin"
 mkdir -p "$FAKE_BIN"
 ln -s "$FIXTURE_DIR/fake-curl" "$FAKE_BIN/curl"
+
+# Fake `python3` -- Sec VETO-2 (PR #849 review): the ORIGINAL leak check
+# only ever watched curl's own argv, which the Porkbun keys never reached
+# in the first place (they moved via --data-binary @tempfile even in the
+# broken version) -- so scenario 5 could never actually fire regardless
+# of whether the keys leaked into python3's OWN argv, which they DID
+# (three sites, fixed in this same PR: the keys now move exclusively via
+# python3's stdin, never sys.argv). This wrapper makes that guard
+# FALSIFIABLE: it logs its own argv the same way fake-curl already does,
+# to the SAME $FAKE_LEAK_LOG sentinel, then execs the real python3 so
+# every scenario's actual script logic still runs unmodified. Strike this
+# by putting a key back on python3's argv in assign-app-domain.sh -- this
+# wrapper will catch it; the curl-level check alone never could.
+REAL_PYTHON3="$(command -v python3)"
+[[ -n "$REAL_PYTHON3" ]] || { echo "FATAL: no real python3 on PATH to wrap" >&2; exit 2; }
+cat > "$FAKE_BIN/python3" <<EOF
+#!/usr/bin/env bash
+ARGS="\$*"
+if [[ -n "\${FAKE_PORKBUN_API_KEY_VALUE:-}" ]] && printf '%s' "\$ARGS" | grep -qF "\$FAKE_PORKBUN_API_KEY_VALUE"; then
+  printf 'LEAK: PORKBUN_API_KEY value found in python3 argv: %s\n' "\$ARGS" >> "\${FAKE_LEAK_LOG:-/dev/null}"
+fi
+if [[ -n "\${FAKE_PORKBUN_SECRET_KEY_VALUE:-}" ]] && printf '%s' "\$ARGS" | grep -qF "\$FAKE_PORKBUN_SECRET_KEY_VALUE"; then
+  printf 'LEAK: PORKBUN_SECRET_KEY value found in python3 argv: %s\n' "\$ARGS" >> "\${FAKE_LEAK_LOG:-/dev/null}"
+fi
+exec "$REAL_PYTHON3" "\$@"
+EOF
+chmod +x "$FAKE_BIN/python3"
 
 cat > "$FAKE_BIN/ssh" <<EOF
 #!/usr/bin/env bash
@@ -150,28 +193,45 @@ run_case() {
   fi
   echo "OK: [$desc] exit $rc as expected, no key leak." >&2
   CASE_LOG="$log"
+  CASE_OUTPUT="$(cat "$WORK/out.$$")"
   return 0
 }
 
 FAIL=0
 
-EMPTY_RECORDS='[]'
-CONFLICT_MX_APEX='[{"name":"fake-domain.test","type":"MX","content":"mail.example.com"}]'
+# The REAL pfindash.com apex shape (Sec F-2, PR #849 review -- measured
+# live: `dig +short MX pfindash.com` / `dig +short TXT pfindash.com`).
+# Using this as the happy-path fixture, not an empty apex, is the whole
+# point: it is what let the prior over-broad refusal ship unnoticed.
+REAL_SHAPE_APEX_RECORDS='[{"name":"fake-domain.test","type":"MX","content":"fwd1.porkbun.com","prio":"10"},{"name":"fake-domain.test","type":"MX","content":"fwd2.porkbun.com","prio":"20"},{"name":"fake-domain.test","type":"TXT","content":"v=spf1 include:_spf.porkbun.com ~all"},{"name":"fake-domain.test","type":"TXT","content":"brevo-code:abc123"}]'
+CONFLICT_CNAME_APEX='[{"name":"fake-domain.test","type":"CNAME","content":"somewhere-else.example.com"}]'
+CONFLICT_CAA_NONLE='[{"name":"fake-domain.test","type":"CAA","content":"0 issue \"digicert.com\""}]'
 CONFLICT_TXT_WWW='[{"name":"www.fake-domain.test","type":"TXT","content":"v=spf1 ..."}]'
 ALREADY_CORRECT='[{"name":"fake-domain.test","type":"A","content":"127.0.0.1"},{"name":"www.fake-domain.test","type":"CNAME","content":"fake-domain.test"}]'
 
-# 1. HAPPY-PATH PREFLIGHT
-run_case "happy-path preflight" 0 "" "$EMPTY_RECORDS" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+# 1. HAPPY-PATH PREFLIGHT -- real apex shape (MX x2 + TXT x2), all
+#    untouched, no refusal.
+run_case "happy-path preflight" 0 "" "$REAL_SHAPE_APEX_RECORDS" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
 if [[ -n "${CASE_LOG:-}" ]] && grep -q "dns/create\|dns/editByNameType\|-X PATCH" "$CASE_LOG"; then
   echo "FAIL: [happy-path preflight] a write call was issued despite no --apply" >&2
   FAIL=1
 fi
 
-# 2. MX-AT-APEX-REFUSES
-run_case "MX record at apex refuses" 1 "" "$CONFLICT_MX_APEX" 200 200 "" "" 1 || FAIL=1
+# 2. CNAME-AT-APEX-REFUSES (replaces the old MX-at-apex scenario, which
+#    is no longer a refusal condition -- MX passes through untouched, per
+#    scenario 1 above)
+run_case "CNAME record at apex refuses" 1 "" "$CONFLICT_CNAME_APEX" 200 200 "" "" 1 || FAIL=1
 
 # 3. TXT-AT-WWW-REFUSES
 run_case "TXT record at www refuses" 1 "" "$CONFLICT_TXT_WWW" 200 200 "" "" 1 || FAIL=1
+
+# 3b. CAA-NON-LE-REFUSES -- a CAA record at the apex that does not
+#     authorise Let's Encrypt.
+run_case "CAA record at apex not authorising Let's Encrypt refuses" 1 "" "$CONFLICT_CAA_NONLE" 200 200 "" "" 1 || FAIL=1
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qi "does not authorise the Let s Encrypt CA" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [CAA-non-LE-refuses] did not name the CAA predicate -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
 
 # 4. ALREADY-CORRECT
 run_case "already-correct: no action needed" 0 "" "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
@@ -183,8 +243,9 @@ fi
 # 5. KEYS-NEVER-IN-ARGV -- covered by every run_case call's own leak-log assertion above.
 echo "OK: [keys never in argv] asserted on every scenario's own curl log." >&2
 
-# 8. APPLY-HAPPY-PATH
-run_case "apply happy-path: DNS+PATCH+certs all verified" 0 --apply "$EMPTY_RECORDS" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+# 8. APPLY-HAPPY-PATH -- real apex shape again, apex A / www CNAME both
+#    still absent (create), MX/TXT untouched throughout --apply too.
+run_case "apply happy-path: DNS+PATCH+certs all verified" 0 --apply "$REAL_SHAPE_APEX_RECORDS" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
 if [[ -n "${CASE_LOG:-}" ]] && { ! grep -q "dns/create" "$CASE_LOG" || ! grep -q -- "-X PATCH" "$CASE_LOG"; }; then
   echo "FAIL: [apply happy-path] expected both a Porkbun create call and a Coolify PATCH call" >&2
   FAIL=1
