@@ -73,6 +73,21 @@
 #      BLOCKED-BY <prereq>, not counted as a genuine failure; a step
 #      whose prerequisite is satisfied but which independently fails IS
 #      counted -> exit 3, never the old unconditional exit 0.
+#  16. DRY-RUN-BLOCKED-BY-THROUGH-LENIENT-INTERMEDIATE (team-lead
+#      follow-up on 15, live --dry-run, 2026-09-20) -- record-uuids.sh's
+#      own preflight succeeds (VERIFIED) even though pfin-back-etl does
+#      not exist, by design ("absent -> info, not failure"); a one-hop
+#      BLOCKED-BY check falls through to misclassifying nonsecret-env/
+#      etl-role/provider-sync-role as independent failures. Fixed to
+#      walk one hop further, through record-uuids' own lenient status,
+#      into provision-resources's live done-predicate.
+#  17. STANDUP-LIVE-DONE-SKIPS-APPLY (team-lead follow-up, live
+#      --dry-run, 2026-09-20) -- run_standup()'s own live_done_standup()
+#      reports already-healthy -> standup.sh is never called at all,
+#      "VERIFIED without applying" prints instead.
+#  18. STANDUP-NOT-DONE-CALLS-STANDUP -- live_done_standup reports NOT
+#      healthy -> falls through to calling standup.sh normally, proving
+#      the fallback path (not just the new skip path) still works.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -554,6 +569,36 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
     FAIL=1
   fi
 fi
+
+# 17. STANDUP-LIVE-DONE-SKIPS-APPLY (team-lead follow-up, live --dry-run,
+#     2026-09-20) -- run_standup()'s own live_done_standup() reports
+#     already-healthy (provision-supabase-stack.sh --check-healthy would
+#     exit 0) -> standup.sh is NEVER called, "VERIFIED without applying"
+#     prints instead, in BOTH the preflight and apply invocations. This
+#     is the whole point of the fix: a real re-run against an already-
+#     healthy stack does not churn through standup's own (individually
+#     idempotent but not free) project/secrets/mount steps at all.
+CASE_ENV=(FAKE_RC_provision_supabase_stack=0)
+run_case "standup: live-done skips standup.sh entirely" 0 --only standup || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "already provisioned and healthy -- VERIFIED without applying" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [standup-live-done] did not print the VERIFIED-without-applying line" >&2; FAIL=1; }
+  if grep -q "^standup " "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+    echo "FAIL: [standup-live-done] standup.sh was called despite live_done_standup reporting healthy" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  fi
+fi
+
+# 18. STANDUP-NOT-DONE-CALLS-STANDUP -- live_done_standup reports NOT
+#     healthy -> falls through to the pre-existing behavior, calling
+#     standup.sh normally (proves the fallback path still works, not
+#     just the new skip path).
+CASE_ENV=(FAKE_RC_provision_supabase_stack=1)
+run_case "standup: not live-done falls through to standup.sh" 0 --only standup || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "^standup " "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [standup-not-done] standup.sh was never called" >&2; cat "$CASE_LAST_DIR/calls.log" >&2; FAIL=1; }
+fi
+CASE_ENV=()
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

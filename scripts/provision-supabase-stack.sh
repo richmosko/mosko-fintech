@@ -57,8 +57,19 @@
 #   decrypting server-side and testing non-empty — never by ciphertext
 #   length, which is meaningless: Laravel's `encrypted` cast produces a
 #   non-trivial blob even for an empty string). Mounts: the materialize
-#   script it calls is already idempotent. Deploy: refuses to redeploy onto
-#   a poisoned `db-data` volume rather than silently reproducing 2026-09-10.
+#   script it calls is already idempotent. Deploy: a pre-existing `db-data`
+#   volume is a THREE-WAY branch (team-lead follow-up, live --dry-run,
+#   2026-09-20 -- the old unconditional refusal broke `provision.sh`'s own
+#   "re-run = no-op" contract against a stack that was genuinely healthy) --
+#   (a) no volume -> deploy, as always; (b) volume present AND
+#   check_stack_already_healthy() (see that function's own header for the
+#   exact four-probe definition of "healthy" -- this is a Sec-reviewed
+#   CONTROL, not a loosening of one) confirms it -> "already provisioned
+#   and healthy, nothing to deploy", VERIFIED, skips the deploy call but
+#   still runs the full verification battery; (c) volume present and NOT
+#   confirmed healthy -> the same refusal as before (2026-09-10's poisoned-
+#   mount incident), naming `docker compose ... down -v` as the manual,
+#   never-automatic destroy path.
 #
 # SCOPE — READ BEFORE ASSUMING THIS REPLACES §5
 #   This mints/sets the 8 Supabase-stack secrets named in secrets-manifest.yml's
@@ -172,12 +183,29 @@ BASE_DIRECTORY="/infra/supabase"
 DOCKER_COMPOSE_LOCATION="/docker-compose.yml"
 
 APPLY=0
+CHECK_HEALTHY=0
 for arg in "$@"; do
   case "$arg" in
     --apply) APPLY=1 ;;
-    *) echo "unknown flag: $arg" >&2; echo "usage: $0 [--apply]" >&2; exit 2 ;;
+    # --check-healthy (team-lead follow-up, live --dry-run, 2026-09-20):
+    # a FAST, read-only, live done-predicate -- resolves the application
+    # by name (the same lookup the main Preflight step below performs
+    # anyway) then calls check_stack_already_healthy() and stops, WITHOUT
+    # ever reaching project/environment/application creation, secrets
+    # minting, or mount materialization. Exists so provision.sh's own
+    # run_standup() can ask "is this already done?" BEFORE ever calling
+    # `standup.sh --apply` -- the live defect this whole fix addresses
+    # was discovered by --apply running several idempotent-but-not-free
+    # steps before finally reaching the (then-unconditional) poisoned-
+    # volume refusal. Mutually exclusive with --apply (checked below).
+    --check-healthy) CHECK_HEALTHY=1 ;;
+    *) echo "unknown flag: $arg" >&2; echo "usage: $0 [--apply] | [--check-healthy]" >&2; exit 2 ;;
   esac
 done
+if [[ $APPLY -eq 1 && $CHECK_HEALTHY -eq 1 ]]; then
+  echo "FATAL: --apply and --check-healthy are mutually exclusive -- --check-healthy is a read-only probe, never paired with a mutating run." >&2
+  exit 2
+fi
 
 die()  { printf '\n\033[31mFAIL\033[0m  %s\n' "$*" >&2; exit 1; }
 ok()   { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
@@ -244,6 +272,81 @@ api() {
   fi
 }
 jqp() { python3 -c "import json,sys;$1"; }
+# FENCE-EXTRACT-FUNC-BEGIN: check-stack-already-healthy-func -- scripts/ci/fence-supabase-stack-healthy-check-strikes.sh
+# extracts this function VERBATIM (between these markers) rather than
+# hand-duplicating its logic, so the fence can never silently drift from
+# what actually ships. Keep marker lines exactly as they are. Defined THIS
+# early (before the main Preflight step) so --check-healthy (below) can call
+# it without running any of the project/environment/application creation
+# logic that follows.
+# check_stack_already_healthy -- team-lead follow-up (live --dry-run,
+# 2026-09-20): a stack provisioned 2026-09-09, fully healthy, hit the OLD
+# unconditional "db-data volume exists -> refuse" guard on a plain re-run
+# of this script, breaking provision.sh's own re-run = no-op contract.
+# This is a CONTROL CHANGE (Sec review required) -- the poisoned-volume
+# refusal below still exists and still fires whenever this cannot prove
+# the volume is genuinely healthy; this function is the new, PRECISE
+# DEFINITION of "healthy" for that purpose, not a loosening of the guard.
+#
+# WHAT "HEALTHY" MEANS HERE -- four READ-ONLY checks, all reused from
+# elsewhere in this file (never a new, heavier mechanism invented just for
+# this): (1) N/7 containers report Docker health=healthy (same query the
+# "Verification battery" step below already runs after a fresh deploy);
+# (2) api-gw answers GET /auth/v1/health with HTTP 200, probed from
+# inside the supavisor container -- no API key needed for that path, same
+# probe() shape mint-supabase-jwt-keys.sh's own --verify-live already
+# uses; (3) Postgres is reachable and reports major version 17 (same
+# `select server_version` query below); (4) the STATE-BASED init marker
+# below already documents as the real proof that /docker-entrypoint-
+# initdb.d/ actually ran (Postgres runs it exactly once, ever) --
+# authenticator/pgbouncer/supabase_auth_admin/supabase_functions_admin
+# all have a password set. (4) is the one that actually answers "was
+# this volume initialized by a real deploy of THIS stack, not a bogus
+# mount" -- (1)-(3) only prove "something is currently running and
+# answering", which a poisoned-but-since-patched-around volume could
+# also produce. ALL FOUR must pass; any single failure means "not
+# confirmed healthy" and the caller refuses exactly as before.
+check_stack_already_healthy() {
+  local containers=0
+  for _ in $(seq 1 5); do
+    containers="$(sshx "docker ps --filter 'label=com.docker.compose.project=$APP_UUID' --filter 'health=healthy' --format '{{.Names}}'" | wc -l | tr -d ' ')"
+    [[ "$containers" == "7" ]] && break
+    sleep 2
+  done
+  info "healthy-check (1/4): $containers/7 containers healthy"
+  if [[ "$containers" != "7" ]]; then info "healthy-check FAILED at (1/4): expected 7 healthy containers, got $containers"; return 1; fi
+
+  local gw_status
+  gw_status="$(sshx "docker compose --project-name $APP_UUID exec -T supavisor curl -s -o /dev/null -w '%{http_code}' http://api-gw:8000/auth/v1/health </dev/null" 2>/dev/null || true)"
+  info "healthy-check (2/4): api-gw GET /auth/v1/health -> HTTP ${gw_status:-<none>}"
+  if [[ "$gw_status" != "200" ]]; then info "healthy-check FAILED at (2/4): api-gw did not answer 200"; return 1; fi
+
+  local pgver
+  pgver="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc 'show server_version;'" 2>/dev/null | cut -d. -f1)"
+  info "healthy-check (3/4): Postgres server_version starts '${pgver:-<none>}'"
+  if [[ "$pgver" != "17" ]]; then info "healthy-check FAILED at (3/4): db not reachable, or not major version 17"; return 1; fi
+
+  local init_state all_pw_set=1 role has_pw
+  init_state="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc \"select rolname||':'||(rolpassword is not null) from pg_authid where rolname in ('authenticator','pgbouncer','supabase_auth_admin','supabase_functions_admin') order by rolname;\"" 2>/dev/null || true)"
+  if [[ -z "$init_state" ]]; then
+    info "healthy-check FAILED at (4/4): role-password query returned nothing"
+    return 1
+  fi
+  while IFS=: read -r role has_pw; do
+    [[ -z "$role" ]] && continue
+    info "healthy-check (4/4): role $role password set: $has_pw"
+    [[ "$has_pw" == "true" ]] || all_pw_set=0
+  done < <(printf '%s\n' "$init_state")
+  if [[ "$all_pw_set" != "1" ]]; then
+    info "healthy-check FAILED at (4/4): not all four roles have a password set -- init scripts did not run against this volume (or it is from a different/bogus mount)"
+    return 1
+  fi
+
+  ok "healthy-check: all four probes pass -- this db-data volume was genuinely initialized by a real deploy of this stack"
+  return 0
+}
+# FENCE-EXTRACT-FUNC-END: check-stack-already-healthy-func
+
 
 step "Preflight — project / environment / application (name-keyed lookup)"
 
@@ -316,6 +419,21 @@ else:
 else
   [[ -n "${PROJECT_UUID:-}" && -n "${ENV_UUID:-}" ]] || info "project/environment must exist (or be created) before the application"
   info "application '$APP_NAME' does not exist — would create with build_pack=dockercompose, base_directory=$BASE_DIRECTORY, docker_compose_location=$DOCKER_COMPOSE_LOCATION, branch=$GIT_BRANCH"
+fi
+
+if [[ $CHECK_HEALTHY -eq 1 ]]; then
+  step "--check-healthy: live done-predicate only, stopping here"
+  if [[ -z "${APP_UUID:-}" ]]; then
+    echo "NOT VERIFIED: application '$APP_NAME' does not exist yet." >&2
+    exit 1
+  fi
+  if check_stack_already_healthy; then
+    ok "VERIFIED: stack already provisioned and healthy."
+    exit 0
+  else
+    echo "NOT VERIFIED: see the healthy-check output above for which probe failed." >&2
+    exit 1
+  fi
 fi
 
 step "Preflight — Source commit availability (docs/deployment-runbook.md §4, ADR-072 Amendment 6)"
@@ -862,13 +980,28 @@ if echo "$ASSERT_OUT" | grep -q ': MISSING$'; then
 fi
 REMOTE
 
-step "Refusing to deploy onto a poisoned db-data volume"
-EXISTING_DB_VOLUME="$(sshx "docker volume ls -q --filter name=${APP_UUID}_db-data")"
-if [[ -n "$EXISTING_DB_VOLUME" ]]; then
-  die "${APP_UUID}_db-data already exists. This script does not know whether it initialized against a bogus mount at some point -- see docs/deployment-runbook.md §4 for how to confirm, and 'docker compose --project-name $APP_UUID down -v' to destroy it if it's poisoned. Refusing to deploy onto it silently."
-fi
-ok "no pre-existing db-data volume -- safe to deploy"
+# check_stack_already_healthy() now lives earlier in this file (right after
+# jqp()) so the --check-healthy flag below can call it before reaching this
+# point -- see that definition for the full "what healthy means" derivation.
 
+# FENCE-EXTRACT-DISPATCH-BEGIN: check-stack-already-healthy-dispatch -- scripts/ci/fence-supabase-stack-healthy-check-strikes.sh extracts this dispatcher block VERBATIM too (concatenated after the function extraction) so the fence can never silently drift from what actually ships.
+step "db-data volume check (idempotent-re-run guard, Sec-reviewed 2026-09-20)"
+EXISTING_DB_VOLUME="$(sshx "docker volume ls -q --filter name=${APP_UUID}_db-data")"
+NEED_DEPLOY=1
+if [[ -z "$EXISTING_DB_VOLUME" ]]; then
+  ok "no pre-existing db-data volume -- safe to deploy"
+else
+  info "${APP_UUID}_db-data already exists -- checking whether the stack is already healthy (a genuine idempotent re-run) before treating this as a poisoned volume"
+  if check_stack_already_healthy; then
+    ok "stack already provisioned and healthy -- nothing to deploy (still running the full verification battery below to confirm, not stopping at this quick check)"
+    NEED_DEPLOY=0
+  else
+    die "${APP_UUID}_db-data exists but the stack is NOT confirmed healthy (see the healthy-check output above for which probe failed) -- this script does not know whether it initialized against a bogus mount at some point. See docs/deployment-runbook.md §4 for how to confirm by hand, and 'docker compose --project-name $APP_UUID down -v' to destroy it ONLY once you've confirmed it's poisoned -- never automatic, never inferred from this failure alone. Refusing to deploy onto it silently."
+  fi
+fi
+# FENCE-EXTRACT-DISPATCH-END: check-stack-already-healthy-dispatch
+
+if [[ "$NEED_DEPLOY" == "1" ]]; then
 step "Deploying"
 DEPLOY_UUID="$(api POST "/deploy?uuid=$APP_UUID" | jqp "
 d=json.load(sys.stdin)
@@ -903,6 +1036,7 @@ print('\n'.join(e.get('output','') for e in entries[-60:]))" || true
   die "deployment $DEPLOY_UUID status=$STATUS -- see log above"
 fi
 ok "deployment finished"
+fi
 
 step "Verification battery"
 # Measured 2026-09-11: right after "deployment finished", supavisor (last
@@ -1050,5 +1184,9 @@ echo "$HOST_PORTS" | grep -q '^127.0.0.1:3000->' && ok "only 127.0.0.1:3000 publ
 info "External probe (run from OUTSIDE the box, this script cannot self-check it): nmap -Pn -p 5432,6543,8000,3000 $BOX_IP -- EXPECT all four filtered."
 
 step "Done"
-info "Deploy $DEPLOY_UUID finished and passed the verification battery."
+if [[ "$NEED_DEPLOY" == "1" ]]; then
+  info "Deploy $DEPLOY_UUID finished and passed the verification battery."
+else
+  info "No new deploy was needed -- the pre-existing db-data volume's stack was already healthy, and passed the verification battery."
+fi
 info "Studio, once you want to look at it: ssh -L 3000:localhost:3000 root@$BOX_IP then http://localhost:3000"

@@ -522,7 +522,36 @@ print_summary_and_exit() {
 # returns the underlying script's own exit code, or 4 for a MANUAL step.
 
 run_provision_vps()      { bash "$SCRIPTS/provision-vps.sh" ${1:+--apply}; }
-run_standup()             { bash "$SCRIPTS/standup.sh" ${1:+--apply}; }
+
+# live_done_standup -- team-lead follow-up (live --dry-run, 2026-09-20):
+# standup.sh's own preflight ALWAYS reported VERIFIED trivially --
+# provision-supabase-stack.sh's own preflight always prints "would
+# create/mint/deploy" and exits 0, whether or not the stack is already
+# fully live, so a real run ALWAYS proceeded to --apply regardless of
+# actual state -- discovering only deep into the apply (after mint/
+# secrets/mount calls already ran) that a stack provisioned 2026-09-09,
+# fully healthy, hit the poisoned-volume guard. provision-supabase-
+# stack.sh's own fix (the db-data-volume three-way branch, Sec-reviewed)
+# makes a real re-apply of standup SAFE either way -- this is a
+# SEPARATE, genuinely CHEAP check, evaluated BEFORE --apply is ever
+# called, so a healthy re-run skips the (individually idempotent but not
+# free) project/secrets/mount churn entirely and the dry-run classifier's
+# "VERIFIED (dry-run)" claim becomes true, not trivial. Reuses
+# provision-supabase-stack.sh's own new --check-healthy mode (the SAME
+# check_stack_already_healthy() function the poisoned-volume guard
+# itself calls) -- never a second, divergent implementation.
+live_done_standup() {
+  require_box_ip || return 1
+  bash "$SCRIPTS/provision-supabase-stack.sh" --check-healthy
+}
+
+run_standup() {
+  if live_done_standup; then
+    ok "standup: stack already provisioned and healthy -- VERIFIED without applying"
+    return 0
+  fi
+  bash "$SCRIPTS/standup.sh" ${1:+--apply}
+}
 
 run_db_bootstrap() { bash "$SCRIPTS/db-bootstrap.sh" ${1:+--apply}; }
 
