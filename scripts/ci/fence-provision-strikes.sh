@@ -132,6 +132,22 @@
 #      resolve-stack-network.sh's own call counter is exactly 1 for the
 #      whole run (3 workers x 2 phases = 6 potential call sites, all
 #      served by one memoized resolution).
+#  27b. DEPLOY-WORKERS-POST-DEPLOY-VERIFY-FAILS-STOPS-THE-STEP (team-lead's
+#      run-6 stop, item 10; backfilled into this list, previously
+#      undocumented here despite existing in the script below) -- the
+#      post-deploy store re-verify failing for pfin-back-etl stops the
+#      whole step before provider-sync/pdf-render are ever reached.
+#  27c. DEPLOY-WORKERS-ADMISSION-GUARD-DERIVED (Sec req 4, CA-1 identity
+#      review, run-9 stop 2026-09-21) -- verify-worker-ca1-clear.sh runs
+#      for provider-sync (its compose file declares the serve-admission.js
+#      override) with the NEW <name> --service <svc> call shape, and is
+#      skipped -- explicitly, logged, naming the worker and the reason --
+#      for etl/pdf-render, whose compose files do not.
+#  27d. DEPLOY-WORKERS-ADMISSION-GUARD-MISSING-COMPOSE-FILE-DIES -- a
+#      worker's docker-compose.yaml absent entirely (not merely lacking
+#      the override) hard-stops (die3, exit 3) rather than being treated
+#      as "no admission guard" -- a missing file where one is expected is
+#      a bigger problem than the check it would have gated.
 #  28. RESOLVE-STACK-NETWORK-FAILURE-BLOCKS-DEPLOY-APP -- resolve-stack-
 #      network.sh itself fails (rc=1) -> run_deploy_app() propagates the
 #      failure (exit 2, a genuine FAILED-STOPS outcome) and deploy-app.sh
@@ -208,6 +224,28 @@ run_case() {
   printf '%s' "$FULL_ENV" > "$case_dir/.env"
   # CI_MIGRATE_SSH_PUBKEY points inside case_dir by default (absent unless the case pre-creates it).
   printf 'CI_MIGRATE_SSH_PUBKEY=%s/ci_migrate.pub\n' "$case_dir" >> "$case_dir/.env"
+
+  # worker_has_admission_guard() (provision.sh, CA-1 identity review,
+  # run-9 stop 2026-09-21) reads $REPO_ROOT/<base-dir>/docker-compose.yaml
+  # structurally -- REPO_ROOT is this case_dir, so every case gets its
+  # own copy of the three workers' real admission-guard shape (provider-
+  # sync HAS the serve-admission.js override; etl/pdf-render do NOT),
+  # mirroring the actual tree exactly rather than inventing a fixture
+  # shape. A scenario that wants to test the "no compose file at all"
+  # die3 path removes one of these after run_case populates them (see
+  # the ADMISSION-GUARD-DERIVATION scenario below).
+  mkdir -p "$case_dir/workers/etl" "$case_dir/workers/provider-sync" "$case_dir/workers/pdf-render"
+  printf 'services:\n  pfin-back-etl:\n    build: .\n' > "$case_dir/workers/etl/docker-compose.yaml"
+  # CASE_OMIT_PROVIDER_SYNC_COMPOSE (set by a scenario BEFORE calling
+  # run_case, unset/"0" otherwise) leaves provider-sync's compose file
+  # missing entirely from the start -- deterministic, not a race against
+  # provision.sh's own apply-phase timing (an earlier draft of this
+  # fixture tried to delete the file mid-run in a background job; this
+  # is the same property without a timing dependency).
+  if [[ "${CASE_OMIT_PROVIDER_SYNC_COMPOSE:-0}" != "1" ]]; then
+    printf 'services:\n  provider-sync:\n    build: .\n    command: ["node", "dist/cli/serve-admission.js"]\n' > "$case_dir/workers/provider-sync/docker-compose.yaml"
+  fi
+  printf 'services:\n  pdf-render:\n    build: .\n' > "$case_dir/workers/pdf-render/docker-compose.yaml"
 
   set +e
   # `env` throughout, not bash prefix-assignment syntax: a NAME=value word
@@ -969,6 +1007,56 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   fi
 fi
 CASE_ENV=()
+
+# 27c. DEPLOY-WORKERS-ADMISSION-GUARD-DERIVED (Sec req 4, CA-1 identity
+#      review, run-9 stop 2026-09-21) -- verify-worker-ca1-clear.sh is
+#      called for provider-sync (its docker-compose.yaml, seeded by
+#      run_case above, DOES declare a serve-admission.js command
+#      override) with the NEW call shape (<name> --service <svc>, not a
+#      bare container name), and is NEVER called for pfin-back-etl or
+#      pfin-pdf-render (whose seeded compose files do NOT) -- each of
+#      those two instead gets an explicit skip line in stdout naming the
+#      worker and the reason, never a silent no-op.
+run_case "deploy-workers: admission-guard check runs for provider-sync only, derived not listed" 0 --only deploy-workers || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  CA1_LINES="$(grep '^verify-worker-ca1-clear ' "$CASE_LAST_DIR/calls.log" 2>/dev/null || true)"
+  CA1_COUNT="$(echo "$CA1_LINES" | grep -c . || true)"
+  if [[ "$CA1_COUNT" -ne 1 ]]; then
+    echo "FAIL: [admission-guard-derived] expected exactly 1 verify-worker-ca1-clear call (provider-sync only), found $CA1_COUNT:" >&2
+    echo "$CA1_LINES" >&2
+    FAIL=1
+  elif ! echo "$CA1_LINES" | grep -qE -- 'pfin-provider-sync --service provider-sync( |$)'; then
+    echo "FAIL: [admission-guard-derived] the one verify-worker-ca1-clear call does not carry the new <name> --service <svc> shape:" >&2
+    echo "$CA1_LINES" >&2
+    FAIL=1
+  fi
+  if ! grep -qE 'pfin-back-etl: no admission-guard command override' "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [admission-guard-derived] pfin-back-etl's skip was not logged explicitly (or was silent)." >&2
+    FAIL=1
+  fi
+  if ! grep -qE 'pfin-pdf-render: no admission-guard command override' "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [admission-guard-derived] pfin-pdf-render's skip was not logged explicitly (or was silent)." >&2
+    FAIL=1
+  fi
+fi
+
+# 27d. DEPLOY-WORKERS-ADMISSION-GUARD-MISSING-COMPOSE-FILE-DIES -- a
+#      worker's docker-compose.yaml is absent entirely (not merely
+#      lacking the override) -- worker_has_admission_guard() must hard
+#      stop (die3, exit 3) rather than silently treating "file missing"
+#      the same as "override absent". A missing compose file where one
+#      is expected is a bigger problem than the check it would gate.
+#      CASE_OMIT_PROVIDER_SYNC_COMPOSE=1 makes run_case itself leave the
+#      file out from the start -- deterministic, no timing dependency.
+CASE_OMIT_PROVIDER_SYNC_COMPOSE=1
+run_case "deploy-workers: missing compose file hard-stops (die3), never silently skips" 3 --only deploy-workers || FAIL=1
+CASE_OMIT_PROVIDER_SYNC_COMPOSE=0
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  if ! grep -qF "cannot derive admission-guard membership" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [admission-guard-missing-compose] die3 did not name the derivation failure." >&2
+    FAIL=1
+  fi
+fi
 
 # 28. RESOLVE-STACK-NETWORK-FAILURE-BLOCKS-DEPLOY-APP -- resolve-stack-
 #     network.sh itself fails -> run_deploy_app() must propagate the
