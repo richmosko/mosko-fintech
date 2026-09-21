@@ -120,11 +120,29 @@
 #
 # IDEMPOTENCY
 #   Preflight always reads live role state (`pg_roles.rolcanlogin` +
-#   `pg_authid.rolpassword IS NOT NULL`) before doing anything else, in
-#   BOTH preflight-only and --apply runs. A role that already has LOGIN
-#   AND a password set refuses UNLESS `--rotate` is passed — this script
-#   must never silently re-run an initial handoff over a live credential.
-#   `--rotate` skips the `ALTER ROLE … LOGIN` statement (already set) and
+#   `pg_authid.rolpassword IS NOT NULL`) AND the worker resource's own
+#   Coolify store state (does it already carry a production
+#   `PFIN_DB_PASSWORD` row) before doing anything else, in BOTH
+#   preflight-only and --apply runs. Three-way (team-lead follow-up, live
+#   --dry-run, provision.sh sweep, 2026-09-20 -- the OLD version refused
+#   unconditionally whenever LOGIN+password were both already set,
+#   breaking provision.sh's own "re-run = no-op" contract on the very
+#   next pass over an already-successfully-handed-off role, the same
+#   class of defect provision-supabase-stack.sh's db-data-volume guard
+#   had):
+#     - ALL THREE false (NOLOGIN, no password, store empty) — genuinely
+#       fresh, proceeds with the initial handoff.
+#     - ALL THREE true (LOGIN, password set, store carries
+#       PFIN_DB_PASSWORD) — already handed off, `VERIFIED`, exit 0,
+#       no-op, even with `--apply` and without `--rotate`.
+#     - Any OTHER combination — a genuine mismatch (e.g. LOGIN with no
+#       store value, or a store value with the role still NOLOGIN) —
+#       refuses, naming the specific state, same as before. This is a
+#       Sec-reviewed CONTROL, not a loosening: the refusal remains for
+#       every state that is not cleanly one of the two consistent ones.
+#   `--rotate` is unaffected by the above (it has its own, unchanged gate
+#   — the role must already be LOGIN, or `--rotate` refuses "not yet
+#   LOGIN"): skips the `ALTER ROLE … LOGIN` statement (already set) and
 #   refuses if the role is NOT already LOGIN (that is an initial handoff,
 #   not a rotation — omit `--rotate`).
 #
@@ -336,11 +354,52 @@ info "raw state: rolcanlogin=$ROLE_EXISTS_FIELD has_password=$HAS_PASSWORD_FIELD
 ROLCANLOGIN="$ROLE_EXISTS_FIELD"
 HAS_PASSWORD="$HAS_PASSWORD_FIELD"
 
+step "Preflight — Coolify store state (PFIN_DB_PASSWORD on '$RESOURCE_NAME')"
+# team-lead follow-up (live --dry-run, provision.sh sweep, 2026-09-20):
+# the OLD non-rotate refusal fired on ROLCANLOGIN+HAS_PASSWORD alone,
+# BEFORE this script's own APPLY=0 preflight-exit gate below -- meaning
+# a plain re-run of an ALREADY-SUCCESSFULLY-HANDED-OFF role (the normal,
+# expected state on provision.sh's second pass, or a bare `--from
+# etl-role`) refused instead of reporting VERIFIED, breaking provision.sh's
+# own "re-run = no-op" contract the exact same way provision-supabase-
+# stack.sh's db-data-volume guard did. Fix: a THIRD signal -- does the
+# worker resource's OWN Coolify env store already carry a production
+# PFIN_DB_PASSWORD row -- distinguishes "already fully handed off,
+# nothing to do" from "genuinely fresh, proceed" from "a mismatched,
+# partial state that needs a human, not a script, to resolve". Same
+# on-box Eloquent tinker --execute count-only read this script's own
+# leg E readback already uses (never a GET /envs call, which never
+# returns a secret's real value) -- never the value, never a new
+# mechanism.
+STORE_COUNT="$(sshx "env RESOURCE_UUID=\"$RESOURCE_UUID\" bash -s" <<'REMOTE'
+set -e
+docker exec coolify php artisan tinker --execute="
+\$app = \App\Models\Application::where('uuid','$RESOURCE_UUID')->firstOrFail();
+echo \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->where('is_preview', false)->count();
+" 2>/dev/null | tail -1 | tr -d ' \n'
+REMOTE
+)"
+info "store: PFIN_DB_PASSWORD (is_preview=false) row count on '$RESOURCE_NAME' = ${STORE_COUNT:-<none>}"
+case "$STORE_COUNT" in
+  0) STORE_HAS_PW=f ;;
+  1) STORE_HAS_PW=t ;;
+  *) die "PFIN_DB_PASSWORD (is_preview=false) readback on '$RESOURCE_NAME' found '$STORE_COUNT' matching row(s), expected 0 or 1 -- refusing to trust an ambiguous store state." ;;
+esac
+
 if [[ $ROTATE -eq 1 ]]; then
   [[ "$ROLCANLOGIN" == "t" ]] || die "role '$ROLE' is not yet LOGIN -- this is an INITIAL handoff, not a rotation. Omit --rotate."
 else
-  if [[ "$ROLCANLOGIN" == "t" && "$HAS_PASSWORD" == "t" ]]; then
-    die "role '$ROLE' already has LOGIN and a password set -- refusing to silently re-run the initial handoff over a live credential. Pass --apply --rotate if you intend to rotate it."
+  # Sec-reviewed CONTROL, not a loosening: the refusal below still fires
+  # on any state that is neither "fully fresh" nor "fully handed off" --
+  # only the two CONSISTENT states are treated as non-refusals now.
+  if [[ "$ROLCANLOGIN" == "t" && "$HAS_PASSWORD" == "t" && "$STORE_HAS_PW" == "t" ]]; then
+    ok "role '$ROLE' already has LOGIN + a password set, and '$RESOURCE_NAME' already carries a production PFIN_DB_PASSWORD -- already handed off, nothing to do."
+    printf '\n\033[32mVERIFIED\033[0m  already handed off -- no-op, whether or not --apply was passed. Pass --apply --rotate to rotate the established credential.\n'
+    exit 0
+  elif [[ "$ROLCANLOGIN" == "f" && "$HAS_PASSWORD" == "f" && "$STORE_HAS_PW" == "f" ]]; then
+    : # genuinely fresh -- fall through to the existing Plan/Apply flow, unchanged.
+  else
+    die "role '$ROLE' / '$RESOURCE_NAME' state is INCONSISTENT -- rolcanlogin=$ROLCANLOGIN has_password=$HAS_PASSWORD store_has_PFIN_DB_PASSWORD=$STORE_HAS_PW. Expected either ALL THREE false (fresh -- safe to run --apply) or ALL THREE true (already handed off -- nothing to do); a partial/mismatched combination needs investigation by hand before this script can safely proceed either way. This is NOT the --rotate case -- pass --apply --rotate only when you are intentionally rotating an already-established credential (rolcanlogin=t, has_password=t)."
   fi
 fi
 
@@ -349,7 +408,7 @@ cat <<PLAN
       role            $ROLE
       target resource $RESOURCE_NAME  ($RESOURCE_UUID)
       mode            $([[ $ROTATE -eq 1 ]] && echo "ROTATE (role already LOGIN; \\password only, no LOGIN flip)" || echo "INITIAL HANDOFF (\\password then ALTER ROLE ... LOGIN)")
-      current state   rolcanlogin=$ROLCANLOGIN has_password=$HAS_PASSWORD
+      current state   rolcanlogin=$ROLCANLOGIN has_password=$HAS_PASSWORD store_has_PFIN_DB_PASSWORD=$STORE_HAS_PW
 PLAN
 
 if [[ $APPLY -eq 0 ]]; then

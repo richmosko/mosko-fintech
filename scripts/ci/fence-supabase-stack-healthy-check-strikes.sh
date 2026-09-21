@@ -32,10 +32,15 @@
 # faked project/environment/application preflight this fence otherwise
 # avoids) -- a structural pin below only proves the wiring exists.
 #
-# `sshx` is a plain bash FUNCTION here (not a PATH-shadowed binary --
-# the extracted snippet is sourced directly into a controlled subshell,
-# never invoked as its own process), matching each of the four probes'
-# own distinctive embedded-command text.
+# `sshx` is a plain bash FUNCTION here (not a PATH-shadowed binary),
+# `export -f`'d into a genuinely SEPARATE `bash` invocation of the
+# extracted snippet -- never `source`d (fence-no-source-credential-
+# files.sh, this repo's own box-side config-file read-mechanism fence,
+# bans `source`/`.` of ANY file under scripts/**/*.sh, unconditionally,
+# by design; an earlier draft of this fence used `source "$EXTRACT"` and
+# was caught by that fence, correctly -- the mechanism ban is blunt on
+# purpose and this fence does not get a carve-out). Matches each of the
+# four probes' own distinctive embedded-command text.
 #
 # Scenarios:
 #   1. NO-VOLUME-DEPLOYS -- no db-data volume at all -> NEED_DEPLOY=1, no
@@ -104,75 +109,78 @@ FAIL=0
 #
 # ⚠ The fake `sshx()` below reads FAKE_-prefixed variable names, never
 # bare names like `containers`/`gw_status`/`pgver`/`init_state` --
-# check_stack_already_healthy() (the sourced, real function) declares
-# its OWN `local containers`/`gw_status`/`pgver`/`init_state` internally,
-# and bash resolves an unset-local name by walking the ACTIVE CALL
-# STACK, not lexical/definition-time scope: since that function sits
-# BETWEEN this harness and sshx() on the real call stack once sourced
-# and invoked, a same-named local there would shadow this harness's own
-# variable of the same name -- caught by a strike against this fence
-# ITSELF during development (every scenario read 0 containers regardless
-# of what was configured, traced to exactly this collision). Prefixing
-# these config variables avoids the collision outright rather than
-# relying on bash's scoping rules never changing shape again.
+# check_stack_already_healthy() (the real, extracted function) declares
+# its OWN `local containers`/`gw_status`/`pgver`/`init_state` internally.
+# An earlier draft of this fence used `source "$EXTRACT"` (since replaced
+# -- see the header) and those bare names collided: bash resolves an
+# unset-local name by walking the ACTIVE CALL STACK, not lexical/
+# definition-time scope, so the sourced function's own local shadowed
+# this harness's variable of the same name -- caught by a strike against
+# this fence ITSELF (every scenario read 0 containers regardless of what
+# was configured). The FAKE_ prefix makes the collision impossible by
+# construction (no shared name to shadow), independent of which
+# execution mechanism is used -- kept even after switching away from
+# `source` since it costs nothing and remains the more robust habit.
+# Fakes below are plain top-level functions, `export -f`'d so a genuinely
+# SEPARATE `bash "$combined"` process (never `source`d -- see the header)
+# inherits them. Each redefinition per run_case call is intentional and
+# harmless (the LATEST FAKE_* values, exported as plain env vars just
+# before the child process starts, are what that invocation's `sshx()`
+# reads -- there is no cross-call state to worry about).
+ok()   { printf '  ok  %s\n' "$*"; }
+info() { printf '      %s\n' "$*"; }
+die()  { printf 'FAIL  %s\n' "$*" >&2; exit 1; }
+step() { printf '\n=== %s ===\n' "$*"; }
+sshx() {
+  local cmd="$1"
+  case "$cmd" in
+    *"docker volume ls -q --filter name="*)
+      # `if` not `&&` -- a bare `[[ ... ]] && echo` whose condition is
+      # FALSE makes the WHOLE case-arm's (and so sshx()'s own) exit
+      # status 1, which kills the real script's own
+      # `EXISTING_DB_VOLUME="$(sshx ...)"` assignment under `set -e`
+      # before it ever reads the (correctly empty) result -- caught by
+      # a strike against this fence ITSELF (the no-volume-deploys
+      # scenario failed with no output at all, not the expected
+      # "safe to deploy" line).
+      if [[ "$FAKE_VOLUME_EXISTS" == "1" ]]; then echo "fake-db-data-volume-id"; fi
+      ;;
+    *"filter 'health=healthy'"*)
+      local fi=0
+      while [[ $fi -lt $FAKE_CONTAINERS ]]; do echo "container$fi"; fi=$((fi + 1)); done
+      ;;
+    *"exec -T supavisor curl"*)
+      printf '%s' "$FAKE_GW_STATUS"
+      ;;
+    *"show server_version;"*)
+      printf '%s' "$FAKE_PGVER"
+      ;;
+    *"pg_authid"*)
+      printf '%s\n' "$FAKE_INIT_STATE"
+      ;;
+    *)
+      echo "FAKE sshx: unrecognised command in this fence's own harness: $cmd" >&2
+      return 1
+      ;;
+  esac
+}
+export -f ok info die step sshx
+
 run_case() {
   local desc="$1" expect_rc="$2" expect_need_deploy="$3" FAKE_CONTAINERS="$4" FAKE_GW_STATUS="$5" FAKE_PGVER="$6" FAKE_INIT_STATE="$7" FAKE_VOLUME_EXISTS="$8"
   local out="$WORK/out.$$.$RANDOM"
+  local combined="$WORK/combined.$$.$RANDOM.sh"
+  # The extracted block is APPENDED to, never sourced from -- this file is
+  # executed directly as `bash "$combined"`, a genuinely separate process,
+  # with a driver line of THIS fence's own appended after it so
+  # NEED_DEPLOY (set inside the extracted code) is still visible to print
+  # from the SAME process before it exits.
+  { cat "$EXTRACT"; printf 'echo "RESULT_NEED_DEPLOY=$NEED_DEPLOY"\n'; } > "$combined"
   set +e
-  (
-    set -euo pipefail
-    # APP_UUID and every function below are consumed by the dynamically-
-    # sourced $EXTRACT file, invisible to shellcheck's static analysis --
-    # both findings are false positives inherent to this fence's own
-    # "extract and source the real code" technique, not unused code.
-    # shellcheck disable=SC2034
-    APP_UUID="test-stack-uuid-1234"
-    # shellcheck disable=SC2329
-    ok()   { printf '  ok  %s\n' "$*"; }
-    # shellcheck disable=SC2329
-    info() { printf '      %s\n' "$*"; }
-    # shellcheck disable=SC2329
-    die()  { printf 'FAIL  %s\n' "$*" >&2; exit 1; }
-    # shellcheck disable=SC2329
-    step() { printf '\n=== %s ===\n' "$*"; }
-    # shellcheck disable=SC2329
-    sshx() {
-      local cmd="$1"
-      case "$cmd" in
-        *"docker volume ls -q --filter name="*)
-          # `if` not `&&` -- a bare `[[ ... ]] && echo` whose condition is
-          # FALSE makes the WHOLE case-arm's (and so sshx()'s own) exit
-          # status 1, which kills the real script's own
-          # `EXISTING_DB_VOLUME="$(sshx ...)"` assignment under `set -e`
-          # before it ever reads the (correctly empty) result -- caught by
-          # a strike against this fence ITSELF (the no-volume-deploys
-          # scenario failed with no output at all, not the expected
-          # "safe to deploy" line).
-          if [[ "$FAKE_VOLUME_EXISTS" == "1" ]]; then echo "fake-db-data-volume-id"; fi
-          ;;
-        *"filter 'health=healthy'"*)
-          local fi=0
-          while [[ $fi -lt $FAKE_CONTAINERS ]]; do echo "container$fi"; fi=$((fi + 1)); done
-          ;;
-        *"exec -T supavisor curl"*)
-          printf '%s' "$FAKE_GW_STATUS"
-          ;;
-        *"show server_version;"*)
-          printf '%s' "$FAKE_PGVER"
-          ;;
-        *"pg_authid"*)
-          printf '%s\n' "$FAKE_INIT_STATE"
-          ;;
-        *)
-          echo "FAKE sshx: unrecognised command in this fence's own harness: $cmd" >&2
-          return 1
-          ;;
-      esac
-    }
-    # shellcheck source=/dev/null
-    source "$EXTRACT"
-    echo "RESULT_NEED_DEPLOY=$NEED_DEPLOY"
-  ) > "$out" 2>&1
+  APP_UUID="test-stack-uuid-1234" \
+    FAKE_CONTAINERS="$FAKE_CONTAINERS" FAKE_GW_STATUS="$FAKE_GW_STATUS" FAKE_PGVER="$FAKE_PGVER" \
+    FAKE_INIT_STATE="$FAKE_INIT_STATE" FAKE_VOLUME_EXISTS="$FAKE_VOLUME_EXISTS" \
+    bash "$combined" > "$out" 2>&1
   local rc=$?
   set -e
   if [[ "$rc" != "$expect_rc" ]]; then

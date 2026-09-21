@@ -16,9 +16,18 @@
 # on the PR this fence ships in, not on this fence's own design):
 #   1. ROLE-MISSING     -- preflight reads 'ABSENT|ABSENT' -> refuses,
 #      naming "does not exist", before --apply is even reached.
-#   2. ALREADY-LOGIN-NO-ROTATE -- preflight reads 't|t' (rolcanlogin,
-#      has_password) and --rotate is NOT passed -> refuses, naming
-#      "already has LOGIN and a password".
+#   2. ALREADY-HANDED-OFF-VERIFIED-NO-OP (team-lead follow-up, live
+#      --dry-run, provision.sh sweep, 2026-09-20 -- REPLACES the old
+#      "already-login-no-rotate: refuses" scenario) -- role already
+#      LOGIN+password set AND the worker resource's store already
+#      carries PFIN_DB_PASSWORD -> VERIFIED, exit 0, no-op, even with
+#      --apply and without --rotate. Restores provision.sh's "re-run =
+#      no-op" contract for etl-role/provider-sync-role.
+#   2b. MISMATCH-LOGIN-NO-STORE-VALUE -- role LOGIN+password set but the
+#       store does NOT carry PFIN_DB_PASSWORD -> refuses, "INCONSISTENT"
+#       -- the guard still fires on a genuinely broken state.
+#   2c. MISMATCH-STORE-VALUE-NO-LOGIN -- store carries PFIN_DB_PASSWORD
+#       but the role is not yet LOGIN -> refuses, "INCONSISTENT".
 #   3. ROTATE-BUT-NOT-YET-LOGIN -- preflight reads 'f|f' and --rotate IS
 #      passed -> refuses, naming "not yet LOGIN".
 #   4. RESOURCE-ABSENT  -- the target Coolify resource does not exist ->
@@ -119,6 +128,16 @@ cat > "$FAKE_BIN/docker" <<'EOF'
 ARGS="$*"
 
 if [[ "$ARGS" == *"artisan tinker --execute"* ]]; then
+  # team-lead follow-up (live --dry-run, provision.sh sweep, 2026-09-20):
+  # the NEW preflight store-count check (a bare `->count()`, no hash
+  # binding -- that only makes sense AFTER this run has generated a
+  # credential) is distinguished from leg E's own readback (below) by the
+  # ABSENCE of "hash(" in the tinker script body -- leg E's own query
+  # always contains "hash('sha256'".
+  if [[ "$ARGS" != *"hash("* ]]; then
+    echo "${FAKE_STORE_COUNT:-0}"
+    exit 0
+  fi
   # F-2/F-4 (PR #846 review) -- the real readback is now
   # "count|truncated-hash|PFIN_DB_USER-value", not a bare length. SEED_FILE
   # is inherited as a real environment variable here (set via the calling
@@ -288,6 +307,7 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_ECHO_PASSWORD_IN_OUTPUT="\$FAKE_ECHO_PASSWORD_IN_OUTPUT" FAKE_READBACK_COUNT="\$FAKE_READBACK_COUNT" \\
     FAKE_NO_PASSWORD_PROMPT="\$FAKE_NO_PASSWORD_PROMPT" FAKE_READBACK_HASH_MISMATCH="\$FAKE_READBACK_HASH_MISMATCH" \\
     FAKE_READBACK_USER="\$FAKE_READBACK_USER" FAKE_ECHO_PW_IN_CONNECT="\$FAKE_ECHO_PW_IN_CONNECT" \\
+    FAKE_STORE_COUNT="\$FAKE_STORE_COUNT" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -302,7 +322,7 @@ EOF
 chmod +x "$FAKE_BIN/ssh"
 
 run_scenario() {
-  # run_scenario <desc> <expect_exit> <role> <apply_flag> <curl_mode> <role_state> <verify_state> <connect_fail> <mismatch> <handoff_fail> <echo_pw> <readback_count> [no_prompt] [hash_mismatch] [readback_user] [echo_pw_in_connect]
+  # run_scenario <desc> <expect_exit> <role> <apply_flag> <curl_mode> <role_state> <verify_state> <connect_fail> <mismatch> <handoff_fail> <echo_pw> <readback_count> [no_prompt] [hash_mismatch] [readback_user] [echo_pw_in_connect] [store_count]
   # <readback_count>: empty string -> fake computes a REAL count=1 + hash
   # bound to the actual generated credential (happy path); a digit ->
   # forces that row-count, striking the count-mismatch guard.
@@ -312,8 +332,14 @@ run_scenario() {
   # <echo_pw_in_connect>: 1 -> the connect-as-role fake prints the prompt
   # normally AND also leaks the credential elsewhere in its output (Sec
   # F-6's dedicated cleartext-guard scenario).
+  # <store_count> (team-lead follow-up, 2026-09-20): the NEW preflight
+  # store-count check's own answer -- "does '$resource_name' already
+  # carry a production PFIN_DB_PASSWORD row". Defaults to 0 (matches
+  # every pre-existing "f|f" scenario's own fresh-state assumption,
+  # unaffected by this parameter's addition); scenarios exercising the
+  # already-handed-off / mismatched-state logic set it explicitly.
   local desc="$1" expect_exit="$2" role="$3" apply_flag="$4" curl_mode="$5" \
-        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}"
+        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17:-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   local resource_name="pfin-back-etl"
@@ -326,6 +352,7 @@ run_scenario() {
     FAKE_ECHO_PASSWORD_IN_OUTPUT="$echo_pw" FAKE_READBACK_COUNT="$readback_count" \
     FAKE_NO_PASSWORD_PROMPT="$no_prompt" FAKE_READBACK_HASH_MISMATCH="$hash_mismatch" \
     FAKE_READBACK_USER="$readback_user" FAKE_ECHO_PW_IN_CONNECT="$echo_pw_in_connect" \
+    FAKE_STORE_COUNT="$store_count" \
     bash "$DB_ROLE_HANDOFF_SH" "$role" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -367,9 +394,42 @@ FAIL=0
 OUT1="$(run_scenario "role-missing: refuses" 1 pfin_etl --apply clean "ABSENT|ABSENT" "t|t" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "role-missing" "${OUT1:-}" "does not exist" || FAIL=1
 
-# 2. ALREADY-LOGIN-NO-ROTATE (preflight-only, no --apply needed to trigger the refusal)
-OUT2="$(run_scenario "already-login-no-rotate: refuses" 1 pfin_etl --apply clean "t|t" "t|t" 0 0 0 0 "")" || FAIL=1
-assert_output_contains "already-login-no-rotate" "${OUT2:-}" "already has LOGIN and a password" || FAIL=1
+# 2. ALREADY-HANDED-OFF-VERIFIED-NO-OP (team-lead follow-up, live
+#    --dry-run, provision.sh sweep, 2026-09-20 -- REPLACES the OLD
+#    "already-login-no-rotate: refuses" scenario, which tested exactly
+#    the defect this fix closes). Role already LOGIN + password set
+#    ('t|t') AND the worker resource already carries a production
+#    PFIN_DB_PASSWORD row -> VERIFIED, exit 0, no-op -- even with --apply
+#    passed, even without --rotate. This is what actually restores
+#    provision.sh's "re-run = no-op" contract for etl-role/provider-
+#    sync-role: the OLD unconditional refusal here broke a plain second
+#    pass over an already-successfully-handed-off role, the exact same
+#    class of defect provision-supabase-stack.sh's db-data-volume guard
+#    had.
+OUT2="$(run_scenario "already-handed-off: VERIFIED no-op" 0 pfin_etl --apply clean "t|t" "t|t" 0 0 0 0 "" 0 0 "" 0 1)" || FAIL=1
+assert_output_contains "already-handed-off" "${OUT2:-}" "already handed off" || FAIL=1
+assert_output_contains "already-handed-off" "${OUT2:-}" "VERIFIED" || FAIL=1
+
+# 2b. MISMATCH-LOGIN-NO-STORE-VALUE (team-lead's own named strike --
+#     "LOGIN but no store value") -- role already LOGIN + password set,
+#     but the worker resource's store does NOT carry PFIN_DB_PASSWORD.
+#     This is a genuinely broken state (the DB got a credential, but it
+#     was never pushed, or was wiped, from the worker's own Coolify env)
+#     -- refuses, naming "INCONSISTENT". The guard must still fire; this
+#     is not a loosening, only the ALL-THREE-true and ALL-THREE-false
+#     states are non-refusals now.
+OUT2B="$(run_scenario "mismatch-login-no-store-value: refuses" 1 pfin_etl --apply clean "t|t" "t|t" 0 0 0 0 "" 0 0 "" 0 0)" || FAIL=1
+assert_output_contains "mismatch-login-no-store-value" "${OUT2B:-}" "INCONSISTENT" || FAIL=1
+
+# 2c. MISMATCH-STORE-VALUE-NO-LOGIN (team-lead's own named strike --
+#     "store value but NOLOGIN") -- the worker resource's store DOES
+#     carry PFIN_DB_PASSWORD, but the role is not yet LOGIN/no password
+#     set. A partial/inconsistent state (perhaps a prior run pushed to
+#     Coolify but died before the DB ALTER) -- refuses rather than
+#     silently minting ANOTHER credential over an already-populated
+#     store.
+OUT2C="$(run_scenario "mismatch-store-value-no-login: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "" 0 0 "" 0 1)" || FAIL=1
+assert_output_contains "mismatch-store-value-no-login" "${OUT2C:-}" "INCONSISTENT" || FAIL=1
 
 # 3. ROTATE-BUT-NOT-YET-LOGIN
 OUT3="$(run_scenario "rotate-but-not-yet-login: refuses" 1 pfin_etl "--apply --rotate" clean "f|f" "t|t" 0 0 0 0 "")" || FAIL=1
