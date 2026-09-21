@@ -22,6 +22,14 @@
 > prose (a relocation, not a rewrite); it folds into the live sheet's Part 1/2/3 shape
 > once W-3 lands. Until then this archive is its only copy — the live sheet no longer
 > carries it inline.
+>
+> **Two pieces of this file are NOT frozen-only** (Sec, PR #847 review N-2): the §4.1
+> TimeZone-sweep `psql` block and the `PGRST_DB_SCHEMAS` ruled literal are CI-fenced
+> (`scripts/ci/check-tz-sweep-identical.py`, `scripts/ci/fence-pgrst-schemas-pfin.sh`)
+> against their LIVE copies in `docs/deployment-runbook.md` Part 3, not against
+> anything in this file. The copies below, in archived §4.1, are a frozen historical
+> snapshot only — if the two ever appear to disagree, the live sheet's copy is the one
+> the fences actually check.
 
 ---
 
@@ -1866,12 +1874,20 @@ Net effect: **deleting a user who has grouped legs FAILS** (the `journal` cascad
 
 ---
 
-## ARCHIVED — original `docs/deployment-runbook.md` lines 1643-1879: §7 Workers
+## ARCHIVED — original `docs/deployment-runbook.md` lines 1643-1880: §7 Workers
 
 > Moved here verbatim on 2026-09-20 (team-lead directive, second-pass re-shape).
 > §7 is still devops/W-3-owned and unchanged from its pre-conversion prose — this is
 > a relocation, not a rewrite. It folds into the Part 1/2/3 execution-sheet shape
 > once W-3 lands; until then this is its only copy.
+>
+> **Restoring, not editing (Sec, PR #847 review N-8):** the original `## 7. Workers`
+> markdown heading itself was dropped during the first extraction pass (only the
+> section's body text was captured). Re-added below so a bare `§7` / `## 7. Workers`
+> citation resolves to a real heading in this file — the line was measured as the one
+> gap in an otherwise verbatim capture, and restoring it is not a content change.
+
+## 7. Workers
 
 Scope: deploy the background-worker containers. Per ARCH Lock 13, the V1 runtime is a **hybrid 3-container topology** on Coolify: (1) V1 web-app, (2) `pfin_back_etl` ETL, (3) Node PDF worker — plus the Phase-6/V1.5 cron + scheduled-poll additions.
 
