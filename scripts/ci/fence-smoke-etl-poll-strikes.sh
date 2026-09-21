@@ -40,6 +40,12 @@
 #      actually happens, not just that it would have passed anyway).
 #   8. TENANT-CONN-ERROR -- the pre-check's own connection attempt fails
 #      -> exit 2 (a precondition, same class as scenario 5).
+#   9. INTERPRETER-MISSING (run-12 stop fix) -- the preflight
+#      `test -x /app/.venv/bin/python` fails in the container -> exit 2,
+#      before either read or the worker ever runs.
+#   10. PSYCOPG2-IMPORT-FAILS (run-12 stop fix) -- the interpreter
+#      exists but `import psycopg2` fails (a stale/incomplete venv) ->
+#      exit 2, distinct message from scenario 9's.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -89,6 +95,7 @@ CMD_REWRITTEN="\$(printf '%s' "\$CMD" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
 PATH="$FAKE_BIN:\$PATH" FAKE_WORKER_MODE="\${FAKE_WORKER_MODE:-}" FAKE_COUNT_MODE="\${FAKE_COUNT_MODE:-}" \\
   FAKE_COUNT="\${FAKE_COUNT:-}" FAKE_CONTAINERS="\${FAKE_CONTAINERS:-}" \\
   FAKE_TENANT_MODE="\${FAKE_TENANT_MODE:-}" FAKE_TENANT_COUNT="\${FAKE_TENANT_COUNT:-}" \\
+  FAKE_INTERPRETER_MISSING="\${FAKE_INTERPRETER_MISSING:-}" FAKE_PSYCOPG2_IMPORT_FAILS="\${FAKE_PSYCOPG2_IMPORT_FAILS:-}" \\
   bash -c "\$CMD_REWRITTEN"
 EOF
 chmod +x "$FAKE_BIN/ssh"
@@ -102,6 +109,7 @@ run_scenario() {
     PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$WORK/curl.log.$$.$RANDOM" \
     FAKE_WORKER_MODE="$worker_mode" FAKE_COUNT_MODE="$count_mode" FAKE_COUNT="$count" FAKE_CONTAINERS="$containers" \
     FAKE_TENANT_MODE="$tenant_mode" FAKE_TENANT_COUNT="$tenant_count" \
+    FAKE_INTERPRETER_MISSING="${FAKE_INTERPRETER_MISSING:-0}" FAKE_PSYCOPG2_IMPORT_FAILS="${FAKE_PSYCOPG2_IMPORT_FAILS:-0}" \
     bash "$SMOKE_SH" < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -135,6 +143,21 @@ run_scenario "zero active tenants: SKIPPED, exit 3, worker never runs" 3 fail ok
 # -> exit 2 (a precondition, same class as the post-run COUNT-CONN-ERROR
 # scenario above).
 run_scenario "tenant pre-check connection error: precondition, exit 2" 2 ok ok 3 1 conn-error 1 || FAIL=1
+
+# 9. INTERPRETER-MISSING (run-12 stop fix) -- the venv interpreter does
+# not exist in the container -> exit 2, before the tenant pre-check or
+# the worker ever runs (worker_mode "fail" here proves the short-circuit
+# is real, same discipline as scenario 7's zero-tenants proof).
+FAKE_INTERPRETER_MISSING=1 run_scenario "interpreter missing: precondition, exit 2, nothing else runs" 2 fail ok 3 1 || FAIL=1
+FAKE_INTERPRETER_MISSING=0
+
+# 10. PSYCOPG2-IMPORT-FAILS (run-12 stop fix) -- the interpreter exists
+# but the psycopg2 import itself fails (a stale/incomplete venv) ->
+# exit 2, distinct from scenario 9 (interpreter absent) and from the
+# tenant/count CONN_ERROR scenarios (a live connection failure, not an
+# import failure).
+FAKE_PSYCOPG2_IMPORT_FAILS=1 run_scenario "psycopg2 import fails: precondition, exit 2, nothing else runs" 2 fail ok 3 1 || FAIL=1
+FAKE_PSYCOPG2_IMPORT_FAILS=0
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

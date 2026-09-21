@@ -100,6 +100,27 @@
 
 set -euo pipefail
 
+# WHICH PYTHON, AND WHY THIS MATTERS -- run-12 stop fix, 2026-09-21.
+# workers/etl/Dockerfile's own convention: `WORKDIR /app` + `uv sync
+# --frozen --no-dev` (uv's own default venv location is
+# <project-root>/.venv, never overridden here) -- so the project's own
+# dependencies (psycopg2-binary, per pyproject.toml) live ONLY at
+# /app/.venv/bin/python. MEASURED live in the running etl container
+# (23ca4985..., run 12): `which python3` -> /usr/local/bin/python3 (the
+# python:3.14-slim BASE image's own system interpreter) has NO
+# psycopg2/psycopg/sqlalchemy at all; /app/.venv/bin/python imports
+# psycopg2 2.9.11 fine. Every `docker exec ... python3` call in this
+# script's own prior revision used the wrong interpreter and failed at
+# the very first import, misreported as "could not read pfin.account's
+# active-tenant count" (a NO_PSYCOPG2 precondition, not a poll failure).
+# Fixed by naming the interpreter ONCE, here, and never spelling out
+# `python3`/`python` bare against this container again -- see the new
+# preflight step below, which asserts this path exists and actually
+# imports psycopg2 BEFORE either read depends on it, rather than letting
+# a wrong-interpreter failure surface three steps later as an opaque
+# CONN_ERROR-shaped message.
+ETL_PYTHON="/app/.venv/bin/python"
+
 BOX_IP="${BOX_IP:-}"
 AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
 ETL_APP_NAME="${ETL_APP_NAME:-pfin-back-etl}"
@@ -176,6 +197,13 @@ Investigate on the box (docker compose --project-name $APP_UUID ps -a) before tr
 CONTAINER="$(awk -F'\t' '{print $1}' <<<"$RUNNING_LIST")"
 ok "running container: $CONTAINER"
 
+step "Preflight: confirming the container's own project interpreter"
+sshx "docker exec $CONTAINER test -x $ETL_PYTHON" </dev/null >/dev/null 2>&1 \
+  || die2 "$ETL_PYTHON does not exist or is not executable in container $CONTAINER -- either the image build changed (uv's venv location, or the base image path) or this container predates that convention. Investigate before assuming the interpreter path above still holds; do not fall back to a bare 'python3' (the system interpreter has no psycopg2 -- see this script's own header)."
+PSYCOPG2_PROBE_OUT="$(sshx "docker exec $CONTAINER $ETL_PYTHON -c 'import psycopg2'" </dev/null 2>&1)" \
+  || die2 "$ETL_PYTHON exists but 'import psycopg2' failed in container $CONTAINER: $PSYCOPG2_PROBE_OUT -- the venv itself may be stale or incomplete (uv sync did not run, or ran against a different lockfile). This is a precondition failure, not a poll failure -- investigate the image build before re-running."
+ok "$ETL_PYTHON exists and imports psycopg2 -- proceeding with the real reads below"
+
 step "Pre-check: active (account-owning) tenant count"
 PY_TENANT_CHECK='
 import os, sys
@@ -209,7 +237,7 @@ except Exception as exc:
     sys.exit(2)
 '
 set +e
-TENANT_COUNT_OUT="$(sshx "docker exec $CONTAINER python3 -c $(printf '%q' "$PY_TENANT_CHECK")")"
+TENANT_COUNT_OUT="$(sshx "docker exec $CONTAINER $ETL_PYTHON -c $(printf '%q' "$PY_TENANT_CHECK")")"
 TENANT_COUNT_RC=$?
 set -e
 if [[ $TENANT_COUNT_RC -ne 0 ]]; then
@@ -223,7 +251,7 @@ ok "$TENANT_COUNT_OUT active (account-owning) tenant(s) -- proceeding to a real,
 
 step "Running one daily-NAV checkpoint poll"
 set +e
-WORKER_OUT="$(sshx "docker exec $CONTAINER python run_nav_daily.py" 2>&1)"
+WORKER_OUT="$(sshx "docker exec $CONTAINER $ETL_PYTHON run_nav_daily.py" 2>&1)"
 WORKER_RC=$?
 set -e
 info "$(tail -5 <<<"$WORKER_OUT")"
@@ -270,7 +298,7 @@ except Exception as exc:
     sys.exit(2)
 '
 set +e
-COUNT_OUT="$(sshx "docker exec $CONTAINER python3 -c $(printf '%q' "$PY_COUNT_CHECK")")"
+COUNT_OUT="$(sshx "docker exec $CONTAINER $ETL_PYTHON -c $(printf '%q' "$PY_COUNT_CHECK")")"
 COUNT_RC=$?
 set -e
 if [[ $COUNT_RC -ne 0 ]]; then
