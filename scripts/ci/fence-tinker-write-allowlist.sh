@@ -46,11 +46,12 @@
 #        variable's content could hide anything. Site 06 uses this
 #        shape -- its marker sits at the `ssh ... --execute="$SCRIPT_
 #        CONTENT"` line, NOT at the `$row->save()` body 30 lines above
-#        (Sec: "the marker goes where the fence LOOKS"). A file with a
-#        bound unresolvable-site marker is exempt from ALSO requiring
-#        its own literal write-verb text (elsewhere in the same file)
-#        to carry a SEPARATE marker -- see the SCOPE note below for
-#        exactly how far that exemption reaches.
+#        (Sec: "the marker goes where the fence LOOKS"). A bound
+#        unresolvable-site marker exempts AT MOST ONE nearby literal
+#        write-verb line (its nearest, not-yet-exempted one) from ALSO
+#        requiring its own SEPARATE marker -- 1:1, not file-wide (F-6
+#        fix, Sec PR #862 review; see SCOPE below for exactly how far
+#        that exemption reaches).
 #
 # ⚠ A MARKER IS NOT UNIQUE BY CONSTRUCTION -- stated, not assumed. Copy
 # an allowlisted line (marker included) to a NEW site and the new site
@@ -67,11 +68,11 @@
 # `--execute=` line: find its nearest unclaimed `/* TINKER-WRITE-
 # ALLOW-NN */` marker within that mode's own window (see above),
 # excluding a marker already consumed by an earlier, closer site.
-# Unresolvable sites are resolved FIRST, and a file with a bound
-# unresolvable site is then exempt from the write-verb requirement (see
-# SCOPE). Violations, each independently fatal:
-#   - a write-verb line (in a file with NO bound unresolvable site) with
-#     no unclaimed marker within WRITE_WINDOW_LINES
+# Unresolvable sites are resolved FIRST; each one that binds exempts AT
+# MOST ONE nearby write-verb line, 1:1 (see SCOPE). Violations, each
+# independently fatal:
+#   - a write-verb line with no unclaimed marker within
+#     WRITE_WINDOW_LINES AND no unresolvable-site exemption covering it
 #   - an unresolvable `--execute=` line with no unclaimed marker within
 #     UNRESOLVABLE_WINDOW_LINES
 #   - a site whose nearest marker's ID is not in the allowlist
@@ -92,13 +93,18 @@
 # this tree today, checked) would also be flagged; same fail-closed-
 # over-precise tradeoff this repo's other grep-based fences (fence-
 # tinker-no-echo.sh's own header names it explicitly) already accept.
-# The "unresolvable site exempts this file's write-verb lines" rule
-# (mode ii) is scoped to exactly the shape this tree has today: ONE
-# unresolvable `--execute` call, ONE write-verb body, in the same file,
-# presumed to be the same logical write. A file mixing an unresolvable
-# call with an UNRELATED, independently-markered literal write is not
-# modelled -- Sec's own re-measurement note applies here too: this is a
-# stated limit, not a silent gap.
+# The "unresolvable site exempts a write-verb line" rule (mode ii) is
+# 1:1 (F-6 fix, Sec PR #862 review): each bound unresolvable site
+# exempts its OWN nearest not-yet-exempted write-verb line, greedily
+# assigned across all unresolvable sites in the file. A SECOND,
+# unrelated write verb in a file that also has an unresolvable site
+# gets NO exemption and must carry its own marker -- the earlier,
+# file-wide version of this rule let one indirect call cover every
+# write in the file, which was the fail-open Sec's review caught (the
+# third found in this fence; each one latent, none live, when found).
+# Today's tree has exactly one unresolvable site and one write verb in
+# the one file with this shape (coolify-materialize-supabase-
+# mounts.sh), so this fix changes no live behavior.
 # This fence reads `scripts/*.sh` ONLY -- PHP text that lives in a
 # non-`.sh` file (a `.php` fixture, a heredoc sourced from a separate
 # template file, etc.) and is `cat`'d or otherwise fed into a tinker
@@ -116,10 +122,17 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPTS_DIR="$REPO_ROOT/scripts"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ALLOWLIST="$SELF_DIR/fence-tinker-write-allowlist.txt"
-ALLOWLIST_PIN="$SELF_DIR/fence-tinker-write-allowlist.sha256"
+# Overridable ONLY for this fence's own offline strike battery
+# (fence-tinker-write-allowlist-strikes.sh), so that battery can point
+# the real detection logic at a disposable scratch tree instead of
+# duplicating it -- a fixture that re-implements the fence's own logic
+# risks "the fake restates the lie" (this repo's own recurring failure
+# mode). Unset in every real CI invocation, so production behavior is
+# unchanged.
+SCRIPTS_DIR="${FENCE_TINKER_ALLOWLIST_SCRIPTS_DIR:-$REPO_ROOT/scripts}"
+ALLOWLIST="${FENCE_TINKER_ALLOWLIST_FILE:-$SELF_DIR/fence-tinker-write-allowlist.txt}"
+ALLOWLIST_PIN="${FENCE_TINKER_ALLOWLIST_PIN_FILE:-$SELF_DIR/fence-tinker-write-allowlist.sha256}"
 
 [[ -d "$SCRIPTS_DIR" ]] || { echo "FATAL: $SCRIPTS_DIR missing" >&2; exit 2; }
 
@@ -223,12 +236,8 @@ def scan_file(path):
         return best, best_id
 
     # Unresolvable --execute sites FIRST, own tight window -- Sec: "the
-    # marker goes at the invocation line". Each one that binds makes its
-    # WHOLE FILE exempt from the separate write-verb requirement below
-    # (see the scope note ahead of this function's return) -- this repo
-    # has exactly one file with this shape today; a file mixing an
-    # indirect call AND an unrelated, independently-markered literal
-    # write is not modelled and would need re-deriving this rule.
+    # marker goes at the invocation line".
+    bound_unresolvable_lines = []  # line indices that successfully bound a marker
     for u in unresolvable_lines:
         best, best_id = claim_nearest(u, UNRESOLVABLE_WINDOW_LINES)
         lineno = u + 1
@@ -237,16 +246,42 @@ def scan_file(path):
             continue
         consumed.add(best)
         site_ids.append((best_id, lineno))
+        bound_unresolvable_lines.append(u)
 
-    file_has_unresolvable_site = len(unresolvable_lines) > 0
+    # F-6 fix (Sec, PR #862 review): the exemption below is 1:1, not
+    # file-wide. An earlier revision let ANY bound unresolvable site
+    # exempt EVERY write-verb line in the whole file -- a single
+    # `--execute="$VAR"` anywhere would silently cover an unrelated
+    # second write elsewhere in the same file, which is exactly the
+    # escape hatch this fence exists to close (found by Sec's review,
+    # not by this agent's own inversion testing -- the third fail-open
+    # found in this fence, each one latent when found). Fix, matching
+    # the same `consumed`-set discipline already used for markers: each
+    # bound unresolvable site exempts AT MOST ONE write-verb line -- its
+    # nearest not-yet-exempted one, greedily assigned in unresolvable-
+    # site order. A second, unrelated write verb in the same file gets
+    # NO exemption and must carry its own marker like any other site.
+    # Today's tree is unaffected (exactly one unresolvable site, one
+    # write verb, in coolify-materialize-supabase-mounts.sh) -- this
+    # only changes behavior for a file that doesn't exist yet.
+    exempted_write_lines = set()
+    for u in bound_unresolvable_lines:
+        nearest_w, nearest_dist = None, None
+        for w in write_lines:
+            if w in exempted_write_lines:
+                continue
+            dist = abs(w - u)
+            if nearest_dist is None or dist < nearest_dist:
+                nearest_w, nearest_dist = w, dist
+        if nearest_w is not None:
+            exempted_write_lines.add(nearest_w)
 
     for w in write_lines:
         lineno = w + 1
-        if file_has_unresolvable_site:
-            # Scope note above: this file's write is presumed to be the
-            # one reaching the unresolvable --execute call already
-            # marked above -- not independently required to carry its
-            # own marker too.
+        if w in exempted_write_lines:
+            # Scope note above: this write is presumed to be the ONE
+            # reaching its nearest bound unresolvable --execute call --
+            # not independently required to carry its own marker too.
             continue
         best, best_id = claim_nearest(w, WRITE_WINDOW_LINES)
         if best is None:
