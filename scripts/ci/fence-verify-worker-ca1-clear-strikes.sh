@@ -58,14 +58,19 @@
 #      and MUST NOT print "CA-1 clear... confirmed" -- the exact
 #      fail-open the OLD `2>/dev/null || true` form let through
 #      (a failed read and a clean "no match" both came back empty).
-#  11. UUID-MISMATCH (team-lead's own follow-up, same review round) --
-#      `docker exec` SUCCEEDS (rc 0) but its output does NOT carry
-#      COOLIFY_RESOURCE_UUID=<the resolved app uuid> -- an empty read,
-#      a wrong/unrelated container, or a race against a container
-#      recycle. Must exit non-zero and must NOT print the clear
-#      message, even though the read itself technically succeeded --
-#      the read succeeding is not the same as it having read the RIGHT
-#      thing.
+#  11a. UUID-ABSENT (team-lead's own follow-up; split from a single
+#      "mismatch" scenario per Sec F-3) -- `docker exec` SUCCEEDS
+#      (rc 0) but its output carries NO COOLIFY_RESOURCE_UUID= line AT
+#      ALL -- an empty read, an unrelated container, a race against a
+#      container recycle. Must exit non-zero (91) and must NOT print
+#      the clear message.
+#  11b. UUID-WRONG-VALUE (Sec F-3: "absent" and "present but wrong" are
+#      different diagnoses with different next actions -- do not
+#      conflate them into one exit code/message) -- `docker exec`
+#      SUCCEEDS and the line IS present, but its value does not match
+#      the uuid this script itself resolved -- exit 92, distinct from
+#      91, naming all three possible readings (wrong-container read,
+#      the equality premise being wrong, or a genuine anomaly).
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -106,13 +111,16 @@ REAL_SHAPE_CID="provider-sync-hmjeuhdaolhw8tlz3qi6lopi-194853542981"
 #     strikes.sh's own fake: the compose-ps mock above only returns ids
 #     meant to look running).
 #   `docker exec <id> env` -- prints a COOLIFY_RESOURCE_UUID=<the
-#     resolved app uuid> line (the real script's own F-1 positive-token
-#     assertion greps for exactly this, team-lead's follow-up, same
-#     review round) plus $FAKE_ROUTE_SIGNAL verbatim (empty by default
-#     -- clean). $FAKE_EXEC_ENV_FAILS=1 makes the call itself fail (a
-#     failed read); $FAKE_UUID_MISMATCH=1 makes it SUCCEED but omit the
-#     COOLIFY_RESOURCE_UUID line entirely (rc 0, empty/unrelated read --
-#     the shape the positive-token check exists to catch).
+#     resolved app uuid> line (the real script's own positive-token
+#     assertion greps for exactly this) plus $FAKE_ROUTE_SIGNAL verbatim
+#     (empty by default -- clean). $FAKE_EXEC_ENV_FAILS=1 makes the call
+#     itself fail (a failed read, exit 90). $FAKE_UUID_MISMATCH=1 makes
+#     it SUCCEED but OMIT the COOLIFY_RESOURCE_UUID line entirely (rc 0,
+#     empty/unrelated read -- exit 91). $FAKE_UUID_WRONG_VALUE=1 makes
+#     it SUCCEED and carry the line, but with a DIFFERENT uuid value
+#     (exit 92, Sec F-3: split from exit 91 because "absent entirely"
+#     and "present but wrong" are different diagnoses with different
+#     next actions).
 cat > "$FAKE_BIN/docker" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -133,7 +141,11 @@ if [[ "\$*" == *"exec"* && "\$*" == *" env"* ]]; then
     exit 1
   fi
   if [[ "\${FAKE_UUID_MISMATCH:-0}" != "1" ]]; then
-    printf 'COOLIFY_RESOURCE_UUID=%s\n' "\${FAKE_APP_UUID:-hmjeuhdaolhw8tlz3qi6lop1}"
+    if [[ "\${FAKE_UUID_WRONG_VALUE:-0}" == "1" ]]; then
+      printf 'COOLIFY_RESOURCE_UUID=%s\n' "some-other-container-uuid00"
+    else
+      printf 'COOLIFY_RESOURCE_UUID=%s\n' "\${FAKE_APP_UUID:-hmjeuhdaolhw8tlz3qi6lop1}"
+    fi
   fi
   printf '%s' "\${FAKE_ROUTE_SIGNAL:-}"
   exit 0
@@ -183,6 +195,7 @@ CMD="\${@: -1}"
 CMD_REWRITTEN="\$(printf '%s' "\$CMD" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
 PATH="$FAKE_BIN:\$PATH" FAKE_COMPOSE_CIDS="\${FAKE_COMPOSE_CIDS-$REAL_SHAPE_CID}" FAKE_ROUTE_SIGNAL="\${FAKE_ROUTE_SIGNAL:-}" \\
   FAKE_EXEC_ENV_FAILS="\${FAKE_EXEC_ENV_FAILS:-0}" FAKE_APP_UUID="\${FAKE_APP_UUID:-}" FAKE_UUID_MISMATCH="\${FAKE_UUID_MISMATCH:-0}" \\
+  FAKE_UUID_WRONG_VALUE="\${FAKE_UUID_WRONG_VALUE:-0}" \\
   bash -c "\$CMD_REWRITTEN"
 EOF
 chmod +x "$FAKE_BIN/ssh"
@@ -287,15 +300,28 @@ if [[ -n "${READFAIL_OUT:-}" ]]; then
   grep -qF "CA-1 clear" <<<"$READFAIL_OUT" && { echo "FAIL: [stage-3-read-fails] the fail-open message ('CA-1 clear') is STILL present alongside the refusal -- this is exactly the property F-1 exists to remove." >&2; FAIL=1; }
 fi
 
-# 11. UUID-MISMATCH -- team-lead's own follow-up, same review round.
-#     `docker exec` SUCCEEDS (rc 0) but its output carries NO
-#     COOLIFY_RESOURCE_UUID=<resolved uuid> line -- must still refuse,
-#     never treat "the call didn't error" as "we read the right thing".
-MISMATCH_OUT="$(FAKE_UUID_MISMATCH=1 \
-  run_scenario "uuid-mismatch: rc 0 with no matching COOLIFY_RESOURCE_UUID still refuses" 2 pfin-provider-sync --service provider-sync)" || FAIL=1
-if [[ -n "${MISMATCH_OUT:-}" ]]; then
-  grep -qF "COOLIFY_RESOURCE_UUID" <<<"$MISMATCH_OUT" || { echo "FAIL: [uuid-mismatch] refusal did not name the missing COOLIFY_RESOURCE_UUID token." >&2; FAIL=1; }
-  grep -qF "CA-1 clear" <<<"$MISMATCH_OUT" && { echo "FAIL: [uuid-mismatch] the fail-open message ('CA-1 clear') is STILL present alongside the refusal." >&2; FAIL=1; }
+# 11a. UUID-ABSENT -- team-lead's own follow-up, same review round.
+#      `docker exec` SUCCEEDS (rc 0) but its output carries NO
+#      COOLIFY_RESOURCE_UUID= line AT ALL -- must still refuse, never
+#      treat "the call didn't error" as "we read the right thing".
+ABSENT_OUT="$(FAKE_UUID_MISMATCH=1 \
+  run_scenario "uuid-absent: rc 0 with no COOLIFY_RESOURCE_UUID line still refuses" 2 pfin-provider-sync --service provider-sync)" || FAIL=1
+if [[ -n "${ABSENT_OUT:-}" ]]; then
+  grep -qF "carried NO COOLIFY_RESOURCE_UUID" <<<"$ABSENT_OUT" || { echo "FAIL: [uuid-absent] refusal did not name the absent-entirely diagnosis specifically." >&2; FAIL=1; }
+  grep -qF "CA-1 clear" <<<"$ABSENT_OUT" && { echo "FAIL: [uuid-absent] the fail-open message ('CA-1 clear') is STILL present alongside the refusal." >&2; FAIL=1; }
+fi
+
+# 11b. UUID-WRONG-VALUE -- Sec F-3: split from 11a because "absent" and
+#      "present but wrong" are different diagnoses. `docker exec`
+#      SUCCEEDS and the line IS present, but its value does not match
+#      the resolved uuid -- must refuse with a DISTINCT message (exit
+#      92, not 91), naming the wrong-container/premise/anomaly readings.
+WRONGVAL_OUT="$(FAKE_UUID_WRONG_VALUE=1 \
+  run_scenario "uuid-wrong-value: present but mismatched value refuses, distinct message" 2 pfin-provider-sync --service provider-sync)" || FAIL=1
+if [[ -n "${WRONGVAL_OUT:-}" ]]; then
+  grep -qF "did NOT match the resolved application uuid" <<<"$WRONGVAL_OUT" || { echo "FAIL: [uuid-wrong-value] refusal did not name the wrong-value diagnosis specifically." >&2; FAIL=1; }
+  grep -qF "carried NO COOLIFY_RESOURCE_UUID" <<<"$WRONGVAL_OUT" && { echo "FAIL: [uuid-wrong-value] used the ABSENT (91) message instead of the WRONG-VALUE (92) one -- the two diagnoses are conflated." >&2; FAIL=1; }
+  grep -qF "CA-1 clear" <<<"$WRONGVAL_OUT" && { echo "FAIL: [uuid-wrong-value] the fail-open message ('CA-1 clear') is STILL present alongside the refusal." >&2; FAIL=1; }
 fi
 
 if [[ $FAIL -ne 0 ]]; then
