@@ -160,6 +160,34 @@ worker-ci.yml	integration	Live-DB integration lane (G2/G3/SC-4)
 etl-ci.yml	unit	Unit tests + lint (pytest -m unit; hermetic, no secrets)
 etl-ci.yml	pgtest	Staging-update regression (pgtest; real Postgres, zero secrets)
 
+# --- Third batch: provisioning-script fences, added 2026-09-21 (PR #854
+# follow-up, team-lead ruling) ---
+# All five were advisory-only through PR #854's entire six-round review: they ran on
+# every PR (no `paths:` filter, same "run-always by construction" shape as the first
+# batch above) and their own commit messages describe them as CI-fence-class
+# artifacts, but none was a required context, so a red run here never blocked a
+# merge. Sec raised this exact gap FOUR TIMES across that review (C-2 on the two
+# tree-wide fences specifically -- "a fence file on disk that no job invokes is not a
+# fence" -- plus three further "still open" messages after the jobs were wired but
+# before this promotion), each time correctly distinguishing "the fence runs" from
+# "the fence is enforced." Promoting them closes that gap for the whole family in one
+# change rather than leaving four individually-argued near-misses.
+# fence-db-bootstrap-strikes / fence-db-role-handoff-strikes / fence-provision-strikes
+# proved out over that same review as the primary strike-proofs for the boolean-cast
+# predicate bug and the provision.sh orchestrator done-predicates PR #854 fixed.
+# fence-heredoc-stdin-drain and fence-boolean-cast-pairing are the two tree-wide
+# structural fences #854 built to generalize Sec's VETO-1 (heredoc-fed docker exec
+# stdin-drain) and VETO-2 (the same boolean-cast predicate bug, found live a second
+# time in a file #854 merely edited) findings across all of scripts/*.sh, so a future
+# instance of either defect class fails a REQUIRED check, not an advisory one nobody
+# is looking at. Job display names below are read live from security-scan.yml, not
+# retyped from memory -- see this batch's own promotion PR for the exact command.
+security-scan.yml	fence-db-bootstrap-strikes	db-bootstrap.sh — database bootstrap strike-proofs
+security-scan.yml	fence-db-role-handoff-strikes	db-role-handoff.sh — two-statement handoff + credential-transport strike-proofs
+security-scan.yml	fence-provision-strikes	provision.sh — orchestrator control-flow strike-proofs
+security-scan.yml	fence-heredoc-stdin-drain	heredoc-fed remote blocks — docker exec stdin-drain fence (tree-wide)
+security-scan.yml	fence-boolean-cast-pairing	psql boolean reads — cast/comparison vocabulary pairing fence (tree-wide)
+
 # The fence that enforces this file, listed in it deliberately. If
 # `required-unfiltered` is not itself a required context, someone can break it and
 # merge anyway — and the failure is quiet, because a broken guard looks exactly like
