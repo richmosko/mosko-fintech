@@ -334,10 +334,18 @@ check_stack_already_healthy() {
   info "healthy-check (1/5): $containers/7 containers healthy"
   if [[ "$containers" != "7" ]]; then info "healthy-check FAILED at (1/5): expected 7 healthy containers, got $containers"; return 1; fi
 
-  # team-lead's live measurement, 2026-09-21: this stack's Kong route for
-  # /auth/v1/health enforces key-auth -- an unkeyed GET answers 401, not
-  # 200 (measured from a sibling container: no apikey -> 401, anon apikey
-  # -> 200, same for /rest/v1/). The ORIGINAL probe here expected 200
+  # team-lead's live measurement, 2026-09-21: this stack's gateway route
+  # for /auth/v1/health enforces key-auth -- an unkeyed GET answers 401,
+  # not 200 (measured from a sibling container: no apikey -> 401, anon
+  # apikey -> 200, same for /rest/v1/). The gateway is ENVOY, not Kong
+  # (infra/supabase/docker-compose.yml: api-gw = envoyproxy/envoy,
+  # container_name supabase-envoy; the `kong` name there is a legacy
+  # network ALIAS). The enforcement lives in Envoy's inline Lua apikey
+  # filter, whose PROTECTED_ROUTES table lists `auth-v1-protected` --
+  # the bare `/auth/v1/` PREFIX route, with no exact-path carve-out for
+  # /auth/v1/health (infra/supabase/volumes/api/envoy/lds.template.yaml).
+  # So the 401 is a repo-grounded invariant, not only a one-off live
+  # observation. The ORIGINAL probe here expected 200
   # unkeyed and refused a genuinely healthy stack on every re-run --
   # exactly the false-negative that stopped the live `--from standup`
   # pass. Fixed to a two-part probe, reusing the SAME mechanism
@@ -350,17 +358,12 @@ check_stack_already_healthy() {
   # just that a key was supplied). ANON_KEY is read back on the box via
   # the same on-box Eloquent tinker pattern used throughout this file and
   # in mint-supabase-jwt-keys.sh -- never echoed to this script's own
-  # stdout, only the two HTTP status codes cross back.
+  # stdout -- only the ANON_KEY_PRESENT boolean and the two HTTP status
+  # codes cross back.
   local gw_probe anon_key_present gw_nokey gw_withkey
-  # SC2188 below is a false positive: shellcheck's parser loses track of
-  # which command the trailing `2>/dev/null || true` belongs to when a
-  # heredoc sits between it and `sshx`; it is the SAME command
-  # substitution's own redirect (matches every other probe's `2>/dev/null
-  # || true` in this function), not an orphaned redirect. Functionally
-  # verified: strike-tested by removing each of the three checks below in
-  # turn and confirming the fence goes red at exactly the right scenario.
-  # shellcheck disable=SC2188
-  gw_probe="$(sshx "env APP_UUID=\"$APP_UUID\" bash -s" <<'REMOTE'
+  # Strike-tested: removing each of the three checks below in turn takes
+  # the fence red at exactly the right scenario (5a / 5d / 5b).
+  gw_probe="$(sshx "env APP_UUID=\"$APP_UUID\" bash -s" 2>/dev/null <<'REMOTE' || true
 set -e
 ANON_KEY="$(docker exec coolify php artisan tinker --execute="
 \$app = \App\Models\Application::where('uuid','$APP_UUID')->firstOrFail();
@@ -376,13 +379,16 @@ fi
 set -e
 printf 'ANON_KEY_PRESENT=%s NOKEY=%s WITHKEY=%s\n' "$([[ -n "$ANON_KEY" ]] && echo 1 || echo 0)" "${NOKEY_STATUS:-<none>}" "${WITHKEY_STATUS:-<none>}"
 REMOTE
-2>/dev/null || true)"
+)"
   anon_key_present="$(printf '%s' "$gw_probe" | grep -oE 'ANON_KEY_PRESENT=[01]' | cut -d= -f2)"
   gw_nokey="$(printf '%s' "$gw_probe" | grep -oE 'NOKEY=[^ ]+' | cut -d= -f2)"
   gw_withkey="$(printf '%s' "$gw_probe" | grep -oE 'WITHKEY=[^ ]+' | cut -d= -f2)"
   info "healthy-check (2/5, no-key): api-gw GET /auth/v1/health without an apikey -> HTTP ${gw_nokey:-<none>} (expect 401 -- proves the gateway is up AND key-auth is enforced)"
   if [[ "$gw_nokey" != "401" ]]; then
     info "healthy-check FAILED at (2/5, no-key half): expected 401 without an apikey, got ${gw_nokey:-<none>}"
+    if [[ "$gw_nokey" == "200" ]]; then
+      info "  ^ a 200 here means the gateway served /auth/v1/ with NO apikey -- key-auth is not being enforced. That is a security finding, not a health blip: fix the gateway (Envoy lds PROTECTED_ROUTES / apikey filter), never relax this expectation to make the check pass."
+    fi
     return 1
   fi
   if [[ "$anon_key_present" != "1" ]]; then
@@ -391,7 +397,7 @@ REMOTE
   fi
   info "healthy-check (2/5, with-key): api-gw GET /auth/v1/health with the anon apikey -> HTTP ${gw_withkey:-<none>} (expect 200)"
   if [[ "$gw_withkey" != "200" ]]; then
-    info "healthy-check FAILED at (2/5, with-key half): expected 200 with the anon apikey, got ${gw_withkey:-<none>}"
+    info "healthy-check FAILED at (2/5, with-key half): expected 200 with the anon apikey, got ${gw_withkey:-<none>}. Most likely cause: the Coolify store's ANON_KEY and the key baked into the RUNNING Envoy config have diverged -- Envoy renders the expected key into its lds config at container-start, so rotating the store value without redeploying the stack leaves the gateway checking the OLD key (mint-supabase-jwt-keys.sh's header documents the same hazard)."
     return 1
   fi
 
