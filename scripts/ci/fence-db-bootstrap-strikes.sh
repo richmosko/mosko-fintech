@@ -393,6 +393,23 @@ if [[ "$ARGS" == *"-h db"* ]]; then
       echo "psql: error: connection failed" >&2
       exit 2
     fi
+    if [[ "${FAKE_SUPPRESS_REAL_PROMPT:-0}" == "1" ]]; then
+      # Sec C-1 (PR #859 round 2) -- item 7's fixture-fidelity change
+      # collapsed the OLD "-W silently stopped forcing a prompt" scenario
+      # onto the trust-bypass shape (which now also strikes the control),
+      # leaving the real connect's OWN missing-prompt guard with zero
+      # coverage: striking it left the whole suite green. This models
+      # the hazard precisely -- the CONTROL's own probe behaves normally
+      # (still shows its prompt, still fails with the exact auth-failure
+      # text), but -W stops forcing a prompt for JUST the real connect,
+      # exit 0, current_user correct -- everything else about this
+      # connection looks fine except the one thing this guard exists to
+      # catch.
+      echo " current_user "
+      echo "--------------"
+      echo " migrator"
+      exit 0
+    fi
     [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
     echo " current_user "
     echo "--------------"
@@ -596,7 +613,7 @@ FAKE_VARS=(FAKE_CURL_LOG FAKE_CURL_MODE FAKE_MIGRATOR_STATE FAKE_BOOTSTRAP_COMPL
   FAKE_MARKER_FILE FAKE_POST_PUSH_BOOTSTRAP FAKE_LEG_B_STATE FAKE_CONNECT_FAIL FAKE_NO_PASSWORD_PROMPT \\
   FAKE_ECHO_PW_IN_CONNECT FAKE_WRONG_CURRENT_USER FAKE_READBACK_COUNT FAKE_READBACK_DIVERGE FAKE_READBACK_EMPTY FAKE_STORE_PW \
   FAKE_LEG_A_RC_LEAK FAKE_BOOTSTRAP_READ_FAIL FAKE_MIGRATOR_STATE_READ_FAIL \
-  FAKE_CONTROL_SUCCEEDS FAKE_CONTROL_WRONG_ERROR FAKE_CONTROL_WRONG_ROLE_ERROR FAKE_ECHO_PW_IN_CONTROL FAKE_CONNECT_CALL_LOG FAKE_NO_PASSWORD_PROMPT_CLEAN)
+  FAKE_CONTROL_SUCCEEDS FAKE_CONTROL_WRONG_ERROR FAKE_CONTROL_WRONG_ROLE_ERROR FAKE_ECHO_PW_IN_CONTROL FAKE_CONNECT_CALL_LOG FAKE_NO_PASSWORD_PROMPT_CLEAN FAKE_SUPPRESS_REAL_PROMPT)
 FORWARD=()
 for v in "\${FAKE_VARS[@]}"; do
   FORWARD+=("\$v=\${!v:-}")
@@ -623,7 +640,7 @@ run_scenario() {
         vault_view_fail="${13}" post_push_bootstrap="${14}" leg_b_state="${15}" connect_fail="${16}" \
         no_password_prompt="${17}" echo_pw_in_connect="${18}" wrong_current_user="${19}" readback_count="${20}" \
         readback_diverge="${21}" store_pw="${22}" leg_a_rc_leak="${23}" bootstrap_read_fail="${24:-0}" \
-        migrator_state_read_fail="${25:-0}" control_succeeds="${26:-0}" control_wrong_error="${27:-0}" no_password_prompt_clean="${28:-0}" control_wrong_role_error="${29:-0}" echo_pw_in_control="${30:-0}" readback_empty="${31:-0}"
+        migrator_state_read_fail="${25:-0}" control_succeeds="${26:-0}" control_wrong_error="${27:-0}" no_password_prompt_clean="${28:-0}" control_wrong_role_error="${29:-0}" echo_pw_in_control="${30:-0}" readback_empty="${31:-0}" suppress_real_prompt="${32:-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   local marker="$WORK/push_marker.$$.$RANDOM"
   # Sec/self-found bug: `OUT="$(run_scenario ...)"` forks a SUBSHELL --
@@ -650,7 +667,7 @@ run_scenario() {
     FAKE_LEG_A_RC_LEAK="$leg_a_rc_leak" \
     FAKE_BOOTSTRAP_READ_FAIL="$bootstrap_read_fail" FAKE_MIGRATOR_STATE_READ_FAIL="$migrator_state_read_fail" \
     FAKE_CONTROL_SUCCEEDS="$control_succeeds" FAKE_CONTROL_WRONG_ERROR="$control_wrong_error" \
-    FAKE_CONTROL_WRONG_ROLE_ERROR="$control_wrong_role_error" FAKE_ECHO_PW_IN_CONTROL="$echo_pw_in_control" \
+    FAKE_CONTROL_WRONG_ROLE_ERROR="$control_wrong_role_error" FAKE_ECHO_PW_IN_CONTROL="$echo_pw_in_control" FAKE_SUPPRESS_REAL_PROMPT="$suppress_real_prompt" \
     FAKE_NO_PASSWORD_PROMPT_CLEAN="$no_password_prompt_clean" \
     FAKE_CONNECT_CALL_LOG="$CONNECT_CALL_LOG" \
     bash "$TARGET_SH" $extra_flag < /dev/null > "$WORK/out.$$" 2>&1
@@ -821,6 +838,23 @@ assert_output_contains "leg-c-trust-path-no-prompt" "${OUT11:-}" "did not fail w
 OUT11B="$(run_scenario "leg-c-trust-path-no-prompt-clean: refuses at the control" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 0 0 1)" || FAIL=1
 assert_output_contains "leg-c-trust-path-no-prompt-clean" "${OUT11B:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
 
+# 11c. LEG-C-CONNECT-NO-PROMPT (Sec C-1, PR #859 round 2) -- item 7's
+#      fixture-fidelity change (above) collapsed the OLD "-W silently
+#      stopped forcing a prompt" coverage onto the trust-bypass shape,
+#      which now also strikes the control -- leaving the REAL connect's
+#      OWN missing-prompt guard with zero coverage of its own (striking
+#      it left the whole suite green). Models the hazard precisely: the
+#      CONTROL's own probe behaves normally (still shows its prompt,
+#      still fails with the exact auth-failure text), but -W stops
+#      forcing a prompt for JUST the real connect -- exit 0, current_user
+#      correct, everything else clean except the one thing this guard
+#      exists to catch. team-lead's ruling (PR #859 round 2): KEEP this
+#      assertion (it is the runtime proof -W actually took effect, a
+#      distinct property from the -W-ABSENCE argv pin) and restore its
+#      coverage, not delete it.
+OUT11C="$(run_scenario "leg-c-connect-no-prompt: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 0 0 0 0 0 0 1)" || FAIL=1
+assert_output_contains "leg-c-connect-no-prompt" "${OUT11C:-}" "no password prompt (\"Password:\") was observed connecting AS migrator" || FAIL=1
+
 # 12. LEG-C-CLEARTEXT-LEAK-IN-CONNECT
 OUT12="$(run_scenario "leg-c-cleartext-leak-in-connect: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 1 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-c-cleartext-leak-in-connect" "${OUT12:-}" "cleartext value appeared in the connect-as-migrator step" || FAIL=1
@@ -910,6 +944,12 @@ unset CONNECT_CALL_LOG
 #      never proceeding to try the real credential.
 OUT21A="$(run_scenario "already-bootstrapped-control-succeeds: refuses" 1 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 1)" || FAIL=1
 assert_output_contains "already-bootstrapped-control-succeeds" "${OUT21A:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
+
+# 21a2. ALREADY-BOOTSTRAPPED-CONNECT-NO-PROMPT (Sec C-1, PR #859 round 2)
+#       -- same restored coverage as leg-c's own copy above, at this
+#       site's real connect.
+OUT21A2="$(run_scenario "already-bootstrapped-connect-no-prompt: refuses" 1 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 0 0 0 0 0 0 1)" || FAIL=1
+assert_output_contains "already-bootstrapped-connect-no-prompt" "${OUT21A2:-}" "no password prompt (\"Password:\") was observed connecting AS migrator" || FAIL=1
 
 # 21b. ALREADY-BOOTSTRAPPED-CONTROL-WRONG-ERROR -- the control fails, but
 #      not with "password authentication failed" (DNS/compose/protocol

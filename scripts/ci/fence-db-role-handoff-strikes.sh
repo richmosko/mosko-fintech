@@ -366,6 +366,22 @@ if [[ "$ARGS" == *"-h db"* ]]; then
       echo "psql: error: connection failed" >&2
       exit 2
     fi
+    if [[ "${FAKE_SUPPRESS_REAL_PROMPT:-0}" == "1" ]]; then
+      # Sec C-1 (PR #859 round 2) -- item 7's fixture-fidelity change
+      # collapsed the OLD "-W silently stopped forcing a prompt" scenario
+      # onto the trust-bypass shape (which now also strikes the control),
+      # leaving the real connect's OWN missing-prompt guard with zero
+      # coverage: striking it left the whole suite green. Models the
+      # hazard precisely -- the CONTROL's own probe behaves normally
+      # (still shows its prompt, still fails with the exact auth-failure
+      # text), but -W stops forcing a prompt for JUST the real connect --
+      # exit 0, current_user correct, everything else clean except the
+      # one thing this guard exists to catch.
+      echo " current_user "
+      echo "--------------"
+      echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+      exit 0
+    fi
     [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
     echo " current_user "
     echo "--------------"
@@ -484,6 +500,7 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_NO_PASSWORD_PROMPT_CLEAN="\$FAKE_NO_PASSWORD_PROMPT_CLEAN" FAKE_WRONG_CURRENT_USER="\$FAKE_WRONG_CURRENT_USER" \\
     FAKE_CONTROL_SUCCEEDS="\$FAKE_CONTROL_SUCCEEDS" FAKE_CONTROL_WRONG_ERROR="\$FAKE_CONTROL_WRONG_ERROR" \\
     FAKE_CONTROL_WRONG_ROLE_ERROR="\$FAKE_CONTROL_WRONG_ROLE_ERROR" FAKE_ECHO_PW_IN_CONTROL="\$FAKE_ECHO_PW_IN_CONTROL" \\
+    FAKE_SUPPRESS_REAL_PROMPT="\$FAKE_SUPPRESS_REAL_PROMPT" \\
     FAKE_CONNECT_CALL_LOG="\$FAKE_CONNECT_CALL_LOG" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
@@ -531,7 +548,7 @@ run_scenario() {
   # each carried exactly one such row, value_len=0) -- STORE_HAS_PW must
   # then read false, the exact same as a genuinely fresh store.
   local desc="$1" expect_exit="$2" role="$3" apply_flag="$4" curl_mode="$5" \
-        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" no_prompt_clean="${19:-0}" wrong_current_user="${20:-0}" control_succeeds="${21:-0}" control_wrong_error="${22:-0}" store_nonempty="${23:-1}" control_wrong_role_error="${24:-0}" echo_pw_in_control="${25:-0}" readback_empty="${26:-0}" store_read_raw="${27-}"
+        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" no_prompt_clean="${19:-0}" wrong_current_user="${20:-0}" control_succeeds="${21:-0}" control_wrong_error="${22:-0}" store_nonempty="${23:-1}" control_wrong_role_error="${24:-0}" echo_pw_in_control="${25:-0}" readback_empty="${26:-0}" store_read_raw="${27-}" suppress_real_prompt="${28:-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   local resource_name="pfin-back-etl"
@@ -557,6 +574,7 @@ run_scenario() {
     FAKE_NO_PASSWORD_PROMPT_CLEAN="$no_prompt_clean" FAKE_WRONG_CURRENT_USER="$wrong_current_user" \
     FAKE_CONTROL_SUCCEEDS="$control_succeeds" FAKE_CONTROL_WRONG_ERROR="$control_wrong_error" \
     FAKE_CONTROL_WRONG_ROLE_ERROR="$control_wrong_role_error" FAKE_ECHO_PW_IN_CONTROL="$echo_pw_in_control" \
+    FAKE_SUPPRESS_REAL_PROMPT="$suppress_real_prompt" \
     FAKE_CONNECT_CALL_LOG="$CONNECT_CALL_LOG" \
     bash "$DB_ROLE_HANDOFF_SH" "$role" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
@@ -822,6 +840,20 @@ assert_output_contains "trust-path-no-prompt" "${OUT13:-}" "did not fail with th
 OUT13B="$(run_scenario "trust-path-no-prompt-clean: refuses at the control" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 1)" || FAIL=1
 assert_output_contains "trust-path-no-prompt-clean" "${OUT13B:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
+# 13c. LEG-C-CONNECT-NO-PROMPT (Sec C-1, PR #859 round 2) -- item 7's
+#      fixture-fidelity change collapsed the OLD "-W silently stopped
+#      forcing a prompt" coverage onto the trust-bypass shape (which now
+#      also strikes the control), leaving the real connect's OWN
+#      missing-prompt guard with zero coverage: striking it left the
+#      whole suite green. Models the hazard precisely -- the CONTROL's
+#      own probe behaves normally (still shows its prompt, still fails
+#      with the exact auth-failure text), but -W stops forcing a prompt
+#      for JUST the real connect. team-lead's ruling: KEEP this
+#      assertion (the runtime proof -W took effect, distinct from the
+#      -W-absence argv pin) and restore its coverage, not delete it.
+OUT13C="$(run_scenario "leg-c-connect-no-prompt: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 0 0 1 0 0 0 "" 1)" || FAIL=1
+assert_output_contains "leg-c-connect-no-prompt" "${OUT13C:-}" 'no password prompt ("Password:") was observed connecting AS pfin_etl' || FAIL=1
+
 # 13c. WRONG-CURRENT-USER-FRESH-HANDOFF (Sec C-1, PR #856 round 1) -- leg
 #      C's own connect (the fresh-handoff path): prompt prints normally,
 #      no cleartext leak, exit 0, but `select current_user;` echoes back a
@@ -905,6 +937,12 @@ fi
 #      never proceeding to try the real credential.
 OUT18A="$(run_scenario "already-handed-off-control-succeeds: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 0 0 1)" || FAIL=1
 assert_output_contains "already-handed-off-control-succeeds" "${OUT18A:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
+
+# 18a2. ALREADY-HANDED-OFF-CONNECT-NO-PROMPT (Sec C-1, PR #859 round 2)
+#       -- same restored coverage as leg-c's own copy above, at this
+#       site's own bind-check connect.
+OUT18I="$(run_scenario "already-handed-off-connect-no-prompt: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 0 0 0 0 1 0 0 0 "" 1)" || FAIL=1
+assert_output_contains "already-handed-off-connect-no-prompt" "${OUT18I:-}" 'no password prompt ("Password:") was observed connecting AS pfin_etl' || FAIL=1
 
 # 18b. ALREADY-HANDED-OFF-CONTROL-WRONG-ERROR -- the control fails, but
 #      not with "password authentication failed" -- refuses.
