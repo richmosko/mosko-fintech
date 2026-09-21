@@ -308,6 +308,162 @@ step "DNS diff"
 info "apex A:      $APEX_CURRENT -> $BOX_IP  [$APEX_ACTION]"
 info "www  CNAME:  $WWW_CURRENT -> $ROOT_DOMAIN  [$WWW_ACTION]"
 
+# --- ports_exposes preflight (Sec availability finding, run-10 stop, MEASURED
+# live): pfin-app's ports_exposes is Coolify's OWN create-time default ('80'),
+# while api/docker-compose.yaml's `expose:` block is 3000 and the app's own
+# Dockerfile EXPOSEs 3000 (no PORT override anywhere in this repo) -- nothing
+# in this script, provision-app.sh, or provision.sh has ever SET ports_exposes
+# for the app (grep across all three: zero hits). Left uncorrected, at the DNS
+# step Coolify's router would resolve the domain to the WRONG in-container
+# port and 502 -- and this script's OWN cert-poll below (waiting for a 200 on
+# https://$ROOT_DOMAIN/) would spin to its bound and report a failure whose
+# real cause is an unrelated port misconfiguration it never looked at.
+#
+# Resolved here (before the preflight-exit gate, matching deploy-app.sh's own
+# precedent of an SSH-backed identity read during preflight, not just apply)
+# so an operator sees the mismatch before ever running --apply.
+sshx true >/dev/null 2>&1 || die2 "box at $BOX_IP not reachable over SSH with $AUTOMATION_KEY -- run scripts/provision-vps.sh first"
+sshx 'test -s /root/.pfin/coolify.env' >/dev/null 2>&1 \
+  || die2 "no /root/.pfin/coolify.env on the box -- run scripts/provision-vps.sh --apply first"
+
+read -r -d '' PY_API_HELPER <<'PY' || true
+import json, sys, subprocess
+
+def die(msg):
+    print(f"FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def api(token, method, path, body=None):
+    if '"' in token or "\n" in token:
+        die("Coolify API token contains an unexpected character -- refusing to build a curl config for it")
+    config = 'header = "Authorization: Bearer ' + token + '"\n'
+    body_path = None
+    try:
+        cmd = ["curl", "-fsS", "-K", "-", "-X", method]
+        if body is not None:
+            config += 'header = "Content-Type: application/json"\n'
+            import tempfile, os
+            old_umask = os.umask(0o077)
+            fd, body_path = tempfile.mkstemp(dir="/root/.pfin", prefix=".curlbody.")
+            os.umask(old_umask)
+            with os.fdopen(fd, "wb") as f:
+                f.write(json.dumps(body).encode())
+            cmd += ["--data-binary", f"@{body_path}"]
+        cmd += [f"http://localhost:8000/api/v1{path}"]
+        try:
+            result = subprocess.run(cmd, input=config.encode(), capture_output=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            die(f"Coolify API {method} {path} failed: exit {exc.returncode} ({exc.stderr.decode(errors='replace').strip()[:200]})")
+    finally:
+        if body_path is not None:
+            try:
+                import os
+                os.unlink(body_path)
+            except OSError:
+                pass
+    return json.loads(result.stdout.decode()) if result.stdout.strip() else None
+PY
+
+step "Resolving '$APP_NAME' (identity + ports_exposes)"
+RESOLVED_FULL="$(sshx "env app_query=$(printf '%q' "$APP_NAME") bash -s" <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "\$app_query" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, query = sys.argv[1], sys.argv[2]
+apps = api(token, "GET", "/applications")
+matches = [a for a in apps if a.get("name") == query]
+if len(matches) != 1:
+    die(f"expected exactly one application named '{query}', found {len(matches)}")
+a = matches[0]
+print(a["uuid"])
+print(a.get("base_directory") or "")
+print(a.get("build_pack") or "")
+print(a.get("ports_exposes") or "")
+PYEOF
+REMOTE
+)"
+APP_UUID="$(sed -n '1p' <<<"$RESOLVED_FULL")"
+APP_BASE_DIR_LIVE="$(sed -n '2p' <<<"$RESOLVED_FULL")"
+APP_BUILD_PACK_LIVE="$(sed -n '3p' <<<"$RESOLVED_FULL")"
+APP_PORTS_LIVE="$(sed -n '4p' <<<"$RESOLVED_FULL")"
+UUID_RE='^[a-z0-9]{20,32}$'
+[[ "$APP_UUID" =~ $UUID_RE ]] || die2 "could not resolve '$APP_NAME' to a uuid-shaped application id"
+ok "resolved '$APP_NAME' -> $APP_UUID (base_directory=$APP_BASE_DIR_LIVE, build_pack=$APP_BUILD_PACK_LIVE, ports_exposes=${APP_PORTS_LIVE:-<empty>})"
+
+# TARGET GUARD (Sec, this review): this setter must never write
+# ports_exposes against a WORKER resource -- provision-worker.sh's own
+# fqdn/ports_exposes clear (the CA-1 fix) writes `ports_exposes:""` for a
+# worker, and a caller pointing APP_NAME at a worker by mistake (it is
+# env-var-overridable) would fight that clear. TWO INDEPENDENT checks,
+# both required (Sec: belt and suspenders, derive rather than name):
+#   (a) POSITIVE identity -- base_directory/build_pack must be exactly
+#       this script's own hardcoded expectation (this script is
+#       app-specific by design, unlike deploy-app.sh's generic guard).
+#   (b) NEGATIVE worker-shape -- the resolved target's OWN docker-
+#       compose.yaml must not declare a serve-admission command
+#       override, the SAME structural grep provision.sh's
+#       worker_has_admission_guard() uses (duplicated here rather than
+#       sourced -- this repo's own convention for sibling scripts, see
+#       e.g. the api() helper above, copied verbatim rather than
+#       imported from one shared file).
+# Fails CLOSED, naming CA-1 explicitly -- corrupting a worker's
+# fqdn/ports_exposes clear via a wrong-target write here would be a
+# CA-1 regression, not merely a misconfiguration.
+EXPECT_APP_BASE_DIR="/api"
+EXPECT_APP_BUILD_PACK="dockercompose"
+[[ "$APP_BASE_DIR_LIVE" == "$EXPECT_APP_BASE_DIR" ]] \
+  || die2 "TARGET GUARD FAILED (CA-1): resolved application '$APP_NAME' ($APP_UUID) has base_directory='$APP_BASE_DIR_LIVE', expected '$EXPECT_APP_BASE_DIR' -- this script is app-specific and refuses to write ports_exposes against anything else, including a worker resource whose own CA-1 fqdn/ports_exposes clear this write could otherwise fight."
+[[ "$APP_BUILD_PACK_LIVE" == "$EXPECT_APP_BUILD_PACK" ]] \
+  || die2 "TARGET GUARD FAILED (CA-1): resolved application '$APP_NAME' ($APP_UUID) has build_pack='$APP_BUILD_PACK_LIVE', expected '$EXPECT_APP_BUILD_PACK'."
+APP_COMPOSE_FILE="$REPO_ROOT/${APP_BASE_DIR_LIVE#/}/docker-compose.yaml"
+[[ -f "$APP_COMPOSE_FILE" ]] || die2 "TARGET GUARD: no docker-compose.yaml at $APP_COMPOSE_FILE -- cannot verify this target is not a worker resource."
+if grep -q 'serve-admission' "$APP_COMPOSE_FILE"; then
+  die2 "TARGET GUARD FAILED (CA-1): resolved application '$APP_NAME' ($APP_UUID)'s own docker-compose.yaml declares a serve-admission command override -- that shape belongs to a WORKER (provider-sync), never the app resource this script exists to configure. Refusing to write ports_exposes against it."
+fi
+ok "TARGET GUARD passed: base_directory/build_pack match, no admission-guard shape in its compose."
+
+# app_compose_expose_port <file> -- the ONE expose: port, comment-
+# stripped FIRST (Sec ask: prove the parser still finds the real key
+# through a comment, not just that it happens to work on today's
+# comment-free expose: block -- this repo's own compose files are
+# comment-heavy by convention, see this very block's own header
+# comments a few lines up). Refuses (returns nothing; caller dies) on
+# zero or MORE THAN ONE match -- never "the first of several". Not a
+# general YAML/shell-quote-aware comment parser -- narrow to this one
+# read, matching this repo's low-tech grep/awk convention for compose
+# files (worker_has_admission_guard() in provision.sh is the same
+# shape) rather than introducing a YAML library dependency.
+app_compose_expose_port() {
+  local file="$1"
+  awk '
+    /^[[:space:]]*#/ { next }
+    { sub(/[[:space:]]+#.*$/, "") }
+    /^[[:space:]]*expose:[[:space:]]*$/ { in_expose=1; next }
+    in_expose && /^[[:space:]]*-[[:space:]]*"?[0-9]+"?[[:space:]]*$/ {
+      line=$0; gsub(/[^0-9]/, "", line); print line; next
+    }
+    in_expose && !/^[[:space:]]*-/ { in_expose=0 }
+  ' "$file"
+}
+EXPOSE_PORTS="$(app_compose_expose_port "$APP_COMPOSE_FILE")"
+EXPOSE_COUNT="$(printf '%s\n' "$EXPOSE_PORTS" | grep -c . || true)"
+[[ "$EXPOSE_COUNT" -eq 1 ]] \
+  || die2 "expected exactly one 'expose:' port in $APP_COMPOSE_FILE, found $EXPOSE_COUNT -- refusing to guess which one Coolify's ports_exposes should carry (never 'the first of several')."
+EXPOSE_PORT="$EXPOSE_PORTS"
+ok "compose declares expose: $EXPOSE_PORT"
+
+step "ports_exposes diff"
+info "Coolify ports_exposes:  ${APP_PORTS_LIVE:-<empty>} -> $EXPOSE_PORT"
+if [[ "$APP_PORTS_LIVE" == "$EXPOSE_PORT" ]]; then
+  ok "ports_exposes already matches the compose's own expose: port -- nothing to change"
+  PORTS_NEEDS_PATCH=0
+else
+  info "would PATCH /api/v1/applications/$APP_UUID body {\"ports_exposes\": \"$EXPOSE_PORT\"}"
+  PORTS_NEEDS_PATCH=1
+fi
+
 step "Coolify PATCH (Sec ask: UNMEASURED field name -- printed, never assumed)"
 COOLIFY_TARGET_FQDN="https://$ROOT_DOMAIN,https://www.$ROOT_DOMAIN"
 info "would PATCH /api/v1/applications/<uuid> body {\"fqdn\": \"$COOLIFY_TARGET_FQDN\"}"
@@ -362,6 +518,34 @@ PYEOF
   printf '%s\n%s\n' "$PORKBUN_API_KEY" "$PORKBUN_SECRET_KEY" | python3 "$PY_WWW_FILE" "$ROOT_DOMAIN" "$WWW_ACTION"
   rm -f "$PY_WWW_FILE"
   ok "www CNAME -> $ROOT_DOMAIN ($WWW_ACTION)"
+fi
+
+# ports_exposes PATCH -- BEFORE the domain is assigned (below), on
+# purpose: Coolify's router needs the RIGHT in-container port wired
+# before a domain routes traffic at it, or the cert-poll below spins on
+# an unrelated 502. Reuses $APP_UUID/$EXPOSE_PORT/$PORTS_NEEDS_PATCH
+# already resolved and target-guarded in the preflight above -- no
+# second resolution, no second guard check.
+if [[ "$PORTS_NEEDS_PATCH" -eq 1 ]]; then
+  step "PATCHing '$APP_NAME's ports_exposes to match its own compose"
+  NEW_PORTS="$(sshx "env app_uuid=$(printf '%q' "$APP_UUID") target_port=$(printf '%q' "$EXPOSE_PORT") bash -s" <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "\$app_uuid" "\$target_port" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, uuid, target = sys.argv[1], sys.argv[2], sys.argv[3]
+api(token, "PATCH", f"/applications/{uuid}", {"ports_exposes": target})
+readback = api(token, "GET", f"/applications/{uuid}")
+print(readback.get("ports_exposes") or "")
+PYEOF
+REMOTE
+)"
+  [[ "$NEW_PORTS" == "$EXPOSE_PORT" ]] \
+    || die "ports_exposes PATCH read-back shows '$NEW_PORTS', expected '$EXPOSE_PORT' -- investigate the live Coolify API's actual write path for this field before treating step 9 as done."
+  ok "ports_exposes PATCH read-back confirms ports_exposes = $NEW_PORTS"
+else
+  ok "ports_exposes already correct (checked in preflight) -- no PATCH issued"
 fi
 
 step "Resolving '$APP_NAME' and PATCHing its Coolify domain"

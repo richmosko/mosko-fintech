@@ -123,6 +123,9 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_APP_UUID="\${FAKE_APP_UUID:-}" FAKE_APP_NAME="\${FAKE_APP_NAME:-}" \\
     FAKE_OLD_FQDN="\${FAKE_OLD_FQDN:-}" FAKE_NEW_FQDN="\${FAKE_NEW_FQDN:-}" \\
     FAKE_PATCH_MARKER="\${FAKE_PATCH_MARKER:-}" FAKE_PATCH_TAKES_EFFECT="\${FAKE_PATCH_TAKES_EFFECT:-}" \\
+    FAKE_APP_BASE_DIR="\${FAKE_APP_BASE_DIR:-}" FAKE_APP_BUILD_PACK="\${FAKE_APP_BUILD_PACK:-}" \\
+    FAKE_APP_PORTS="\${FAKE_APP_PORTS:-}" FAKE_NEW_PORTS="\${FAKE_NEW_PORTS:-}" \\
+    FAKE_PORTS_PATCH_MARKER="\${FAKE_PORTS_PATCH_MARKER:-}" FAKE_PORTS_PATCH_TAKES_EFFECT="\${FAKE_PORTS_PATCH_TAKES_EFFECT:-}" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -149,17 +152,48 @@ EOF
 PORKBUN_API_KEY_VALUE="test-porkbun-api-key-leak-check"
 PORKBUN_SECRET_KEY_VALUE="test-porkbun-secret-key-leak-check"
 
+# seed_default_app_compose -- writes $WORK/api/docker-compose.yaml with
+# the REAL production expose:3000 shape (matching api/docker-compose.yaml
+# in this repo) so every scenario's TARGET GUARD + expose-port read
+# resolve cleanly against REPO_ROOT="$WORK" (run_case's own override) by
+# default. Called once per run_case (idempotent overwrite) rather than
+# once globally, so a ports_exposes/TARGET-GUARD scenario that swaps in
+# ITS OWN synthetic compose (via FAKE_APP_BASE_DIR pointing at a
+# different scratch subdirectory this function also seeds) never leaves
+# a stale file for the NEXT scenario to accidentally read.
+seed_default_app_compose() {
+  mkdir -p "$WORK/api"
+  if [[ -n "${CASE_APP_COMPOSE_CONTENT:-}" ]]; then
+    printf '%s' "$CASE_APP_COMPOSE_CONTENT" > "$WORK/api/docker-compose.yaml"
+  else
+    printf 'services:\n  app:\n    expose:\n      - "3000"\n' > "$WORK/api/docker-compose.yaml"
+  fi
+}
+
 run_case() {
   # run_case <desc> <expect_exit> <apply-flag-or-empty> <records-json> <apex-code> <www-code> <old-fqdn> <new-fqdn> <patch-takes-effect>
   # (the ambiguous-application scenario swaps in a whole different curl
   # shim -- tests/fixtures/ci/assign-app-domain via $FAKE_BIN/curl-ambiguous
   # -- rather than a run_case parameter, since it changes the LIST
   # response shape, not a single canned value.)
+  #
+  # REPO_ROOT="$WORK" below means the real script's TARGET GUARD reads
+  # "$WORK/${base_directory}/docker-compose.yaml" -- NOT this repo's own
+  # tree. seed_default_app_compose (called once, before the first
+  # run_case) writes $WORK/api/docker-compose.yaml with the REAL
+  # expose:3000 shape, so every EXISTING scenario below (none of which
+  # know about the ports_exposes preflight) resolves it cleanly and sees
+  # ports_exposes already matching (CASE_ENV's own FAKE_APP_PORTS default
+  # is 3000, below) -- no surprise PATCH call, no assertion breakage.
+  # Ports_exposes-specific scenarios further down override FAKE_APP_PORTS
+  # and/or FAKE_APP_BASE_DIR via CASE_ENV explicitly.
   local desc="$1" expect_exit="$2" apply_flag="$3" records="$4" apex_code="$5" www_code="$6"
   local old_fqdn="$7" new_fqdn="$8" patch_effect="$9"
+  seed_default_app_compose
   local log="$WORK/curl.log.$$.$RANDOM"
   local leak_log="$WORK/leak.log.$$.$RANDOM"
   local patch_marker="$WORK/patch.marker.$$.$RANDOM"
+  local ports_patch_marker="$WORK/ports-patch.marker.$$.$RANDOM"
   : > "$log"
 
   printf 'PORKBUN_API_KEY=%s\nPORKBUN_SECRET_KEY=%s\nBOX_IP=127.0.0.1\n' "$PORKBUN_API_KEY_VALUE" "$PORKBUN_SECRET_KEY_VALUE" > "$WORK/.env"
@@ -176,9 +210,13 @@ run_case() {
     FAKE_PORKBUN_RECORDS="$records" FAKE_APEX_CODE="$apex_code" FAKE_WWW_CODE="$www_code" \
     FAKE_APP_UUID=appuuid0000000000001 FAKE_APP_NAME=pfin-app FAKE_OLD_FQDN="$old_fqdn" FAKE_NEW_FQDN="$new_fqdn" \
     FAKE_PATCH_MARKER="$patch_marker" FAKE_PATCH_TAKES_EFFECT="$patch_effect" \
+    FAKE_APP_BASE_DIR="${FAKE_APP_BASE_DIR:-/api}" FAKE_APP_BUILD_PACK="${FAKE_APP_BUILD_PACK:-dockercompose}" \
+    FAKE_APP_PORTS="${FAKE_APP_PORTS:-3000}" FAKE_NEW_PORTS="${FAKE_NEW_PORTS:-3000}" \
+    FAKE_PORTS_PATCH_MARKER="$ports_patch_marker" FAKE_PORTS_PATCH_TAKES_EFFECT="${FAKE_PORTS_PATCH_TAKES_EFFECT:-1}" \
     bash "$SMOKE_SH" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
+  CASE_PORTS_PATCH_MARKER="$ports_patch_marker"
 
   if [[ "$rc" != "$expect_exit" ]]; then
     echo "FAIL: [$desc] expected exit $expect_exit, got $rc" >&2
@@ -264,6 +302,134 @@ chmod +x "$FAKE_BIN/curl"
 run_case "ambiguous application match refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
 rm -f "$FAKE_BIN/curl"
 mv "$FAKE_BIN/curl.real" "$FAKE_BIN/curl"
+
+# --- ports_exposes preflight + TARGET GUARD (Sec ask, joint review --
+# fix/pdf-render-chromium-pin-and-resume-clear) --------------------------
+# All scenarios below reuse ALREADY_CORRECT for DNS (no DNS-refusal noise)
+# so each isolates ONE ports_exposes/TARGET-GUARD predicate. Overrides are
+# plain FAKE_* shell variables, unset immediately after each run_case --
+# NOT the CASE_ENV array idiom used elsewhere: macOS's bash 3.2 (measured
+# here) recognises an env-assignment prefix (`VAR=val cmd`) only when the
+# VAR=val token is LITERAL at parse time; a word produced by expanding
+# "${arr[@]}" is never lexically "VAR=val" even when the array element
+# looks like one at runtime, so it silently becomes the COMMAND WORD
+# instead of an assignment (`FAKE_APP_PORTS=80: command not found`,
+# caught live by actually running this fence, not by reading it).
+# run_case's own env-prefix already reads each of these outer vars via
+# "${FAKE_APP_PORTS:-3000}"-style fallbacks, so a plain `FAKE_APP_PORTS=80`
+# set before the call (and `unset` after) is sufficient and portable.
+# CASE_APP_COMPOSE_CONTENT is unaffected -- it is read directly by
+# seed_default_app_compose() inside this fence process, never passed
+# through the run_case env-prefix list.
+
+# 11. PORTS-MISMATCH-SHOWN-IN-PREFLIGHT-NO-PATCH -- Coolify reports 80,
+#     the compose says 3000; preflight (no --apply) must show the diff and
+#     issue NO PATCH of any kind.
+FAKE_APP_PORTS=80
+run_case "ports_exposes mismatch shown in preflight, no PATCH issued" 0 "" "$ALREADY_CORRECT" 200 200 "" "" 1 || FAIL=1
+unset FAKE_APP_PORTS
+if [[ -n "${CASE_LOG:-}" ]] && grep -q -- "-X PATCH" "$CASE_LOG"; then
+  echo "FAIL: [ports mismatch preflight] a PATCH call was issued despite no --apply" >&2
+  FAIL=1
+fi
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -q "80 -> 3000" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [ports mismatch preflight] did not show the 80 -> 3000 diff -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 12. PORTS-ALREADY-CORRECT-APPLY-NO-PATCH -- apply mode, ports already
+#     3000 -- must issue no ports_exposes PATCH (the fqdn PATCH still
+#     fires unconditionally; only the ports leg is under test here).
+run_case "ports_exposes already correct in apply mode issues no ports PATCH" 0 --apply "$ALREADY_CORRECT" 200 200 "https://fake-domain.test,https://www.fake-domain.test" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+if [[ -f "${CASE_PORTS_PATCH_MARKER:-/nonexistent}" ]]; then
+  echo "FAIL: [ports already correct apply] a ports_exposes PATCH was issued despite no mismatch" >&2
+  FAIL=1
+fi
+
+# 13. PORTS-MISMATCH-APPLY-PATCHES-BEFORE-FQDN -- proves ORDER: the
+#     ports_exposes PATCH must land before the domain (fqdn) PATCH, since
+#     Coolify's router needs the right in-container port wired before a
+#     domain routes traffic at it.
+FAKE_APP_PORTS=80 FAKE_NEW_PORTS=3000 FAKE_PORTS_PATCH_TAKES_EFFECT=1
+run_case "ports_exposes mismatch in apply mode PATCHes before the fqdn PATCH" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_PORTS FAKE_NEW_PORTS FAKE_PORTS_PATCH_TAKES_EFFECT
+if [[ ! -f "${CASE_PORTS_PATCH_MARKER:-/nonexistent}" ]]; then
+  echo "FAIL: [ports mismatch apply ordering] no ports_exposes PATCH was issued" >&2
+  FAIL=1
+elif [[ -n "${CASE_LOG:-}" ]]; then
+  PORTS_LN="$(grep -n '^COOLIFY-PATCH-PORTS$' "$CASE_LOG" | head -1 | cut -d: -f1 || true)"
+  FQDN_LN="$(grep -n '^COOLIFY-PATCH-FQDN$' "$CASE_LOG" | head -1 | cut -d: -f1 || true)"
+  if [[ -z "$PORTS_LN" || -z "$FQDN_LN" || "$PORTS_LN" -ge "$FQDN_LN" ]]; then
+    echo "FAIL: [ports mismatch apply ordering] expected COOLIFY-PATCH-PORTS (line $PORTS_LN) before COOLIFY-PATCH-FQDN (line $FQDN_LN)" >&2
+    FAIL=1
+  fi
+fi
+
+# 14. PORTS-PATCH-READBACK-MISMATCH-REFUSES -- the PATCH's own read-back
+#     shows the write didn't take -- must refuse (exit 1), matching the
+#     existing fqdn read-back-mismatch predicate's shape.
+FAKE_APP_PORTS=80 FAKE_NEW_PORTS=3000 FAKE_PORTS_PATCH_TAKES_EFFECT=0
+run_case "ports_exposes PATCH read-back mismatch refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_PORTS FAKE_NEW_PORTS FAKE_PORTS_PATCH_TAKES_EFFECT
+
+# 15. TARGET-GUARD-WRONG-BASE-DIR-REFUSES
+FAKE_APP_BASE_DIR=/nonexistent-app-dir
+run_case "TARGET GUARD refuses on wrong base_directory" 2 "" "$ALREADY_CORRECT" 200 200 "" "" 1 || FAIL=1
+unset FAKE_APP_BASE_DIR
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -q "TARGET GUARD FAILED (CA-1)" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [TARGET GUARD wrong base_directory] did not name CA-1 -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 16. TARGET-GUARD-WRONG-BUILD-PACK-REFUSES
+FAKE_APP_BUILD_PACK=dockerfile
+run_case "TARGET GUARD refuses on wrong build_pack" 2 "" "$ALREADY_CORRECT" 200 200 "" "" 1 || FAIL=1
+unset FAKE_APP_BUILD_PACK
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -q "build_pack='dockerfile'" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [TARGET GUARD wrong build_pack] did not name the live build_pack -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 17. TARGET-GUARD-ADMISSION-SHAPE-REFUSES -- identity matches (/api,
+#     dockercompose) but the compose itself declares a serve-admission
+#     command override, the WORKER shape -- isolates the NEGATIVE check
+#     from the POSITIVE identity check above.
+CASE_APP_COMPOSE_CONTENT=$'services:\n  app:\n    command: ["node", "dist/cli/serve-admission.js"]\n    expose:\n      - "3000"\n'
+run_case "TARGET GUARD refuses on admission-guard shape present" 2 "" "$ALREADY_CORRECT" 200 200 "" "" 1 || FAIL=1
+CASE_APP_COMPOSE_CONTENT=""
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -q "declares a serve-admission command override" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [TARGET GUARD admission shape] did not name the serve-admission predicate -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 18. EXPOSE-ZERO-ENTRIES-REFUSES
+CASE_APP_COMPOSE_CONTENT=$'services:\n  app:\n    image: foo\n'
+run_case "expose: zero entries refuses" 2 "" "$ALREADY_CORRECT" 200 200 "" "" 1 || FAIL=1
+CASE_APP_COMPOSE_CONTENT=""
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -q "found 0" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [expose zero entries] did not report found 0 -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 19. EXPOSE-MULTIPLE-ENTRIES-REFUSES -- never "the first of several".
+CASE_APP_COMPOSE_CONTENT=$'services:\n  app:\n    expose:\n      - "3000"\n      - "4000"\n'
+run_case "expose: multiple entries refuses (never the first of several)" 2 "" "$ALREADY_CORRECT" 200 200 "" "" 1 || FAIL=1
+CASE_APP_COMPOSE_CONTENT=""
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -q "found 2" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [expose multiple entries] did not report found 2 -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 20. EXPOSE-COMMENT-STRIPPED-POSITIVE-CONTROL -- comments interleaved
+#     around AND inside the expose: block; the parser must still find the
+#     real port (team-lead's explicit ask: prove it, don't assume it).
+CASE_APP_COMPOSE_CONTENT=$'# top-of-file comment\nservices:\n  app:\n    expose:  # trailing comment on the key itself\n      # a comment line inside the block\n      - "3000"  # inline comment after the value\n'
+run_case "expose: comment-stripped positive control finds the real port" 0 "" "$ALREADY_CORRECT" 200 200 "" "" 1 || FAIL=1
+CASE_APP_COMPOSE_CONTENT=""
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -q "compose declares expose: 3000" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [expose comment-stripped] parser did not find port 3000 through the comments -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

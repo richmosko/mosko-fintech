@@ -7,7 +7,22 @@
 #      per FAKE_PORKBUN_RECORDS (dns/retrieve) or a canned SUCCESS
 #      (dns/create, dns/editByNameType).
 #   2. Coolify API (localhost:8000/api/v1/...) -- canned application list
-#      / detail / PATCH read-back, same shape as sibling fences.
+#      / detail / PATCH read-back, same shape as sibling fences. The
+#      application list/detail response now ALSO carries base_directory,
+#      build_pack and ports_exposes (FAKE_APP_BASE_DIR / FAKE_APP_BUILD_PACK
+#      / FAKE_APP_PORTS -- ports_exposes preflight + TARGET GUARD review,
+#      fix/pdf-render-chromium-pin-and-resume-clear). A Coolify PATCH is
+#      routed to one of TWO independently-tracked markers by inspecting its
+#      own --data-binary body: FAKE_PORTS_PATCH_MARKER for a body containing
+#      "ports_exposes", FAKE_PATCH_MARKER (pre-existing) for everything else
+#      (fqdn). Each PATCH also appends a tag line (COOLIFY-PATCH-PORTS /
+#      COOLIFY-PATCH-FQDN) to $FAKE_CURL_LOG so a scenario can assert ORDER
+#      between the two PATCH calls, not just that both happened -- the two
+#      calls hit the identical URL, so the tag is the only way to tell them
+#      apart from the log alone. A subsequent read-back GET reports
+#      FAKE_NEW_PORTS in place of FAKE_APP_PORTS once FAKE_PORTS_PATCH_MARKER
+#      exists, unless FAKE_PORTS_PATCH_TAKES_EFFECT=0 (mirrors the pre-
+#      existing FAKE_PATCH_TAKES_EFFECT convention for the fqdn field).
 #   3. The public HTTPS poll (https://<domain>/ or https://www.<domain>/)
 #      -- responds per FAKE_APEX_CODE / FAKE_WWW_CODE.
 #
@@ -67,6 +82,14 @@ fi
 # --- Coolify API ---------------------------------------------------------
 # api()'s own argv shape: -fsS -K - -X <METHOD> [--data-binary @<file>]
 # http://localhost:8000/api/v1<path> -- the URL is always the LAST token.
+#
+# ports_exposes PATCH tracking (ports_exposes preflight, fix/pdf-render-
+# chromium-pin-and-resume-clear review) is TRACKED SEPARATELY from the
+# fqdn PATCH's own marker -- the two are different API calls in the real
+# script now, and a scenario testing one must not accidentally trip the
+# other. Which field a given PATCH call is FOR is determined by reading
+# its own --data-binary body file (same technique the Porkbun branch
+# above already uses to prove a body was sent at all).
 if [[ "$ARGS" == *"localhost:8000/api/v1"* ]]; then
   METHOD="GET"
   [[ "$ARGS" == *"-X PATCH"* ]] && METHOD="PATCH"
@@ -74,25 +97,46 @@ if [[ "$ARGS" == *"localhost:8000/api/v1"* ]]; then
   if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
     cat <<JSON
 [
-  {"uuid": "${FAKE_APP_UUID:-appuuid0000000000001}", "name": "${FAKE_APP_NAME:-pfin-app}", "fqdn": "${FAKE_OLD_FQDN:-}"}
+  {"uuid": "${FAKE_APP_UUID:-appuuid0000000000001}", "name": "${FAKE_APP_NAME:-pfin-app}", "fqdn": "${FAKE_OLD_FQDN:-}", "base_directory": "${FAKE_APP_BASE_DIR:-/api}", "build_pack": "${FAKE_APP_BUILD_PACK:-dockercompose}", "ports_exposes": "${FAKE_APP_PORTS:-3000}"}
 ]
 JSON
     exit 0
   fi
   if [[ "$METHOD" == "PATCH" ]]; then
-    # Record that a PATCH happened; the subsequent GET read-back reports
-    # FAKE_NEW_FQDN if PATCH_TAKES_EFFECT=1, else the OLD value (simulates
-    # the "field name guess was wrong" case).
-    [[ -n "${FAKE_PATCH_MARKER:-}" ]] && echo "1" > "$FAKE_PATCH_MARKER"
+    BODY_FILE=""
+    prev=""
+    for a in "$@"; do
+      if [[ "$prev" == "--data-binary" ]]; then
+        BODY_FILE="${a#@}"
+      fi
+      prev="$a"
+    done
+    if [[ -n "$BODY_FILE" && -f "$BODY_FILE" ]] && grep -qF "ports_exposes" "$BODY_FILE"; then
+      echo "COOLIFY-PATCH-PORTS" >> "$LOG"
+      [[ -n "${FAKE_PORTS_PATCH_MARKER:-}" ]] && echo "1" > "$FAKE_PORTS_PATCH_MARKER"
+    else
+      echo "COOLIFY-PATCH-FQDN" >> "$LOG"
+      [[ -n "${FAKE_PATCH_MARKER:-}" ]] && echo "1" > "$FAKE_PATCH_MARKER"
+    fi
     echo '{}'
     exit 0
   fi
   if [[ "$METHOD" == "GET" ]]; then
-    if [[ -n "${FAKE_PATCH_MARKER:-}" && -f "$FAKE_PATCH_MARKER" && "${FAKE_PATCH_TAKES_EFFECT:-1}" == "1" ]]; then
-      printf '{"uuid": "%s", "name": "%s", "fqdn": "%s"}\n' "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "${FAKE_NEW_FQDN:-}"
-    else
-      printf '{"uuid": "%s", "name": "%s", "fqdn": "%s"}\n' "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "${FAKE_OLD_FQDN:-}"
+    PORTS_OUT="${FAKE_APP_PORTS:-3000}"
+    if [[ -n "${FAKE_PORTS_PATCH_MARKER:-}" && -f "$FAKE_PORTS_PATCH_MARKER" ]]; then
+      if [[ "${FAKE_PORTS_PATCH_TAKES_EFFECT:-1}" == "1" ]]; then
+        PORTS_OUT="${FAKE_NEW_PORTS:-3000}"
+      fi
+      # PATCH_TAKES_EFFECT=0 -> PORTS_OUT stays FAKE_APP_PORTS (the OLD
+      # value), simulating "the write didn't take".
     fi
+    FQDN_OUT="${FAKE_OLD_FQDN:-}"
+    if [[ -n "${FAKE_PATCH_MARKER:-}" && -f "$FAKE_PATCH_MARKER" && "${FAKE_PATCH_TAKES_EFFECT:-1}" == "1" ]]; then
+      FQDN_OUT="${FAKE_NEW_FQDN:-}"
+    fi
+    printf '{"uuid": "%s", "name": "%s", "fqdn": "%s", "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}\n' \
+      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "$FQDN_OUT" \
+      "${FAKE_APP_BASE_DIR:-/api}" "${FAKE_APP_BUILD_PACK:-dockercompose}" "$PORTS_OUT"
     exit 0
   fi
   echo '{}'
