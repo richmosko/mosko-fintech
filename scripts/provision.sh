@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
 # provision.sh -- the single entry point for the V1 greenfield production
-# stand-up. BACKLOG.md §7.36 item 76 (W-5). DevOps-owned. Runs the 16
-# ordered steps of docs/deployment-runbook.md Part 3 (as reconciled with
-# BACKLOG.md §7.36 item 68's own worker-deploy sequence, PR #848) as ONE
-# call instead of an operator running each script by hand in order.
+# stand-up. BACKLOG.md §7.36 item 76 (W-5). DevOps-owned. Runs the 26
+# ordered steps this file's own STEP_KEYS registry defines below (the
+# registry IS docs/deployment-runbook.md Part 3's spec -- read `--list`
+# or the array itself, never a stale row count in a comment) as ONE call
+# instead of an operator running each script by hand in order.
 #
 # WHAT THIS IS NOT -- it does not invent new logic. Every step below
 # shells out to a script that already exists and is already idempotent on
@@ -108,20 +109,28 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- Ordered step registry (bash 3.2: parallel arrays, no assoc arrays) -
-# Matches docs/deployment-runbook.md Part 3's 23 rows exactly, one
-# provision.sh step per table row (re-read live from `main` at 6e17ad92,
-# after PR #847 merged and re-sequenced this table -- team-lead's grading
-# pass moved db-role-handoff to AFTER resource creation and moved the
-# §6.9 PGRST-exposure flip EARLIER, among other changes; do not build this
-# registry from memory of an earlier draft of that table). The unnumbered
-# "GitHub Environment reviewer approval" row is deliberately NOT a step
+# 26 steps. Re-sequenced a SECOND time after the first live-order
+# correction (team-lead, mid-session): db-bootstrap -> the §6.9
+# PGRST-exposure pre-flip gates + flip (BEFORE any Coolify resource
+# creation -- smoke-pfin-exposure.sh's default mode asserts pfin is
+# ALREADY exposed) -> the standalone migrator app + its Scheduled Task
+# -> app/worker resource creation -> every env-writing step for a
+# resource VERIFIED before that resource is ever deployed (mint-jwt is
+# the LAST env write on app, by construction) -> deploys -> scheduled
+# tasks -> smokes -> the CA-1/§10 checks -> DNS/GitHub-CI -> the
+# DEPLOY_ON_SUCCESS flip -> cutover. Do not build this registry from
+# memory of an earlier draft -- it has moved twice already this session.
+# The unnumbered "GitHub Environment reviewer approval" row is
+# deliberately NOT a step
 # here -- it recurs on every migrator trigger fire, not once at stand-up.
 STEP_KEYS=(
   provision-vps
   standup
   db-bootstrap
-  pre-cutover-gates
+  pgrst-gates
   pgrst-flip
+  migrator-app
+  migrator-scheduled-task
   provision-resources
   record-uuids
   nonsecret-env
@@ -139,14 +148,17 @@ STEP_KEYS=(
   dns
   ci-keypair
   github-ci
+  deploy-on-success
   cutover
 )
 STEP_LABELS=(
   "Provision + harden the box, install Coolify, bootstrap the admin account (§1+§3)"
   "Stand up the Supabase stack; mint real JWT keys (§4)"
   "Database bootstrap: pfin_owner/migrator, migrations, vault decrypt view (§6.3)"
-  "Pre-flip gates: VETO trigger, migration count, 025 presence (§6.9 steps 1-3)"
+  "Pre-flip gates B-1/B-2/B-3: VETO trigger, migration count, 025 presence (§6.9 steps 1-3)"
   "Flip the pfin Data-API exposure (§6.9 steps 4-6)"
+  "Create the standalone migrator Coolify resource (ADR-072 Amendment 4)"
+  "Create the migrator db-push Scheduled Task"
   "Create app/etl/pdf-render/provider-sync Coolify resources (§7.1/§7.2 step i)"
   "Record all Coolify resource UUIDs into .env"
   "Set non-secret env: app's PUBLIC_SUPABASE_URL, each worker's PFIN_DB_*/PLAID_ENV (§7.2 step ii)"
@@ -157,13 +169,14 @@ STEP_LABELS=(
   "Deploy app, smoke its own Data-API path"
   "Deploy etl/provider-sync/pdf-render (§7.2 deploy steps)"
   "Create the etl monthly-report and provider-sync daily-poll Scheduled Tasks"
-  "Smoke: admission endpoint (CA-2), ETL poll, PDF round-trip"
+  "Smoke: admission endpoint (CA-2), ETL poll, PDF round-trip, pfin exposure"
   "CA-1 deploy-gate: provider-sync's injected env names vs PUBLIC_ROUTE_ENV_MATCHERS"
-  "Remaining §10 checks: CA-7 reachability, TZ-1 pin, RLS isolation, auth login"
-  "Re-establish Coolify -> Discord notifications (§8)"
+  "Remaining §10 checks: CA-7 reachability, TZ-1 pin, RLS isolation, auth login (unavoidable manual, no script exists for any)"
+  "Re-establish Coolify -> Discord notifications (§8) -- unavoidable manual, no API surface measured"
   "DNS + Coolify domain assignment + LE cert (§2)"
   "CI-trigger keypair + box-side wiring (§6.4)"
   "GitHub-side CI setup: Actions secret/variable, production-migrator Environment (§6.4)"
+  "Flip DEPLOY_ON_SUCCESS=1 (provision-vps.sh re-run)"
   "Cutover: tear down the incumbent pfindash.com stack (§9)"
 )
 
@@ -252,36 +265,18 @@ print_summary_and_exit() {
 run_provision_vps()      { bash "$SCRIPTS/provision-vps.sh" ${1:+--apply}; }
 run_standup()             { bash "$SCRIPTS/standup.sh" ${1:+--apply}; }
 
-run_db_bootstrap() {
-  step "db-bootstrap: NOT YET SCRIPTED (BACKLOG §7.36 item 75)"
-  info "By hand, in order (full command text: docs/archive/deployment-runbook-rationale-2026-09-20.md §6.3):"
-  info "  1. psql -U supabase_admin -f supabase/roles.sql"
-  info "  2. psql -U supabase_admin -f supabase/auth-grants.sql"
-  info "  3. the engine-backstop REVOKEs (same file)"
-  info "  4. \\password migrator  (interactive, piped stdin -- never a -c literal)"
-  info "  5. ALTER ROLE migrator LOGIN;"
-  info "  6. the role-comment files"
-  info "  7. docker compose exec migrator supabase db push --yes --db-url \"\$PROD_DB_URL\""
-  info "  8. psql -U supabase_admin -f supabase/post-step-vault-view.sql"
-  info "Verify: every pfin object owned by pfin_owner; bootstrap_complete = t; exactly one decrypt view."
-  return 4
-}
+run_db_bootstrap() { bash "$SCRIPTS/db-bootstrap.sh" ${1:+--apply}; }
 
-run_pre_cutover_gates() {
-  step "pre-cutover-gates: BY-HAND (one-time measurement, BACKLOG §7.36 item 66 books scripting this)"
-  info "Run against the production DB as an appropriately-privileged role:"
-  info "  1. select has_schema_privilege('anon','pfin','USAGE');  -- expect f"
-  info "  2. enumerate every pfin relation anon holds any grant on -- expect zero rows"
-  info "  3. select count(*) from supabase_migrations.schema_migrations;  -- expect the migration-file count (ls supabase/migrations/*.sql | wc -l) at the deployed sha -- re-count, do not assume"
-  info "  4. select version from supabase_migrations.schema_migrations where version like '025%';  -- expect exactly one row"
-  info "STOP on any violation -- do not proceed to the pgrst-flip step."
-  return 4
-}
+run_pgrst_gates() { bash "$SCRIPTS/pgrst-exposure-gates.sh"; }
 
 run_pgrst_flip() {
   local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2
   BOX_IP="$box_ip" bash "$SCRIPTS/coolify-env.sh" set pfin-supabase-stack PGRST_DB_SCHEMAS=public,graphql_public,pfin ${1:+--apply --deploy}
 }
+
+run_migrator_app() { bash "$SCRIPTS/provision-migrator-app.sh" ${1:+--apply}; }
+
+run_migrator_scheduled_task() { bash "$SCRIPTS/migrator-scheduled-task.sh" ${1:+--apply}; }
 
 run_provision_resources() {
   local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2
@@ -350,25 +345,23 @@ run_smokes() {
   BOX_IP="$box_ip" bash "$SCRIPTS/smoke-pdf-roundtrip.sh"; rc=$?
   [[ $rc -eq 0 || $rc -eq 3 ]] || return $rc
   [[ $rc -eq 3 ]] && worst=3
+  BOX_IP="$box_ip" bash "$SCRIPTS/smoke-pfin-exposure.sh" pfin-app --compose-service app; rc=$?
+  [[ $rc -eq 0 || $rc -eq 3 ]] || return $rc
+  [[ $rc -eq 3 ]] && worst=3
   return "$worst"
 }
 
-run_ca1_gate() {
-  step "ca1-gate: BY-HAND (BACKLOG §7.36 item 79 books smoke-ca1-env-pattern.sh)"
-  info "docker exec into provider-sync, 'env | cut -d= -f1' (names only, never values)."
-  info "(A) For each injected name, judge whether it is a public-route/FQDN/URL signal on the LIVE Coolify version (docker exec coolify ... --version); confirm PUBLIC_ROUTE_ENV_MATCHERS covers every one that is."
-  info "(B) Confirm zero injected names match any matcher today -- a match means the container should already be refusing to boot."
-  return 4
-}
+run_ca1_gate() { local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2; BOX_IP="$box_ip" bash "$SCRIPTS/smoke-ca1-env-pattern.sh"; }
 
 run_remaining_checks() {
-  step "remaining-checks: BY-HAND (CA-7 reachability, TZ-1 pin, RLS isolation, auth login -- see archive §10)"
-  info "One-time measurement (CA-7/TZ-1); RLS/auth rows stay QA-owned. Ship-block gate on the cutover step."
+  step "remaining-checks: BY-HAND (CA-7 reachability, TZ-1 pin, RLS isolation, auth login -- see docs/archive/deployment-runbook-rationale-2026-09-20.md §10)"
+  info "No script covers any of these four today. TZ-1's own canonical query is fenced verbatim in this file's own header comment block (kept token-identical to supabase/tests/01_session_timezone.sql's (T3) by scripts/ci/check-tz-sweep-identical.py) -- scripting it was considered and deliberately NOT done in this pass (not named in team-lead's explicit ask; a hasty SSH-logic addition inside this orchestrator, duplicating the sshx() pattern every sibling script already carries in its OWN file, was judged worse than leaving this one query manual for now). CA-7 (Supabase datastore reachability) has no smoke script built at all. RLS isolation and auth login are QA-owned by design, not a DevOps scripting gap."
+  info "Ship-block gate on the cutover step -- all four must pass before that step's own --confirm-cutover is meaningful."
   return 4
 }
 
 run_discord() {
-  step "discord: BY-HAND (BACKLOG §7.36 item 74 books measuring whether Coolify's API exposes this)"
+  step "discord: BY-HAND (BACKLOG §7.36 item 74). Measured-as-absent by omission, not confirmed by a live 404: every api() call in every script in this repo targets /applications, /applications/<uuid>, /environments -- grepped across scripts/*.sh for a notification-channel or webhook-config endpoint, zero hits. No live Coolify 4.3.18 install was reachable to confirm this offline -- if a notification-config surface DOES exist and this measurement is wrong, correct this step, don't just work around it by hand indefinitely."
   info "Coolify dashboard -> Notifications -> add/confirm the Discord webhook. Verify: a test event is received."
   return 4
 }
@@ -377,7 +370,31 @@ run_dns() { bash "$SCRIPTS/assign-app-domain.sh" ${1:+--apply}; }
 
 run_ci_keypair() { run_provision_vps "$1"; }
 
+# NOTE (bubble-up, not silently decided): the per-fire GitHub reviewer
+# approval flow -- provision.sh dispatching a real migrator fire, then
+# polling `gh api` for the pending-deployment state and printing the
+# exact review URL rather than telling the human to go find it -- is NOT
+# built in this step. Building a "fire a real production migration
+# trigger" mechanism inside an orchestrator's own registry, under time
+# pressure, without a live box to verify the poll loop against, is
+# exactly the kind of one-way-door judgment call this repo's own
+# DevOps role definition says to flag rather than self-adjudicate.
+# github-ci-setup.sh's own scope (set up the secret/variable/environment
+# gate) is unchanged and complete; the trigger-and-poll wrapper is
+# deferred, stated here, not hidden.
 run_github_ci() { bash "$SCRIPTS/github-ci-setup.sh" ${1:+--apply}; }
+
+run_deploy_on_success() {
+  step "deploy-on-success: flip DEPLOY_ON_SUCCESS=1 in .env, then re-run provision-vps.sh to push it to the box's /etc/pfin/migrator-trigger.conf"
+  if [[ -n "${1:-}" ]]; then
+    if grep -q '^DEPLOY_ON_SUCCESS=' "$REPO_ROOT/.env" 2>/dev/null; then
+      sed -i.bak 's/^DEPLOY_ON_SUCCESS=.*/DEPLOY_ON_SUCCESS=1/' "$REPO_ROOT/.env" && rm -f "$REPO_ROOT/.env.bak"
+    else
+      printf 'DEPLOY_ON_SUCCESS=1\n' >> "$REPO_ROOT/.env"
+    fi
+  fi
+  run_provision_vps "$1"
+}
 
 run_cutover() {
   if [[ "$CONFIRM_CUTOVER" -ne 1 ]]; then
@@ -386,7 +403,7 @@ run_cutover() {
     info "Re-run: scripts/provision.sh --from cutover --confirm-cutover  once every prior step is genuinely green."
     return 4
   fi
-  step "cutover: BY-HAND even with --confirm-cutover (Part 3 row 23 -- no script exists; this flag only lets provision.sh proceed PAST its own gate)"
+  step "cutover: BY-HAND even with --confirm-cutover (the final row -- no script exists; this flag only lets provision.sh proceed PAST its own gate)"
   info "Confirm the smokes and remaining-checks steps are both fully green, then tear down the incumbent pfindash.com stack by hand."
   return 4
 }
@@ -394,11 +411,13 @@ run_cutover() {
 run_step() {
   local key="$1" mode="$2"
   case "$key" in
-    provision-vps)         run_provision_vps "$mode" ;;
-    standup)                run_standup "$mode" ;;
+    provision-vps)           run_provision_vps "$mode" ;;
+    standup)                 run_standup "$mode" ;;
     db-bootstrap)            run_db_bootstrap "$mode" ;;
-    pre-cutover-gates)       run_pre_cutover_gates "$mode" ;;
+    pgrst-gates)             run_pgrst_gates "$mode" ;;
     pgrst-flip)              run_pgrst_flip "$mode" ;;
+    migrator-app)            run_migrator_app "$mode" ;;
+    migrator-scheduled-task) run_migrator_scheduled_task "$mode" ;;
     provision-resources)     run_provision_resources "$mode" ;;
     record-uuids)            run_record_uuids "$mode" ;;
     nonsecret-env)           run_nonsecret_env "$mode" ;;
@@ -416,6 +435,7 @@ run_step() {
     dns)                     run_dns "$mode" ;;
     ci-keypair)              run_ci_keypair "$mode" ;;
     github-ci)               run_github_ci "$mode" ;;
+    deploy-on-success)       run_deploy_on_success "$mode" ;;
     cutover)                 run_cutover "$mode" ;;
     *) return 9 ;;
   esac

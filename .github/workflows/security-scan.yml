@@ -4111,6 +4111,102 @@ jobs:
       - name: offline strike-proofs (happy-path / not-authenticated / key-absent / apply-happy-path / variable-mismatch / env-no-reviewer / existing-different-reviewer)
         run: bash scripts/ci/fence-github-ci-setup-strikes.sh
 
+  fence-pgrst-exposure-gates-strikes:
+    name: pgrst-exposure-gates.sh — pre-flip gate strike-proofs
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 66 (W-5, docs/deployment-runbook.md §6.9's
+    # PGRST_DB_SCHEMAS pre-flip gates, Sec's B-1/B-2/B-3 conditions).
+    # DevOps-owned. Entirely read-only -- no --apply flag exists on this
+    # script at all.
+    # ⚠ tests/fixtures/ci/pgrst-exposure-gates/fake-curl + a fake ssh/
+    # docker resolve the stack app and answer the three -tAc gate queries
+    # with CANNED values -- this fence proves the shell script's own
+    # control flow, never that a real production database actually holds
+    # the grants/ledger state a scenario asserts.
+    # scripts/ci/fence-pgrst-exposure-gates-strikes.sh proves: B-1's VETO
+    # fires on EITHER leg of its OR (anon schema USAGE alone, or a single
+    # granted relation alone) independently; B-2's live migration-file
+    # count (re-measured every run, never a pinned baseline) mismatching
+    # the ledger refuses; B-3 refuses on both zero AND multiple rows for
+    # migration 025 (an exact-one assertion, not "at least one"); the
+    # stack app not resolving refuses before any psql call; box-
+    # unreachable is FAILED, not REFUSED; and this script rejects every
+    # flag argument (it takes none).
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (happy-path / b1-veto-usage / b1-veto-granted-relation / b2-mismatch / b3-zero / b3-multiple / resource-absent / box-unreachable / unknown-flag)
+        run: bash scripts/ci/fence-pgrst-exposure-gates-strikes.sh
+
+  fence-smoke-ca1-env-pattern-strikes:
+    name: smoke-ca1-env-pattern.sh — CA-1 deploy-gate strike-proofs
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 79 (W-5, the CA-1 deploy-gate half). DevOps-
+    # owned. Sec F-7 (PR #847 review) corrected this AC's inversion mid-
+    # session -- this fence proves the CORRECTED direction: a route-
+    # signal name that IS actually injected but matched by NO pattern is
+    # the finding; a benign zero-match on a non-route-signal name is not.
+    # ⚠ tests/fixtures/ci/smoke-ca1-env-pattern/fake-curl + a fake ssh/
+    # docker resolve the provider-sync app, the running container, its
+    # injected env names, and the Node cross-check against
+    # PUBLIC_ROUTE_ENV_MATCHERS with CANNED values -- this fence proves
+    # the shell script's own control flow, never that a real deployed
+    # Coolify version's injected-var set matches the pinned reference
+    # list (that pin is stated, not live-measured -- see the target
+    # script's own header).
+    # scripts/ci/fence-smoke-ca1-env-pattern-strikes.sh proves: the
+    # inversion itself (an injected pinned name matched by nothing
+    # refuses, naming "the exact inversion this check exists to catch");
+    # a benign zero-match (no pinned name injected at all) is NOT a
+    # finding; an ambiguous (>1) running container refuses; zero running
+    # containers is FAILED; the app not resolving refuses; the Node
+    # import itself failing is FAILED; and BOX_IP being unset (this
+    # script takes it directly from the environment, never a .env file)
+    # is FAILED with its own named predicate.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (happy-path / unmatched-finding / none-injected / ambiguous-containers / no-running-container / resource-absent / node-import-failed / box-ip-missing / box-unreachable)
+        run: bash scripts/ci/fence-smoke-ca1-env-pattern-strikes.sh
+
+  fence-db-bootstrap-strikes:
+    name: db-bootstrap.sh — database bootstrap strike-proofs
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 75 (W-5, docs/deployment-runbook.md §6.3's
+    # three-phase database bootstrap). DevOps-owned. 🔒 SECURITY-SENSITIVE
+    # -- Sec joint-review mandatory: this is a NEW privileged-automation
+    # surface, every Phase 1/3 statement running AS supabase_admin, the
+    # box's true superuser. Structurally refuses to run outside an
+    # operator SSH session (it establishes its own SSH connection; a
+    # Coolify Scheduled Task has no code path that could invoke it).
+    # ⚠ tests/fixtures/ci/db-bootstrap/fake-curl + a fake ssh/docker, plus
+    # a throwaway REPO_ROOT fixture tree (never the real repo) -- this
+    # fence proves the shell script's own control flow, never that a real
+    # production database accepts these statements. The structural
+    # worktree-refusal claim is NOT behaviorally exercised (every
+    # scenario pre-sets REPO_ROOT, same as every sibling fence) -- a
+    # source-literal pin stands in for that one property.
+    # scripts/ci/fence-db-bootstrap-strikes.sh proves: an already-
+    # bootstrapped box is a clean no-op (and genuinely never re-runs any
+    # phase -- asserted by the ABSENCE of "roles.sql applied" in the
+    # captured output, not just the exit code); a dirty ownership census
+    # refuses even when bootstrap_complete=t; a partial-bootstrap state
+    # refuses rather than guessing a repair; roles.sql / the credential
+    # handoff (mismatch AND cleartext-leak, both) / the push (failure AND
+    # a missing completion line, both) / the post-push census / the
+    # post-push ledger check / post-step-vault-view.sql each refuse on
+    # their own failure mode; the happy path applies every present role-
+    # comment file and explicitly SKIPS (never silently omits or fatally
+    # errors on) the three deliberately-absent ones; and an unknown flag
+    # is rejected. This PR also fixes a real defect this fence caught:
+    # two `OUT="$(cmd 2>&1)"` remote-script assignments lacked the
+    # set +e / set -e bracket scripts/db-role-handoff.sh's own identical
+    # mechanism uses, so a genuine command failure was silently killing
+    # the script at the assignment under `set -e` before its own FATAL
+    # diagnostic (and the captured command output) could ever print.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (already-bootstrapped-clean / already-bootstrapped-census-bad / partial-state / preflight-no-apply / phase1-roles-fail / credential-mismatch / credential-cleartext-leak / phase2-push-fails / phase2-no-completion-line / phase2-census-bad-after-push / phase2-bootstrap-not-complete-after-push / phase3-source-pin / happy-path-full-apply / resource-absent / unknown-flag / structural-worktree-guard-pin)
+        run: bash scripts/ci/fence-db-bootstrap-strikes.sh
+
   required-unfiltered:
     name: required-unfiltered — required contexts cannot be skipped
     runs-on: ubuntu-latest

@@ -21,9 +21,11 @@
 #      multi-step run can ever exit 0 against this registry).
 #   2. SKIPPED-CONTINUES -- the smokes step's apply returns 3 -> recorded
 #      SKIPPED, run continues to completion, exit 0.
-#   3. MANUAL-STOPS -- db-bootstrap (a genuine MANUAL step, no fake
-#      needed) is reached -> provision.sh stops there, resume hint names
-#      db-bootstrap, exit 1.
+#   3. MANUAL-STOPS -- discord (a genuine MANUAL step, no fake needed --
+#      db-bootstrap became a real scripted step this round, so the
+#      MANUAL-step proxy moved to discord/remaining-checks/cutover) is
+#      reached -> provision.sh stops there, resume hint names discord,
+#      exit 1.
 #   4. FAILED-STOPS -- a step's apply returns 1 -> provision.sh stops
 #      there, resume hint names that step, exit 2; steps AFTER it never
 #      run (their call-log entries absent).
@@ -149,20 +151,21 @@ run_case() {
   return 0
 }
 
-# 1. HAPPY-PATH -- dns(20) -> ci-keypair(21) -> github-ci(22), three
-# CONSECUTIVE, fully-scripted steps, correctly STOPPING at cutover(23),
-# the always-MANUAL terminal gate (run_cutover returns 4 unconditionally,
-# --confirm-cutover or not -- it only changes the printed message). This
-# is this orchestrator's real terminal behavior BY DESIGN: no --from
-# invocation can ever complete past cutover with exit 0, because that gate
-# is a deliberate one-way door, never auto-satisfied. A "happy path"
-# scenario for THIS registry is therefore "N steps VERIFIED, then a clean
-# MANUAL stop at cutover" -- not "exit 0 across the whole remaining run".
+# 1. HAPPY-PATH -- dns -> ci-keypair -> github-ci -> deploy-on-success,
+# FOUR CONSECUTIVE, fully-scripted steps (the registry's last four before
+# cutover), correctly STOPPING at cutover, the always-MANUAL terminal gate
+# (run_cutover returns 4 unconditionally, --confirm-cutover or not -- it
+# only changes the printed message). This is this orchestrator's real
+# terminal behavior BY DESIGN: no --from invocation can ever complete past
+# cutover with exit 0, because that gate is a deliberate one-way door,
+# never auto-satisfied. A "happy path" scenario for THIS registry is
+# therefore "N steps VERIFIED, then a clean MANUAL stop at cutover" -- not
+# "exit 0 across the whole remaining run".
 CASE_ENV=()
-run_case "happy-path (dns -> ci-keypair -> github-ci VERIFIED, stops at cutover)" 1 --from dns || FAIL=1
+run_case "happy-path (dns -> ci-keypair -> github-ci -> deploy-on-success VERIFIED, stops at cutover)" 1 --from dns || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   VERIFIED_COUNT="$(grep -c ': VERIFIED' "$CASE_LAST_DIR/out.txt" 2>/dev/null || echo 0)"
-  [[ "$VERIFIED_COUNT" == "3" ]] || { echo "FAIL: [happy-path] expected 3 VERIFIED steps, saw $VERIFIED_COUNT" >&2; FAIL=1; }
+  [[ "$VERIFIED_COUNT" == "4" ]] || { echo "FAIL: [happy-path] expected 4 VERIFIED steps, saw $VERIFIED_COUNT" >&2; FAIL=1; }
   grep -q -- "--from cutover" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [happy-path] resume hint does not name cutover" >&2; FAIL=1; }
 fi
 
@@ -176,11 +179,11 @@ if [[ -n "${CASE_LAST_DIR:-}" ]] && ! grep -q "SKIPPED" "$CASE_LAST_DIR/out.txt"
   FAIL=1
 fi
 
-# 3. MANUAL-STOPS -- db-bootstrap is reached (no --from/--only needed, it's step 3)
+# 3. MANUAL-STOPS -- discord is reached
 CASE_ENV=()
-run_case "manual step (db-bootstrap) stops the run, exit 1" 1 --only db-bootstrap || FAIL=1
-if [[ -n "${CASE_LAST_DIR:-}" ]] && ! grep -q -- "--from db-bootstrap" "$CASE_LAST_DIR/out.txt"; then
-  echo "FAIL: [manual step] resume hint does not name db-bootstrap" >&2
+run_case "manual step (discord) stops the run, exit 1" 1 --only discord || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]] && ! grep -q -- "--from discord" "$CASE_LAST_DIR/out.txt"; then
+  echo "FAIL: [manual step] resume hint does not name discord" >&2
   FAIL=1
 fi
 
@@ -273,7 +276,7 @@ run_case "unknown --from key refuses, exit 3" 3 --from bogus-step-name || FAIL=1
 
 # 11. KEYGEN-ABSENT-GENERATES
 CASE_ENV=()
-run_case "keygen absent -> generated" 1 --only db-bootstrap || FAIL=1
+run_case "keygen absent -> generated" 1 --only discord || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   if [[ ! -s "$CASE_LAST_DIR/keygen.log" ]]; then
     echo "FAIL: [keygen absent] fake ssh-keygen was never invoked" >&2
@@ -298,11 +301,11 @@ printf 'existing-pub\n' > "$PRESENT_DIR/ci_migrate.pub"
 set +e
 REPO_ROOT="$PRESENT_DIR" SCRIPTS="$FAKE_SCRIPTS_DIR" PATH="$FAKE_BIN:$PATH" \
   FAKE_CALL_LOG="$PRESENT_DIR/calls.log" FAKE_COUNTER_DIR="$PRESENT_DIR" FAKE_SSH_KEYGEN_LOG="$PRESENT_DIR/keygen.log" \
-  bash "$PROVISION_SH" --only db-bootstrap > "$PRESENT_DIR/out.txt" 2>&1
+  bash "$PROVISION_SH" --only discord > "$PRESENT_DIR/out.txt" 2>&1
 PRESENT_RC=$?
 set -e
 if [[ "$PRESENT_RC" != "1" ]]; then
-  echo "FAIL: [keygen present] expected exit 1 (db-bootstrap is MANUAL), got $PRESENT_RC" >&2
+  echo "FAIL: [keygen present] expected exit 1 (discord is MANUAL), got $PRESENT_RC" >&2
   cat "$PRESENT_DIR/out.txt" >&2
   FAIL=1
 elif [[ -s "$PRESENT_DIR/keygen.log" ]]; then

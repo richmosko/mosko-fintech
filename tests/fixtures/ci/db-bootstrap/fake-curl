@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-db-bootstrap-strikes.sh to drive
+# scripts/db-bootstrap.sh's remote python driver against a canned Coolify
+# API response instead of a live box. Same shape as
+# tests/fixtures/ci/pgrst-exposure-gates/fake-curl (identical
+# PY_API_HELPER text, no -w status-code suffix -- bare JSON only).
+#
+# GET /applications resolves BOTH the stack app (pfin-supabase-stack) and
+# the migrator app (pfin-migrator) in one call. $FAKE_CURL_MODE selects
+# which (if either) is omitted:
+#   clean          -- both present
+#   stack-absent   -- migrator present, stack omitted
+#   migrator-absent -- stack present, migrator omitted
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+respond() {
+  printf '%s' "$1"
+  exit 0
+}
+
+METHOD="GET"
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  prev="$a"
+done
+URL="${*: -1}"
+
+STACK_UUID="aaaa1111bbbb2222cccc3333"
+MIGRATOR_UUID="dddd4444eeee5555ffff6666"
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
+  STACK_ROW=""
+  MIGRATOR_ROW=""
+  MODE="${FAKE_CURL_MODE:-clean}"
+  [[ "$MODE" != "stack-absent" ]] && STACK_ROW="$(printf '{"uuid":"%s","name":"pfin-supabase-stack"}' "$STACK_UUID")"
+  [[ "$MODE" != "migrator-absent" ]] && MIGRATOR_ROW="$(printf '{"uuid":"%s","name":"pfin-migrator"}' "$MIGRATOR_UUID")"
+  ROWS=()
+  [[ -n "$STACK_ROW" ]] && ROWS+=("$STACK_ROW")
+  [[ -n "$MIGRATOR_ROW" ]] && ROWS+=("$MIGRATOR_ROW")
+  IFS=,
+  respond "[${ROWS[*]}]"
+fi
+
+respond '{}'

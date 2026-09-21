@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-pgrst-exposure-gates-strikes.sh to drive
+# scripts/pgrst-exposure-gates.sh's remote python driver against a canned
+# Coolify API response instead of a live box. Same shape as
+# tests/fixtures/ci/db-role-handoff/fake-curl. pgrst-exposure-gates.sh
+# itself is never modified or made aware this exists.
+#
+# Only one endpoint is used: GET /applications, resolving the stack app
+# (pfin-supabase-stack). $FAKE_CURL_MODE=stack-absent omits it, forcing
+# the "expected exactly one application" refusal.
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+# The real PY_API_HELPER this script's caller embeds runs
+# `curl -fsS -K - -X <method> <url>` with NO `-w` status-code suffix --
+# it relies on `-f`'s own exit code for failure and parses stdout as bare
+# JSON (`json.loads(out)`), so this fake must print ONLY the body, never
+# an appended status line (unlike tests/fixtures/ci/db-role-handoff/
+# fake-curl, whose caller's helper differs).
+respond() {
+  local body="$1"
+  printf '%s' "$body"
+  exit 0
+}
+
+METHOD="GET"
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  prev="$a"
+done
+URL="${*: -1}"
+
+STACK_UUID="aaaa1111bbbb2222cccc3333"
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
+  if [[ "${FAKE_CURL_MODE:-clean}" == "stack-absent" ]]; then
+    respond '[]'
+  fi
+  respond "$(printf '[{"uuid":"%s","name":"pfin-supabase-stack"}]' "$STACK_UUID")"
+fi
+
+respond '{}'
