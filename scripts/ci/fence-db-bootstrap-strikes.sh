@@ -6,7 +6,7 @@
 # curl/docker for every nested invocation (same shape as
 # fence-db-role-handoff-strikes.sh), a fake `docker` stands in for every
 # `docker compose ... exec -T db psql ...` / `exec -T migrator sh -c
-# 'supabase db push ...'` / `docker exec coolify php artisan tinker ...`
+# 'supabase db push ...'` / `docker exec coolify php artisan tinker --execute=...`
 # call, distinguishing the many shapes by their OWN argv flags and stdin
 # content (never call order), and tests/fixtures/ci/db-bootstrap/fake-curl
 # resolves both the stack and migrator applications. A throwaway
