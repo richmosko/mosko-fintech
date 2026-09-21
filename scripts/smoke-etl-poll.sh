@@ -255,6 +255,14 @@ try:
         connect_timeout=10,
     )
     cur = conn.cursor()
+    # Sec V-2 (PR #848 round-2 review) -- PFIN_DB_USER (pfin_etl) is
+    # NOINHERIT and holds NO direct table privileges by design (055:190);
+    # an unqualified SELECT here fails 42501, same as every other pfin_etl
+    # statement this repo runs. service_role holds
+    # select (users_id, nav_date) on pfin.nav_daily (054:615) -- assume it
+    # explicitly, exactly as the pre-check above already does. No grant
+    # change; do not add privileges to pfin_etl to work around this.
+    cur.execute("set local role service_role")
     cur.execute("select count(*) from pfin.nav_daily where nav_date = current_date")
     print(cur.fetchone()[0])
 except Exception as exc:

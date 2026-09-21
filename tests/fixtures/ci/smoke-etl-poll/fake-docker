@@ -54,6 +54,17 @@ if [[ "$ARGS" == *"python3 -c"* && "$ARGS" == *"pfin.account"* ]]; then
 fi
 
 if [[ "$ARGS" == *"python3 -c"* && "$ARGS" == *"pfin.nav_daily"* ]]; then
+  # Sec V-2 (PR #848 round-2 review) -- PFIN_DB_USER (pfin_etl) is
+  # NOINHERIT with no direct table privileges; a real Postgres would
+  # 42501 this exact SELECT without an explicit `set local role
+  # service_role` first (same class as the pre-check above, which
+  # already does this correctly). REFUSE (simulate the real 42501 as a
+  # CONN_ERROR) unless the invocation's own SQL text proves the guard is
+  # present -- this is what strikes a regression that drops the line.
+  if [[ "$ARGS" != *"set local role service_role"* ]]; then
+    echo "CONN_ERROR permission denied for schema pfin (simulated 42501 -- no 'set local role service_role' in the invocation)" >&2
+    exit 2
+  fi
   if [[ "${FAKE_COUNT_MODE:-ok}" == "conn-error" ]]; then
     echo "CONN_ERROR could not connect" >&2
     exit 2

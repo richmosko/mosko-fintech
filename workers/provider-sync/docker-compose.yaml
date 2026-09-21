@@ -84,6 +84,15 @@ services:
     # PID 1 to be idle, only that the container is RUNNING, which the admission
     # server being resident (`restart: unless-stopped`, never a one-shot exit)
     # guarantees exactly as well as `tail -f /dev/null` did.
+    #
+    # NEW BEHAVIOR (Sec N-1, PR #848 round-2 review): with PID 1 = the admission
+    # server, a CA-1 startup refusal (the worker's own limb-(a) public-route
+    # tripwire, admissionGuard.ts) now CRASH-LOOPS the container under
+    # `restart: unless-stopped` instead of leaving a `tail -f /dev/null` shell
+    # sitting idle -- correct fail-closed behavior, but it ALSO removes the
+    # `poll` Scheduled Task's `docker exec` target while the loop is crashing
+    # (no running container to exec into). This is new relative to the prior
+    # `tail -f /dev/null` state and is stated here, not silently accepted.
     command: ["node", "dist/cli/serve-admission.js"]
     # INTERNAL-ONLY admission port. `expose:` = reachable to sibling containers on
     # the project network; NOT host-published. NEVER convert this to a `ports:`
