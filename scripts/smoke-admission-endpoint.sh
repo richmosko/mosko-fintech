@@ -186,7 +186,23 @@ else
 fi
 
 step "N1 -- unreachable from the operator's own machine"
-N1_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$BOX_IP:8081/healthz" 2>/dev/null || echo "000")"
+# Sec VETO V-1 (PR #848 review). Real curl, on a connection-level failure
+# (refused/timeout/no route), ALREADY prints "000" via -w '%{http_code}'
+# itself, THEN exits non-zero (e.g. 7, "couldn't connect") -- curl's own
+# -w output happens regardless of its exit code. The prior `|| echo
+# "000"` was not a fallback for a silent failure, it was a SECOND "000"
+# appended after curl's own, producing "000000" (two concatenated
+# prints) on every single correctly-unreachable box -- a string that
+# never equals "000", so this check FAILED CLOSED IN THE WRONG DIRECTION:
+# it reported a real, working negative control as a false "exposure"
+# every time. `|| true` only suppresses `set -e` on curl's non-zero
+# exit; it prints nothing of its own. A truly EMPTY result (curl itself
+# missing/broken, producing no output at all -- not even "000") is a
+# precondition this smoke could not attempt under, not a "not equal to
+# 000" reachability finding -- checked explicitly, refused with die2 if
+# so, never silently compared as if it were a real code.
+N1_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$BOX_IP:8081/healthz" 2>/dev/null || true)"
+[[ -n "$N1_CODE" ]] || die2 "N1: the local curl probe produced NO output at all (not even '000') -- local curl may be missing or broken. A precondition this smoke could not attempt under, not a reachability finding either way."
 if [[ "$N1_CODE" == "000" ]]; then
   ok "N1: http://$BOX_IP:8081/healthz -> 000 (refused/unreachable, as expected)"
 else
@@ -195,7 +211,10 @@ else
 fi
 
 step "N2 -- unreachable from the box HOST's own network namespace (not a container)"
-N2_CODE="$(sshx "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8081/healthz 2>/dev/null || echo 000")"
+# Same V-1 fix as N1 above, inside the remote command string too --
+# `|| echo 000` there had the identical doubling defect.
+N2_CODE="$(sshx "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8081/healthz 2>/dev/null || true")"
+[[ -n "$N2_CODE" ]] || die2 "N2: the box-host curl probe produced NO output at all (not even '000') -- the box's own curl may be missing or broken. A precondition this smoke could not attempt under, not a reachability finding either way."
 if [[ "$N2_CODE" == "000" ]]; then
   ok "N2: box host -> http://127.0.0.1:8081/healthz -> 000 (refused, as expected -- expose:-only does not publish to the host namespace either)"
 else
