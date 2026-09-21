@@ -55,6 +55,20 @@
 #      exit 0.
 #   9. CERT-NEVER-APPEARS-REFUSES -- the apex never returns 200 within
 #      the (fence-shortened) poll bound -> refuses.
+#   21b/21c. DOCKER-COMPOSE-DOMAINS-EXACT-SET (Sec F-4, PR #866 review)
+#      -- the read-back containing an EXTRA domain beyond the intended
+#      two, or a SUPERSTRING near-miss ("notfake-domain.test" contains
+#      "fake-domain.test") -> both refuse; a plain CONTAINS($ROOT_DOMAIN)
+#      check would have passed both silently.
+#   25/26/27. POST-ASSIGNMENT-ENV-READ FAIL-CLOSED (Sec F-3, PR #866
+#      review) -- 'docker ps' itself failing, 2+ containers matching the
+#      name filter (never the old `head -1` first-of-several guess), and
+#      'docker exec ... env' itself failing must each be reported as a
+#      READ FAILURE / ambiguity, never collapsed into the same wording as
+#      a genuinely empty result -- the prior `2>/dev/null || true` shape
+#      printed a false-positive "MEASURED ... CONTROL GAP" fact for a
+#      read that never happened. This section stays informational (exit
+#      code unaffected in all three cases); only the WORDING is asserted.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -135,6 +149,7 @@ fi
 CMD="\${@: -1}"
 CMD_REWRITTEN="\$(printf '%s' "\$CMD" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
 PATH="$FAKE_BIN:\$PATH" FAKE_APP_CID="\${FAKE_APP_CID:-}" FAKE_APP_ENV_LINES="\${FAKE_APP_ENV_LINES:-}" \\
+  FAKE_DOCKER_PS_FAILS="\${FAKE_DOCKER_PS_FAILS:-}" FAKE_DOCKER_EXEC_FAILS="\${FAKE_DOCKER_EXEC_FAILS:-}" \\
   bash -c "\$CMD_REWRITTEN"
 EOF
 chmod +x "$FAKE_BIN/ssh"
@@ -142,18 +157,31 @@ chmod +x "$FAKE_BIN/ssh"
 # Fake `docker` -- post-assignment container-env read (team-lead ask,
 # PR #866 review), informational only in the real script. `$FAKE_APP_CID`
 # controls whether a container is reported running for the app (empty =
-# none, the common not-yet-redeployed case); `$FAKE_APP_ENV_LINES`
-# (newline-separated `NAME=value` pairs) is what `docker exec ... env`
-# reports -- the real script's own `grep -oE` + `cut -d= -f1` narrow this
-# to names only, so this fixture does not need to pre-filter.
+# none, the common not-yet-redeployed case; multiple newline-separated
+# ids = ambiguous); `$FAKE_APP_ENV_LINES` (newline-separated `NAME=value`
+# pairs) is what `docker exec ... env` reports -- the real script's own
+# `grep -oE` + `cut -d= -f1` narrow this to names only, so this fixture
+# does not need to pre-filter. `$FAKE_DOCKER_PS_FAILS=1`/
+# `$FAKE_DOCKER_EXEC_FAILS=1` (Sec F-3, PR #866 review) model the ssh/
+# docker call itself failing -- distinct from "ran fine, found nothing" --
+# so the real script's read-failure-vs-empty-result distinction is
+# actually falsifiable.
 cat > "$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *"ps --filter"* && "$*" == *"status=running"* ]]; then
+  if [[ "${FAKE_DOCKER_PS_FAILS:-0}" == "1" ]]; then
+    echo "Cannot connect to the Docker daemon (simulated)" >&2
+    exit 1
+  fi
   printf '%s' "${FAKE_APP_CID:-}"
   exit 0
 fi
 if [[ "$*" == *"exec"* && "$*" == *" env"* ]]; then
+  if [[ "${FAKE_DOCKER_EXEC_FAILS:-0}" == "1" ]]; then
+    echo "Error: No such container (simulated)" >&2
+    exit 1
+  fi
   printf '%s\n' "${FAKE_APP_ENV_LINES:-}"
   exit 0
 fi
@@ -254,6 +282,7 @@ run_case() {
     FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT="${FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT:-$patch_effect}" \
     FAKE_COMPOSE_DOMAINS_PATCH_STATUS="${FAKE_COMPOSE_DOMAINS_PATCH_STATUS:-200}" \
     FAKE_APP_CID="${FAKE_APP_CID:-}" FAKE_APP_ENV_LINES="${FAKE_APP_ENV_LINES:-}" \
+    FAKE_DOCKER_PS_FAILS="${FAKE_DOCKER_PS_FAILS:-0}" FAKE_DOCKER_EXEC_FAILS="${FAKE_DOCKER_EXEC_FAILS:-0}" \
     bash "$SMOKE_SH" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -500,6 +529,35 @@ if [[ -n "${CASE_OUTPUT:-}" ]]; then
   fi
 fi
 
+# 21b. DOCKER-COMPOSE-DOMAINS-EXTRA-DOMAIN-REFUSES (Sec F-4, PR #866
+#     review) -- the read-back contains BOTH intended domains AND an
+#     extra one a containment check would have missed entirely.
+FAKE_NEW_COMPOSE_DOMAINS="https://fake-domain.test,https://www.fake-domain.test,https://evil-extra.test"
+run_case "docker_compose_domains read-back with an extra domain refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_NEW_COMPOSE_DOMAINS
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "does not exactly equal the intended set" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [compose-domains extra domain] did not name the exact-set mismatch -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "evil-extra.test" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [compose-domains extra domain] did not name the extra domain -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 21c. DOCKER-COMPOSE-DOMAINS-SUPERSTRING-NEAR-MISS-REFUSES (Sec F-4,
+#     PR #866 review) -- the read-back's first entry is a SUPERSTRING of
+#     the intended root domain ("notfake-domain.test" contains
+#     "fake-domain.test") -- a containment check would have passed this.
+FAKE_NEW_COMPOSE_DOMAINS="https://notfake-domain.test,https://www.fake-domain.test"
+run_case "docker_compose_domains read-back superstring near-miss refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_NEW_COMPOSE_DOMAINS
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "does not exactly equal the intended set" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [compose-domains superstring near-miss] did not name the exact-set mismatch -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
 # 22. POST-ASSIGNMENT-ENV-READ-NOT-APPLICABLE -- no container running yet
 #     for the app (the common not-yet-redeployed case, default
 #     FAKE_APP_CID empty) -- informational, never blocks the exit code.
@@ -513,7 +571,7 @@ fi
 #     SERVICE_FQDN_*/COOLIFY_FQDN names -- printed as a MEASURED line,
 #     names only (never a value, matching this repo's names-only
 #     discipline for env-store contents elsewhere).
-FAKE_APP_CID=cid-app-running-1
+FAKE_APP_CID=abc123def456
 FAKE_APP_ENV_LINES=$'COOLIFY_FQDN=http://abc.sslip.io\nSERVICE_FQDN_APP=https://fake-domain.test'
 run_case "post-assignment env read: names found, reported MEASURED" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
 unset FAKE_APP_CID FAKE_APP_ENV_LINES
@@ -531,13 +589,71 @@ fi
 # 24. POST-ASSIGNMENT-ENV-READ-NO-NAMES-CONTROL-GAP -- a running
 #     container injects NONE of the watched names -- reported as a
 #     CONTROL GAP to investigate, never silently passed over as success.
-FAKE_APP_CID=cid-app-running-2
+FAKE_APP_CID=abc123def789
 FAKE_APP_ENV_LINES=""
 run_case "post-assignment env read: no names found, reported as a control gap" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
 unset FAKE_APP_CID FAKE_APP_ENV_LINES
 if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "CONTROL GAP" <<<"$CASE_OUTPUT"; then
   echo "FAIL: [post-assignment env read: no names] did not name the control gap -- captured output: $CASE_OUTPUT" >&2
   FAIL=1
+fi
+
+# 25. POST-ASSIGNMENT-ENV-READ-DOCKER-PS-FAILS (Sec F-3, PR #866 review)
+#     -- 'docker ps' itself fails (transport/daemon error) -- must be
+#     reported as a READ FAILURE, never collapsed into the same "no
+#     container" / "MEASURED ... NONE" wording as a genuinely empty
+#     result. exit code is UNCHANGED (still informational, never a hard
+#     gate) -- only the WORDING is under test here.
+FAKE_DOCKER_PS_FAILS=1
+run_case "post-assignment env read: docker ps fails, reported as a read failure" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_DOCKER_PS_FAILS
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "READ FAILURE" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [docker ps fails] did not name the read failure -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qE "injects (NONE of|:)" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [docker ps fails] printed an env-injection measurement despite the read itself failing -- a failed read is not a measurement of anything." >&2
+    FAIL=1
+  fi
+fi
+
+# 26. POST-ASSIGNMENT-ENV-READ-AMBIGUOUS-CONTAINERS (Sec F-3, PR #866
+#     review) -- 2 running containers match the name filter -- never
+#     silently pick the first (the old `head -1` pattern); reported as
+#     ambiguous, no docker exec issued.
+FAKE_APP_CID=$'abc123def456\nabc123def789'
+run_case "post-assignment env read: ambiguous containers, never guesses" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_CID
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "ambiguous" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [ambiguous containers] did not name the ambiguity -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qE "injects (NONE of|:)" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [ambiguous containers] printed an env-injection measurement despite never resolving which container is authoritative." >&2
+    FAIL=1
+  fi
+fi
+
+# 27. POST-ASSIGNMENT-ENV-READ-DOCKER-EXEC-FAILS (Sec F-3, PR #866
+#     review) -- a container IS resolved, but 'docker exec ... env'
+#     itself fails -- must be reported as a READ FAILURE, never as a
+#     "MEASURED ... injects NONE" / CONTROL GAP (the false-positive shape
+#     this finding named specifically).
+FAKE_APP_CID=abc123def456
+FAKE_DOCKER_EXEC_FAILS=1
+run_case "post-assignment env read: docker exec fails, reported as a read failure" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_CID FAKE_DOCKER_EXEC_FAILS
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "READ FAILURE" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [docker exec fails] did not name the read failure -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qF "that is a CONTROL GAP to report" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [docker exec fails] reported a CONTROL GAP for a read that never actually happened -- this is exactly the false positive Sec's F-3 named." >&2
+    FAIL=1
+  fi
 fi
 
 if [[ $FAIL -ne 0 ]]; then

@@ -71,10 +71,14 @@
 #     field is documented as a plain nullable STRING, not an array --
 #     Coolify evidently serializes it differently for read than it
 #     accepts it for write. The exact runtime string shape is UNMEASURED
-#     -- the read-back below does a SUBSTRING containment check for the
-#     target domain within whatever comes back, never an exact-value
-#     comparison, and logs the raw field so a future run turns this into
-#     a measured fact (append it to COOLIFY-API-MEASURED.md).
+#     -- the read-back below splits the live comma-separated string and
+#     compares it as a SET against the intended domain set (Sec F-4, PR
+#     #866 review: a substring/containment check passes even with extra
+#     domains present, or on a superstring near-miss like
+#     "notexample.com" containing "example.com" -- neither means this
+#     app now serves EXACTLY the intended domains), and logs the raw
+#     field so a future run turns this into a measured fact (append it to
+#     COOLIFY-API-MEASURED.md).
 #   NO TINKER FALLBACK HERE (Sec explicit instruction, PR #866 review):
 #     if docker_compose_domains cannot actually route traffic, this
 #     script STOPS -- a new tinker-write proposal goes to Sec FIRST, it
@@ -691,9 +695,21 @@ if status == 422:
     print((body or "")[:500].replace("\n", " "))
     sys.exit(0)
 readback = api(token, "GET", f"/applications/{uuid}")
+live = readback.get("docker_compose_domains") or ""
 print("PATCH_OK")
-print(readback.get("docker_compose_domains") or "")
+print(live)
 print(readback.get("fqdn") or "")
+# Sec F-4 (PR #866 review): a CONTAINS($ROOT_DOMAIN) check passes even
+# with EXTRA domains present in the live comma-separated list, or on a
+# superstring near-miss (e.g. "notexample.com" contains "example.com")
+# -- neither means this app now serves EXACTLY the domains intended.
+# Compare SETS, not substrings, and say precisely what differs.
+intended_set = {d.strip() for d in target.split(",") if d.strip()}
+live_set = {d.strip() for d in live.split(",") if d.strip()}
+if live_set != intended_set:
+    print("DOMAIN_SET_MISMATCH")
+    print(",".join(sorted(intended_set - live_set)) or "-")
+    print(",".join(sorted(live_set - intended_set)) or "-")
 PYEOF
 REMOTE
 )"
@@ -704,10 +720,13 @@ if [[ "$PATCH_STATUS" == "PATCH_422" ]]; then
 fi
 NEW_COMPOSE_DOMAINS="$(sed -n '2p' <<<"$PATCH_OUT")"
 NEW_FQDN_AFTER_COMPOSE_PATCH="$(sed -n '3p' <<<"$PATCH_OUT")"
-if [[ "$NEW_COMPOSE_DOMAINS" != *"$ROOT_DOMAIN"* ]]; then
-  die "docker_compose_domains PATCH 200'd but the read-back ('$NEW_COMPOSE_DOMAINS') does not contain '$ROOT_DOMAIN' -- the write shape (COOLIFY-FACT-06, schema-documented, not independently confirmed by a live element-carrying PATCH before this run) may not be what Coolify actually expects. Investigate before treating step 9 as done; do not assume success from a 200 alone."
+DOMAIN_SET_CHECK="$(sed -n '4p' <<<"$PATCH_OUT")"
+if [[ "$DOMAIN_SET_CHECK" == "DOMAIN_SET_MISMATCH" ]]; then
+  MISSING_DOMAINS="$(sed -n '5p' <<<"$PATCH_OUT")"
+  EXTRA_DOMAINS="$(sed -n '6p' <<<"$PATCH_OUT")"
+  die "docker_compose_domains PATCH 200'd but the read-back domain SET does not exactly equal the intended set -- live='$NEW_COMPOSE_DOMAINS' intended='$COOLIFY_TARGET_DOMAIN' (missing: $MISSING_DOMAINS; extra: $EXTRA_DOMAINS) -- a substring/containment check would have passed this silently (extra domains route real traffic this script never intended; a superstring near-miss like 'notexample.com' containing 'example.com' would also have passed). Investigate before treating step 9 as done; do not assume success from a 200 alone."
 fi
-ok "docker_compose_domains PATCH read-back contains '$ROOT_DOMAIN': $NEW_COMPOSE_DOMAINS"
+ok "docker_compose_domains PATCH read-back domain SET exactly matches intended: $NEW_COMPOSE_DOMAINS"
 info "app-level fqdn after this PATCH: ${NEW_FQDN_AFTER_COMPOSE_PATCH:-<empty>} -- INFORMATIONAL ONLY (whether Coolify derives/mirrors fqdn from docker_compose_domains is UNMEASURED; this script's success does not depend on it)."
 
 # Post-assignment container-env read (team-lead, Sec-adjacent ask) --
@@ -718,17 +737,48 @@ info "app-level fqdn after this PATCH: ${NEW_FQDN_AFTER_COMPOSE_PATCH:-<empty>} 
 # hasn't been redeployed since this PATCH, there is nothing to read yet
 # -- informational, never a hard gate on this script's own exit code.
 step "Post-assignment container-env read (informational -- names only, never a value)"
-EXISTING_APP_CID="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.ID}}' | head -1" </dev/null 2>/dev/null || true)"
-if [[ -z "$EXISTING_APP_CID" ]]; then
+# Sec F-3 (PR #866 review): the previous `2>/dev/null || true` collapsed
+# a FAILED read (ssh/docker error) into the same empty result as "read
+# succeeded, found nothing" -- which then printed a false positive
+# "MEASURED ... CONTROL GAP" fact for a read that never actually
+# happened. A read failure is reported as a failure, distinctly, never
+# as a measurement of anything. `head -1` silently picked the first of
+# several containers on an ambiguous match -- also fixed: >1 match
+# refuses to guess, same discipline as this script's own application-
+# uuid resolution.
+set +e
+CID_RAW="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.ID}}'" </dev/null 2>&1)"
+CID_RC=$?
+set -e
+if [[ $CID_RC -ne 0 ]]; then
+  info "container-env read SKIPPED -- 'docker ps' itself failed (rc=$CID_RC): $CID_RAW -- a READ FAILURE, not a measurement of anything; never reported as a MEASURED fact."
+elif [[ -z "$CID_RAW" ]]; then
   info "no running container for '$APP_NAME' yet -- container-env read not applicable until the next deploy picks up this domain assignment."
 else
-  ENV_NAMES_FOUND="$(sshx "docker exec $EXISTING_APP_CID env | grep -oE '^(SERVICE_FQDN_[A-Za-z0-9_]*|COOLIFY_FQDN|COOLIFY_URL)=' | cut -d= -f1 | sort -u" </dev/null 2>/dev/null || true)"
-  if [[ -z "$ENV_NAMES_FOUND" ]]; then
-    info "MEASURED $(date -u +%Y-%m-%d): container $EXISTING_APP_CID for '$APP_NAME' injects NONE of SERVICE_FQDN_*/COOLIFY_FQDN/COOLIFY_URL -- if this persists after a redeploy, that is a CONTROL GAP to report (CA-1's admission-guard-relevant surface would have nothing to see for this app), not something to paper over."
+  CID_COUNT="$(printf '%s\n' "$CID_RAW" | grep -c .)"
+  CID_SHAPE_RE='^[a-f0-9]{6,64}$'
+  if [[ "$CID_COUNT" -gt 1 ]]; then
+    info "container-env read SKIPPED -- $CID_COUNT running containers matched name filter '$APP_UUID' ($(printf '%s' "$CID_RAW" | tr '\n' ' ')) -- ambiguous, never guessing which is authoritative."
+  elif [[ ! "$CID_RAW" =~ $CID_SHAPE_RE ]]; then
+    info "container-env read SKIPPED -- 'docker ps' returned a non-container-id-shaped value ('$CID_RAW'); refusing to pass it to docker exec."
   else
-    info "MEASURED $(date -u +%Y-%m-%d): container $EXISTING_APP_CID for '$APP_NAME' injects: $(printf '%s' "$ENV_NAMES_FOUND" | tr '\n' ' ')"
+    EXISTING_APP_CID="$CID_RAW"
+    set +e
+    ENV_RAW="$(sshx "docker exec $EXISTING_APP_CID env" </dev/null 2>&1)"
+    ENV_RC=$?
+    set -e
+    if [[ $ENV_RC -ne 0 ]]; then
+      info "container-env read FAILED -- 'docker exec $EXISTING_APP_CID env' rc=$ENV_RC: $ENV_RAW -- a READ FAILURE, not a measurement of absence; never reported as a CONTROL GAP."
+    else
+      ENV_NAMES_FOUND="$(printf '%s\n' "$ENV_RAW" | grep -oE '^(SERVICE_FQDN_[A-Za-z0-9_]*|COOLIFY_FQDN|COOLIFY_URL)=' | cut -d= -f1 | sort -u || true)"
+      if [[ -z "$ENV_NAMES_FOUND" ]]; then
+        info "MEASURED $(date -u +%Y-%m-%d): container $EXISTING_APP_CID for '$APP_NAME' injects NONE of SERVICE_FQDN_*/COOLIFY_FQDN/COOLIFY_URL -- if this persists after a redeploy, that is a CONTROL GAP to report (CA-1's admission-guard-relevant surface would have nothing to see for this app), not something to paper over."
+      else
+        info "MEASURED $(date -u +%Y-%m-%d): container $EXISTING_APP_CID for '$APP_NAME' injects: $(printf '%s' "$ENV_NAMES_FOUND" | tr '\n' ' ')"
+      fi
+      info "Append this line to scripts/COOLIFY-API-MEASURED.md's COOLIFY-FACT-06 entry (names only, this run's date, whether a redeploy had already happened) -- this script does not write to that file itself."
+    fi
   fi
-  info "Append this line to scripts/COOLIFY-API-MEASURED.md's COOLIFY-FACT-06 entry (names only, this run's date, whether a redeploy had already happened) -- this script does not write to that file itself."
 fi
 
 step "Polling for the Let's Encrypt cert on https://$ROOT_DOMAIN (bounded: $CERT_POLL_ATTEMPTS x ${CERT_POLL_INTERVAL_SECONDS}s)"
