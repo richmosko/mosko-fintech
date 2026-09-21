@@ -396,24 +396,62 @@ if [ -z "$PW" ]; then
 fi
 
 echo "== C (read-only). Connect AS migrator over -h db with the store's current credential =="
+# team-lead's own live measurement, run-5 (realrun5.clean.log), 2026-09-21,
+# MEASURED on the production target (read-only, empty/wrong passwords,
+# credential never printed): psql 17.6 over -h db, non-tty, inside `docker
+# compose exec -T`, prints NO "Password for user" text at all without -W --
+# it silently consumes the first piped stdin line as the password and
+# attempts auth with it. Every "prompt observed" guard in this file (and in
+# db-role-handoff.sh) was fail-closed on a premise that can never be true
+# in production: it refused this exact leg even against a genuinely correct
+# credential, which is what stopped run-5. Fix, measured: `-W` forces psql
+# to print a password prompt regardless of tty/pipe state; its exact text
+# is `Password: ` (not `Password for user "migrator":`) -- the assertion
+# below accepts both forms, since the exact wording is a psql-version fact,
+# not a security property this check should be brittle against.
+#
+# POSITIVE CONTROL, same measurement: a deliberately WRONG password over
+# this SAME path (-h db, -W) must fail with "password authentication
+# failed" -- that failure IS the trust-path detection this leg exists to
+# provide (measured: -h db + -W + a wrong password -> rc=2, "Password: "
+# then exactly that FATAL text; the store's real credential + -W -> rc=0,
+# "Password: ", current_user=migrator). Without this control, a wrong
+# password succeeding (a trust rule) or failing some OTHER way (DNS,
+# compose, protocol) would both be indistinguishable from the real
+# credential simply not being tried yet -- both are refused here, loudly,
+# before the real credential is ever used.
+WRONG_PW="control-$RANDOM-$RANDOM-$RANDOM"
 set +e
-CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U migrator -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
+CONTROL_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U migrator -d postgres <<< "$(printf '%s\nselect current_user;\n' "$WRONG_PW")" 2>&1)"
+CONTROL_RC=$?
+set -e
+if printf '%s' "$CONTROL_OUT" | grep -qF -- "$PW"; then
+  echo "FATAL: the real credential's cleartext value appeared in the trust-path control's own captured output (a control run using a DIFFERENT, deliberately-wrong password) -- refusing to proceed or print it." >&2
+  exit 1
+fi
+if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed"; then
+  echo "FATAL: connecting AS migrator with a deliberately WRONG password did not fail with 'password authentication failed' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
+  exit 1
+fi
+
+set +e
+CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U migrator -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
 CONNECT_RC=$?
 set -e
 if printf '%s' "$CONNECT_OUT" | grep -qF -- "$PW"; then
   echo "FATAL: the credential's cleartext value appeared in the connect-as-migrator step's own captured output -- refusing to proceed or print it." >&2
   exit 1
 fi
-if ! printf '%s' "$CONNECT_OUT" | grep -qF "Password for user"; then
-  echo "FATAL: no password prompt was observed connecting AS migrator with the store's current credential -- this means the connection took a NON-password-authenticated path (a trust rule), or the credential no longer authenticates at all. Investigate by hand." >&2
+if ! printf '%s' "$CONNECT_OUT" | grep -qE "Password:|Password for user"; then
+  echo "FATAL: no password prompt (\"Password:\") was observed connecting AS migrator with the store's current credential -- this means the connection took a NON-password-authenticated path (a trust rule), or -W stopped forcing one. Observed output: $CONNECT_OUT" >&2
   exit 1
 fi
 if [ $CONNECT_RC -ne 0 ]; then
-  echo "FATAL: could not connect AS migrator with the store's current credential (exit $CONNECT_RC) -- the store and the live role have drifted apart. Investigate by hand (see docs/archive/deployment-runbook-rationale-2026-09-20.md sec6.3); this script does not auto-repair a migrator credential mismatch on an already-bootstrapped box." >&2
+  echo "FATAL: could not connect AS migrator with the store's current credential (exit $CONNECT_RC) -- the store and the live role have drifted apart. Investigate by hand (see docs/archive/deployment-runbook-rationale-2026-09-20.md sec6.3); this script does not auto-repair a migrator credential mismatch on an already-bootstrapped box. Observed output: $CONNECT_OUT" >&2
   exit 1
 fi
 if ! printf '%s' "$CONNECT_OUT" | grep -qE '^[[:space:]]*migrator[[:space:]]*$'; then
-  echo "FATAL: connected but current_user did not echo back 'migrator' as its own output row." >&2
+  echo "FATAL: connected but current_user did not echo back 'migrator' as its own output row. Observed output: $CONNECT_OUT" >&2
   exit 1
 fi
 echo "OK: connected AS migrator over a non-loopback, password-prompted path with the store's current credential; current_user confirmed."
@@ -576,21 +614,49 @@ if [ "$VERIFY_TRIMMED" != "true|true" ]; then
 fi
 echo "OK: catalog confirms rolcanlogin=true and a password is set."
 
-echo "== C. Connect AS migrator over a non-loopback path with the generated credential (-h db, never -h localhost -- see db-role-handoff.sh's own header for the container-internal trust-path hazard this avoids; UNMEASURED on the production target, same bound as that script states) =="
+echo "== C. Connect AS migrator over a non-loopback path with the generated credential (-h db, never -h localhost -- see db-role-handoff.sh's own header for the container-internal trust-path hazard this avoids) =="
+# team-lead's own live measurement, run-5 (realrun5.clean.log), 2026-09-21
+# -- see the already-bootstrapped leg C's own comment above (this file's
+# read-only copy of this exact mechanism) for the full derivation: psql
+# over -h db prints NO password prompt at all without -W; `-W` forces one
+# (`Password: `, not `Password for user "migrator":`); a deliberately
+# WRONG password over this SAME path must fail with "password
+# authentication failed" as the actual trust-path proof, run BEFORE the
+# real credential. Was "UNMEASURED on the production target" -- now
+# measured. Scrub-before-prompt-check ordering also aligned to match the
+# already-bootstrapped leg C and db-role-handoff.sh's own sites (this site
+# previously checked the prompt BEFORE scrubbing, the one site in this
+# mechanism's four copies that hadn't been aligned yet -- required here
+# anyway so that printing $CONNECT_OUT on a FATAL below is provably safe,
+# never reachable before the scrub has already cleared it).
+WRONG_PW="control-$RANDOM-$RANDOM-$RANDOM"
 set +e
-CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U migrator -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
-CONNECT_RC=$?
+CONTROL_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U migrator -d postgres <<< "$(printf '%s\nselect current_user;\n' "$WRONG_PW")" 2>&1)"
+CONTROL_RC=$?
 set -e
-if ! printf '%s' "$CONNECT_OUT" | grep -qF "Password for user"; then
-  echo "FATAL: no password prompt was observed connecting AS migrator -- this means the connection took a NON-password-authenticated path (e.g. a trust rule), which is the exact hazard this step exists to detect. Refusing regardless of exit code." >&2
+if printf '%s' "$CONTROL_OUT" | grep -qF -- "$PW"; then
+  echo "FATAL: the real credential's cleartext value appeared in the trust-path control's own captured output (a control run using a DIFFERENT, deliberately-wrong password) -- refusing to proceed or print it." >&2
   exit 1
 fi
+if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed"; then
+  echo "FATAL: connecting AS migrator with a deliberately WRONG password did not fail with 'password authentication failed' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
+  exit 1
+fi
+
+set +e
+CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U migrator -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
+CONNECT_RC=$?
+set -e
 if printf '%s' "$CONNECT_OUT" | grep -qF -- "$PW"; then
   echo "FATAL: the credential's cleartext value appeared in the connect-as-migrator step's own captured output -- refusing to proceed or print it." >&2
   exit 1
 fi
+if ! printf '%s' "$CONNECT_OUT" | grep -qE "Password:|Password for user"; then
+  echo "FATAL: no password prompt (\"Password:\") was observed connecting AS migrator -- this means the connection took a NON-password-authenticated path (e.g. a trust rule), or -W stopped forcing one, which is the exact hazard this step exists to detect. Refusing regardless of exit code. Observed output: $CONNECT_OUT" >&2
+  exit 1
+fi
 if [ $CONNECT_RC -ne 0 ]; then
-  echo "FATAL: could not connect AS migrator with the generated credential (exit $CONNECT_RC) -- the handoff did not take effect end to end." >&2
+  echo "FATAL: could not connect AS migrator with the generated credential (exit $CONNECT_RC) -- the handoff did not take effect end to end. Observed output: $CONNECT_OUT" >&2
   exit 1
 fi
 # Sec F-1b (PR #849 r2 review): match the psql output ROW exactly, not a
@@ -600,7 +666,7 @@ fi
 # check above. Anchored to a whitespace-tolerant EXACT row match instead
 # (psql's own column output pads with leading/trailing spaces).
 if ! printf '%s' "$CONNECT_OUT" | grep -qE '^[[:space:]]*migrator[[:space:]]*$'; then
-  echo "FATAL: connected but current_user did not echo back 'migrator' as its own output row." >&2
+  echo "FATAL: connected but current_user did not echo back 'migrator' as its own output row. Observed output: $CONNECT_OUT" >&2
   exit 1
 fi
 echo "OK: connected AS migrator over a non-loopback, password-prompted path with the generated credential; current_user confirmed."
