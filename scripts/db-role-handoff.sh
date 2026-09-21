@@ -412,15 +412,20 @@ step "Preflight — Coolify store state (PFIN_DB_PASSWORD on '$RESOURCE_NAME')"
 # leg E readback already uses (never a GET /envs call, which never
 # returns a secret's real value) -- never the value, never a new
 # mechanism.
-STORE_COUNT="$(sshx "env RESOURCE_UUID=\"$RESOURCE_UUID\" bash -s" <<'REMOTE'
+STORE_READ="$(sshx "env RESOURCE_UUID=\"$RESOURCE_UUID\" bash -s" <<'REMOTE'
 set -e
 docker exec coolify php artisan tinker --execute="
 \$app = \App\Models\Application::where('uuid','$RESOURCE_UUID')->firstOrFail();
-echo \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->where('is_preview', false)->count();
+\$rows = \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->where('is_preview', false)->get();
+\$count = \$rows->count();
+\$nonEmpty = (\$count === 1 && (string) \$rows[0]->value !== '') ? '1' : '0';
+echo \$count . '|' . \$nonEmpty;
 " 2>/dev/null | tail -1 | tr -d ' \n'
 REMOTE
 )"
-info "store: PFIN_DB_PASSWORD (is_preview=false) row count on '$RESOURCE_NAME' = ${STORE_COUNT:-<none>}"
+STORE_COUNT="${STORE_READ%%|*}"
+STORE_NONEMPTY="${STORE_READ#*|}"
+info "store: PFIN_DB_PASSWORD (is_preview=false) row count on '$RESOURCE_NAME' = ${STORE_COUNT:-<none>}, non-empty=${STORE_NONEMPTY:-<none>}"
 # Sec F-2 (PR #854 review): STORE_HAS_PW normalized to "true"/"false" --
 # same vocabulary as ROLCANLOGIN/HAS_PASSWORD below, even though this
 # value is bash-assigned by this `case`, never psql-cast, so it was
@@ -431,9 +436,30 @@ info "store: PFIN_DB_PASSWORD (is_preview=false) row count on '$RESOURCE_NAME' =
 # provision.sh's own handoff_adopt_check() byte-match against it (that
 # grep, and the ONE OTHER site below, are this value's only two
 # consumers -- normalizing here is safe).
+#
+# team-lead's run-6 stop (realrun6.clean.log, 2026-09-21) -- MEASURED on
+# the box: pfin-back-etl and pfin-provider-sync BOTH already carry
+# exactly one PFIN_DB_PASSWORD row (is_preview=false), but with
+# value_len=0 -- an EMPTY PLACEHOLDER row Coolify's compose parser
+# creates from the workers' `${PFIN_DB_PASSWORD:?}` interpolation
+# reference, never a value this script or push-production-secrets.sh
+# (which excludes this key by design) ever wrote. A row-COUNT-only check
+# read this placeholder as "store has a value" (STORE_HAS_PW=true),
+# sending an otherwise-fresh role (LOGIN+password not yet set, or
+# already set with nothing to bind against) into the wrong branch below.
+# Fix: STORE_HAS_PW is true only when the row exists AND its value is
+# non-empty; an empty placeholder is treated as "no value" -- the exact
+# same shape as a genuinely fresh store, which is what it is.
 case "$STORE_COUNT" in
   0) STORE_HAS_PW=false ;;
-  1) STORE_HAS_PW=true ;;
+  1)
+    if [[ "$STORE_NONEMPTY" == "1" ]]; then
+      STORE_HAS_PW=true
+    else
+      STORE_HAS_PW=false
+      info "store row exists but is an empty compose-parse placeholder -- treated as no value"
+    fi
+    ;;
   *) die "PFIN_DB_PASSWORD (is_preview=false) readback on '$RESOURCE_NAME' found '$STORE_COUNT' matching row(s), expected 0 or 1 -- refusing to trust an ambiguous store state." ;;
 esac
 
@@ -479,7 +505,16 @@ PW="$(docker exec coolify php artisan tinker --execute="
 echo \$row ? (string) \$row->value : '';
 " 2>/dev/null | tail -1 | tr -d ' \n')"
 if [ -z "$PW" ]; then
-  echo "FATAL: PFIN_DB_PASSWORD (is_preview=false) resolved to empty on the bind-check read, despite the earlier count read reporting exactly one row -- refusing to trust an inconsistent store." >&2
+  # team-lead's run-6 stop, item 3 -- this branch is now unreachable in the
+  # normal case (the preflight's own STORE_HAS_PW check above already
+  # treats an empty/placeholder row as "no value" and never reaches this
+  # bind-check at all), but kept as a fail-closed guard against a race: the
+  # store changing between the preflight's read and this one, moments
+  # later. A distinct sentinel line lets the caller give an honest message
+  # here instead of the misleading "does NOT authenticate" one below (this
+  # was never actually tried against a value).
+  echo "FATAL: PFIN_DB_PASSWORD (is_preview=false) resolved to empty on the bind-check read, despite the earlier preflight read reporting a non-empty value -- the store changed between the two reads (a race), or the preflight check was bypassed. Refusing to trust an inconsistent store." >&2
+  echo "BIND_CHECK_EMPTY_VALUE_RACE"
   exit 1
 fi
 
@@ -508,10 +543,11 @@ if printf '%s' "$CONTROL_OUT" | grep -qF -- "$PW"; then
   echo "FATAL: the real credential's cleartext value appeared in the trust-path control's own captured output (a control run using a DIFFERENT, deliberately-wrong password) -- refusing to proceed or print it." >&2
   exit 1
 fi
-if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed"; then
-  echo "FATAL: connecting AS $ROLE with a deliberately WRONG password did not fail with 'password authentication failed' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
+if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed for user \"$ROLE\""; then
+  echo "FATAL: connecting AS $ROLE with a deliberately WRONG password did not fail with the exact text 'password authentication failed for user \"$ROLE\"' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
   exit 1
 fi
+echo "OK: trust-path control: a deliberately WRONG password was refused with 'password authentication failed for user \"$ROLE\"' -- this path genuinely verifies passwords (not a trust rule). Wrong value never printed."
 
 set +e
 CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
@@ -542,8 +578,26 @@ REMOTE
     fi
     rm -f "$BIND_CHECK_SCRIPT"
     if [[ "$BIND_CHECK_RC" -ne 0 ]]; then
+      # team-lead's run-6 stop, item 3 -- distinguish the bind-check's own
+      # defensive "resolved to empty" trip (a race against the preflight
+      # read a moment earlier, or the preflight check bypassed) from a
+      # genuine credential mismatch. The former is NOT "does NOT
+      # authenticate" -- it was never tried against a value at all.
+      if printf '%s' "$BIND_CHECK_OUT" | grep -qF "BIND_CHECK_EMPTY_VALUE_RACE"; then
+        die "role '$ROLE' / '$RESOURCE_NAME' preflight reported a non-empty store value, but the bind-check's own read a moment later found it empty -- a race between the two reads, or the store changed mid-run. Refusing to guess which is authoritative; re-run. (bind-check output: $BIND_CHECK_OUT)"
+      fi
       die "role '$ROLE' / '$RESOURCE_NAME' state is INCONSISTENT(store≠role) -- rolcanlogin=$ROLCANLOGIN has_password=$HAS_PASSWORD store_has_PFIN_DB_PASSWORD=$STORE_HAS_PW, but the store's current PFIN_DB_PASSWORD does NOT authenticate as '$ROLE' against the live database (bind-check output: $BIND_CHECK_OUT). This is the exact half-completed-rotation residual Sec named at PR #852's F-1 review -- the existence-only check would have silently reported VERIFIED here. Run --apply --rotate to re-establish a coherent value from scratch."
     fi
+    # team-lead's run-6 stop, item 5b -- surface the bind-check's own
+    # observed-fact lines (including the trust-path control's OK line)
+    # to this script's own stdout on success too, not only inside a
+    # die() on failure -- otherwise the control's own proof that this
+    # path genuinely verifies passwords is invisible in a clean run log.
+    # Safe to print unconditionally here: the remote script's own
+    # cleartext-scrub guards already would have exited non-zero (caught
+    # above) before ever reaching its own final success echo if $PW had
+    # leaked into this capture.
+    printf '%s\n' "$BIND_CHECK_OUT"
     ok "bind-check confirmed: the store's current PFIN_DB_PASSWORD authenticates as '$ROLE' against the live database."
     printf '\n\033[32mVERIFIED\033[0m  already handed off -- store and live role bind-checked, no-op whether or not --apply was passed. Pass --apply --rotate to rotate the established credential.\n'
     exit 0
@@ -723,10 +777,11 @@ if printf '%s' "$CONTROL_OUT" | grep -qF -- "$PW"; then
   echo "FATAL: the real credential's cleartext value appeared in the trust-path control's own captured output (a control run using a DIFFERENT, deliberately-wrong password) -- refusing to proceed or print it." >&2
   exit 1
 fi
-if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed"; then
-  echo "FATAL: connecting AS $ROLE with a deliberately WRONG password did not fail with 'password authentication failed' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
+if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed for user \"$ROLE\""; then
+  echo "FATAL: connecting AS $ROLE with a deliberately WRONG password did not fail with the exact text 'password authentication failed for user \"$ROLE\"' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
   exit 1
 fi
+echo "OK: trust-path control: a deliberately WRONG password was refused with 'password authentication failed for user \"$ROLE\"' -- this path genuinely verifies passwords (not a trust rule). Wrong value never printed."
 
 set +e
 CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"

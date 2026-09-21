@@ -408,6 +408,15 @@ if [[ "$ARGS" == *"-h db"* ]]; then
       echo "psql: error: could not translate host name \"db\" to address: Name or service not known" >&2
       exit 2
     fi
+    if [[ "${FAKE_CONTROL_WRONG_ROLE_ERROR:-0}" == "1" ]]; then
+      # team-lead's run-6 stop, item 5a -- a DIFFERENT role's own auth
+      # failure text, never "migrator". Proves the role-specific string
+      # match is load-bearing: a role-agnostic `grep -qF "password
+      # authentication failed"` would have wrongly ACCEPTED this.
+      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      echo "psql: error: connection to server at \"db\" (10.0.0.5), port 5432 failed: FATAL:  password authentication failed for user \"some_other_role\"" >&2
+      exit 2
+    fi
     [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
     echo "psql: error: connection to server at \"db\" (10.0.0.5), port 5432 failed: FATAL:  password authentication failed for user \"migrator\"" >&2
     exit 2
@@ -548,7 +557,7 @@ FAKE_VARS=(FAKE_CURL_LOG FAKE_CURL_MODE FAKE_MIGRATOR_STATE FAKE_BOOTSTRAP_COMPL
   FAKE_MARKER_FILE FAKE_POST_PUSH_BOOTSTRAP FAKE_LEG_B_STATE FAKE_CONNECT_FAIL FAKE_NO_PASSWORD_PROMPT \\
   FAKE_ECHO_PW_IN_CONNECT FAKE_WRONG_CURRENT_USER FAKE_READBACK_COUNT FAKE_READBACK_DIVERGE FAKE_STORE_PW \
   FAKE_LEG_A_RC_LEAK FAKE_BOOTSTRAP_READ_FAIL FAKE_MIGRATOR_STATE_READ_FAIL \
-  FAKE_CONTROL_SUCCEEDS FAKE_CONTROL_WRONG_ERROR FAKE_CONNECT_CALL_LOG FAKE_NO_PASSWORD_PROMPT_CLEAN)
+  FAKE_CONTROL_SUCCEEDS FAKE_CONTROL_WRONG_ERROR FAKE_CONTROL_WRONG_ROLE_ERROR FAKE_CONNECT_CALL_LOG FAKE_NO_PASSWORD_PROMPT_CLEAN)
 FORWARD=()
 for v in "\${FAKE_VARS[@]}"; do
   FORWARD+=("\$v=\${!v:-}")
@@ -575,7 +584,7 @@ run_scenario() {
         vault_view_fail="${13}" post_push_bootstrap="${14}" leg_b_state="${15}" connect_fail="${16}" \
         no_password_prompt="${17}" echo_pw_in_connect="${18}" wrong_current_user="${19}" readback_count="${20}" \
         readback_diverge="${21}" store_pw="${22}" leg_a_rc_leak="${23}" bootstrap_read_fail="${24:-0}" \
-        migrator_state_read_fail="${25:-0}" control_succeeds="${26:-0}" control_wrong_error="${27:-0}" no_password_prompt_clean="${28:-0}"
+        migrator_state_read_fail="${25:-0}" control_succeeds="${26:-0}" control_wrong_error="${27:-0}" no_password_prompt_clean="${28:-0}" control_wrong_role_error="${29:-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   local marker="$WORK/push_marker.$$.$RANDOM"
   # Sec/self-found bug: `OUT="$(run_scenario ...)"` forks a SUBSHELL --
@@ -602,6 +611,7 @@ run_scenario() {
     FAKE_LEG_A_RC_LEAK="$leg_a_rc_leak" \
     FAKE_BOOTSTRAP_READ_FAIL="$bootstrap_read_fail" FAKE_MIGRATOR_STATE_READ_FAIL="$migrator_state_read_fail" \
     FAKE_CONTROL_SUCCEEDS="$control_succeeds" FAKE_CONTROL_WRONG_ERROR="$control_wrong_error" \
+    FAKE_CONTROL_WRONG_ROLE_ERROR="$control_wrong_role_error" \
     FAKE_NO_PASSWORD_PROMPT_CLEAN="$no_password_prompt_clean" \
     FAKE_CONNECT_CALL_LOG="$CONNECT_CALL_LOG" \
     bash "$TARGET_SH" $extra_flag < /dev/null > "$WORK/out.$$" 2>&1
@@ -656,6 +666,10 @@ CONNECT_CALL_LOG="$WORK/connect-pin.1.$$"
 OUT1="$(run_scenario "already-bootstrapped-clean: no-op VERIFIED" 0 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "already-bootstrapped-clean" "${OUT1:-}" "VERIFIED, nothing to do" || FAIL=1
 assert_output_lacks "already-bootstrapped-clean" "${OUT1:-}" "roles.sql applied" || FAIL=1
+# team-lead's queued Sec item 2 -- the control's own observed-fact OK
+# line is load-bearing evidence (not decoration): pin it on a happy path
+# so deleting it from the real script turns this scenario RED.
+assert_output_contains "already-bootstrapped-clean" "${OUT1:-}" "OK: trust-path control: a deliberately WRONG password was refused with 'password authentication failed for user \"migrator\"'" || FAIL=1
 # team-lead's run-5 fix (2026-09-21) -- -W PINNED FROM THE LOGGED ARGV,
 # not just inferred from behavior: every -h db call this scenario made
 # (the trust-path control AND the real connect) must carry -W. Deleting
@@ -813,6 +827,7 @@ CONNECT_CALL_LOG="$WORK/connect-pin.21.$$"
 OUT21="$(run_scenario "happy-path-full-apply: succeeds, absent role-comment files skipped" 0 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "happy-path-full-apply" "${OUT21:-}" "Phase 1 -> 2 -> 3 complete" || FAIL=1
 assert_output_contains "happy-path-full-apply" "${OUT21:-}" "migrator: LOGIN + password set from pfin-migrator's own existing MIGRATOR_DB_PASSWORD" || FAIL=1
+assert_output_contains "happy-path-full-apply" "${OUT21:-}" "OK: trust-path control: a deliberately WRONG password was refused with 'password authentication failed for user \"migrator\"'" || FAIL=1
 for f in 116_pfin_provider_sync_role 117_pfin_etl_role_comment_c1_reattribution 119_migrator_role_comment_amendment3_recitation; do
   assert_output_contains "happy-path-full-apply (skip $f)" "${OUT21:-}" "$f.sql not present in supabase/migrations/ -- skipping" || FAIL=1
 done
@@ -833,21 +848,33 @@ unset CONNECT_CALL_LOG
 #      catch (a trust rule authenticating ANY password) -- refuses,
 #      never proceeding to try the real credential.
 OUT21A="$(run_scenario "already-bootstrapped-control-succeeds: refuses" 1 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 1)" || FAIL=1
-assert_output_contains "already-bootstrapped-control-succeeds" "${OUT21A:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "already-bootstrapped-control-succeeds" "${OUT21A:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
 
 # 21b. ALREADY-BOOTSTRAPPED-CONTROL-WRONG-ERROR -- the control fails, but
 #      not with "password authentication failed" (DNS/compose/protocol
 #      error) -- refuses, never treated as "good enough" proof.
 OUT21B="$(run_scenario "already-bootstrapped-control-wrong-error: refuses" 1 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 0 1)" || FAIL=1
-assert_output_contains "already-bootstrapped-control-wrong-error" "${OUT21B:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "already-bootstrapped-control-wrong-error" "${OUT21B:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
+
+# 21b2. ALREADY-BOOTSTRAPPED-CONTROL-WRONG-ROLE (team-lead's run-6 stop,
+#       item 5a, 2026-09-21) -- the control DOES fail with the exact text
+#       "password authentication failed", but naming a DIFFERENT role --
+#       refuses. Proves the role-specific match is load-bearing: a
+#       role-agnostic grep would have wrongly ACCEPTED this.
+OUT21B2="$(run_scenario "already-bootstrapped-control-wrong-role: refuses" 1 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 0 0 0 1)" || FAIL=1
+assert_output_contains "already-bootstrapped-control-wrong-role" "${OUT21B2:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
 
 # 21c. LEG-C-CONTROL-SUCCEEDS -- same strike against Phase-1's own leg C.
 OUT21C="$(run_scenario "leg-c-control-succeeds: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 1)" || FAIL=1
-assert_output_contains "leg-c-control-succeeds" "${OUT21C:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "leg-c-control-succeeds" "${OUT21C:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
 
 # 21d. LEG-C-CONTROL-WRONG-ERROR -- same, non-auth-failure error shape.
 OUT21D="$(run_scenario "leg-c-control-wrong-error: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 0 1)" || FAIL=1
-assert_output_contains "leg-c-control-wrong-error" "${OUT21D:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "leg-c-control-wrong-error" "${OUT21D:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
+
+# 21d2. LEG-C-CONTROL-WRONG-ROLE -- same strike against Phase-1's own leg C.
+OUT21D2="$(run_scenario "leg-c-control-wrong-role: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 0 0 0 1)" || FAIL=1
+assert_output_contains "leg-c-control-wrong-role" "${OUT21D2:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
 
 # 22. RESOURCE-ABSENT (measured exit 1, not the header's documented 2 --
 #     see the note in the header comment above)

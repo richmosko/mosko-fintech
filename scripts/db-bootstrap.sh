@@ -429,10 +429,11 @@ if printf '%s' "$CONTROL_OUT" | grep -qF -- "$PW"; then
   echo "FATAL: the real credential's cleartext value appeared in the trust-path control's own captured output (a control run using a DIFFERENT, deliberately-wrong password) -- refusing to proceed or print it." >&2
   exit 1
 fi
-if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed"; then
-  echo "FATAL: connecting AS migrator with a deliberately WRONG password did not fail with 'password authentication failed' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
+if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed for user \"migrator\""; then
+  echo "FATAL: connecting AS migrator with a deliberately WRONG password did not fail with the exact text 'password authentication failed for user \"migrator\"' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
   exit 1
 fi
+echo "OK: trust-path control: a deliberately WRONG password was refused with 'password authentication failed for user \"migrator\"' -- this path genuinely verifies passwords (not a trust rule). Wrong value never printed."
 
 set +e
 CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U migrator -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
@@ -638,10 +639,11 @@ if printf '%s' "$CONTROL_OUT" | grep -qF -- "$PW"; then
   echo "FATAL: the real credential's cleartext value appeared in the trust-path control's own captured output (a control run using a DIFFERENT, deliberately-wrong password) -- refusing to proceed or print it." >&2
   exit 1
 fi
-if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed"; then
-  echo "FATAL: connecting AS migrator with a deliberately WRONG password did not fail with 'password authentication failed' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
+if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed for user \"migrator\""; then
+  echo "FATAL: connecting AS migrator with a deliberately WRONG password did not fail with the exact text 'password authentication failed for user \"migrator\"' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
   exit 1
 fi
+echo "OK: trust-path control: a deliberately WRONG password was refused with 'password authentication failed for user \"migrator\"' -- this path genuinely verifies passwords (not a trust rule). Wrong value never printed."
 
 set +e
 CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U migrator -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"

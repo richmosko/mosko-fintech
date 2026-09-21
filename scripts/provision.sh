@@ -271,6 +271,24 @@ if [[ "$LIST_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
+# team-lead's run-6 stop, item 5c -- stamp the code sha this invocation is
+# actually running from, at the very start of every real (non --list) run,
+# so the run log is self-contained evidence of what code produced it
+# without cross-referencing a separate `git log` at grading time. Read
+# from REPO_ROOT (never the caller's cwd, which may differ under an
+# agent worktree per the REPO_ROOT override above); origin/main's tip is
+# whatever this checkout's remote-tracking ref last fetched -- informational
+# only, not re-fetched here (a live fetch is a side effect this script has
+# never had and should not gain silently).
+step "Provenance"
+PROVISION_HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+PROVISION_MAIN_TIP="$(git -C "$REPO_ROOT" rev-parse origin/main 2>/dev/null || echo unknown)"
+PROVISION_TREE_STATE="clean"
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+  PROVISION_TREE_STATE="DIRTY"
+fi
+info "provision.sh @ $PROVISION_HEAD_SHA on origin/main $PROVISION_MAIN_TIP (tree: $PROVISION_TREE_STATE)"
+
 # --- .env operator-provided-name preflight (names only, per Part 2 of
 # docs/deployment-runbook.md -- hand-maintained here, same posture as
 # that prose list; keep in sync with it by hand, not derived, since "what

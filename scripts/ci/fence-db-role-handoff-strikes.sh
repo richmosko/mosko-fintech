@@ -201,7 +201,15 @@ if [[ "$ARGS" == *"artisan tinker --execute"* ]]; then
     # catches, far likelier in practice than two rows), which the colon
     # form would have silently defaulted back to "0" ("fresh"). No
     # colon -- only a genuinely OMITTED FAKE_STORE_COUNT defaults.
-    echo "${FAKE_STORE_COUNT-0}"
+    #
+    # team-lead's run-6 stop, item 1/4 -- the real script's preflight query
+    # now returns "count|nonEmpty" (a compose-parse placeholder row reads
+    # count=1, nonEmpty=0), so this fake matches that shape.
+    # FAKE_STORE_NONEMPTY defaults to 1 (non-empty) so every EXISTING
+    # scenario that only ever set FAKE_STORE_COUNT keeps its prior
+    # true/false meaning unchanged; the new placeholder-row scenarios set
+    # FAKE_STORE_NONEMPTY=0 explicitly alongside FAKE_STORE_COUNT=1.
+    echo "${FAKE_STORE_COUNT-0}|${FAKE_STORE_NONEMPTY-1}"
     exit 0
   fi
   # F-2/F-4 (PR #846 review) -- the real readback is now
@@ -352,6 +360,16 @@ if [[ "$ARGS" == *"-h db"* ]]; then
       echo "psql: error: could not translate host name \"db\" to address: Name or service not known" >&2
       exit 2
     fi
+    if [[ "${FAKE_CONTROL_WRONG_ROLE_ERROR:-0}" == "1" ]]; then
+      # team-lead's run-6 stop, item 5a -- a DIFFERENT role's own auth
+      # failure text (e.g. a stale/misdirected connection), never
+      # $FAKE_ROLE_NAME. Proves the role-specific string match is
+      # load-bearing: a role-agnostic `grep -qF "password authentication
+      # failed"` would have wrongly ACCEPTED this as proof.
+      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      echo "psql: error: connection to server at \"db\" (10.0.0.5), port 5432 failed: FATAL:  password authentication failed for user \"some_other_role\"" >&2
+      exit 2
+    fi
     [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
     echo "psql: error: connection to server at \"db\" (10.0.0.5), port 5432 failed: FATAL:  password authentication failed for user \"${FAKE_ROLE_NAME:-pfin_etl}\"" >&2
     exit 2
@@ -423,9 +441,10 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_ECHO_PASSWORD_IN_OUTPUT="\$FAKE_ECHO_PASSWORD_IN_OUTPUT" FAKE_READBACK_COUNT="\$FAKE_READBACK_COUNT" \\
     FAKE_NO_PASSWORD_PROMPT="\$FAKE_NO_PASSWORD_PROMPT" FAKE_READBACK_HASH_MISMATCH="\$FAKE_READBACK_HASH_MISMATCH" \\
     FAKE_READBACK_USER="\$FAKE_READBACK_USER" FAKE_ECHO_PW_IN_CONNECT="\$FAKE_ECHO_PW_IN_CONNECT" \\
-    FAKE_STORE_COUNT="\$FAKE_STORE_COUNT" FAKE_BIND_CHECK_PW="\$FAKE_BIND_CHECK_PW" \\
+    FAKE_STORE_COUNT="\$FAKE_STORE_COUNT" FAKE_STORE_NONEMPTY="\$FAKE_STORE_NONEMPTY" FAKE_BIND_CHECK_PW="\$FAKE_BIND_CHECK_PW" \\
     FAKE_NO_PASSWORD_PROMPT_CLEAN="\$FAKE_NO_PASSWORD_PROMPT_CLEAN" FAKE_WRONG_CURRENT_USER="\$FAKE_WRONG_CURRENT_USER" \\
     FAKE_CONTROL_SUCCEEDS="\$FAKE_CONTROL_SUCCEEDS" FAKE_CONTROL_WRONG_ERROR="\$FAKE_CONTROL_WRONG_ERROR" \\
+    FAKE_CONTROL_WRONG_ROLE_ERROR="\$FAKE_CONTROL_WRONG_ROLE_ERROR" \\
     FAKE_CONNECT_CALL_LOG="\$FAKE_CONNECT_CALL_LOG" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
@@ -463,8 +482,17 @@ run_scenario() {
   # unset/omitted defaults to a real-looking 64-char value so every other
   # scenario's bind-check (including connect-fail strikes via
   # <connect_fail>) passes through this read undisturbed.
+  # <store_nonempty> (team-lead's run-6 stop, item 1/4, 2026-09-21): the
+  # preflight's OWN non-emptiness answer for the store row (independent of
+  # the bind-check's own separate read via <bind_check_pw> above) --
+  # defaults to 1 (non-empty), matching every pre-existing scenario's own
+  # assumption that a store_count=1 row carries a real value. Set to 0
+  # alongside store_count=1 to model the compose-parse EMPTY PLACEHOLDER
+  # row (team-lead's run-6 measurement: pfin-back-etl/pfin-provider-sync
+  # each carried exactly one such row, value_len=0) -- STORE_HAS_PW must
+  # then read false, the exact same as a genuinely fresh store.
   local desc="$1" expect_exit="$2" role="$3" apply_flag="$4" curl_mode="$5" \
-        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" no_prompt_clean="${19:-0}" wrong_current_user="${20:-0}" control_succeeds="${21:-0}" control_wrong_error="${22:-0}"
+        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" no_prompt_clean="${19:-0}" wrong_current_user="${20:-0}" control_succeeds="${21:-0}" control_wrong_error="${22:-0}" store_nonempty="${23:-1}" control_wrong_role_error="${24:-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   local resource_name="pfin-back-etl"
@@ -486,9 +514,10 @@ run_scenario() {
     FAKE_ECHO_PASSWORD_IN_OUTPUT="$echo_pw" FAKE_READBACK_COUNT="$readback_count" \
     FAKE_NO_PASSWORD_PROMPT="$no_prompt" FAKE_READBACK_HASH_MISMATCH="$hash_mismatch" \
     FAKE_READBACK_USER="$readback_user" FAKE_ECHO_PW_IN_CONNECT="$echo_pw_in_connect" \
-    FAKE_STORE_COUNT="$store_count" FAKE_BIND_CHECK_PW="$bind_check_pw" \
+    FAKE_STORE_COUNT="$store_count" FAKE_STORE_NONEMPTY="$store_nonempty" FAKE_BIND_CHECK_PW="$bind_check_pw" \
     FAKE_NO_PASSWORD_PROMPT_CLEAN="$no_prompt_clean" FAKE_WRONG_CURRENT_USER="$wrong_current_user" \
     FAKE_CONTROL_SUCCEEDS="$control_succeeds" FAKE_CONTROL_WRONG_ERROR="$control_wrong_error" \
+    FAKE_CONTROL_WRONG_ROLE_ERROR="$control_wrong_role_error" \
     FAKE_CONNECT_CALL_LOG="$CONNECT_CALL_LOG" \
     bash "$DB_ROLE_HANDOFF_SH" "$role" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
@@ -525,6 +554,15 @@ assert_output_contains() {
   return 0
 }
 
+assert_output_lacks() {
+  local desc="$1" out="$2" needle="$3"
+  if grep -qF "$needle" <<<"$out"; then
+    echo "FAIL: [$desc] unexpectedly contained '$needle'." >&2
+    return 1
+  fi
+  return 0
+}
+
 FAIL=0
 
 # 1. ROLE-MISSING
@@ -548,6 +586,9 @@ CONNECT_CALL_LOG="$WORK/connect-pin.2.$$"
 OUT2="$(run_scenario "already-handed-off: VERIFIED no-op" 0 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1)" || FAIL=1
 assert_output_contains "already-handed-off" "${OUT2:-}" "already handed off" || FAIL=1
 assert_output_contains "already-handed-off" "${OUT2:-}" "VERIFIED" || FAIL=1
+# team-lead's queued Sec item 2 -- the control's own observed-fact OK
+# line is load-bearing evidence: pin it so deleting it turns this RED.
+assert_output_contains "already-handed-off" "${OUT2:-}" "OK: trust-path control: a deliberately WRONG password was refused with 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 # Sec F-1 (PR #852 AMBER review) remedied (team-lead, run-4, Item 4,
 # 2026-09-21) -- this no-op path used to be existence-only; it now runs a
 # real bind-check (read the store's current value, connect AS the role
@@ -567,11 +608,42 @@ elif grep -qv -- '-W' "$CONNECT_CALL_LOG"; then
 fi
 unset CONNECT_CALL_LOG
 
-# 2f. ALREADY-HANDED-OFF-BIND-CHECK-STORE-EMPTY -- count-only preflight
-#     says the store carries a row (store_count=1), but the bind-check's
-#     own dedicated value read resolves to empty.
-OUT2F="$(run_scenario "already-handed-off-bind-check: store-empty refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "")" || FAIL=1
-assert_output_contains "already-handed-off-bind-check-store-empty" "${OUT2F:-}" "INCONSISTENT(store" || FAIL=1
+# 2f. ALREADY-HANDED-OFF-BIND-CHECK-RACE (team-lead's run-6 stop, item 3,
+#     2026-09-21 -- reclassified from "store-empty" now that the
+#     preflight itself checks non-emptiness, item 1 below) -- the
+#     preflight says the store carries a NON-EMPTY row (store_count=1,
+#     store_nonempty=1, the default), but the bind-check's own SEPARATE
+#     read a moment later resolves empty -- a race between the two reads,
+#     or the store changed mid-run. This must NOT be classified as
+#     "does NOT authenticate" (it was never tried against a value at
+#     all) -- refuses with the dedicated race message instead.
+OUT2F="$(run_scenario "already-handed-off-bind-check: race refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "")" || FAIL=1
+assert_output_contains "already-handed-off-bind-check-race" "${OUT2F:-}" "a race between the two reads" || FAIL=1
+assert_output_lacks "already-handed-off-bind-check-race" "${OUT2F:-}" "does NOT authenticate" || FAIL=1
+
+# 2h. PLACEHOLDER-ROW (team-lead's run-6 stop, item 1, 2026-09-21 --
+#     MEASURED on the box: pfin-back-etl/pfin-provider-sync each carried
+#     exactly one PFIN_DB_PASSWORD row, is_preview=false, value_len=0 --
+#     an EMPTY PLACEHOLDER Coolify's compose parser creates from the
+#     workers' `${PFIN_DB_PASSWORD:?}` interpolation, never a real push).
+#     store_count=1 but store_nonempty=0 -- STORE_HAS_PW must read false,
+#     the SAME as a genuinely fresh store, sending role_state=true|true
+#     into the adopt-by-rotation shape (the "else" INCONSISTENT branch,
+#     byte-matched by provision.sh's own handoff_adopt_check()) rather
+#     than the (wrong) already-handed-off bind-check path.
+OUT2H="$(run_scenario "placeholder-row: adopt-by-rotation shape" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "" 0 0 0 0 0)" || FAIL=1
+assert_output_contains "placeholder-row" "${OUT2H:-}" "rolcanlogin=true has_password=true store_has_PFIN_DB_PASSWORD=false" || FAIL=1
+assert_output_lacks "placeholder-row" "${OUT2H:-}" "does NOT authenticate" || FAIL=1
+
+# 2i. PLACEHOLDER-ROW-ROTATE-SUCCEEDS -- the same placeholder shape, but
+#     --apply --rotate (ROTATE only requires ROLCANLOGIN=true and does not
+#     consult STORE_HAS_PW at all) -- proceeds through the plain
+#     apply/rotate path unaffected by the placeholder, generating a fresh
+#     credential and pushing it; leg E's own hash-bound readback (already
+#     load-bearing, scenario 9/14) is what proves the placeholder row got
+#     UPDATED to exactly one real row, never duplicated.
+OUT2I="$(run_scenario "placeholder-row-rotate: succeeds via plain rotate path" 0 pfin_etl "--apply --rotate" clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "" 0 0 0 0 0)" || FAIL=1
+assert_output_contains "placeholder-row-rotate" "${OUT2I:-}" "hash-bound to the generated credential confirmed" || FAIL=1
 
 # 2g. ALREADY-HANDED-OFF-BIND-CHECK-CONNECT-FAILS -- the store carries a
 #     real-looking value, but connecting AS the role with it fails --
@@ -654,6 +726,7 @@ CONNECT_CALL_LOG="$WORK/connect-pin.10.$$"
 : > "$CONNECT_CALL_LOG"
 OUT10="$(run_scenario "happy-path-initial: succeeds" 0 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "happy-path-initial" "${OUT10:-}" "hash-bound to the generated credential confirmed" || FAIL=1
+assert_output_contains "happy-path-initial" "${OUT10:-}" "OK: trust-path control: a deliberately WRONG password was refused with 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 # -W PINNED FROM THE LOGGED ARGV (fresh-handoff leg C's own connect calls).
 if [[ ! -s "$CONNECT_CALL_LOG" ]]; then
   echo "FAIL: [happy-path-initial] no -h db connect calls were logged at all -- the -W pin has nothing to check." >&2
@@ -676,6 +749,7 @@ fi
 # 12. Same shapes for the OTHER role, spot-check (provider-sync's own resource name resolves)
 OUT12="$(run_scenario "provider-sync happy-path-initial: succeeds" 0 pfin_provider_sync --apply clean "false|false" "true|true" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "provider-sync happy-path-initial" "${OUT12:-}" "hash-bound to the generated credential confirmed" || FAIL=1
+assert_output_contains "provider-sync happy-path-initial" "${OUT12:-}" "OK: trust-path control: a deliberately WRONG password was refused with 'password authentication failed for user \"pfin_provider_sync\"'" || FAIL=1
 
 # 13. TRUST-PATH-NO-PROMPT (Sec VETO V-1, PR #846 review) -- paired golden
 #     test: the fake psql's step-C branch does NOT emit "Password for
@@ -772,21 +846,35 @@ fi
 #      catch (a trust rule authenticating ANY password) -- refuses,
 #      never proceeding to try the real credential.
 OUT18A="$(run_scenario "already-handed-off-control-succeeds: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 0 0 1)" || FAIL=1
-assert_output_contains "already-handed-off-control-succeeds" "${OUT18A:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "already-handed-off-control-succeeds" "${OUT18A:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
 # 18b. ALREADY-HANDED-OFF-CONTROL-WRONG-ERROR -- the control fails, but
 #      not with "password authentication failed" -- refuses.
 OUT18B="$(run_scenario "already-handed-off-control-wrong-error: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 0 0 0 1)" || FAIL=1
-assert_output_contains "already-handed-off-control-wrong-error" "${OUT18B:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "already-handed-off-control-wrong-error" "${OUT18B:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
 # 18c. LEG-C-CONTROL-SUCCEEDS -- same strike against the fresh-handoff
 #      leg C.
 OUT18C="$(run_scenario "leg-c-control-succeeds: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 1)" || FAIL=1
-assert_output_contains "leg-c-control-succeeds" "${OUT18C:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "leg-c-control-succeeds" "${OUT18C:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
 # 18d. LEG-C-CONTROL-WRONG-ERROR -- same, non-auth-failure error shape.
 OUT18D="$(run_scenario "leg-c-control-wrong-error: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 0 1)" || FAIL=1
-assert_output_contains "leg-c-control-wrong-error" "${OUT18D:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "leg-c-control-wrong-error" "${OUT18D:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
+
+# 18e. ALREADY-HANDED-OFF-CONTROL-WRONG-ROLE (team-lead's run-6 stop, item
+#      5a, 2026-09-21) -- the control DOES fail with the exact text
+#      "password authentication failed", but naming a DIFFERENT role than
+#      the one being tested -- refuses. Proves the role-specific match is
+#      load-bearing: a role-agnostic `grep -qF "password authentication
+#      failed"` (the F-1b-class defect this tightening fixes) would have
+#      wrongly ACCEPTED this as proof.
+OUT18E="$(run_scenario "already-handed-off-control-wrong-role: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 0 0 0 0 1 1)" || FAIL=1
+assert_output_contains "already-handed-off-control-wrong-role" "${OUT18E:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
+
+# 18f. LEG-C-CONTROL-WRONG-ROLE -- same strike against the fresh-handoff leg C.
+OUT18F="$(run_scenario "leg-c-control-wrong-role: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 0 0 1 1)" || FAIL=1
+assert_output_contains "leg-c-control-wrong-role" "${OUT18F:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
