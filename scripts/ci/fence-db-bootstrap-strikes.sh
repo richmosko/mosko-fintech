@@ -463,11 +463,15 @@ if [[ "$ARGS" == *"exec -T migrator sh -c"* ]]; then
 fi
 
 # Leg A / Leg E -- both go through `docker exec coolify php artisan
-# tinker --execute=...` against MIGRATOR_DB_PASSWORD; distinguished by
-# whether the script computes a hash() (leg E's sanity re-read) or just
-# echoes the raw value (leg A's initial read, PATH A -- Sec VETO-1 r2).
+# tinker --execute=...` against MIGRATOR_DB_PASSWORD. Sec F-3 (PR #859
+# review) -- routed on an explicit `/* probe:<name> */` marker the real
+# script's own tinker string carries, never on which Eloquent accessor
+# or expression it happens to use (that discriminator is incidental and
+# has already broken once elsewhere in this repo when a new read's shape
+# collided with an existing one) -- production is free to change HOW a
+# probe computes its answer without silently retargeting this fake.
 if [[ "$ARGS" == *"tinker --execute"* && "$ARGS" == *"MIGRATOR_DB_PASSWORD"* ]]; then
-  if [[ "$ARGS" == *"hash("* ]]; then
+  if [[ "$ARGS" == *"probe:readback-hash"* ]]; then
     # Leg E: sanity re-read (count|hash).
     if [[ -n "${FAKE_READBACK_COUNT:-}" ]]; then
       echo "${FAKE_READBACK_COUNT}"
@@ -491,11 +495,14 @@ if [[ "$ARGS" == *"tinker --execute"* && "$ARGS" == *"MIGRATOR_DB_PASSWORD"* ]];
       echo "0"
     fi
     exit 0
-  else
+  elif [[ "$ARGS" == *"probe:migrator-value"* ]]; then
     # Leg A: initial read -- echo the raw store value (empty string
     # models "store holds no MIGRATOR_DB_PASSWORD").
     printf '%s' "${FAKE_STORE_PW:-}"
     exit 0
+  else
+    echo "FAKE DOCKER: unrecognized tinker probe -- no /* probe:<name> */ marker matched. ARGS: $ARGS" >&2
+    exit 1
   fi
 fi
 

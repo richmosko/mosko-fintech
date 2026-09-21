@@ -276,13 +276,21 @@ fi
 # so the run log is self-contained evidence of what code produced it
 # without cross-referencing a separate `git log` at grading time. Read
 # from REPO_ROOT (never the caller's cwd, which may differ under an
-# agent worktree per the REPO_ROOT override above); origin/main's tip is
-# whatever this checkout's remote-tracking ref last fetched -- informational
-# only, not re-fetched here (a live fetch is a side effect this script has
-# never had and should not gain silently).
+# agent worktree per the REPO_ROOT override above).
+#
+# team-lead's N-1 correction (Sec, PR #859 review) -- `git rev-parse
+# origin/main` reads this checkout's LOCAL remote-tracking ref, which is
+# stale if the operator hasn't fetched, and prints as though it were
+# current -- cosmetic everywhere else, but not inside an evidence
+# artifact. `git ls-remote origin refs/heads/main` instead makes one
+# read-only network call for the ACTUAL current tip (never mutates any
+# local ref, unlike `git fetch`) -- honestly reported as "unreachable"
+# on any failure (no network, no remote, auth failure) rather than
+# silently falling back to a value that could be stale without saying so.
 step "Provenance"
 PROVISION_HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
-PROVISION_MAIN_TIP="$(git -C "$REPO_ROOT" rev-parse origin/main 2>/dev/null || echo unknown)"
+PROVISION_MAIN_TIP="$(git -C "$REPO_ROOT" ls-remote origin refs/heads/main 2>/dev/null | cut -f1 || true)"
+[[ -n "$PROVISION_MAIN_TIP" ]] || PROVISION_MAIN_TIP="unreachable"
 PROVISION_TREE_STATE="clean"
 if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
   PROVISION_TREE_STATE="DIRTY"

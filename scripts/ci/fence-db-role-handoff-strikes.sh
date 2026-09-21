@@ -172,13 +172,18 @@ cat > "$FAKE_BIN/docker" <<'EOF'
 ARGS="$*"
 
 if [[ "$ARGS" == *"artisan tinker --execute"* ]]; then
-  # team-lead follow-up, run-4 (Item 4, 2026-09-21): the NEW already-
-  # handed-off bind-check's own leg-A read (`->first()`, echoing the
-  # actual VALUE) is distinguished from the OLDER count-only preflight
-  # read (`->count()`) by the presence of "->first()" in the tinker script
-  # body -- checked BEFORE the count branch below, since both share the
-  # "no hash(" property and would otherwise collide on the same branch.
-  if [[ "$ARGS" == *"->first()"* && "$ARGS" != *"hash("* ]]; then
+  # Sec F-3 (PR #859 review) -- routed on an explicit `/* probe:<name> */`
+  # marker the real script's own tinker --execute string carries (never
+  # on which Eloquent accessor it happens to call, e.g. ->first() vs a
+  # count()/hash() call) -- production is then free to change HOW a
+  # probe reads its value without silently retargeting a different
+  # branch of this fake (the exact failure class this repo has already
+  # hit twice: #856 C-5's over-general "bash -s" match, and this PR's own
+  # item-1 fix landing a NEW ->first() call that, before this rewrite,
+  # collided with the bind-check's own discriminator). An unrecognized
+  # probe refuses loudly instead of silently falling through to the
+  # wrong canned answer.
+  if [[ "$ARGS" == *"probe:bind-check-value"* ]]; then
     # FAKE_BIND_CHECK_PW unset/empty models "store resolved to no value on
     # this specific read" (scenario 2f); a real-looking default keeps every
     # OTHER scenario's already-handed-off bind-check passing without
@@ -186,13 +191,7 @@ if [[ "$ARGS" == *"artisan tinker --execute"* ]]; then
     echo "${FAKE_BIND_CHECK_PW-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
     exit 0
   fi
-  # team-lead follow-up (live --dry-run, provision.sh sweep, 2026-09-20):
-  # the OLDER preflight store-count check (a bare `->count()`, no hash
-  # binding -- that only makes sense AFTER this run has generated a
-  # credential) is distinguished from leg E's own readback (below) by the
-  # ABSENCE of "hash(" in the tinker script body -- leg E's own query
-  # always contains "hash('sha256'".
-  if [[ "$ARGS" != *"hash("* ]]; then
+  if [[ "$ARGS" == *"probe:store-presence"* ]]; then
     # Sec N-3 (PR #852 AMBER review round 2): `${FAKE_STORE_COUNT:-0}`
     # (with the colon) treats "set but empty" the SAME as "unset" --
     # scenario 2e below passes an EXPLICIT empty string to model the
@@ -209,42 +208,54 @@ if [[ "$ARGS" == *"artisan tinker --execute"* ]]; then
     # scenario that only ever set FAKE_STORE_COUNT keeps its prior
     # true/false meaning unchanged; the new placeholder-row scenarios set
     # FAKE_STORE_NONEMPTY=0 explicitly alongside FAKE_STORE_COUNT=1.
+    if [[ -n "${FAKE_STORE_READ_RAW-}" ]]; then
+      # Sec F-2 (PR #859 review) -- models a truncated/malformed read
+      # (e.g. a bare count with no '|' at all), bypassing the count|
+      # nonempty construction above entirely so the shape guard's own
+      # scenario can supply an input that never had a pipe to split.
+      printf '%s' "$FAKE_STORE_READ_RAW"
+      exit 0
+    fi
     echo "${FAKE_STORE_COUNT-0}|${FAKE_STORE_NONEMPTY-1}"
     exit 0
   fi
-  # F-2/F-4 (PR #846 review) -- the real readback is now
-  # "count|truncated-hash|PFIN_DB_USER-value", not a bare length. SEED_FILE
-  # is inherited as a real environment variable here (set via the calling
-  # `env SEED_FILE=... bash -s` prefix in the remote session, and docker's
-  # own child-process inherits its parent shell's env like any subprocess)
-  # -- reading it and hashing its exact bytes the same way the real script
-  # hashes $PW is what lets this fake prove the hash-binding guard, not
-  # just the row-count guard, is load-bearing. FAKE_READBACK_USER defaults
-  # to the role being handed off (the "already matches, no ordering
-  # hazard" happy-path shape); set it to a different value to strike F-4's
-  # ordering guard.
-  USER_VAL="${FAKE_READBACK_USER:-${FAKE_ROLE_NAME:-pfin_etl}}"
-  if [[ -n "${FAKE_READBACK_COUNT:-}" ]]; then
-    echo "${FAKE_READBACK_COUNT}||$USER_VAL"
+  if [[ "$ARGS" == *"probe:readback-hash"* ]]; then
+    # F-2/F-4 (PR #846 review) -- the real readback is now
+    # "count|truncated-hash|PFIN_DB_USER-value", not a bare length. SEED_FILE
+    # is inherited as a real environment variable here (set via the calling
+    # `env SEED_FILE=... bash -s` prefix in the remote session, and docker's
+    # own child-process inherits its parent shell's env like any subprocess)
+    # -- reading it and hashing its exact bytes the same way the real script
+    # hashes $PW is what lets this fake prove the hash-binding guard, not
+    # just the row-count guard, is load-bearing. FAKE_READBACK_USER defaults
+    # to the role being handed off (the "already matches, no ordering
+    # hazard" happy-path shape); set it to a different value to strike F-4's
+    # ordering guard.
+    USER_VAL="${FAKE_READBACK_USER:-${FAKE_ROLE_NAME:-pfin_etl}}"
+    if [[ -n "${FAKE_READBACK_COUNT:-}" ]]; then
+      echo "${FAKE_READBACK_COUNT}||$USER_VAL"
+      exit 0
+    fi
+    if [[ -z "${SEED_FILE:-}" || ! -f "$SEED_FILE" ]]; then
+      echo "FAKE DOCKER: readback called but SEED_FILE ('${SEED_FILE:-unset}') is not a real file" >&2
+      exit 1
+    fi
+    ACTUAL_HASH="$(sha256sum "$SEED_FILE" | cut -c1-16)"
+    if [[ "${FAKE_READBACK_HASH_MISMATCH:-0}" == "1" ]]; then
+      echo "1|0000000000000000|$USER_VAL"
+      exit 0
+    fi
+    if [[ "${FAKE_READBACK_EMPTY:-0}" == "1" ]]; then
+      # team-lead's run-6 stop, item 8 -- the row exists (count=1) but its
+      # value is empty.
+      echo "1|EMPTY|$USER_VAL"
+      exit 0
+    fi
+    echo "1|$ACTUAL_HASH|$USER_VAL"
     exit 0
   fi
-  if [[ -z "${SEED_FILE:-}" || ! -f "$SEED_FILE" ]]; then
-    echo "FAKE DOCKER: readback called but SEED_FILE ('${SEED_FILE:-unset}') is not a real file" >&2
-    exit 1
-  fi
-  ACTUAL_HASH="$(sha256sum "$SEED_FILE" | cut -c1-16)"
-  if [[ "${FAKE_READBACK_HASH_MISMATCH:-0}" == "1" ]]; then
-    echo "1|0000000000000000|$USER_VAL"
-    exit 0
-  fi
-  if [[ "${FAKE_READBACK_EMPTY:-0}" == "1" ]]; then
-    # team-lead's run-6 stop, item 8 -- the row exists (count=1) but its
-    # value is empty.
-    echo "1|EMPTY|$USER_VAL"
-    exit 0
-  fi
-  echo "1|$ACTUAL_HASH|$USER_VAL"
-  exit 0
+  echo "FAKE DOCKER: unrecognized tinker probe -- no /* probe:<name> */ marker matched. ARGS: $ARGS" >&2
+  exit 1
 fi
 
 if [[ "$ARGS" == *"coalesce((select rolcanlogin"* ]]; then
@@ -469,7 +480,7 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_ECHO_PASSWORD_IN_OUTPUT="\$FAKE_ECHO_PASSWORD_IN_OUTPUT" FAKE_READBACK_COUNT="\$FAKE_READBACK_COUNT" \\
     FAKE_NO_PASSWORD_PROMPT="\$FAKE_NO_PASSWORD_PROMPT" FAKE_READBACK_HASH_MISMATCH="\$FAKE_READBACK_HASH_MISMATCH" FAKE_READBACK_EMPTY="\$FAKE_READBACK_EMPTY" \\
     FAKE_READBACK_USER="\$FAKE_READBACK_USER" FAKE_ECHO_PW_IN_CONNECT="\$FAKE_ECHO_PW_IN_CONNECT" \\
-    FAKE_STORE_COUNT="\$FAKE_STORE_COUNT" FAKE_STORE_NONEMPTY="\$FAKE_STORE_NONEMPTY" FAKE_BIND_CHECK_PW="\$FAKE_BIND_CHECK_PW" \\
+    FAKE_STORE_COUNT="\$FAKE_STORE_COUNT" FAKE_STORE_NONEMPTY="\$FAKE_STORE_NONEMPTY" FAKE_STORE_READ_RAW="\$FAKE_STORE_READ_RAW" FAKE_BIND_CHECK_PW="\$FAKE_BIND_CHECK_PW" \\
     FAKE_NO_PASSWORD_PROMPT_CLEAN="\$FAKE_NO_PASSWORD_PROMPT_CLEAN" FAKE_WRONG_CURRENT_USER="\$FAKE_WRONG_CURRENT_USER" \\
     FAKE_CONTROL_SUCCEEDS="\$FAKE_CONTROL_SUCCEEDS" FAKE_CONTROL_WRONG_ERROR="\$FAKE_CONTROL_WRONG_ERROR" \\
     FAKE_CONTROL_WRONG_ROLE_ERROR="\$FAKE_CONTROL_WRONG_ROLE_ERROR" FAKE_ECHO_PW_IN_CONTROL="\$FAKE_ECHO_PW_IN_CONTROL" \\
@@ -520,7 +531,7 @@ run_scenario() {
   # each carried exactly one such row, value_len=0) -- STORE_HAS_PW must
   # then read false, the exact same as a genuinely fresh store.
   local desc="$1" expect_exit="$2" role="$3" apply_flag="$4" curl_mode="$5" \
-        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" no_prompt_clean="${19:-0}" wrong_current_user="${20:-0}" control_succeeds="${21:-0}" control_wrong_error="${22:-0}" store_nonempty="${23:-1}" control_wrong_role_error="${24:-0}" echo_pw_in_control="${25:-0}" readback_empty="${26:-0}"
+        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" no_prompt_clean="${19:-0}" wrong_current_user="${20:-0}" control_succeeds="${21:-0}" control_wrong_error="${22:-0}" store_nonempty="${23:-1}" control_wrong_role_error="${24:-0}" echo_pw_in_control="${25:-0}" readback_empty="${26:-0}" store_read_raw="${27-}"
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   local resource_name="pfin-back-etl"
@@ -542,7 +553,7 @@ run_scenario() {
     FAKE_ECHO_PASSWORD_IN_OUTPUT="$echo_pw" FAKE_READBACK_COUNT="$readback_count" \
     FAKE_NO_PASSWORD_PROMPT="$no_prompt" FAKE_READBACK_HASH_MISMATCH="$hash_mismatch" FAKE_READBACK_EMPTY="$readback_empty" \
     FAKE_READBACK_USER="$readback_user" FAKE_ECHO_PW_IN_CONNECT="$echo_pw_in_connect" \
-    FAKE_STORE_COUNT="$store_count" FAKE_STORE_NONEMPTY="$store_nonempty" FAKE_BIND_CHECK_PW="$bind_check_pw" \
+    FAKE_STORE_COUNT="$store_count" FAKE_STORE_NONEMPTY="$store_nonempty" FAKE_STORE_READ_RAW="$store_read_raw" FAKE_BIND_CHECK_PW="$bind_check_pw" \
     FAKE_NO_PASSWORD_PROMPT_CLEAN="$no_prompt_clean" FAKE_WRONG_CURRENT_USER="$wrong_current_user" \
     FAKE_CONTROL_SUCCEEDS="$control_succeeds" FAKE_CONTROL_WRONG_ERROR="$control_wrong_error" \
     FAKE_CONTROL_WRONG_ROLE_ERROR="$control_wrong_role_error" FAKE_ECHO_PW_IN_CONTROL="$echo_pw_in_control" \
@@ -690,15 +701,30 @@ assert_output_contains "ambiguous-store-state" "${OUT2D:-}" "refusing to trust a
 
 # 2e. STORE-READ-FAILED (Sec N-3, PR #852 AMBER review round 2) -- the
 #     tinker call itself produces NO output (crashed, timed out, docker
-#     unreachable) -- a case db-role-handoff.sh:381's `*)` arm ALSO
-#     catches (STORE_COUNT is neither "0" nor "1"), and far likelier in
-#     practice than 2d's two-rows case, but nothing in this fence
-#     exercised it until now: the fake's own `${FAKE_STORE_COUNT:-0}`
-#     (with the colon) silently defaulted an explicit empty string back
-#     to "0" ("fresh"), masking exactly the scenario meant to prove the
-#     refusal fires on this path too.
+#     unreachable), far likelier in practice than 2d's two-rows case, but
+#     nothing in this fence exercised it until now: the fake's own
+#     `${FAKE_STORE_COUNT:-0}` (with the colon) silently defaulted an
+#     explicit empty string back to "0" ("fresh"), masking exactly the
+#     scenario meant to prove the refusal fires on this path too.
+#     Sec F-2 (PR #859 review) -- this now fails the shape guard (no
+#     digits before a '|' that isn't even there) BEFORE ever reaching the
+#     case statement's own ambiguous-count catch-all, so it asserts the
+#     shape guard's own message, not the (now unreachable for THIS input)
+#     "ambiguous store state" text -- that text is still reachable, and
+#     still pinned, by 2d's two-rows case above.
 OUT2E="$(run_scenario "store-read-failed: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 "")" || FAIL=1
-assert_output_contains "store-read-failed" "${OUT2E:-}" "refusing to trust an ambiguous store state" || FAIL=1
+assert_output_contains "store-read-failed" "${OUT2E:-}" "store-presence read on 'pfin-back-etl' returned unparseable output" || FAIL=1
+
+# 2e2. STORE-READ-TRUNCATED (Sec F-2, PR #859 review) -- the tinker read
+#      returns a bare count with NO pipe at all (a truncated/malformed
+#      read) -- WITHOUT the shape guard, `${STORE_READ%%|*}` and
+#      `${STORE_READ#*|}` both return the whole string unchanged, so
+#      STORE_COUNT="1" AND STORE_NONEMPTY="1", silently treating a read
+#      that never reported non-emptiness as if it had. Proves the shape
+#      guard is load-bearing on its own, independent of 2e's
+#      pipe-present-but-empty case.
+OUT2E2="$(run_scenario "store-read-truncated: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 0 0 0 0 0 0 "1")" || FAIL=1
+assert_output_contains "store-read-truncated" "${OUT2E2:-}" "store-presence read on 'pfin-back-etl' returned unparseable output" || FAIL=1
 
 # 2b. MISMATCH-LOGIN-NO-STORE-VALUE (team-lead's own named strike --
 #     "LOGIN but no store value") -- role already LOGIN + password set,

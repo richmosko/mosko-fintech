@@ -415,6 +415,7 @@ step "Preflight — Coolify store state (PFIN_DB_PASSWORD on '$RESOURCE_NAME')"
 STORE_READ="$(sshx "env RESOURCE_UUID=\"$RESOURCE_UUID\" bash -s" <<'REMOTE'
 set -e
 docker exec coolify php artisan tinker --execute="
+/* probe:store-presence */
 \$app = \App\Models\Application::where('uuid','$RESOURCE_UUID')->firstOrFail();
 \$rows = \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->where('is_preview', false)->get();
 \$count = \$rows->count();
@@ -423,6 +424,15 @@ echo \$count . '|' . \$nonEmpty;
 " 2>/dev/null | tail -1 | tr -d ' \n'
 REMOTE
 )"
+# Sec F-2 (PR #859 review) -- shape-guard the read BEFORE splitting it:
+# without this, a truncated/malformed read with no '|' at all (e.g. a
+# bare "1") has `${STORE_READ%%|*}` and `${STORE_READ#*|}` BOTH return
+# the WHOLE string unchanged -- STORE_COUNT="1" AND STORE_NONEMPTY="1",
+# silently reading a read that never reported non-emptiness as if it
+# had. A truly empty read ("" -- the tinker call itself failed) already
+# fails this regex too, refusing here rather than falling through to the
+# case statement's own (still-kept) ambiguous-count catch-all below.
+[[ "$STORE_READ" =~ ^[0-9]+\|[01]$ ]] || die "PFIN_DB_PASSWORD (is_preview=false) store-presence read on '$RESOURCE_NAME' returned unparseable output ('$STORE_READ') -- refusing to guess; expected '<count>|<0|1>'."
 STORE_COUNT="${STORE_READ%%|*}"
 STORE_NONEMPTY="${STORE_READ#*|}"
 info "store: PFIN_DB_PASSWORD (is_preview=false) row count on '$RESOURCE_NAME' = ${STORE_COUNT:-<none>}, non-empty=${STORE_NONEMPTY:-<none>}"
@@ -441,9 +451,12 @@ info "store: PFIN_DB_PASSWORD (is_preview=false) row count on '$RESOURCE_NAME' =
 # the box: pfin-back-etl and pfin-provider-sync BOTH already carry
 # exactly one PFIN_DB_PASSWORD row (is_preview=false), but with
 # value_len=0 -- an EMPTY PLACEHOLDER row Coolify's compose parser
-# creates from the workers' `${PFIN_DB_PASSWORD:?}` interpolation
-# reference, never a value this script or push-production-secrets.sh
-# (which excludes this key by design) ever wrote. A row-COUNT-only check
+# creates from the workers' PLAIN `${PFIN_DB_PASSWORD}` interpolation
+# (workers/etl/docker-compose.yaml:97, workers/provider-sync/docker-
+# compose.yaml:124 -- NOT the `:?` form; Sec's own compose measurement,
+# PR #859 review, corrected an earlier wrong attribution here), never a
+# value this script or push-production-secrets.sh (which excludes this
+# key by design) ever wrote. A row-COUNT-only check
 # read this placeholder as "store has a value" (STORE_HAS_PW=true),
 # sending an otherwise-fresh role (LOGIN+password not yet set, or
 # already set with nothing to bind against) into the wrong branch below.
@@ -500,6 +513,7 @@ else
 set -e
 echo "== Reading the store's CURRENT PFIN_DB_PASSWORD (read-only -- no rotation, no PATCH) =="
 PW="$(docker exec coolify php artisan tinker --execute="
+/* probe:bind-check-value */
 \$app = \App\Models\Application::where('uuid','$RESOURCE_UUID')->firstOrFail();
 \$row = \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->where('is_preview', false)->first();
 echo \$row ? (string) \$row->value : '';
@@ -885,6 +899,7 @@ step_r "E. Hash-bound readback — production row only, exactly one match, bound
 # predicate for a clearer diagnostic.
 EXPECTED_HASH="$(printf '%s' "$PW" | sha256sum | cut -c1-16)"
 READBACK_OUT="$(docker exec coolify php artisan tinker --execute="
+/* probe:readback-hash */
 \$app = \App\Models\Application::where('uuid','$RESOURCE_UUID')->firstOrFail();
 \$rows = \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->where('is_preview', false)->get();
 \$userRow = \$app->environment_variables()->where('key', 'PFIN_DB_USER')->where('is_preview', false)->first();

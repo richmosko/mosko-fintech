@@ -386,6 +386,7 @@ umask 077
 
 echo "== A (read-only). Reading the CURRENT MIGRATOR_DB_PASSWORD from pfin-migrator's own env store =="
 PW="$(docker exec coolify php artisan tinker --execute="
+/* probe:migrator-value */
 \$app = \App\Models\Application::where('uuid','$MIGRATOR_UUID')->firstOrFail();
 \$row = \$app->environment_variables()->where('key', 'MIGRATOR_DB_PASSWORD')->where('is_preview', false)->first();
 echo \$row ? (string) \$row->value : '';
@@ -468,6 +469,7 @@ EXPECTED_HASH="$(printf '%s' "$PW" | sha256sum | cut -c1-16)"
 # non-emptiness, so an empty re-read gets its own honest message instead
 # of being folded into the generic "different value" hash-mismatch text.
 READBACK_OUT="$(docker exec coolify php artisan tinker --execute="
+/* probe:readback-hash */
 \$app = \App\Models\Application::where('uuid','$MIGRATOR_UUID')->firstOrFail();
 \$rows = \$app->environment_variables()->where('key', 'MIGRATOR_DB_PASSWORD')->where('is_preview', false)->get();
 if (\$rows->count() !== 1) { echo \$rows->count(); } else { \$v = (string) \$rows[0]->value; echo '1|' . (\$v === '' ? 'EMPTY' : substr(hash('sha256', \$v), 0, 16)); }
@@ -546,6 +548,7 @@ umask 077
 
 echo "== A. Reading the existing MIGRATOR_DB_PASSWORD from pfin-migrator's own env store (box-side; Coolify's public API never returns a secret's real value, so this uses the same tinker mechanism leg E's readback already relies on -- never a GET /envs call) =="
 PW="$(docker exec coolify php artisan tinker --execute="
+/* probe:migrator-value */
 \$app = \App\Models\Application::where('uuid','$MIGRATOR_UUID')->firstOrFail();
 \$row = \$app->environment_variables()->where('key', 'MIGRATOR_DB_PASSWORD')->where('is_preview', false)->first();
 echo \$row ? (string) \$row->value : '';
@@ -692,6 +695,7 @@ EXPECTED_HASH="$(printf '%s' "$PW" | sha256sum | cut -c1-16)"
 # already immune to an empty/placeholder value, but given the SAME
 # explicit non-empty predicate for a clearer diagnostic.
 READBACK_OUT="$(docker exec coolify php artisan tinker --execute="
+/* probe:readback-hash */
 \$app = \App\Models\Application::where('uuid','$MIGRATOR_UUID')->firstOrFail();
 \$rows = \$app->environment_variables()->where('key', 'MIGRATOR_DB_PASSWORD')->where('is_preview', false)->get();
 if (\$rows->count() !== 1) { echo \$rows->count(); } else { \$v = (string) \$rows[0]->value; echo '1|' . (\$v === '' ? 'EMPTY' : substr(hash('sha256', \$v), 0, 16)); }
