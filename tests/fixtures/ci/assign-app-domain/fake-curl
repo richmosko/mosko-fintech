@@ -7,22 +7,27 @@
 #      per FAKE_PORKBUN_RECORDS (dns/retrieve) or a canned SUCCESS
 #      (dns/create, dns/editByNameType).
 #   2. Coolify API (localhost:8000/api/v1/...) -- canned application list
-#      / detail / PATCH read-back, same shape as sibling fences. The
-#      application list/detail response now ALSO carries base_directory,
-#      build_pack and ports_exposes (FAKE_APP_BASE_DIR / FAKE_APP_BUILD_PACK
-#      / FAKE_APP_PORTS -- ports_exposes preflight + TARGET GUARD review,
-#      fix/pdf-render-chromium-pin-and-resume-clear). A Coolify PATCH is
-#      routed to one of TWO independently-tracked markers by inspecting its
-#      own --data-binary body: FAKE_PORTS_PATCH_MARKER for a body containing
-#      "ports_exposes", FAKE_PATCH_MARKER (pre-existing) for everything else
-#      (fqdn). Each PATCH also appends a tag line (COOLIFY-PATCH-PORTS /
-#      COOLIFY-PATCH-FQDN) to $FAKE_CURL_LOG so a scenario can assert ORDER
-#      between the two PATCH calls, not just that both happened -- the two
-#      calls hit the identical URL, so the tag is the only way to tell them
-#      apart from the log alone. A subsequent read-back GET reports
-#      FAKE_NEW_PORTS in place of FAKE_APP_PORTS once FAKE_PORTS_PATCH_MARKER
-#      exists, unless FAKE_PORTS_PATCH_TAKES_EFFECT=0 (mirrors the pre-
-#      existing FAKE_PATCH_TAKES_EFFECT convention for the fqdn field).
+#      / detail / PATCH read-back. The application list/detail response
+#      carries base_directory, build_pack, ports_exposes, fqdn (now
+#      INFORMATIONAL-only in the real script -- PR #866 review retired
+#      it as a write target) and docker_compose_domains (the real
+#      write target, PR #866). A Coolify PATCH is routed to one of TWO
+#      independently-tracked markers by inspecting its own
+#      --data-binary body: FAKE_PORTS_PATCH_MARKER for a body
+#      containing "ports_exposes", FAKE_COMPOSE_DOMAINS_PATCH_MARKER
+#      for "docker_compose_domains" -- an UNRECOGNISED body fails
+#      closed (exit 97), no catch-all (Sec F-2). Each PATCH also
+#      appends a tag line (COOLIFY-PATCH-PORTS /
+#      COOLIFY-PATCH-COMPOSE-DOMAINS) to $FAKE_CURL_LOG so a scenario
+#      can assert ORDER between the two PATCH calls, not just that both
+#      happened -- the two calls hit the identical URL, so the tag is
+#      the only way to tell them apart from the log alone. A subsequent
+#      read-back GET reports FAKE_NEW_PORTS/FAKE_NEW_COMPOSE_DOMAINS in
+#      place of the OLD values once the matching marker exists, unless
+#      the matching *_TAKES_EFFECT=0 (models "the write didn't take").
+#      FAKE_COMPOSE_DOMAINS_PATCH_STATUS=422 models the write itself
+#      being refused (see the Coolify-API section's own header for the
+#      two api() helper shapes this distinguishes).
 #   3. The public HTTPS poll (https://<domain>/ or https://www.<domain>/)
 #      -- responds per FAKE_APEX_CODE / FAKE_WWW_CODE.
 #
@@ -80,28 +85,68 @@ if [[ "$ARGS" == *"api.porkbun.com"* ]]; then
 fi
 
 # --- Coolify API ---------------------------------------------------------
-# api()'s own argv shape: -fsS -K - -X <METHOD> [--data-binary @<file>]
-# http://localhost:8000/api/v1<path> -- the URL is always the LAST token.
+# TWO api() helper shapes coexist in the real script now (PR #866
+# review): the OLDER `-fsS -K - -X <METHOD> [--data-binary @<file>]`
+# shape (identity resolve + ports_exposes PATCH), and a NEWER
+# `-K - -X <METHOD> -w '\n%{http_code}' [--data-binary @<file>]` shape
+# (the docker_compose_domains PATCH, which needs to distinguish 422 from
+# every other status -- same shape provision-worker.sh's own api()
+# already uses, Sec-reviewed there). This fake reads what the caller
+# actually asked curl to do -- `-f` present or not, `-w` present or not
+# -- rather than assuming one fixed shape, the same discipline every
+# other fake in this repo's fixtures already applies to its own target
+# script's real argv. emit() below is the single response path both
+# shapes go through.
 #
-# ports_exposes PATCH tracking (ports_exposes preflight, fix/pdf-render-
-# chromium-pin-and-resume-clear review) is TRACKED SEPARATELY from the
-# fqdn PATCH's own marker -- the two are different API calls in the real
-# script now, and a scenario testing one must not accidentally trip the
-# other. Which field a given PATCH call is FOR is determined by reading
-# its own --data-binary body file (same technique the Porkbun branch
-# above already uses to prove a body was sent at all).
+# ⚠ EXHAUSTIVE PATCH DISPATCH, NO CATCH-ALL (Sec F-2, PR #866 review) --
+# self-caught by inversion-testing this exact property: reinstating an
+# `else -> COOLIFY-PATCH-COMPOSE-DOMAINS` catch-all here does NOT redden
+# ANY scenario in this fence, because the real script today never sends
+# a THIRD PATCH body shape -- there is nothing to strike this property
+# WITH via assign-app-domain.sh's own current behavior. The fix (refuse
+# unknown bodies, exit 97) is still correct and worth keeping -- it
+# protects against a FUTURE third PATCH silently mislabeling itself --
+# but it is verified by code inspection and this note, not by a standing
+# green/red scenario. Do not remove this branch on the reasoning that
+# "nothing tests it, so it's dead code."
 if [[ "$ARGS" == *"localhost:8000/api/v1"* ]]; then
   METHOD="GET"
-  [[ "$ARGS" == *"-X PATCH"* ]] && METHOD="PATCH"
+  HAS_DASH_F=0
+  WRITEOUT_FMT=""
+  prev=""
+  for a in "$@"; do
+    if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+    if [[ "$prev" == "-w" ]]; then WRITEOUT_FMT="$a"; fi
+    [[ "$a" == "-f" || "$a" == "-fsS" || "$a" == "-sSf" ]] && HAS_DASH_F=1
+    prev="$a"
+  done
   URL="${*: -1}"
-  if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
-    cat <<JSON
-[
-  {"uuid": "${FAKE_APP_UUID:-appuuid0000000000001}", "name": "${FAKE_APP_NAME:-pfin-app}", "fqdn": "${FAKE_OLD_FQDN:-}", "base_directory": "${FAKE_APP_BASE_DIR:-/api}", "build_pack": "${FAKE_APP_BUILD_PACK:-dockercompose}", "ports_exposes": "${FAKE_APP_PORTS:-3000}"}
-]
-JSON
+
+  emit() {
+    # emit <body> [status=200] -- honors WRITEOUT_FMT/-f exactly as a
+    # real curl invocation given the SAME argv would: -f suppresses the
+    # body and exits nonzero (22) on >=400 UNLESS a caller also asked
+    # for -w (real curl still honors -f's exit-nonzero regardless of
+    # -w, but the api_allow_status() caller never combines -f with -w,
+    # so this fake does not need to model that combination).
+    local body="$1" status="${2:-200}"
+    if [[ "$HAS_DASH_F" -eq 1 && "$status" -ge 400 ]]; then
+      echo "curl: (22) The requested URL returned error: $status" >&2
+      exit 22
+    fi
+    printf '%s' "$body"
+    if [[ -n "$WRITEOUT_FMT" ]]; then
+      printf '%s' "$WRITEOUT_FMT" | sed "s/%{http_code}/$status/"
+    fi
     exit 0
+  }
+
+  if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
+    emit "$(printf '[{"uuid": "%s", "name": "%s", "fqdn": "%s", "docker_compose_domains": "%s", "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}]' \
+      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "${FAKE_OLD_FQDN:-}" "${FAKE_OLD_COMPOSE_DOMAINS:-}" \
+      "${FAKE_APP_BASE_DIR:-/api}" "${FAKE_APP_BUILD_PACK:-dockercompose}" "${FAKE_APP_PORTS:-3000}")"
   fi
+
   if [[ "$METHOD" == "PATCH" ]]; then
     BODY_FILE=""
     prev=""
@@ -111,36 +156,52 @@ JSON
       fi
       prev="$a"
     done
-    if [[ -n "$BODY_FILE" && -f "$BODY_FILE" ]] && grep -qF "ports_exposes" "$BODY_FILE"; then
+    # Sec F-2 (PR #866 review): NO catch-all `else` -- each known body
+    # shape gets its own tag; an UNRECOGNISED PATCH body fails loudly
+    # (exit 97), never silently labelled as one of the known fields. The
+    # prior version's `else -> FQDN` catch-all meant a future THIRD
+    # PATCH would satisfy an ordering assertion vacuously; this closes
+    # that hole the same way every other exhaustive-dispatch fix in this
+    # repo has (name every known shape, refuse the rest).
+    if [[ -z "$BODY_FILE" || ! -f "$BODY_FILE" ]]; then
+      echo "FAKE CURL: PATCH with no --data-binary body file found" >&2
+      exit 97
+    elif grep -qF '"ports_exposes"' "$BODY_FILE"; then
       echo "COOLIFY-PATCH-PORTS" >> "$LOG"
       [[ -n "${FAKE_PORTS_PATCH_MARKER:-}" ]] && echo "1" > "$FAKE_PORTS_PATCH_MARKER"
-    else
-      echo "COOLIFY-PATCH-FQDN" >> "$LOG"
-      [[ -n "${FAKE_PATCH_MARKER:-}" ]] && echo "1" > "$FAKE_PATCH_MARKER"
-    fi
-    echo '{}'
-    exit 0
-  fi
-  if [[ "$METHOD" == "GET" ]]; then
-    PORTS_OUT="${FAKE_APP_PORTS:-3000}"
-    if [[ -n "${FAKE_PORTS_PATCH_MARKER:-}" && -f "$FAKE_PORTS_PATCH_MARKER" ]]; then
-      if [[ "${FAKE_PORTS_PATCH_TAKES_EFFECT:-1}" == "1" ]]; then
-        PORTS_OUT="${FAKE_NEW_PORTS:-3000}"
+      emit '{}' 200
+    elif grep -qF '"docker_compose_domains"' "$BODY_FILE"; then
+      echo "COOLIFY-PATCH-COMPOSE-DOMAINS" >> "$LOG"
+      if [[ "${FAKE_COMPOSE_DOMAINS_PATCH_STATUS:-200}" == "422" ]]; then
+        emit '{"message":"fake: docker_compose_domains element rejected -- unrecognised service or shape"}' 422
       fi
-      # PATCH_TAKES_EFFECT=0 -> PORTS_OUT stays FAKE_APP_PORTS (the OLD
-      # value), simulating "the write didn't take".
+      [[ -n "${FAKE_COMPOSE_DOMAINS_PATCH_MARKER:-}" ]] && echo "1" > "$FAKE_COMPOSE_DOMAINS_PATCH_MARKER"
+      emit '{}' 200
+    else
+      echo "FAKE CURL: unrecognised PATCH body (neither ports_exposes nor docker_compose_domains):" >&2
+      cat "$BODY_FILE" >&2
+      exit 97
+    fi
+  fi
+
+  if [[ "$METHOD" == "GET" && "$URL" != *"/applications" ]]; then
+    PORTS_OUT="${FAKE_APP_PORTS:-3000}"
+    if [[ -n "${FAKE_PORTS_PATCH_MARKER:-}" && -f "$FAKE_PORTS_PATCH_MARKER" && "${FAKE_PORTS_PATCH_TAKES_EFFECT:-1}" == "1" ]]; then
+      PORTS_OUT="${FAKE_NEW_PORTS:-3000}"
+    fi
+    # PATCH_TAKES_EFFECT=0 -> stays the OLD value, simulating "the write
+    # didn't take" -- same convention for both fields below.
+    COMPOSE_DOMAINS_OUT="${FAKE_OLD_COMPOSE_DOMAINS:-}"
+    if [[ -n "${FAKE_COMPOSE_DOMAINS_PATCH_MARKER:-}" && -f "$FAKE_COMPOSE_DOMAINS_PATCH_MARKER" && "${FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT:-1}" == "1" ]]; then
+      COMPOSE_DOMAINS_OUT="${FAKE_NEW_COMPOSE_DOMAINS:-}"
     fi
     FQDN_OUT="${FAKE_OLD_FQDN:-}"
-    if [[ -n "${FAKE_PATCH_MARKER:-}" && -f "$FAKE_PATCH_MARKER" && "${FAKE_PATCH_TAKES_EFFECT:-1}" == "1" ]]; then
-      FQDN_OUT="${FAKE_NEW_FQDN:-}"
-    fi
-    printf '{"uuid": "%s", "name": "%s", "fqdn": "%s", "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}\n' \
-      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "$FQDN_OUT" \
-      "${FAKE_APP_BASE_DIR:-/api}" "${FAKE_APP_BUILD_PACK:-dockercompose}" "$PORTS_OUT"
-    exit 0
+    emit "$(printf '{"uuid": "%s", "name": "%s", "fqdn": "%s", "docker_compose_domains": "%s", "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}' \
+      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "$FQDN_OUT" "$COMPOSE_DOMAINS_OUT" \
+      "${FAKE_APP_BASE_DIR:-/api}" "${FAKE_APP_BUILD_PACK:-dockercompose}" "$PORTS_OUT")"
   fi
-  echo '{}'
-  exit 0
+
+  emit '{}' 200
 fi
 
 # --- Public HTTPS poll -----------------------------------------------------

@@ -8,14 +8,15 @@
 #
 # ⚠ WHAT THIS FENCE DOES NOT, AND CANNOT, PROVE -- stated, not glossed:
 # whether Porkbun's real API actually behaves the way fake-curl asserts
-# it does, whether the Coolify `fqdn` PATCH field name is actually
-# correct (that is UNMEASURED per the real script's own header -- this
-# fence proves the script correctly detects a MISMATCHING read-back, not
-# that the field name is right), whether DNS actually propagates, or
-# whether a real Let's Encrypt cert is ever issued. Every leg here is a
-# CANNED response; this fence proves the shell script's own control flow
-# (refuse on the right conditions, proceed on the right conditions), not
-# any live external system's behavior.
+# it does; whether `docker_compose_domains`'s ELEMENT SHAPE (schema-
+# documented, COOLIFY-FACT-06, never independently confirmed by a live
+# element-carrying PATCH before PR #866) actually takes effect on the
+# real box; whether DNS actually propagates; or whether a real Let's
+# Encrypt cert is ever issued. Every leg here is a CANNED response; this
+# fence proves the shell script's own control flow (refuse on the right
+# conditions, proceed on the right conditions), not any live external
+# system's behavior. See scripts/COOLIFY-API-MEASURED.md for what IS
+# live-measured vs schema-documented vs still unmeasured.
 #
 # Scenarios:
 #   1. HAPPY-PATH PREFLIGHT -- MX x2 + TXT x2 at the apex (the REAL
@@ -46,9 +47,9 @@
 #      sentinel).
 #   6. UUID-AMBIGUOUS-REFUSES -- 2 applications match APP_NAME -> refuses
 #      (Sec F4 discipline, same class as every sibling script).
-#   7. PATCH-READBACK-MISMATCH-REFUSES -- the Coolify PATCH "succeeds"
-#      but the immediate GET read-back still shows the OLD fqdn (the
-#      field-name guess was wrong) -> refuses, never reports success.
+#   7. PATCH-READBACK-MISMATCH-REFUSES -- the docker_compose_domains
+#      PATCH "succeeds" (200) but the immediate GET read-back does not
+#      contain the target domain -> refuses, never reports success.
 #   8. APPLY-HAPPY-PATH -- --apply with no existing conflicting records,
 #      a correct PATCH read-back, and both apex/www answering 200 ->
 #      exit 0.
@@ -122,18 +123,44 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
   PATH="$FAKE_BIN:\$PATH" FAKE_CURL_LOG="\${FAKE_CURL_LOG:-}" \\
     FAKE_APP_UUID="\${FAKE_APP_UUID:-}" FAKE_APP_NAME="\${FAKE_APP_NAME:-}" \\
     FAKE_OLD_FQDN="\${FAKE_OLD_FQDN:-}" FAKE_NEW_FQDN="\${FAKE_NEW_FQDN:-}" \\
-    FAKE_PATCH_MARKER="\${FAKE_PATCH_MARKER:-}" FAKE_PATCH_TAKES_EFFECT="\${FAKE_PATCH_TAKES_EFFECT:-}" \\
     FAKE_APP_BASE_DIR="\${FAKE_APP_BASE_DIR:-}" FAKE_APP_BUILD_PACK="\${FAKE_APP_BUILD_PACK:-}" \\
     FAKE_APP_PORTS="\${FAKE_APP_PORTS:-}" FAKE_NEW_PORTS="\${FAKE_NEW_PORTS:-}" \\
     FAKE_PORTS_PATCH_MARKER="\${FAKE_PORTS_PATCH_MARKER:-}" FAKE_PORTS_PATCH_TAKES_EFFECT="\${FAKE_PORTS_PATCH_TAKES_EFFECT:-}" \\
+    FAKE_OLD_COMPOSE_DOMAINS="\${FAKE_OLD_COMPOSE_DOMAINS:-}" FAKE_NEW_COMPOSE_DOMAINS="\${FAKE_NEW_COMPOSE_DOMAINS:-}" \\
+    FAKE_COMPOSE_DOMAINS_PATCH_MARKER="\${FAKE_COMPOSE_DOMAINS_PATCH_MARKER:-}" FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT="\${FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT:-}" \\
+    FAKE_COMPOSE_DOMAINS_PATCH_STATUS="\${FAKE_COMPOSE_DOMAINS_PATCH_STATUS:-}" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
 CMD="\${@: -1}"
 CMD_REWRITTEN="\$(printf '%s' "\$CMD" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
-PATH="$FAKE_BIN:\$PATH" bash -c "\$CMD_REWRITTEN"
+PATH="$FAKE_BIN:\$PATH" FAKE_APP_CID="\${FAKE_APP_CID:-}" FAKE_APP_ENV_LINES="\${FAKE_APP_ENV_LINES:-}" \\
+  bash -c "\$CMD_REWRITTEN"
 EOF
 chmod +x "$FAKE_BIN/ssh"
+
+# Fake `docker` -- post-assignment container-env read (team-lead ask,
+# PR #866 review), informational only in the real script. `$FAKE_APP_CID`
+# controls whether a container is reported running for the app (empty =
+# none, the common not-yet-redeployed case); `$FAKE_APP_ENV_LINES`
+# (newline-separated `NAME=value` pairs) is what `docker exec ... env`
+# reports -- the real script's own `grep -oE` + `cut -d= -f1` narrow this
+# to names only, so this fixture does not need to pre-filter.
+cat > "$FAKE_BIN/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"ps --filter"* && "$*" == *"status=running"* ]]; then
+  printf '%s' "${FAKE_APP_CID:-}"
+  exit 0
+fi
+if [[ "$*" == *"exec"* && "$*" == *" env"* ]]; then
+  printf '%s\n' "${FAKE_APP_ENV_LINES:-}"
+  exit 0
+fi
+echo "FAKE DOCKER: unrecognised invocation: $*" >&2
+exit 1
+EOF
+chmod +x "$FAKE_BIN/docker"
 
 # Ambiguous-application case: fake-curl's application-list branch only
 # ever returns ONE app -- for the ambiguity scenario, override with a
@@ -192,8 +219,8 @@ run_case() {
   seed_default_app_compose
   local log="$WORK/curl.log.$$.$RANDOM"
   local leak_log="$WORK/leak.log.$$.$RANDOM"
-  local patch_marker="$WORK/patch.marker.$$.$RANDOM"
   local ports_patch_marker="$WORK/ports-patch.marker.$$.$RANDOM"
+  local compose_domains_patch_marker="$WORK/compose-domains-patch.marker.$$.$RANDOM"
   : > "$log"
 
   printf 'PORKBUN_API_KEY=%s\nPORKBUN_SECRET_KEY=%s\nBOX_IP=127.0.0.1\n' "$PORKBUN_API_KEY_VALUE" "$PORKBUN_SECRET_KEY_VALUE" > "$WORK/.env"
@@ -202,6 +229,16 @@ run_case() {
   # Intentional, on $apply_flag below: an empty apply_flag must vanish
   # entirely (zero args passed), not become one empty-string arg -- the
   # real script's own case-statement would reject that as "unknown flag".
+  #
+  # $old_fqdn/$new_fqdn double as the docker_compose_domains defaults
+  # (PR #866 review, mechanism switched from `fqdn` to
+  # `docker_compose_domains` -- see assign-app-domain.sh's own header):
+  # every EXISTING scenario already passes exactly the domain-string
+  # shape docker_compose_domains needs, so FAKE_OLD_COMPOSE_DOMAINS/
+  # FAKE_NEW_COMPOSE_DOMAINS default to them unchanged -- no scenario
+  # below needed to change its call shape for the mechanism switch.
+  # FAKE_OLD_FQDN/FAKE_NEW_FQDN still get set too (the app-level `fqdn`
+  # read is now purely INFORMATIONAL in the real script, never a gate).
   # shellcheck disable=SC2086
   REPO_ROOT="$WORK" ROOT_DOMAIN=fake-domain.test APP_NAME=pfin-app AUTOMATION_KEY=/dev/null \
     CERT_POLL_ATTEMPTS=2 CERT_POLL_INTERVAL_SECONDS=0 \
@@ -209,14 +246,19 @@ run_case() {
     FAKE_PORKBUN_API_KEY_VALUE="$PORKBUN_API_KEY_VALUE" FAKE_PORKBUN_SECRET_KEY_VALUE="$PORKBUN_SECRET_KEY_VALUE" \
     FAKE_PORKBUN_RECORDS="$records" FAKE_APEX_CODE="$apex_code" FAKE_WWW_CODE="$www_code" \
     FAKE_APP_UUID=appuuid0000000000001 FAKE_APP_NAME=pfin-app FAKE_OLD_FQDN="$old_fqdn" FAKE_NEW_FQDN="$new_fqdn" \
-    FAKE_PATCH_MARKER="$patch_marker" FAKE_PATCH_TAKES_EFFECT="$patch_effect" \
     FAKE_APP_BASE_DIR="${FAKE_APP_BASE_DIR:-/api}" FAKE_APP_BUILD_PACK="${FAKE_APP_BUILD_PACK:-dockercompose}" \
     FAKE_APP_PORTS="${FAKE_APP_PORTS:-3000}" FAKE_NEW_PORTS="${FAKE_NEW_PORTS:-3000}" \
     FAKE_PORTS_PATCH_MARKER="$ports_patch_marker" FAKE_PORTS_PATCH_TAKES_EFFECT="${FAKE_PORTS_PATCH_TAKES_EFFECT:-1}" \
+    FAKE_OLD_COMPOSE_DOMAINS="${FAKE_OLD_COMPOSE_DOMAINS:-$old_fqdn}" FAKE_NEW_COMPOSE_DOMAINS="${FAKE_NEW_COMPOSE_DOMAINS:-$new_fqdn}" \
+    FAKE_COMPOSE_DOMAINS_PATCH_MARKER="$compose_domains_patch_marker" \
+    FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT="${FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT:-$patch_effect}" \
+    FAKE_COMPOSE_DOMAINS_PATCH_STATUS="${FAKE_COMPOSE_DOMAINS_PATCH_STATUS:-200}" \
+    FAKE_APP_CID="${FAKE_APP_CID:-}" FAKE_APP_ENV_LINES="${FAKE_APP_ENV_LINES:-}" \
     bash "$SMOKE_SH" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
   CASE_PORTS_PATCH_MARKER="$ports_patch_marker"
+  CASE_COMPOSE_DOMAINS_PATCH_MARKER="$compose_domains_patch_marker"
 
   if [[ "$rc" != "$expect_exit" ]]; then
     echo "FAIL: [$desc] expected exit $expect_exit, got $rc" >&2
@@ -347,20 +389,20 @@ if [[ -f "${CASE_PORTS_PATCH_MARKER:-/nonexistent}" ]]; then
 fi
 
 # 13. PORTS-MISMATCH-APPLY-PATCHES-BEFORE-FQDN -- proves ORDER: the
-#     ports_exposes PATCH must land before the domain (fqdn) PATCH, since
+#     ports_exposes PATCH must land before the domain (docker_compose_domains) PATCH, since
 #     Coolify's router needs the right in-container port wired before a
 #     domain routes traffic at it.
 FAKE_APP_PORTS=80 FAKE_NEW_PORTS=3000 FAKE_PORTS_PATCH_TAKES_EFFECT=1
-run_case "ports_exposes mismatch in apply mode PATCHes before the fqdn PATCH" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+run_case "ports_exposes mismatch in apply mode PATCHes before the docker_compose_domains PATCH" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
 unset FAKE_APP_PORTS FAKE_NEW_PORTS FAKE_PORTS_PATCH_TAKES_EFFECT
 if [[ ! -f "${CASE_PORTS_PATCH_MARKER:-/nonexistent}" ]]; then
   echo "FAIL: [ports mismatch apply ordering] no ports_exposes PATCH was issued" >&2
   FAIL=1
 elif [[ -n "${CASE_LOG:-}" ]]; then
   PORTS_LN="$(grep -n '^COOLIFY-PATCH-PORTS$' "$CASE_LOG" | head -1 | cut -d: -f1 || true)"
-  FQDN_LN="$(grep -n '^COOLIFY-PATCH-FQDN$' "$CASE_LOG" | head -1 | cut -d: -f1 || true)"
-  if [[ -z "$PORTS_LN" || -z "$FQDN_LN" || "$PORTS_LN" -ge "$FQDN_LN" ]]; then
-    echo "FAIL: [ports mismatch apply ordering] expected COOLIFY-PATCH-PORTS (line $PORTS_LN) before COOLIFY-PATCH-FQDN (line $FQDN_LN)" >&2
+  DOMAINS_LN="$(grep -n '^COOLIFY-PATCH-COMPOSE-DOMAINS$' "$CASE_LOG" | head -1 | cut -d: -f1 || true)"
+  if [[ -z "$PORTS_LN" || -z "$DOMAINS_LN" || "$PORTS_LN" -ge "$DOMAINS_LN" ]]; then
+    echo "FAIL: [ports mismatch apply ordering] expected COOLIFY-PATCH-PORTS (line $PORTS_LN) before COOLIFY-PATCH-COMPOSE-DOMAINS (line $DOMAINS_LN)" >&2
     FAIL=1
   fi
 fi
@@ -428,6 +470,73 @@ run_case "expose: comment-stripped positive control finds the real port" 0 "" "$
 CASE_APP_COMPOSE_CONTENT=""
 if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -q "compose declares expose: 3000" <<<"$CASE_OUTPUT"; then
   echo "FAIL: [expose comment-stripped] parser did not find port 3000 through the comments -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# --- docker_compose_domains mechanism-specific scenarios (Sec merge
+# condition, PR #866 review) -------------------------------------------
+
+# 21. DOCKER-COMPOSE-DOMAINS-PATCH-422-DISTINCT-MESSAGE -- a 422 on the
+#     write itself must be named DISTINCTLY from a read-back mismatch
+#     (team-lead's explicit ask) -- naming the field, the build_pack,
+#     and pointing at scripts/COOLIFY-API-MEASURED.md, never worded as
+#     "the field name guess was wrong" (that framing described the
+#     RETIRED fqdn mechanism, not this one).
+FAKE_COMPOSE_DOMAINS_PATCH_STATUS=422
+run_case "docker_compose_domains PATCH 422 refuses with a distinct message" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_COMPOSE_DOMAINS_PATCH_STATUS
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "HTTP 422" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [compose-domains 422] did not name HTTP 422 -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "build_pack=dockercompose" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [compose-domains 422] did not name the build_pack -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qF "read-back shows" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [compose-domains 422] used read-back-mismatch wording for a write-level 422 -- these are distinct failure classes, must not share a message." >&2
+    FAIL=1
+  fi
+fi
+
+# 22. POST-ASSIGNMENT-ENV-READ-NOT-APPLICABLE -- no container running yet
+#     for the app (the common not-yet-redeployed case, default
+#     FAKE_APP_CID empty) -- informational, never blocks the exit code.
+run_case "post-assignment env read: no running container, not applicable" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "container-env read not applicable" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [post-assignment env read: no container] did not report inapplicability -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 23. POST-ASSIGNMENT-ENV-READ-NAMES-FOUND -- a running container reports
+#     SERVICE_FQDN_*/COOLIFY_FQDN names -- printed as a MEASURED line,
+#     names only (never a value, matching this repo's names-only
+#     discipline for env-store contents elsewhere).
+FAKE_APP_CID=cid-app-running-1
+FAKE_APP_ENV_LINES=$'COOLIFY_FQDN=http://abc.sslip.io\nSERVICE_FQDN_APP=https://fake-domain.test'
+run_case "post-assignment env read: names found, reported MEASURED" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_CID FAKE_APP_ENV_LINES
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "MEASURED" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [post-assignment env read: names found] did not print a MEASURED line -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "COOLIFY_FQDN" <<<"$CASE_OUTPUT" || ! grep -qF "SERVICE_FQDN_APP" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [post-assignment env read: names found] did not name both env vars found -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 24. POST-ASSIGNMENT-ENV-READ-NO-NAMES-CONTROL-GAP -- a running
+#     container injects NONE of the watched names -- reported as a
+#     CONTROL GAP to investigate, never silently passed over as success.
+FAKE_APP_CID=cid-app-running-2
+FAKE_APP_ENV_LINES=""
+run_case "post-assignment env read: no names found, reported as a control gap" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_CID FAKE_APP_ENV_LINES
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "CONTROL GAP" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [post-assignment env read: no names] did not name the control gap -- captured output: $CASE_OUTPUT" >&2
   FAIL=1
 fi
 
