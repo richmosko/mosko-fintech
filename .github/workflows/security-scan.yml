@@ -4264,6 +4264,33 @@ jobs:
       - name: tree-wide boolean-cast pairing scan (scripts/*.sh)
         run: bash scripts/ci/fence-boolean-cast-pairing.sh
 
+  fence-docker-inspect-format-tab:
+    name: docker inspect --format templates — literal-tab fence (tree-wide)
+    runs-on: ubuntu-latest
+    # Run-7 stop (team-lead's own brief, 2026-09-21), the #841 defect
+    # class's THIRD live instance: inside a Go template, `\t` in the
+    # format string's LITERAL TEXT never expands -- only a string-literal
+    # ACTION, `{{"\t"}}`, becomes a real tab. MEASURED live:
+    # scripts/smoke-pfin-exposure.sh:177's `docker inspect --format
+    # '{{.State.Running}}\t{{.Id}}\t{{.Created}}'` printed the literal
+    # bytes `true\t<id>` against a genuinely running, healthy container,
+    # and the downstream `awk -F'\t' '$1=="true"'` never matched -- the
+    # smoke died "no running container found" on a fully successful
+    # deploy. Already fixed once in scripts/deploy-app.sh:441 (PR #841)
+    # and every OTHER scripts/smoke-*.sh sibling except this one --
+    # fixed here, and this fence exists so a fourth instance is caught
+    # by CI rather than by a human reading a run log. Deliberately scoped
+    # to `docker inspect --format` only -- `docker ps`/`docker images`/
+    # `docker compose ... ps ... --format` pre-process `\t` correctly
+    # (measured) and are out of scope by construction (see
+    # scripts/ci/fence-docker-inspect-format-tab.sh's own header).
+    # Structural / source-literal, same convention as fence-heredoc-
+    # stdin-drain.sh and fence-boolean-cast-pairing.sh.
+    steps:
+      - uses: actions/checkout@v4
+      - name: tree-wide docker-inspect-format literal-tab scan (scripts/*.sh)
+        run: bash scripts/ci/fence-docker-inspect-format-tab.sh
+
   fence-mint-jwt-boxip-strikes:
     name: mint-supabase-jwt-keys.sh — BOX_IP-required-not-defaulted strike-proof
     runs-on: ubuntu-latest
