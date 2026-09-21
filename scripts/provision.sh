@@ -37,7 +37,18 @@
 # runs (nothing mutated anywhere), but a preflight is a snapshot of
 # CURRENT state, not a simulation of what --apply would do to a DIFFERENT
 # state a real run might encounter later (the same limitation each
-# individual script's own header already states for itself).
+# individual script's own header already states for itself). On a
+# partially-provisioned box, a step whose preflight fails because an
+# EARLIER step's own output does not exist yet (--dry-run never applies
+# anything, so that output genuinely is absent) is reported
+# `BLOCKED-BY <step>`, using that step's own declared STEP_REQUIRES
+# prerequisite -- this is EXPECTED on a fresh/partial box, not a defect,
+# and does not fail the dry run. A step that fails for any OTHER reason
+# is reported `would likely fail` and DOES fail the dry run (exit 3) --
+# see EXIT CODES. (D-2, live `--dry-run`, 2026-09-20: the prior version
+# of this script printed every non-zero preflight the same way and still
+# reported overall success, which was false on the box that surfaced
+# this.)
 #
 # USAGE
 #   scripts/provision.sh                          # run every step in order: preflight, then --apply, stop on first failure
@@ -49,13 +60,18 @@
 #
 # EXIT CODES
 #   0  every step (or the one selected by --only, or every remaining step
-#      from --from) reported VERIFIED or SKIPPED.
+#      from --from) reported VERIFIED or SKIPPED -- or, under --dry-run,
+#      every step reported VERIFIED/SKIPPED/MANUAL/BLOCKED-BY-an-earlier-
+#      step-not-yet-applied (see the summary counts printed at the end).
 #   1  a step reported MANUAL and this run stopped there (an unavoidable
 #      by-hand moment, not a script defect).
 #   2  a step reported a real failure (REFUSED/FAILED) and this run
 #      stopped there.
 #   3  a precondition this script could not even attempt under (missing
-#      operator-provided .env names, unknown --from/--only step key).
+#      operator-provided .env names, unknown --from/--only step key) --
+#      OR, under --dry-run only, one or more steps reported "would likely
+#      fail" for a reason other than an earlier step's own output being
+#      absent (the summary names how many and each rc=).
 #
 # ORCHESTRATOR CONTRACT: non-interactive, no prompts, no `read` anywhere
 # in this file or any step it calls in preflight/--apply mode. Every step
@@ -309,8 +325,70 @@ load_box_ip() {
   grep -m1 '^BOX_IP=' "$REPO_ROOT/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r\n' || true
 }
 
+# require_box_ip -- ONE mechanism for every run_* function whose
+# underlying script requires BOX_IP passed via the environment, never
+# defaulted, never self-read from .env (provision-migrator-app.sh,
+# migrator-scheduled-task.sh, coolify-env.sh, provision-app.sh,
+# provision-worker.sh, record-coolify-uuids.sh, push-production-
+# secrets.sh, mint-supabase-jwt-keys.sh, db-role-handoff.sh, deploy-
+# app.sh, every smoke-*.sh, worker-scheduled-task.sh -- "the same
+# discipline as provision-supabase-stack.sh", per those scripts' own
+# headers). Sets and EXPORTS the global BOX_IP, read FRESH from .env on
+# every call -- never cached across steps, because provision-vps.sh's
+# own --apply (step 1) writes BOX_IP to .env for the first time mid-run,
+# so a later step in the SAME invocation must see the value THIS run
+# just produced, not a stale empty read from before step 1 executed.
+# Once exported here, every subsequent `bash "$SCRIPTS/...sh"` call in
+# the calling function inherits it automatically -- replacing the prior
+# per-call-site `BOX_IP="$box_ip" bash ...` prefix, which was correct
+# but duplicated across ~13 functions and ~20 call sites, and is the
+# exact shape that let two sub-scripts (provision-migrator-app.sh,
+# migrator-scheduled-task.sh) get missed entirely (D-1, live
+# `--dry-run`, 2026-09-20 -- both failed "BOX_IP is required, not
+# defaulted" at the real run's step 3). A third, MASKED instance:
+# run_mint_jwt below used to omit BOX_IP entirely too, silently falling
+# through to mint-supabase-jwt-keys.sh's own hardcoded
+# `${BOX_IP:-188.245.166.206}` default -- happened to be this
+# deployment's real box IP, so it "worked", but is the exact silent-
+# prod-fallback shape every OTHER script in this registry explicitly
+# refuses to do. Fixed the same way: explicit, never assumed.
+require_box_ip() {
+  BOX_IP="$(load_box_ip)"
+  [[ -n "$BOX_IP" ]] || return 2
+  export BOX_IP
+  return 0
+}
+
 resume_hint() {
   printf '\nresume: scripts/provision.sh --from %s\n' "$1" >&2
+}
+
+# result_status_for <key> -- prints THIS run's already-recorded
+# RESULT_STATUS for <key> (steps run in order, so a step's own declared
+# STEP_REQUIRES prerequisite -- always earlier in STEP_KEYS -- has
+# already been recorded by the time this is called); prints nothing and
+# returns 1 if <key> has not run in this invocation (e.g. --from/--only
+# skipped it -- treated as "unknown", never as blocked, since this run
+# never observed its actual state).
+result_status_for() {
+  local want="$1" j
+  for j in "${!RESULT_KEYS[@]}"; do
+    if [[ "${RESULT_KEYS[$j]}" == "$want" ]]; then
+      printf '%s' "${RESULT_STATUS[$j]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# is_satisfied_status <status> -- true if a prerequisite step's own
+# RESULT_STATUS this dry run counts as "its own condition is met", for
+# BLOCKED-BY classification purposes (D-2, live --dry-run, 2026-09-20).
+is_satisfied_status() {
+  case "$1" in
+    "VERIFIED (dry-run)"|"SKIPPED (dry-run)"|"MANUAL (dry-run)") return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # print_summary_and_exit <failed-step-key> <exit-code> -- prints the
@@ -337,88 +415,88 @@ run_db_bootstrap() { bash "$SCRIPTS/db-bootstrap.sh" ${1:+--apply}; }
 run_pgrst_gates() { bash "$SCRIPTS/pgrst-exposure-gates.sh"; }
 
 run_pgrst_flip() {
-  local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2
-  BOX_IP="$box_ip" bash "$SCRIPTS/coolify-env.sh" set pfin-supabase-stack PGRST_DB_SCHEMAS=public,graphql_public,pfin ${1:+--apply --deploy}
+  require_box_ip || return 2
+  bash "$SCRIPTS/coolify-env.sh" set pfin-supabase-stack PGRST_DB_SCHEMAS=public,graphql_public,pfin ${1:+--apply --deploy}
 }
 
-run_migrator_app() { bash "$SCRIPTS/provision-migrator-app.sh" ${1:+--apply}; }
+run_migrator_app() { require_box_ip || return 2; bash "$SCRIPTS/provision-migrator-app.sh" ${1:+--apply}; }
 
-run_migrator_scheduled_task() { bash "$SCRIPTS/migrator-scheduled-task.sh" ${1:+--apply}; }
+run_migrator_scheduled_task() { require_box_ip || return 2; bash "$SCRIPTS/migrator-scheduled-task.sh" ${1:+--apply}; }
 
 run_provision_resources() {
-  local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2
-  BOX_IP="$box_ip" bash "$SCRIPTS/provision-app.sh" ${1:+--apply} || return $?
+  require_box_ip || return 2
+  bash "$SCRIPTS/provision-app.sh" ${1:+--apply} || return $?
   local rc
   for name in pfin-back-etl pfin-pdf-render pfin-provider-sync; do
-    BOX_IP="$box_ip" bash "$SCRIPTS/provision-worker.sh" "$name" ${1:+--apply}; rc=$?
+    bash "$SCRIPTS/provision-worker.sh" "$name" ${1:+--apply}; rc=$?
     [[ $rc -eq 0 ]] || return $rc
   done
   return 0
 }
 
-run_record_uuids() { local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2; BOX_IP="$box_ip" bash "$SCRIPTS/record-coolify-uuids.sh" ${1:+--apply}; }
+run_record_uuids() { require_box_ip || return 2; bash "$SCRIPTS/record-coolify-uuids.sh" ${1:+--apply}; }
 
 run_nonsecret_env() {
-  local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2
-  BOX_IP="$box_ip" bash "$SCRIPTS/coolify-env.sh" set pfin-app PUBLIC_SUPABASE_URL=http://api-gw:8000 ${1:+--apply} || return $?
-  BOX_IP="$box_ip" bash "$SCRIPTS/coolify-env.sh" set pfin-back-etl \
+  require_box_ip || return 2
+  bash "$SCRIPTS/coolify-env.sh" set pfin-app PUBLIC_SUPABASE_URL=http://api-gw:8000 ${1:+--apply} || return $?
+  bash "$SCRIPTS/coolify-env.sh" set pfin-back-etl \
     PFIN_DB_HOST=db PFIN_DB_PORT=5432 PFIN_DB_NAME=postgres PFIN_DB_USER=pfin_etl PFIN_DB_SSLMODE=disable ${1:+--apply} || return $?
-  BOX_IP="$box_ip" bash "$SCRIPTS/coolify-env.sh" set pfin-provider-sync \
+  bash "$SCRIPTS/coolify-env.sh" set pfin-provider-sync \
     PFIN_DB_HOST=db PFIN_DB_PORT=5432 PFIN_DB_NAME=postgres PFIN_DB_USER=pfin_provider_sync PFIN_DB_SSLMODE=disable PLAID_ENV=production ${1:+--apply}
 }
 
-run_secrets() { local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2; BOX_IP="$box_ip" bash "$SCRIPTS/push-production-secrets.sh" ${1:+--apply --skip-missing-resource}; }
+run_secrets() { require_box_ip || return 2; bash "$SCRIPTS/push-production-secrets.sh" ${1:+--apply --skip-missing-resource}; }
 
-run_mint_jwt() { bash "$SCRIPTS/mint-supabase-jwt-keys.sh" ${1:+--apply --app-name pfin-app --verify-live}; }
+run_mint_jwt() { require_box_ip || return 2; bash "$SCRIPTS/mint-supabase-jwt-keys.sh" ${1:+--apply --app-name pfin-app --verify-live}; }
 
-run_etl_role()             { local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2; BOX_IP="$box_ip" bash "$SCRIPTS/db-role-handoff.sh" pfin_etl ${1:+--apply}; }
-run_provider_sync_role()   { local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2; BOX_IP="$box_ip" bash "$SCRIPTS/db-role-handoff.sh" pfin_provider_sync ${1:+--apply}; }
+run_etl_role()             { require_box_ip || return 2; bash "$SCRIPTS/db-role-handoff.sh" pfin_etl ${1:+--apply}; }
+run_provider_sync_role()   { require_box_ip || return 2; bash "$SCRIPTS/db-role-handoff.sh" pfin_provider_sync ${1:+--apply}; }
 
 run_deploy_app() {
-  local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2
-  BOX_IP="$box_ip" bash "$SCRIPTS/deploy-app.sh" pfin-app --expect-base-directory /api --expect-build-pack dockercompose --compose-service app \
+  require_box_ip || return 2
+  bash "$SCRIPTS/deploy-app.sh" pfin-app --expect-base-directory /api --expect-build-pack dockercompose --compose-service app \
     --require-env PUBLIC_SUPABASE_URL,PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY \
     --require-network APP_STACK_NETWORK_NAME --resolve-host api-gw ${1:+--apply} || return $?
   [[ -n "${1:-}" ]] || return 0
-  BOX_IP="$box_ip" bash "$SCRIPTS/smoke-pfin-exposure.sh" pfin-app --compose-service app
+  bash "$SCRIPTS/smoke-pfin-exposure.sh" pfin-app --compose-service app
 }
 
 run_deploy_workers() {
-  local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2
+  require_box_ip || return 2
   for name in pfin-back-etl pfin-provider-sync pfin-pdf-render; do
     case "$name" in
-      pfin-back-etl)      BOX_IP="$box_ip" bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/etl --expect-build-pack dockercompose --compose-service pfin-back-etl-monthly-report --require-network ETL_STACK_NETWORK_NAME --resolve-host db ${1:+--apply} || return $? ;;
-      pfin-provider-sync) BOX_IP="$box_ip" bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/provider-sync --expect-build-pack dockercompose --compose-service provider-sync --require-network PROVIDER_SYNC_STACK_NETWORK_NAME --resolve-host db ${1:+--apply} || return $? ;;
-      pfin-pdf-render)    BOX_IP="$box_ip" bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/pdf-render --expect-build-pack dockercompose --compose-service pdf-render --require-network PDF_RENDER_STACK_NETWORK_NAME ${1:+--apply} || return $? ;;
+      pfin-back-etl)      bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/etl --expect-build-pack dockercompose --compose-service pfin-back-etl-monthly-report --require-network ETL_STACK_NETWORK_NAME --resolve-host db ${1:+--apply} || return $? ;;
+      pfin-provider-sync) bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/provider-sync --expect-build-pack dockercompose --compose-service provider-sync --require-network PROVIDER_SYNC_STACK_NETWORK_NAME --resolve-host db ${1:+--apply} || return $? ;;
+      pfin-pdf-render)    bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/pdf-render --expect-build-pack dockercompose --compose-service pdf-render --require-network PDF_RENDER_STACK_NETWORK_NAME ${1:+--apply} || return $? ;;
     esac
   done
 }
 
 run_scheduled_tasks() {
-  local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2
-  BOX_IP="$box_ip" bash "$SCRIPTS/worker-scheduled-task.sh" pfin-back-etl-monthly-report ${1:+--apply} || return $?
-  BOX_IP="$box_ip" bash "$SCRIPTS/worker-scheduled-task.sh" pfin-provider-sync-daily-poll ${1:+--apply}
+  require_box_ip || return 2
+  bash "$SCRIPTS/worker-scheduled-task.sh" pfin-back-etl-monthly-report ${1:+--apply} || return $?
+  bash "$SCRIPTS/worker-scheduled-task.sh" pfin-provider-sync-daily-poll ${1:+--apply}
 }
 
 run_smokes() {
-  local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2
+  require_box_ip || return 2
   local rc
-  BOX_IP="$box_ip" bash "$SCRIPTS/smoke-admission-endpoint.sh"; rc=$?
+  bash "$SCRIPTS/smoke-admission-endpoint.sh"; rc=$?
   [[ $rc -eq 0 || $rc -eq 3 ]] || return $rc
   local worst=$rc
-  BOX_IP="$box_ip" bash "$SCRIPTS/smoke-etl-poll.sh"; rc=$?
+  bash "$SCRIPTS/smoke-etl-poll.sh"; rc=$?
   [[ $rc -eq 0 || $rc -eq 3 ]] || return $rc
   [[ $rc -eq 3 ]] && worst=3
-  BOX_IP="$box_ip" bash "$SCRIPTS/smoke-pdf-roundtrip.sh"; rc=$?
+  bash "$SCRIPTS/smoke-pdf-roundtrip.sh"; rc=$?
   [[ $rc -eq 0 || $rc -eq 3 ]] || return $rc
   [[ $rc -eq 3 ]] && worst=3
-  BOX_IP="$box_ip" bash "$SCRIPTS/smoke-pfin-exposure.sh" pfin-app --compose-service app; rc=$?
+  bash "$SCRIPTS/smoke-pfin-exposure.sh" pfin-app --compose-service app; rc=$?
   [[ $rc -eq 0 || $rc -eq 3 ]] || return $rc
   [[ $rc -eq 3 ]] && worst=3
   return "$worst"
 }
 
-run_ca1_gate() { local box_ip; box_ip="$(load_box_ip)"; [[ -n "$box_ip" ]] || return 2; BOX_IP="$box_ip" bash "$SCRIPTS/smoke-ca1-env-pattern.sh"; }
+run_ca1_gate() { require_box_ip || return 2; bash "$SCRIPTS/smoke-ca1-env-pattern.sh"; }
 
 run_remaining_checks() {
   step "remaining-checks: BY-HAND (CA-7 reachability, TZ-1 pin, RLS isolation, auth login -- see docs/archive/deployment-runbook-rationale-2026-09-20.md §10)"
@@ -623,7 +701,35 @@ for ((i = START_IDX; i <= END_IDX; i++)); do
     elif [[ $PREFLIGHT_RC -eq 4 ]]; then
       RESULT_STATUS+=("MANUAL (dry-run)")
     else
-      RESULT_STATUS+=("would likely fail (dry-run, rc=$PREFLIGHT_RC)")
+      # D-2 (live --dry-run, 2026-09-20): a real preflight failure code
+      # here does NOT always mean a genuine defect -- nothing is ever
+      # applied in --dry-run, so once one step's resource is absent (a
+      # fresh/partially-provisioned box), every step downstream of it
+      # ALSO fails its own preflight for the exact same underlying
+      # reason (its own resource, built by an earlier step, was never
+      # actually created either). Distinguish that expected cascade from
+      # an independent failure by checking whether THIS step's own
+      # declared STEP_REQUIRES prerequisite was itself satisfied earlier
+      # in this SAME dry run.
+      blocked_by=""
+      reqs_i="${STEP_REQUIRES[$i]:-}"
+      if [[ -n "$reqs_i" ]]; then
+        IFS=',' read -r -a req_list_i <<< "$reqs_i"
+        for req_i in "${req_list_i[@]}"; do
+          [[ -n "$req_i" ]] || continue
+          prior_status="$(result_status_for "$req_i")" && {
+            if ! is_satisfied_status "$prior_status"; then
+              blocked_by="$req_i"
+              break
+            fi
+          }
+        done
+      fi
+      if [[ -n "$blocked_by" ]]; then
+        RESULT_STATUS+=("BLOCKED-BY $blocked_by (dry-run, rc=$PREFLIGHT_RC)")
+      else
+        RESULT_STATUS+=("would likely fail (dry-run, rc=$PREFLIGHT_RC)")
+      fi
     fi
     RESULT_KEYS+=("$key")
     continue
@@ -660,5 +766,34 @@ done
 
 step "Summary"
 for j in "${!RESULT_KEYS[@]}"; do printf '  %-20s %s\n' "${RESULT_KEYS[$j]}" "${RESULT_STATUS[$j]}"; done
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  # D-2 (live --dry-run, 2026-09-20): the old unconditional "ok all
+  # selected steps VERIFIED or SKIPPED" + exit 0 was FALSE on a
+  # partially-provisioned box -- ten steps read "would likely fail" yet
+  # the run still reported success. Count truthfully instead: a
+  # BLOCKED-BY step is EXPECTED (nothing is ever applied in --dry-run,
+  # so a step downstream of one not yet run cannot preflight clean) and
+  # does not fail the run; a genuine "would likely fail" does.
+  V=0; S=0; M=0; B=0; F=0
+  for j in "${!RESULT_STATUS[@]}"; do
+    case "${RESULT_STATUS[$j]}" in
+      "VERIFIED "*)   V=$((V + 1)) ;;
+      "SKIPPED "*)    S=$((S + 1)) ;;
+      "MANUAL "*)     M=$((M + 1)) ;;
+      "BLOCKED-BY "*) B=$((B + 1)) ;;
+      *)              F=$((F + 1)) ;;
+    esac
+  done
+  info "$V VERIFIED, $S SKIPPED, $M MANUAL, $B BLOCKED-BY-earlier-step (expected on a partial box), $F would likely fail"
+  if [[ $F -gt 0 ]]; then
+    echo "" >&2
+    echo "FAIL: $F step(s) would likely fail for a reason OTHER than an earlier step not yet being applied -- see the rc= value(s) above; investigate before a real run." >&2
+    exit 3
+  fi
+  ok "dry-run: every step VERIFIED, SKIPPED, MANUAL, or BLOCKED-BY a step this dry run never applied (expected -- --dry-run applies nothing)"
+  exit 0
+fi
+
 ok "all selected steps VERIFIED or SKIPPED"
 exit 0
