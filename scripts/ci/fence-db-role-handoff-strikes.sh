@@ -237,6 +237,12 @@ if [[ "$ARGS" == *"artisan tinker --execute"* ]]; then
     echo "1|0000000000000000|$USER_VAL"
     exit 0
   fi
+  if [[ "${FAKE_READBACK_EMPTY:-0}" == "1" ]]; then
+    # team-lead's run-6 stop, item 8 -- the row exists (count=1) but its
+    # value is empty.
+    echo "1|EMPTY|$USER_VAL"
+    exit 0
+  fi
   echo "1|$ACTUAL_HASH|$USER_VAL"
   exit 0
 fi
@@ -284,32 +290,43 @@ if [[ "$ARGS" == *"-h db"* ]]; then
     REAL_PW="${FAKE_BIND_CHECK_PW:-}"
   fi
 
+  # team-lead's run-6 stop, item 7 (fixture-fidelity, optional) -- this
+  # bypass now applies to ANY connect attempt (control OR real), checked
+  # BEFORE the password comparison below, since a systemic -W breakage
+  # (the hazard this models) would affect every -h db call this process
+  # makes, not just the one using the real credential. Previously gated
+  # inside "REAL_PW matched" only, leaving the control probe on normal
+  # processing in a "trust-path" scenario -- a state a real breakage
+  # could never actually produce.
+  if [[ "${FAKE_NO_PASSWORD_PROMPT:-0}" == "1" ]]; then
+    # Sec VETO V-1 (PR #846 review) -- trust-path bypass: NO prompt text
+    # at all EVEN WITH -W (the actual hazard: something suppresses the
+    # prompt regardless), the cleartext first-stdin-line consumed as a
+    # bogus SQL statement instead. Realistically leaks whatever was piped
+    # into the syntax-error echo -- with scrub-before-prompt-check
+    # ordering, the cleartext scrub now correctly fires FIRST on this
+    # exact shape for the REAL connect (a STRONGER outcome); for the
+    # CONTROL probe, its own exact-string auth-failure check never finds
+    # it either, so both probes refuse. FAKE_NO_PASSWORD_PROMPT_CLEAN
+    # below isolates the missing-prompt guard with a non-leaking variant.
+    echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$FIRST_LINE\""
+    echo "LINE 1: $FIRST_LINE"
+    echo " current_user "
+    echo "--------------"
+    echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+    exit 0
+  fi
+  if [[ "${FAKE_NO_PASSWORD_PROMPT_CLEAN:-0}" == "1" ]]; then
+    echo "psql:<stdin>:1: ERROR:  syntax error at or near a piped credential (redacted by this fake, not by db-role-handoff.sh)"
+    echo " current_user "
+    echo "--------------"
+    echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+    exit 0
+  fi
+
   if [[ -n "$REAL_PW" && "$FIRST_LINE" == "$REAL_PW" ]]; then
     # The REAL credential was piped -- this is the real connect attempt
     # (whether or not a control call happened first).
-    if [[ "${FAKE_NO_PASSWORD_PROMPT:-0}" == "1" ]]; then
-      # Sec VETO V-1 (PR #846 review) -- trust-path bypass: NO prompt text
-      # at all EVEN WITH -W (the actual hazard: something suppresses the
-      # prompt regardless), the cleartext first-stdin-line consumed as a
-      # bogus SQL statement instead. Realistically leaks $PW into the
-      # syntax-error echo -- with scrub-before-prompt-check ordering, the
-      # cleartext scrub now correctly fires FIRST on this exact shape (a
-      # STRONGER outcome). FAKE_NO_PASSWORD_PROMPT_CLEAN below isolates
-      # the missing-prompt guard with a non-leaking variant.
-      echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$FIRST_LINE\""
-      echo "LINE 1: $FIRST_LINE"
-      echo " current_user "
-      echo "--------------"
-      echo " ${FAKE_ROLE_NAME:-pfin_etl}"
-      exit 0
-    fi
-    if [[ "${FAKE_NO_PASSWORD_PROMPT_CLEAN:-0}" == "1" ]]; then
-      echo "psql:<stdin>:1: ERROR:  syntax error at or near a piped credential (redacted by this fake, not by db-role-handoff.sh)"
-      echo " current_user "
-      echo "--------------"
-      echo " ${FAKE_ROLE_NAME:-pfin_etl}"
-      exit 0
-    fi
     if [[ "${FAKE_WRONG_CURRENT_USER:-0}" == "1" ]]; then
       # Sec C-1 (PR #856 round 1) -- everything else about this connection
       # is normal (prompt prints, no cleartext leak, exit 0), but the row
@@ -348,6 +365,17 @@ if [[ "$ARGS" == *"-h db"* ]]; then
     # wrong value, or REAL_PW unset). Real psql behavior: auth failure,
     # unless a dedicated override models the actual hazards the control
     # exists to catch.
+    if [[ "${FAKE_ECHO_PW_IN_CONTROL:-0}" == "1" ]]; then
+      # Sec F-1 (PR #858 review) -- the CONTROL's own scrub had no
+      # scenario in this file either: striking it left the whole suite
+      # green. Models a hypothetical transport/debug-print bug that
+      # leaks the REAL credential into the control probe's own output
+      # even though the control never sent it.
+      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      echo "DEBUG (simulated transport bug): real value was $REAL_PW"
+      echo "psql: error: connection to server at \"db\" (10.0.0.5), port 5432 failed: FATAL:  password authentication failed for user \"${FAKE_ROLE_NAME:-pfin_etl}\"" >&2
+      exit 2
+    fi
     if [[ "${FAKE_CONTROL_SUCCEEDS:-0}" == "1" ]]; then
       [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
       echo " current_user "
@@ -439,12 +467,12 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_ROLE_STATE="\$FAKE_ROLE_STATE" FAKE_VERIFY_STATE="\$FAKE_VERIFY_STATE" FAKE_ROLE_NAME="\$FAKE_ROLE_NAME" \\
     FAKE_CONNECT_FAIL="\$FAKE_CONNECT_FAIL" FAKE_MISMATCH="\$FAKE_MISMATCH" FAKE_HANDOFF_FAIL="\$FAKE_HANDOFF_FAIL" \\
     FAKE_ECHO_PASSWORD_IN_OUTPUT="\$FAKE_ECHO_PASSWORD_IN_OUTPUT" FAKE_READBACK_COUNT="\$FAKE_READBACK_COUNT" \\
-    FAKE_NO_PASSWORD_PROMPT="\$FAKE_NO_PASSWORD_PROMPT" FAKE_READBACK_HASH_MISMATCH="\$FAKE_READBACK_HASH_MISMATCH" \\
+    FAKE_NO_PASSWORD_PROMPT="\$FAKE_NO_PASSWORD_PROMPT" FAKE_READBACK_HASH_MISMATCH="\$FAKE_READBACK_HASH_MISMATCH" FAKE_READBACK_EMPTY="\$FAKE_READBACK_EMPTY" \\
     FAKE_READBACK_USER="\$FAKE_READBACK_USER" FAKE_ECHO_PW_IN_CONNECT="\$FAKE_ECHO_PW_IN_CONNECT" \\
     FAKE_STORE_COUNT="\$FAKE_STORE_COUNT" FAKE_STORE_NONEMPTY="\$FAKE_STORE_NONEMPTY" FAKE_BIND_CHECK_PW="\$FAKE_BIND_CHECK_PW" \\
     FAKE_NO_PASSWORD_PROMPT_CLEAN="\$FAKE_NO_PASSWORD_PROMPT_CLEAN" FAKE_WRONG_CURRENT_USER="\$FAKE_WRONG_CURRENT_USER" \\
     FAKE_CONTROL_SUCCEEDS="\$FAKE_CONTROL_SUCCEEDS" FAKE_CONTROL_WRONG_ERROR="\$FAKE_CONTROL_WRONG_ERROR" \\
-    FAKE_CONTROL_WRONG_ROLE_ERROR="\$FAKE_CONTROL_WRONG_ROLE_ERROR" \\
+    FAKE_CONTROL_WRONG_ROLE_ERROR="\$FAKE_CONTROL_WRONG_ROLE_ERROR" FAKE_ECHO_PW_IN_CONTROL="\$FAKE_ECHO_PW_IN_CONTROL" \\
     FAKE_CONNECT_CALL_LOG="\$FAKE_CONNECT_CALL_LOG" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
@@ -492,7 +520,7 @@ run_scenario() {
   # each carried exactly one such row, value_len=0) -- STORE_HAS_PW must
   # then read false, the exact same as a genuinely fresh store.
   local desc="$1" expect_exit="$2" role="$3" apply_flag="$4" curl_mode="$5" \
-        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" no_prompt_clean="${19:-0}" wrong_current_user="${20:-0}" control_succeeds="${21:-0}" control_wrong_error="${22:-0}" store_nonempty="${23:-1}" control_wrong_role_error="${24:-0}"
+        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" no_prompt_clean="${19:-0}" wrong_current_user="${20:-0}" control_succeeds="${21:-0}" control_wrong_error="${22:-0}" store_nonempty="${23:-1}" control_wrong_role_error="${24:-0}" echo_pw_in_control="${25:-0}" readback_empty="${26:-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   local resource_name="pfin-back-etl"
@@ -512,12 +540,12 @@ run_scenario() {
     FAKE_ROLE_STATE="$role_state" FAKE_VERIFY_STATE="$verify_state" FAKE_ROLE_NAME="$role" \
     FAKE_CONNECT_FAIL="$connect_fail" FAKE_MISMATCH="$mismatch" FAKE_HANDOFF_FAIL="$handoff_fail" \
     FAKE_ECHO_PASSWORD_IN_OUTPUT="$echo_pw" FAKE_READBACK_COUNT="$readback_count" \
-    FAKE_NO_PASSWORD_PROMPT="$no_prompt" FAKE_READBACK_HASH_MISMATCH="$hash_mismatch" \
+    FAKE_NO_PASSWORD_PROMPT="$no_prompt" FAKE_READBACK_HASH_MISMATCH="$hash_mismatch" FAKE_READBACK_EMPTY="$readback_empty" \
     FAKE_READBACK_USER="$readback_user" FAKE_ECHO_PW_IN_CONNECT="$echo_pw_in_connect" \
     FAKE_STORE_COUNT="$store_count" FAKE_STORE_NONEMPTY="$store_nonempty" FAKE_BIND_CHECK_PW="$bind_check_pw" \
     FAKE_NO_PASSWORD_PROMPT_CLEAN="$no_prompt_clean" FAKE_WRONG_CURRENT_USER="$wrong_current_user" \
     FAKE_CONTROL_SUCCEEDS="$control_succeeds" FAKE_CONTROL_WRONG_ERROR="$control_wrong_error" \
-    FAKE_CONTROL_WRONG_ROLE_ERROR="$control_wrong_role_error" \
+    FAKE_CONTROL_WRONG_ROLE_ERROR="$control_wrong_role_error" FAKE_ECHO_PW_IN_CONTROL="$echo_pw_in_control" \
     FAKE_CONNECT_CALL_LOG="$CONNECT_CALL_LOG" \
     bash "$DB_ROLE_HANDOFF_SH" "$role" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
@@ -751,26 +779,22 @@ OUT12="$(run_scenario "provider-sync happy-path-initial: succeeds" 0 pfin_provid
 assert_output_contains "provider-sync happy-path-initial" "${OUT12:-}" "hash-bound to the generated credential confirmed" || FAIL=1
 assert_output_contains "provider-sync happy-path-initial" "${OUT12:-}" "OK: trust-path control: a deliberately WRONG password was refused with 'password authentication failed for user \"pfin_provider_sync\"'" || FAIL=1
 
-# 13. TRUST-PATH-NO-PROMPT (Sec VETO V-1, PR #846 review) -- paired golden
-#     test: the fake psql's step-C branch does NOT emit "Password for
-#     user" and instead echoes the piped credential back inside a
-#     fabricated syntax-error message (the measured 127.0.0.1/32 `trust`
-#     rule shape). Before the V-1 fix this scenario exited 0 (false OK).
-#     Sec C-1 (PR #856 round 1) -- leg C now scrubs cleartext BEFORE the
-#     missing-prompt check (F-2b), so on this realistic (credential-
-#     leaking) trust-path shape, the scrub now fires first -- still
-#     exit 1, but via a different, STRONGER guard. Asserts the scrub's
-#     own message, not the (now second-in-line) missing-prompt message.
+# 13. TRUST-PATH-NO-PROMPT (Sec VETO V-1, PR #846 review; team-lead's
+#     run-6 stop item 7 -- fixture-fidelity: the bypass now applies to
+#     ANY connect attempt, control included) -- the CONTROL probe hits
+#     this shape FIRST, before the real connect is ever attempted: its
+#     own exact-string auth-failure check never finds it (a syntax
+#     error, not "password authentication failed"), so the script
+#     refuses at the control. Before the V-1 fix this scenario exited 0
+#     (false OK).
 OUT13="$(run_scenario "trust-path-no-prompt: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 1)" || FAIL=1
-assert_output_contains "trust-path-no-prompt" "${OUT13:-}" "cleartext value appeared" || FAIL=1
+assert_output_contains "trust-path-no-prompt" "${OUT13:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
-# 13b. TRUST-PATH-NO-PROMPT-CLEAN (Sec C-1 follow-up) -- the same bypass,
-#      but the fake's syntax-error text does NOT leak the credential,
-#      isolating the missing-prompt guard so it still has its own
-#      independent strike now that #13's realistic shape is caught by the
-#      scrub first.
-OUT13B="$(run_scenario "trust-path-no-prompt-clean: refuses via missing-prompt guard" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 1)" || FAIL=1
-assert_output_contains "trust-path-no-prompt-clean" "${OUT13B:-}" 'no password prompt ("Password:") was observed' || FAIL=1
+# 13b. TRUST-PATH-NO-PROMPT-CLEAN -- the same bypass via the non-leaking
+#      variant, same control-refusal outcome; kept for its own
+#      independent coverage of the FAKE_NO_PASSWORD_PROMPT_CLEAN path.
+OUT13B="$(run_scenario "trust-path-no-prompt-clean: refuses at the control" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 1)" || FAIL=1
+assert_output_contains "trust-path-no-prompt-clean" "${OUT13B:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
 # 13c. WRONG-CURRENT-USER-FRESH-HANDOFF (Sec C-1, PR #856 round 1) -- leg
 #      C's own connect (the fresh-handoff path): prompt prints normally,
@@ -797,6 +821,14 @@ assert_output_contains "wrong-current-user-bind-check" "${OUT13D:-}" "did not ec
 #     refuses, proving the count-only check from #9 is not the only guard.
 OUT14="$(run_scenario "readback-hash-mismatch: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 1)" || FAIL=1
 assert_output_contains "readback-hash-mismatch" "${OUT14:-}" "DIFFERENT value than what was pushed" || FAIL=1
+
+# 14b. READBACK-EMPTY (team-lead's run-6 stop, item 8) -- exactly one
+#      production row exists, but its value is empty. This site is
+#      already hash-bound and structurally immune (empty never hashes to
+#      $EXPECTED_HASH); hardened anyway with the SAME predicate for a
+#      clearer diagnostic than the generic hash-mismatch text.
+OUT14B="$(run_scenario "readback-empty: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 0 0 1 0 0 1)" || FAIL=1
+assert_output_contains "readback-empty" "${OUT14B:-}" "readback resolved to an empty value" || FAIL=1
 
 # 15. PFIN-DB-USER-MISMATCH-INITIAL (Sec F-4) -- provider-sync's own
 #     documented pre-cutover state (PFIN_DB_USER=authenticator while
@@ -875,6 +907,20 @@ assert_output_contains "already-handed-off-control-wrong-role" "${OUT18E:-}" "di
 # 18f. LEG-C-CONTROL-WRONG-ROLE -- same strike against the fresh-handoff leg C.
 OUT18F="$(run_scenario "leg-c-control-wrong-role: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 0 0 1 1)" || FAIL=1
 assert_output_contains "leg-c-control-wrong-role" "${OUT18F:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
+
+# 18g. ALREADY-HANDED-OFF-CONTROL-CLEARTEXT-LEAK (Sec F-1, PR #858
+#      review) -- the CONTROL's own scrub had no scenario in this file
+#      either: striking it left the whole suite green. Models a
+#      hypothetical transport/debug-print bug leaking the REAL credential
+#      into the control probe's own output even though the control never
+#      sent it.
+OUT18G="$(run_scenario "already-handed-off-control-cleartext-leak: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 0 0 0 0 1 0 1)" || FAIL=1
+assert_output_contains "already-handed-off-control-cleartext-leak" "${OUT18G:-}" "cleartext value appeared in the trust-path control's own captured output" || FAIL=1
+assert_output_lacks "already-handed-off-control-cleartext-leak" "${OUT18G:-}" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || FAIL=1
+
+# 18h. LEG-C-CONTROL-CLEARTEXT-LEAK -- same strike against the fresh-handoff leg C.
+OUT18H="$(run_scenario "leg-c-control-cleartext-leak: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 0 0 1 0 1)" || FAIL=1
+assert_output_contains "leg-c-control-cleartext-leak" "${OUT18H:-}" "cleartext value appeared in the trust-path control's own captured output" || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

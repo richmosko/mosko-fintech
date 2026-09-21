@@ -879,13 +879,17 @@ step_r "E. Hash-bound readback — production row only, exactly one match, bound
 #      target for a value this short-lived and never exposed elsewhere,
 #      and it is the ONLY thing that proves the stored value is the SAME
 #      credential this run generated, not merely 64 characters long.
+# team-lead's run-6 stop, item 8 -- same hardening as db-bootstrap.sh's
+# own two leg-E sites: hash-bound, so structurally already immune to an
+# empty/placeholder value, but given the SAME explicit non-empty
+# predicate for a clearer diagnostic.
 EXPECTED_HASH="$(printf '%s' "$PW" | sha256sum | cut -c1-16)"
 READBACK_OUT="$(docker exec coolify php artisan tinker --execute="
 \$app = \App\Models\Application::where('uuid','$RESOURCE_UUID')->firstOrFail();
 \$rows = \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->where('is_preview', false)->get();
 \$userRow = \$app->environment_variables()->where('key', 'PFIN_DB_USER')->where('is_preview', false)->first();
 \$userVal = \$userRow ? (string) \$userRow->value : '';
-if (\$rows->count() !== 1) { echo \$rows->count() . '||' . \$userVal; } else { echo '1|' . substr(hash('sha256', (string) \$rows->first()->value), 0, 16) . '|' . \$userVal; }
+if (\$rows->count() !== 1) { echo \$rows->count() . '||' . \$userVal; } else { \$v = (string) \$rows[0]->value; echo '1|' . (\$v === '' ? 'EMPTY' : substr(hash('sha256', \$v), 0, 16)) . '|' . \$userVal; }
 " 2>/dev/null | tail -1 | tr -d ' \n')"
 READBACK_COUNT="${READBACK_OUT%%|*}"
 READBACK_REST="${READBACK_OUT#*|}"
@@ -893,6 +897,10 @@ READBACK_HASH="${READBACK_REST%%|*}"
 READBACK_USER="${READBACK_REST#*|}"
 if [ "$READBACK_COUNT" != "1" ]; then
   echo "FATAL: PFIN_DB_PASSWORD (is_preview=false) readback found $READBACK_COUNT matching row(s) on the target resource, expected exactly 1 -- refusing to trust the store." >&2
+  exit 1
+fi
+if [ "$READBACK_HASH" = "EMPTY" ]; then
+  echo "FATAL: PFIN_DB_PASSWORD (is_preview=false) readback resolved to an empty value on the target resource, despite the row existing -- refusing to trust the store." >&2
   exit 1
 fi
 if [ "$READBACK_HASH" != "$EXPECTED_HASH" ]; then

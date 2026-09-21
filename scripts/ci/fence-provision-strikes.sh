@@ -219,8 +219,20 @@ run_case() {
   # bash 3.2 (macOS default, pre-4.4) also trips `set -u`'s "unbound
   # variable" on "${arr[@]}" for a TRULY EMPTY array -- the
   # ${arr[@]+"${arr[@]}"} form is the standard safe idiom for that.
+  # team-lead's run-6 stop, item 10 -- run_deploy_workers() now calls
+  # db-role-handoff.sh a SECOND time (post-deploy re-verify), grepping
+  # its output for "VERIFIED". The generic fake below never prints that
+  # unless told to, so every scenario defaults to a VERIFIED-shaped
+  # stdout here; a scenario testing the NEW guard's own failure path
+  # overrides FAKE_STDOUT_db_role_handoff via its own CASE_ENV entry,
+  # which -- appearing later in this `env` invocation -- wins. (Naming
+  # matches this fixture's own convention -- the fake computes its var
+  # name from `basename "$0" .sh` verbatim, lowercase, dashes to
+  # underscores; it does NOT uppercase, despite this file's own header
+  # comment claiming it does.)
   env REPO_ROOT="$case_dir" SCRIPTS="$FAKE_SCRIPTS_DIR" PATH="$FAKE_BIN:$PATH" \
     FAKE_CALL_LOG="$call_log" FAKE_COUNTER_DIR="$case_dir" FAKE_SSH_KEYGEN_LOG="$keygen_log" \
+    FAKE_STDOUT_db_role_handoff="VERIFIED already handed off -- store and live role bind-checked, no-op." \
     ${CASE_ENV[@]+"${CASE_ENV[@]}"} \
     bash "$PROVISION_SH" ${extra_args[@]+"${extra_args[@]}"} > "$case_dir/out.txt" 2>&1
   local rc=$?
@@ -932,6 +944,31 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
     FAIL=1
   fi
 fi
+
+# 27b. DEPLOY-WORKERS-POST-DEPLOY-VERIFY-FAILS-STOPS-THE-STEP (team-lead's
+#      run-6 stop, item 10) -- pfin_etl's own worker deploy succeeds, but
+#      the post-deploy re-verify (a second db-role-handoff.sh call, no
+#      --apply) reports an INCONSISTENT state instead of VERIFIED -- the
+#      step must fail here, never proceed to provider-sync/pdf-render's
+#      own deploys with a silently-broken etl credential.
+CASE_ENV=(FAKE_RC_db_role_handoff=1 FAKE_STDOUT_db_role_handoff="FAIL  role 'pfin_etl' / 'pfin-back-etl' state is INCONSISTENT(store≠role) -- the store's current PFIN_DB_PASSWORD does NOT authenticate as 'pfin_etl' against the live database.")
+run_case "deploy-workers: post-deploy store re-verify fails, step fails" 2 --only deploy-workers || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  # 3 preflight-phase deploy-app calls (all three workers, read-only) +
+  # 1 apply-phase call (pfin-back-etl only) -- the apply phase must stop
+  # there, never reaching provider-sync's or pdf-render's own apply.
+  WORKER_LINES="$(grep -c '^deploy-app ' "$CASE_LAST_DIR/calls.log" 2>/dev/null || echo 0)"
+  if [[ "$WORKER_LINES" -ne 4 ]]; then
+    echo "FAIL: [deploy-workers-post-verify-fails] expected exactly 4 deploy-app calls (3 preflight + pfin-back-etl's own apply, before the failed re-verify stops the loop), found $WORKER_LINES" >&2
+    FAIL=1
+  fi
+  APPLY_LINES="$(grep -c '^deploy-app .*--apply' "$CASE_LAST_DIR/calls.log" 2>/dev/null || echo 0)"
+  if [[ "$APPLY_LINES" -ne 1 ]]; then
+    echo "FAIL: [deploy-workers-post-verify-fails] expected exactly 1 apply-phase deploy-app call (pfin-back-etl only), found $APPLY_LINES -- provider-sync/pdf-render must never be reached after etl's re-verify fails" >&2
+    FAIL=1
+  fi
+fi
+CASE_ENV=()
 
 # 28. RESOLVE-STACK-NETWORK-FAILURE-BLOCKS-DEPLOY-APP -- resolve-stack-
 #     network.sh itself fails -> run_deploy_app() must propagate the

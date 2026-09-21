@@ -459,15 +459,27 @@ echo "OK: connected AS migrator over a non-loopback, password-prompted path with
 
 echo "== E (read-only). Re-read the store immediately after connecting -- the value used to connect must still hash-match the store's CURRENT value (guards a concurrent rotation racing this very check) =="
 EXPECTED_HASH="$(printf '%s' "$PW" | sha256sum | cut -c1-16)"
+# team-lead's run-6 stop, item 8 -- swept for the same existence-only
+# defect class this fix closes elsewhere: this check is already
+# hash-bound, so an empty/placeholder/whitespace/literal-"null" value
+# structurally can never match $EXPECTED_HASH (a real 64-hex credential's
+# hash) -- it was never exploitable here. Hardened anyway for the SAME
+# predicate and a clearer diagnostic: the tinker read now also reports
+# non-emptiness, so an empty re-read gets its own honest message instead
+# of being folded into the generic "different value" hash-mismatch text.
 READBACK_OUT="$(docker exec coolify php artisan tinker --execute="
 \$app = \App\Models\Application::where('uuid','$MIGRATOR_UUID')->firstOrFail();
 \$rows = \$app->environment_variables()->where('key', 'MIGRATOR_DB_PASSWORD')->where('is_preview', false)->get();
-if (\$rows->count() !== 1) { echo \$rows->count(); } else { echo '1|' . substr(hash('sha256', (string) \$rows->first()->value), 0, 16); }
+if (\$rows->count() !== 1) { echo \$rows->count(); } else { \$v = (string) \$rows[0]->value; echo '1|' . (\$v === '' ? 'EMPTY' : substr(hash('sha256', \$v), 0, 16)); }
 " 2>/dev/null | tail -1 | tr -d ' \n')"
 READBACK_COUNT="${READBACK_OUT%%|*}"
 READBACK_HASH="${READBACK_OUT#*|}"
 if [ "$READBACK_COUNT" != "1" ]; then
   echo "FATAL: MIGRATOR_DB_PASSWORD (is_preview=false) re-read found $READBACK_COUNT matching row(s) on pfin-migrator, expected exactly 1 -- refusing to trust the store." >&2
+  exit 1
+fi
+if [ "$READBACK_HASH" = "EMPTY" ]; then
+  echo "FATAL: MIGRATOR_DB_PASSWORD (is_preview=false) re-read resolved to an empty value on pfin-migrator, despite the row existing -- the store changed to empty between leg A's read and now, or is an empty compose-parse placeholder. Refusing to trust the store." >&2
   exit 1
 fi
 if [ "$READBACK_HASH" != "$EXPECTED_HASH" ]; then
@@ -675,15 +687,23 @@ echo "OK: connected AS migrator over a non-loopback, password-prompted path with
 
 echo "== E. Sanity re-read (Sec VETO-1 r2 review) -- the store's CURRENT MIGRATOR_DB_PASSWORD must still hash-match the value the role was just set to; a mismatch means the store changed between leg A's read and now (e.g. a concurrent rotation), and the role would be set to a value that will NOT be what the next deploy's PROD_DB_URL reads =="
 EXPECTED_HASH="$(printf '%s' "$PW" | sha256sum | cut -c1-16)"
+# team-lead's run-6 stop, item 8 -- same hardening as the already-
+# bootstrapped site's own leg E above: hash-bound, so structurally
+# already immune to an empty/placeholder value, but given the SAME
+# explicit non-empty predicate for a clearer diagnostic.
 READBACK_OUT="$(docker exec coolify php artisan tinker --execute="
 \$app = \App\Models\Application::where('uuid','$MIGRATOR_UUID')->firstOrFail();
 \$rows = \$app->environment_variables()->where('key', 'MIGRATOR_DB_PASSWORD')->where('is_preview', false)->get();
-if (\$rows->count() !== 1) { echo \$rows->count(); } else { echo '1|' . substr(hash('sha256', (string) \$rows->first()->value), 0, 16); }
+if (\$rows->count() !== 1) { echo \$rows->count(); } else { \$v = (string) \$rows[0]->value; echo '1|' . (\$v === '' ? 'EMPTY' : substr(hash('sha256', \$v), 0, 16)); }
 " 2>/dev/null | tail -1 | tr -d ' \n')"
 READBACK_COUNT="${READBACK_OUT%%|*}"
 READBACK_HASH="${READBACK_OUT#*|}"
 if [ "$READBACK_COUNT" != "1" ]; then
   echo "FATAL: MIGRATOR_DB_PASSWORD (is_preview=false) readback found $READBACK_COUNT matching row(s) on pfin-migrator, expected exactly 1 -- refusing to trust the store." >&2
+  exit 1
+fi
+if [ "$READBACK_HASH" = "EMPTY" ]; then
+  echo "FATAL: MIGRATOR_DB_PASSWORD (is_preview=false) readback resolved to an empty value on pfin-migrator, despite the row existing -- refusing to trust the store." >&2
   exit 1
 fi
 if [ "$READBACK_HASH" != "$EXPECTED_HASH" ]; then

@@ -883,14 +883,54 @@ run_deploy_app() {
   bash "$SCRIPTS/smoke-pfin-exposure.sh" pfin-app --compose-service app
 }
 
+# verify_worker_store_binds <role> -- team-lead's run-6 stop, item 10.
+# Question: can a redeploy of a resource whose compose plainly
+# interpolates `${PFIN_DB_PASSWORD}` RESET an existing NON-EMPTY store
+# row back to empty, undoing db-role-handoff.sh's own work? UNMEASURED
+# against a live production resource (deliberately not tested there --
+# no scratch/dry resource available to redeploy without touching
+# production). Evidence gathered instead, consistent with create-if-
+# absent, NOT with reset-on-redeploy: pfin-migrator's own
+# MIGRATOR_DB_PASSWORD uses the identical plain `${VAR}` interpolation
+# form (infra/supabase/migrator/docker-compose.yaml) and is value_len=64
+# TODAY after several migrator redeploys since it was originally pushed;
+# the workers' own PFIN_DB_PASSWORD row was NEVER pushed at all and came
+# up empty on first parse. Both outcomes are equally explained by
+# create-if-absent and neither proves reset cannot happen -- so this is
+# built as a GUARD, not an assumption: reuses db-role-handoff.sh's own
+# preflight (no --apply) rather than reimplementing its bind-check here.
+# When the role is already LOGIN+password and the store carries a
+# non-empty value, that preflight itself runs the bind-check (exactly
+# one is_preview=false row, non-empty, AND connects AS the role with it,
+# current_user matches) and prints "VERIFIED" on success. Any other
+# outcome -- including a "fresh, nothing to check" exit 0, which would
+# itself be alarming this late in the pipeline -- fails this step.
+verify_worker_store_binds() {
+  local role="$1" out rc
+  if out="$(bash "$SCRIPTS/db-role-handoff.sh" "$role" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [[ "$rc" -ne 0 ]] || ! printf '%s' "$out" | grep -qF "VERIFIED"; then
+    warn "$role: post-deploy store re-verify FAILED (exit $rc) -- the store's PFIN_DB_PASSWORD no longer binds against the live role after this deploy. Output:"
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  info "$role: post-deploy store re-verify passed (store still binds)."
+  return 0
+}
+
 run_deploy_workers() {
   require_box_ip || return 2
   resolve_stack_network_value || return $?
   local net="$STACK_NETWORK_VALUE"
   for name in pfin-back-etl pfin-provider-sync pfin-pdf-render; do
     case "$name" in
-      pfin-back-etl)      bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/etl --expect-build-pack dockercompose --compose-service pfin-back-etl-monthly-report --require-network "$net" --resolve-host db ${1:+--apply} || return $? ;;
-      pfin-provider-sync) bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/provider-sync --expect-build-pack dockercompose --compose-service provider-sync --require-network "$net" --resolve-host db ${1:+--apply} || return $? ;;
+      pfin-back-etl)      bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/etl --expect-build-pack dockercompose --compose-service pfin-back-etl-monthly-report --require-network "$net" --resolve-host db ${1:+--apply} || return $?
+                          [[ -z "${1:-}" ]] || verify_worker_store_binds pfin_etl || return $? ;;
+      pfin-provider-sync) bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/provider-sync --expect-build-pack dockercompose --compose-service provider-sync --require-network "$net" --resolve-host db ${1:+--apply} || return $?
+                          [[ -z "${1:-}" ]] || verify_worker_store_binds pfin_provider_sync || return $? ;;
       pfin-pdf-render)    bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/pdf-render --expect-build-pack dockercompose --compose-service pdf-render --require-network "$net" ${1:+--apply} || return $? ;;
     esac
   done
