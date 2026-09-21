@@ -5,8 +5,11 @@
 # under each real script's name inside a fixture scripts/ dir that
 # provision.sh's SCRIPTS override points at.
 #
-# Per-name behavior is controlled by two env vars, NAME uppercased with
-# `-` -> `_`:
+# Per-name behavior is controlled by two env vars, NAME LOWERCASE with
+# `-` -> `_` (verbatim from `basename "$0" .sh`, NEVER uppercased --
+# corrected 2026-09-21, team-lead's run-6 stop item 10, after this
+# comment's own claim caused a real defect: a new caller assumed
+# uppercase and its default silently never took effect):
 #   FAKE_RC_<NAME>            comma-separated exit codes, one per call to
 #                             this name (cycles/holds on the last entry
 #                             once exhausted) -- lets a compound step's
