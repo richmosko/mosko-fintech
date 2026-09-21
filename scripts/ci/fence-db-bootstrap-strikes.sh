@@ -301,59 +301,47 @@ if [[ "$ARGS" == *"-tAc"* ]]; then
 fi
 
 # Leg C -- connect AS migrator (-h db). team-lead's own live measurement,
-# run-5 (realrun5.clean.log), 2026-09-21, MEASURED on the production
-# target: psql 17.6 over -h db, non-tty, inside `docker compose exec -T`,
-# prints NO password-prompt text at all without `-W` -- it silently
-# consumes the piped first stdin line as the password and attempts auth
-# with it. `-W` forces a `Password: ` prompt regardless of tty/pipe state.
-# This fixture now models a REAL auth check (compare the piped line
-# against the known-correct value) rather than the old flag-only shape,
-# because the real script now runs a POSITIVE CONTROL (a deliberately
-# WRONG password) before the real connect, and a fixture that always
-# "succeeds" regardless of the piped password could never distinguish the
-# two calls or prove the control is load-bearing.
+# run-5 (realrun5.clean.log), 2026-09-21: psql over -h db, non-tty, inside
+# `docker compose exec -T`, prints NO password-prompt text at all -- it
+# silently consumes the piped first stdin line as the password regardless.
+# PR #857's first fix added `-W` to force a visible prompt; Sec measured
+# that FAIL-OPEN (a trust rule still shows -W's prompt and still
+# succeeds). This fixture models NO prompt concept at all -- only a REAL
+# auth check (compare the piped line against the known-correct value) and
+# a TRUST-PATH shape that applies to ANY connection attempt regardless of
+# which password was sent (a real trust rule never validates the
+# password at all).
 if [[ "$ARGS" == *"-h db"* ]]; then
   SCRIPT_IN="$(cat)"
   FIRST_LINE="$(printf '%s\n' "$SCRIPT_IN" | head -1)"
-  HAS_W=0
-  [[ "$ARGS" == *"-W"* ]] && HAS_W=1
   if [[ -n "${FAKE_CONNECT_CALL_LOG:-}" ]]; then
     printf '%s\n' "$ARGS" >> "$FAKE_CONNECT_CALL_LOG"
   fi
-  PROMPT_LINE=""
-  [[ "$HAS_W" -eq 1 ]] && PROMPT_LINE="Password: "
   REAL_PW="${FAKE_STORE_PW:-}"
+
+  if [[ "${FAKE_NO_PASSWORD_PROMPT:-0}" == "1" ]]; then
+    # TRUST-PATH BYPASS -- applies to ANY connect attempt on this host
+    # (control OR real), regardless of which password was piped, because
+    # a real trust rule never validates the password at all. Under
+    # -v ON_ERROR_STOP=1, the piped line is parsed as a bogus SQL
+    # statement -- a syntax error -- but (historically, pre-fix) still
+    # followed by a current_user row and exit 0, the exact shape that let
+    # a trust rule masquerade as success. This means the real script's
+    # own CONTROL never sees the auth-failure string and refuses BEFORE
+    # ever reaching the real connect -- "trust-shaped fake -> RED at the
+    # control" (Sec's own strike criterion, PR #857 r2).
+    echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$FIRST_LINE\""
+    echo " current_user "
+    echo "--------------"
+    echo " migrator"
+    exit 0
+  fi
 
   if [[ -n "$REAL_PW" && "$FIRST_LINE" == "$REAL_PW" ]]; then
     # The REAL credential was piped -- this is the real connect attempt
-    # (whether or not a control call happened first).
-    if [[ "${FAKE_NO_PASSWORD_PROMPT:-0}" == "1" ]]; then
-      # Trust-path bypass -- same shape as db-role-handoff.sh's own struck
-      # scenario: NO prompt text at all EVEN WITH -W (the actual hazard:
-      # something suppresses the prompt regardless), the cleartext
-      # first-stdin-line consumed as a bogus SQL statement instead. This
-      # realistically leaks $PW into the syntax-error echo (a real
-      # Postgres error includes the offending token) -- with the
-      # scrub-before-prompt-check ordering, the cleartext scrub now
-      # correctly fires FIRST on this exact shape (a STRONGER outcome).
-      # FAKE_NO_PASSWORD_PROMPT_CLEAN below isolates the missing-prompt
-      # guard with a non-leaking variant, same fix as db-role-handoff.sh's
-      # own scenario 13/13b split (Sec C-1, PR #856).
-      echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$FIRST_LINE\""
-      echo " current_user "
-      echo "--------------"
-      echo " migrator"
-      exit 0
-    fi
-    if [[ "${FAKE_NO_PASSWORD_PROMPT_CLEAN:-0}" == "1" ]]; then
-      echo "psql:<stdin>:1: ERROR:  syntax error at or near a piped credential (redacted by this fake, not by db-bootstrap.sh)"
-      echo " current_user "
-      echo "--------------"
-      echo " migrator"
-      exit 0
-    fi
+    # (the control already ran and passed, or this fixture doesn't model
+    # a preceding control call at all).
     if [[ "${FAKE_ECHO_PW_IN_CONNECT:-0}" == "1" ]]; then
-      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
       echo "DEBUG (simulated transport bug): last line was $FIRST_LINE"
       echo " current_user "
       echo "--------------"
@@ -362,12 +350,9 @@ if [[ "$ARGS" == *"-h db"* ]]; then
     fi
     if [[ "${FAKE_WRONG_CURRENT_USER:-0}" == "1" ]]; then
       # Sec F-1b (PR #849 r2 review) -- everything else about this
-      # connection is normal (prompt prints, no cleartext leak, exit 0),
-      # but the row psql prints back for `select current_user;` names a
-      # DIFFERENT role. Proves the current_user check fires on its own,
-      # not merely because the (absent, here) missing-prompt guard also
-      # would have.
-      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      # connection is normal (no cleartext leak, exit 0), but the row
+      # psql prints back for `select current_user;` names a DIFFERENT
+      # role.
       echo " current_user "
       echo "--------------"
       echo " postgres"
@@ -375,40 +360,27 @@ if [[ "$ARGS" == *"-h db"* ]]; then
     fi
     if [[ "${FAKE_CONNECT_FAIL:-0}" == "1" ]]; then
       # A genuine password-authenticated connection failing for an
-      # UNRELATED reason (DB unreachable after the prompt, etc) --
-      # distinct from a wrong-password failure below.
-      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      # UNRELATED reason (DB unreachable, etc) -- distinct from a
+      # wrong-password failure below.
       echo "psql: error: connection failed" >&2
       exit 2
     fi
-    [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
     echo " current_user "
     echo "--------------"
     echo " migrator"
     exit 0
   else
-    # Wrong/unknown password (the trust-path CONTROL's own deliberately-
-    # wrong value, or REAL_PW unset). Real psql behavior: auth failure,
-    # unless a dedicated override models the actual hazards the control
-    # exists to catch.
-    if [[ "${FAKE_CONTROL_SUCCEEDS:-0}" == "1" ]]; then
-      # The hazard the control exists to catch: a trust rule authenticates
-      # ANY password, including a wrong one.
-      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
-      echo " current_user "
-      echo "--------------"
-      echo " migrator"
-      exit 0
-    fi
+    # Wrong/unknown password (the trust-path CONTROL's own fixed bogus
+    # value, or REAL_PW unset). Real psql behavior: scram auth failure,
+    # unless a dedicated override models a DIFFERENT hazard the control
+    # must also treat as inconclusive.
     if [[ "${FAKE_CONTROL_WRONG_ERROR:-0}" == "1" ]]; then
-      # Fails, but NOT with "password authentication failed" -- some
-      # other error (DNS, compose, protocol) the control must also treat
-      # as inconclusive, never as "good enough" proof of password auth.
-      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      # Fails, but NOT with "password authentication failed for user
+      # ..." -- some other error (DNS, compose, protocol) the control
+      # must never treat as "good enough" proof of password auth.
       echo "psql: error: could not translate host name \"db\" to address: Name or service not known" >&2
       exit 2
     fi
-    [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
     echo "psql: error: connection to server at \"db\" (10.0.0.5), port 5432 failed: FATAL:  password authentication failed for user \"migrator\"" >&2
     exit 2
   fi
@@ -656,17 +628,18 @@ CONNECT_CALL_LOG="$WORK/connect-pin.1.$$"
 OUT1="$(run_scenario "already-bootstrapped-clean: no-op VERIFIED" 0 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "already-bootstrapped-clean" "${OUT1:-}" "VERIFIED, nothing to do" || FAIL=1
 assert_output_lacks "already-bootstrapped-clean" "${OUT1:-}" "roles.sql applied" || FAIL=1
-# team-lead's run-5 fix (2026-09-21) -- -W PINNED FROM THE LOGGED ARGV,
-# not just inferred from behavior: every -h db call this scenario made
-# (the trust-path control AND the real connect) must carry -W. Deleting
-# -W from the real script must turn this RED even if some other
-# behavioral assertion happened not to notice.
+# Sec's PR #857 r2 correction: `-W` is a REGRESSION now, not a
+# requirement -- it forces a visible prompt BEFORE the connection even
+# negotiates auth, so it fails OPEN on a trust rule (the prompt still
+# shows, the wrong password is silently ignored, current_user still
+# echoes back). PINNED FROM THE LOGGED ARGV that -W is ABSENT from every
+# -h db call this scenario made -- reintroducing it must turn this RED.
 if [[ ! -s "$CONNECT_CALL_LOG" ]]; then
-  echo "FAIL: [already-bootstrapped-clean] no -h db connect calls were logged at all -- the -W pin has nothing to check." >&2
+  echo "FAIL: [already-bootstrapped-clean] no -h db connect calls were logged at all -- the -W absence pin has nothing to check." >&2
   FAIL=1
-elif grep -qv -- '-W' "$CONNECT_CALL_LOG"; then
-  echo "FAIL: [already-bootstrapped-clean] at least one -h db connect call did not carry -W:" >&2
-  grep -v -- '-W' "$CONNECT_CALL_LOG" >&2
+elif grep -qF -- '-W' "$CONNECT_CALL_LOG"; then
+  echo "FAIL: [already-bootstrapped-clean] at least one -h db connect call carries -W (Sec's fail-open regression, PR #857 r2):" >&2
+  grep -F -- '-W' "$CONNECT_CALL_LOG" >&2
   FAIL=1
 fi
 unset CONNECT_CALL_LOG
@@ -736,19 +709,14 @@ assert_output_contains "leg-b-catalog-verify-mismatch" "${OUT9:-}" "post-handoff
 OUT10="$(run_scenario "leg-c-connect-fail: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 1 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-c-connect-fail" "${OUT10:-}" "did not take effect end to end" || FAIL=1
 
-# 11. LEG-C-TRUST-PATH-NO-PROMPT -- this fake's realistic shape leaks $PW
-#     into its own syntax-error echo (a real Postgres error includes the
-#     offending token), so with the scrub-before-prompt-check ordering
-#     the cleartext scrub now fires FIRST -- a STRONGER outcome, same
-#     "earlier guard steals the strike" resolution as db-role-handoff.sh's
-#     own scenario 13/13b split (Sec C-1, PR #856).
-OUT11="$(run_scenario "leg-c-trust-path-no-prompt: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 1 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
-assert_output_contains "leg-c-trust-path-no-prompt" "${OUT11:-}" "cleartext value appeared in the connect-as-migrator step" || FAIL=1
-
-# 11b. LEG-C-TRUST-PATH-NO-PROMPT-CLEAN -- the same bypass with a
-#      non-leaking syntax error, isolating the missing-prompt guard.
-OUT11B="$(run_scenario "leg-c-trust-path-no-prompt-clean: refuses via missing-prompt guard" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 0 0 1)" || FAIL=1
-assert_output_contains "leg-c-trust-path-no-prompt-clean" "${OUT11B:-}" 'no password prompt ("Password:") was observed' || FAIL=1
+# 11. LEG-C-TRUST-PATH (Sec's own corrected design, PR #857 r2) -- a
+#     trust-shaped fake applies to the CONTROL call too (a real trust
+#     rule ignores the password regardless of which probe sent it), so
+#     the CONTROL never sees the auth-failure string and refuses BEFORE
+#     the real connect is ever reached. "trust-shaped fake -> RED at the
+#     control" is Sec's own named strike criterion.
+OUT11="$(run_scenario "leg-c-trust-path: refuses at the control" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 1 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+assert_output_contains "leg-c-trust-path" "${OUT11:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
 
 # 12. LEG-C-CLEARTEXT-LEAK-IN-CONNECT
 OUT12="$(run_scenario "leg-c-cleartext-leak-in-connect: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 1 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
@@ -816,38 +784,40 @@ assert_output_contains "happy-path-full-apply" "${OUT21:-}" "migrator: LOGIN + p
 for f in 116_pfin_provider_sync_role 117_pfin_etl_role_comment_c1_reattribution 119_migrator_role_comment_amendment3_recitation; do
   assert_output_contains "happy-path-full-apply (skip $f)" "${OUT21:-}" "$f.sql not present in supabase/migrations/ -- skipping" || FAIL=1
 done
-# -W PINNED FROM THE LOGGED ARGV (Phase-1 leg C's own connect calls).
+# -W ABSENCE PINNED FROM THE LOGGED ARGV (Sec's PR #857 r2 regression --
+# see scenario 1's own comment for why -W must never come back).
 if [[ ! -s "$CONNECT_CALL_LOG" ]]; then
-  echo "FAIL: [happy-path-full-apply] no -h db connect calls were logged at all -- the -W pin has nothing to check." >&2
+  echo "FAIL: [happy-path-full-apply] no -h db connect calls were logged at all -- the -W absence pin has nothing to check." >&2
   FAIL=1
-elif grep -qv -- '-W' "$CONNECT_CALL_LOG"; then
-  echo "FAIL: [happy-path-full-apply] at least one -h db connect call did not carry -W:" >&2
-  grep -v -- '-W' "$CONNECT_CALL_LOG" >&2
+elif grep -qF -- '-W' "$CONNECT_CALL_LOG"; then
+  echo "FAIL: [happy-path-full-apply] at least one -h db connect call carries -W (Sec's fail-open regression, PR #857 r2):" >&2
+  grep -F -- '-W' "$CONNECT_CALL_LOG" >&2
   FAIL=1
 fi
 unset CONNECT_CALL_LOG
 
-# 21a. ALREADY-BOOTSTRAPPED-CONTROL-SUCCEEDS (team-lead, run-5, 2026-09-21)
-#      -- the trust-path control (a deliberately WRONG password) succeeds
-#      instead of failing -- the exact hazard the control exists to
-#      catch (a trust rule authenticating ANY password) -- refuses,
-#      never proceeding to try the real credential.
-OUT21A="$(run_scenario "already-bootstrapped-control-succeeds: refuses" 1 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 1)" || FAIL=1
-assert_output_contains "already-bootstrapped-control-succeeds" "${OUT21A:-}" "did not fail with 'password authentication failed'" || FAIL=1
+# 21a. ALREADY-BOOTSTRAPPED-TRUST-PATH (Sec's corrected design, PR #857
+#      r2) -- the trust-path fake applies to the CONTROL too (a real
+#      trust rule ignores the password regardless of probe), so the
+#      control never sees the auth-failure string and refuses, never
+#      proceeding to try the real credential.
+OUT21A="$(run_scenario "already-bootstrapped-trust-path: refuses at the control" 1 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 1 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+assert_output_contains "already-bootstrapped-trust-path" "${OUT21A:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
 
 # 21b. ALREADY-BOOTSTRAPPED-CONTROL-WRONG-ERROR -- the control fails, but
-#      not with "password authentication failed" (DNS/compose/protocol
+#      not with the exact auth-failure string (DNS/compose/protocol
 #      error) -- refuses, never treated as "good enough" proof.
 OUT21B="$(run_scenario "already-bootstrapped-control-wrong-error: refuses" 1 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 0 1)" || FAIL=1
-assert_output_contains "already-bootstrapped-control-wrong-error" "${OUT21B:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "already-bootstrapped-control-wrong-error" "${OUT21B:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
 
-# 21c. LEG-C-CONTROL-SUCCEEDS -- same strike against Phase-1's own leg C.
-OUT21C="$(run_scenario "leg-c-control-succeeds: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 1)" || FAIL=1
-assert_output_contains "leg-c-control-succeeds" "${OUT21C:-}" "did not fail with 'password authentication failed'" || FAIL=1
+# 21c. LEG-C-TRUST-PATH-FRESH-HANDOFF -- same strike against Phase-1's
+#      own leg C.
+OUT21C="$(run_scenario "leg-c-trust-path-fresh-handoff: refuses at the control" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 1 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+assert_output_contains "leg-c-trust-path-fresh-handoff" "${OUT21C:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
 
 # 21d. LEG-C-CONTROL-WRONG-ERROR -- same, non-auth-failure error shape.
 OUT21D="$(run_scenario "leg-c-control-wrong-error: refuses" 1 --apply clean "false|false" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0 0 0 0 1)" || FAIL=1
-assert_output_contains "leg-c-control-wrong-error" "${OUT21D:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "leg-c-control-wrong-error" "${OUT21D:-}" "did not fail with the exact text 'password authentication failed for user \"migrator\"'" || FAIL=1
 
 # 22. RESOURCE-ABSENT (measured exit 1, not the header's documented 2 --
 #     see the note in the header comment above)

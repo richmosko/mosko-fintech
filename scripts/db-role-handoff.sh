@@ -487,42 +487,42 @@ echo "== Connect AS $ROLE over -h db with the store's current credential (read-o
 # team-lead's own live measurement, run-5 (realrun5.clean.log), 2026-09-21,
 # MEASURED on the production target: psql 17.6 over -h db, non-tty, inside
 # `docker compose exec -T`, prints NO "Password for user" text at all
-# without -W -- it silently consumes the first piped stdin line as the
-# password. `-W` forces a prompt regardless of tty/pipe state; its exact
-# text is `Password: `, not `Password for user "<role>":` -- accepted as
-# either form below, since the exact wording is a psql-version fact, not a
-# security property this check should be brittle against.
+# without -W. PR #857's first attempt at this fix added -W to force a
+# visible prompt -- Sec measured that FAIL-OPEN: -W prompts BEFORE the
+# connection negotiates auth, so a trust rule still shows the prompt and
+# still succeeds, passing every assertion the -W fix made. No -W, no
+# prompt-text assertion anywhere in this mechanism.
 #
-# POSITIVE CONTROL, same measurement: a deliberately WRONG password over
-# this SAME path (-h db, -W) must fail with "password authentication
-# failed" -- that failure IS the trust-path detection this leg exists to
-# provide. Without it, a wrong password succeeding (a trust rule) or
-# failing some OTHER way (DNS, compose, protocol) would both be
-# indistinguishable from the real credential simply not being tried yet.
-WRONG_PW="control-$RANDOM-$RANDOM-$RANDOM"
+# POSITIVE CONTROL instead (Sec's corrected design, PR #857 r2): a FIXED
+# bogus literal (never derived from the real credential) is piped as the
+# password over this SAME path, no -W. A real scram-enforced connection
+# fails with the EXACT text `password authentication failed for user
+# "<role>"` -- asserted by STRING, never by exit code alone (a wrong
+# host, absent container, or missing psql can also produce rc=2). A
+# trust rule instead parses the bogus literal as a SQL statement -- ANY
+# outcome other than that exact string is refused. The cleartext-scrub
+# guard doubles as an accidental trust-path detector (a trust bypass
+# parses the REAL credential as SQL too) -- kept on both probes.
+CONTROL_BOGUS_PW='trust-path-control-probe-do-not-use-as-a-real-password'
 set +e
-CONTROL_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$WRONG_PW")" 2>&1)"
+CONTROL_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$CONTROL_BOGUS_PW")" 2>&1)"
 CONTROL_RC=$?
 set -e
 if printf '%s' "$CONTROL_OUT" | grep -qF -- "$PW"; then
-  echo "FATAL: the real credential's cleartext value appeared in the trust-path control's own captured output (a control run using a DIFFERENT, deliberately-wrong password) -- refusing to proceed or print it." >&2
+  echo "FATAL: the real credential's cleartext value appeared in the trust-path control's own captured output (a control run using a FIXED bogus password, never the real one) -- refusing to proceed or print it." >&2
   exit 1
 fi
-if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed"; then
-  echo "FATAL: connecting AS $ROLE with a deliberately WRONG password did not fail with 'password authentication failed' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
+if ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed for user \"$ROLE\""; then
+  echo "FATAL: connecting AS $ROLE with a deliberately WRONG (fixed, bogus) password did not fail with the exact text 'password authentication failed for user \"$ROLE\"' (exit $CONTROL_RC) -- this means the connection took a trust-path or non-scram path, or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
   exit 1
 fi
 
 set +e
-CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
+CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
 CONNECT_RC=$?
 set -e
 if printf '%s' "$CONNECT_OUT" | grep -qF -- "$PW"; then
   echo "FATAL: the credential's cleartext value appeared in the bind-check connect step's own captured output -- refusing to proceed or print it." >&2
-  exit 1
-fi
-if ! printf '%s' "$CONNECT_OUT" | grep -qE "Password:|Password for user"; then
-  echo "FATAL: no password prompt (\"Password:\") was observed connecting AS $ROLE with the store's current credential -- a non-password-authenticated path, or -W stopped forcing one. Observed output: $CONNECT_OUT" >&2
   exit 1
 fi
 if [ $CONNECT_RC -ne 0 ]; then
@@ -533,7 +533,7 @@ if ! printf '%s' "$CONNECT_OUT" | grep -qE "^[[:space:]]*${ROLE}[[:space:]]*\$";
   echo "FATAL: connected but current_user did not echo back '$ROLE' as its own output row. Observed output: $CONNECT_OUT" >&2
   exit 1
 fi
-echo "OK: connected AS $ROLE over a non-loopback, password-prompted path with the store's current credential; current_user confirmed."
+echo "OK: connected AS $ROLE over a non-loopback path with the store's current credential (trust-path control passed); current_user confirmed."
 REMOTE
     if BIND_CHECK_OUT="$(sshx "env STACK_UUID=\"$STACK_UUID\" RESOURCE_UUID=\"$RESOURCE_UUID\" ROLE=\"$ROLE\" bash -s" < "$BIND_CHECK_SCRIPT")"; then
       BIND_CHECK_RC=0
@@ -674,11 +674,20 @@ step_r "C. Connect AS $ROLE over a non-loopback path with the generated credenti
 #    a statement" failure mode above. The prior version had no such guard,
 #    so psql exited 0 after a syntax error and the next line
 #    (`select current_user;`) ran anyway, appearing to succeed.
-# 2. Assert the password PROMPT was actually issued. 055:297-299 names
-#    this exact discriminator: "Under trust no password is requested at
-#    all -- so THE PROMPT ITSELF proves the connection did not traverse
-#    the trust line." Absence of "Password for user" in the captured
-#    output is now FATAL on its own, independent of the exit code.
+# 2. SUPERSEDED (team-lead/Sec, run-5, PR #857 r2) -- this used to assert
+#    the password PROMPT was issued (055:297-299's own discriminator:
+#    "under trust no password is requested at all"). MEASURED on the
+#    production target that discriminator is FALSE for this exact
+#    invocation shape: psql over -h db, non-tty, inside `docker compose
+#    exec -T`, prints NO prompt at all regardless of trust/scram (it
+#    silently consumes the piped line either way) -- PR #857's first fix
+#    forced a prompt with `-W`, which Sec then measured FAIL-OPEN (a
+#    trust rule still shows -W's prompt and still succeeds). No prompt
+#    assertion of any kind survives here. Replaced by the POSITIVE
+#    CONTROL below: a deliberately WRONG (fixed, never-real) password
+#    over this same path must fail with the EXACT text "password
+#    authentication failed for user <role>" -- the real discriminator,
+#    asserted by string, never by exit code alone.
 # 3. The cleartext-in-output guard (Sec VETO V-1 item 4, PR #846 review --
 #    corrected at N-12 after an earlier edit here mislabeled it F-5-class;
 #    F-5 was Sec's UNRELATED SET_ALLOWLIST value-shape finding on
@@ -703,41 +712,31 @@ step_r "C. Connect AS $ROLE over a non-loopback path with the generated credenti
 #    bind-check copied THIS site rather than db-bootstrap's corrected
 #    one). Both sites now match byte-for-byte in shape; keep them that
 #    way on any future edit.
-# team-lead's own live measurement, run-5 (realrun5.clean.log), 2026-09-21,
-# MEASURED on the production target: psql 17.6 over -h db, non-tty, inside
-# `docker compose exec -T`, prints NO "Password for user" text at all
-# without -W -- it silently consumes the first piped stdin line as the
-# password. `-W` forces a prompt regardless of tty/pipe state; its exact
-# text is `Password: `, not `Password for user "<role>":` -- accepted as
-# either form below.
-#
-# POSITIVE CONTROL, same measurement: a deliberately WRONG password over
-# this SAME path (-h db, -W) must fail with "password authentication
-# failed" -- the actual trust-path proof, run BEFORE the real credential.
-WRONG_PW="control-$RANDOM-$RANDOM-$RANDOM"
+# team-lead's own live measurement, run-5 (realrun5.clean.log), 2026-09-21
+# -- see the bind-check's own comment above (this file's read-only copy
+# of this exact mechanism) for the full derivation, and for why PR #857's
+# first attempt (-W, a prompt-text assertion) was found FAIL-OPEN by Sec.
+# No -W, no prompt-text assertion anywhere in this mechanism.
+CONTROL_BOGUS_PW='trust-path-control-probe-do-not-use-as-a-real-password'
 set +e
-CONTROL_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$WRONG_PW")" 2>&1)"
+CONTROL_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$CONTROL_BOGUS_PW")" 2>&1)"
 CONTROL_RC=$?
 set -e
 if printf '%s' "$CONTROL_OUT" | grep -qF -- "$PW"; then
-  echo "FATAL: the real credential's cleartext value appeared in the trust-path control's own captured output (a control run using a DIFFERENT, deliberately-wrong password) -- refusing to proceed or print it." >&2
+  echo "FATAL: the real credential's cleartext value appeared in the trust-path control's own captured output (a control run using a FIXED bogus password, never the real one) -- refusing to proceed or print it." >&2
   exit 1
 fi
-if [ "$CONTROL_RC" -eq 0 ] || ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed"; then
-  echo "FATAL: connecting AS $ROLE with a deliberately WRONG password did not fail with 'password authentication failed' (exit $CONTROL_RC) -- this means the connection may have taken a NON-password-authenticated path (a trust rule), or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
+if ! printf '%s' "$CONTROL_OUT" | grep -qF "password authentication failed for user \"$ROLE\""; then
+  echo "FATAL: connecting AS $ROLE with a deliberately WRONG (fixed, bogus) password did not fail with the exact text 'password authentication failed for user \"$ROLE\"' (exit $CONTROL_RC) -- this means the connection took a trust-path or non-scram path, or something else unexpected happened. Observed output: $CONTROL_OUT" >&2
   exit 1
 fi
 
 set +e
-CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -W -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
+CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
 CONNECT_RC=$?
 set -e
 if printf '%s' "$CONNECT_OUT" | grep -qF -- "$PW"; then
   echo "FATAL: the credential's cleartext value appeared in the connect-as-role step's own captured output -- refusing to proceed or print it. Investigate before retrying." >&2
-  exit 1
-fi
-if ! printf '%s' "$CONNECT_OUT" | grep -qE "Password:|Password for user"; then
-  echo "FATAL: no password prompt (\"Password:\") was observed connecting AS $ROLE -- this means the connection took a NON-password-authenticated path (e.g. a trust rule), or -W stopped forcing one, which is the exact hazard this step exists to detect. Refusing regardless of exit code (this check does not trust ON_ERROR_STOP or the exit status alone). Observed output: $CONNECT_OUT" >&2
   exit 1
 fi
 if [ $CONNECT_RC -ne 0 ]; then
@@ -748,7 +747,7 @@ if ! printf '%s' "$CONNECT_OUT" | grep -qE "^[[:space:]]*${ROLE}[[:space:]]*\$";
   echo "FATAL: connected but current_user did not echo back '$ROLE' as its own output row. Observed output: $CONNECT_OUT" >&2
   exit 1
 fi
-echo "OK: connected AS $ROLE over a non-loopback, password-prompted path with the generated credential; current_user confirmed."
+echo "OK: connected AS $ROLE over a non-loopback path with the generated credential (trust-path control passed); current_user confirmed."
 
 step_r "D. Pushing the SAME credential onto the target Coolify resource's env store as PFIN_DB_PASSWORD"
 TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"

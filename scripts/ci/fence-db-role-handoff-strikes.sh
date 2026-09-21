@@ -245,26 +245,21 @@ fi
 
 if [[ "$ARGS" == *"-h db"* ]]; then
   # Connect-as-the-role step. team-lead's own live measurement, run-5
-  # (realrun5.clean.log), 2026-09-21, MEASURED on the production target:
-  # psql 17.6 over -h db, non-tty, inside `docker compose exec -T`, prints
-  # NO password-prompt text at all without `-W` -- it silently consumes
-  # the piped first stdin line as the password and attempts auth with it.
-  # `-W` forces a `Password: ` prompt regardless of tty/pipe state. This
-  # fixture now models a REAL auth check (compare the piped line against
-  # the known-correct value) rather than the old flag-only shape, because
-  # the real script now runs a POSITIVE CONTROL (a deliberately WRONG
-  # password) before the real connect, and a fixture that always
-  # "succeeds" regardless of the piped password could never distinguish
-  # the two calls or prove the control is load-bearing.
+  # (realrun5.clean.log), 2026-09-21: psql over -h db, non-tty, inside
+  # `docker compose exec -T`, prints NO password-prompt text at all -- it
+  # silently consumes the piped first stdin line as the password
+  # regardless. PR #857's first fix added `-W` to force a visible prompt;
+  # Sec measured that FAIL-OPEN (a trust rule still shows -W's prompt and
+  # still succeeds). This fixture models NO prompt concept at all -- only
+  # a REAL auth check (compare the piped line against the known-correct
+  # value) and a TRUST-PATH shape that applies to ANY connection attempt
+  # regardless of which password was sent (a real trust rule never
+  # validates the password at all).
   SCRIPT_IN="$(cat)"
   FIRST_LINE="$(printf '%s\n' "$SCRIPT_IN" | head -1)"
-  HAS_W=0
-  [[ "$ARGS" == *"-W"* ]] && HAS_W=1
   if [[ -n "${FAKE_CONNECT_CALL_LOG:-}" ]]; then
     printf '%s\n' "$ARGS" >> "$FAKE_CONNECT_CALL_LOG"
   fi
-  PROMPT_LINE=""
-  [[ "$HAS_W" -eq 1 ]] && PROMPT_LINE="Password: "
   # The real credential comes from ONE of two sources depending on which
   # site called this: the fresh-handoff leg C generates $PW locally and
   # delivers it via SEED_FILE (readable here -- the leg-E readback hash
@@ -276,47 +271,38 @@ if [[ "$ARGS" == *"-h db"* ]]; then
     REAL_PW="${FAKE_BIND_CHECK_PW:-}"
   fi
 
+  if [[ "${FAKE_NO_PASSWORD_PROMPT:-0}" == "1" ]]; then
+    # Sec VETO V-1 (PR #846 review) -- TRUST-PATH BYPASS, applies to ANY
+    # connect attempt on this host (control OR real), regardless of which
+    # password was piped, because a real trust rule never validates the
+    # password at all. Under -v ON_ERROR_STOP=1 the piped line is parsed
+    # as a bogus SQL statement -- a syntax error -- but (historically,
+    # pre-fix) still followed by a current_user row and exit 0, the exact
+    # shape that let a trust rule masquerade as success. This means the
+    # real script's own CONTROL never sees the auth-failure string and
+    # refuses BEFORE ever reaching the real connect -- "trust-shaped fake
+    # -> RED at the control" (Sec's own strike criterion, PR #857 r2).
+    echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$FIRST_LINE\""
+    echo "LINE 1: $FIRST_LINE"
+    echo " current_user "
+    echo "--------------"
+    echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+    exit 0
+  fi
+
   if [[ -n "$REAL_PW" && "$FIRST_LINE" == "$REAL_PW" ]]; then
-    # The REAL credential was piped -- this is the real connect attempt
-    # (whether or not a control call happened first).
-    if [[ "${FAKE_NO_PASSWORD_PROMPT:-0}" == "1" ]]; then
-      # Sec VETO V-1 (PR #846 review) -- trust-path bypass: NO prompt text
-      # at all EVEN WITH -W (the actual hazard: something suppresses the
-      # prompt regardless), the cleartext first-stdin-line consumed as a
-      # bogus SQL statement instead. Realistically leaks $PW into the
-      # syntax-error echo -- with scrub-before-prompt-check ordering, the
-      # cleartext scrub now correctly fires FIRST on this exact shape (a
-      # STRONGER outcome). FAKE_NO_PASSWORD_PROMPT_CLEAN below isolates
-      # the missing-prompt guard with a non-leaking variant.
-      echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$FIRST_LINE\""
-      echo "LINE 1: $FIRST_LINE"
-      echo " current_user "
-      echo "--------------"
-      echo " ${FAKE_ROLE_NAME:-pfin_etl}"
-      exit 0
-    fi
-    if [[ "${FAKE_NO_PASSWORD_PROMPT_CLEAN:-0}" == "1" ]]; then
-      echo "psql:<stdin>:1: ERROR:  syntax error at or near a piped credential (redacted by this fake, not by db-role-handoff.sh)"
-      echo " current_user "
-      echo "--------------"
-      echo " ${FAKE_ROLE_NAME:-pfin_etl}"
-      exit 0
-    fi
+    # The REAL credential was piped -- this is the real connect attempt.
     if [[ "${FAKE_WRONG_CURRENT_USER:-0}" == "1" ]]; then
       # Sec C-1 (PR #856 round 1) -- everything else about this connection
-      # is normal (prompt prints, no cleartext leak, exit 0), but the row
-      # psql prints back for `select current_user;` names a DIFFERENT
-      # role. Proves the exact-row current_user match fires on its own.
-      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      # is normal (no cleartext leak, exit 0), but the row psql prints
+      # back for `select current_user;` names a DIFFERENT role.
       echo " current_user "
       echo "--------------"
       echo " postgres"
       exit 0
     fi
     if [[ "${FAKE_ECHO_PW_IN_CONNECT:-0}" == "1" ]]; then
-      # Sec F-6 (PR #846 review) -- the prompt DOES print, but the
-      # credential ALSO leaks into the output elsewhere.
-      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      # Sec F-6 (PR #846 review) -- the credential leaks into the output.
       echo "DEBUG (simulated transport bug): last line was $FIRST_LINE"
       echo " current_user "
       echo "--------------"
@@ -325,34 +311,23 @@ if [[ "$ARGS" == *"-h db"* ]]; then
     fi
     if [[ "${FAKE_CONNECT_FAIL:-0}" == "1" ]]; then
       # A genuine password-authenticated connection failing for an
-      # UNRELATED reason (DB unreachable after the prompt, etc).
-      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      # UNRELATED reason (DB unreachable, etc).
       echo "psql: error: connection failed" >&2
       exit 2
     fi
-    [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
     echo " current_user "
     echo "--------------"
     echo " ${FAKE_ROLE_NAME:-pfin_etl}"
     exit 0
   else
-    # Wrong/unknown password (the trust-path CONTROL's own deliberately-
-    # wrong value, or REAL_PW unset). Real psql behavior: auth failure,
-    # unless a dedicated override models the actual hazards the control
-    # exists to catch.
-    if [[ "${FAKE_CONTROL_SUCCEEDS:-0}" == "1" ]]; then
-      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
-      echo " current_user "
-      echo "--------------"
-      echo " ${FAKE_ROLE_NAME:-pfin_etl}"
-      exit 0
-    fi
+    # Wrong/unknown password (the trust-path CONTROL's own fixed bogus
+    # value, or REAL_PW unset). Real psql behavior: scram auth failure,
+    # unless a dedicated override models a DIFFERENT hazard the control
+    # must also treat as inconclusive.
     if [[ "${FAKE_CONTROL_WRONG_ERROR:-0}" == "1" ]]; then
-      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
       echo "psql: error: could not translate host name \"db\" to address: Name or service not known" >&2
       exit 2
     fi
-    [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
     echo "psql: error: connection to server at \"db\" (10.0.0.5), port 5432 failed: FATAL:  password authentication failed for user \"${FAKE_ROLE_NAME:-pfin_etl}\"" >&2
     exit 2
   fi
@@ -554,15 +529,19 @@ assert_output_contains "already-handed-off" "${OUT2:-}" "VERIFIED" || FAIL=1
 # with it) before reporting VERIFIED. Pin the bind-check's own success
 # line, not the old existence-only caveat text (removed).
 assert_output_contains "already-handed-off" "${OUT2:-}" "bind-check confirmed" || FAIL=1
-# team-lead's run-5 fix (2026-09-21) -- -W PINNED FROM THE LOGGED ARGV,
-# not just inferred from behavior: every -h db call this scenario made
-# (the trust-path control AND the real connect) must carry -W.
+# Sec's PR #857 r2 correction: `-W` is a REGRESSION now, not a
+# requirement -- it forces a visible prompt BEFORE the connection even
+# negotiates auth, so it fails OPEN on a trust rule (the prompt still
+# shows, the wrong password is silently ignored, current_user still
+# echoes back). PINNED FROM THE LOGGED ARGV that -W is ABSENT from every
+# -h db call this scenario made (the trust-path control AND the real
+# connect) -- reintroducing it must turn this RED.
 if [[ ! -s "$CONNECT_CALL_LOG" ]]; then
-  echo "FAIL: [already-handed-off] no -h db connect calls were logged at all -- the -W pin has nothing to check." >&2
+  echo "FAIL: [already-handed-off] no -h db connect calls were logged at all -- the -W absence pin has nothing to check." >&2
   FAIL=1
-elif grep -qv -- '-W' "$CONNECT_CALL_LOG"; then
-  echo "FAIL: [already-handed-off] at least one -h db connect call did not carry -W:" >&2
-  grep -v -- '-W' "$CONNECT_CALL_LOG" >&2
+elif grep -qF -- '-W' "$CONNECT_CALL_LOG"; then
+  echo "FAIL: [already-handed-off] at least one -h db connect call carries -W (Sec's fail-open regression, PR #857 r2):" >&2
+  grep -F -- '-W' "$CONNECT_CALL_LOG" >&2
   FAIL=1
 fi
 unset CONNECT_CALL_LOG
@@ -654,13 +633,15 @@ CONNECT_CALL_LOG="$WORK/connect-pin.10.$$"
 : > "$CONNECT_CALL_LOG"
 OUT10="$(run_scenario "happy-path-initial: succeeds" 0 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "happy-path-initial" "${OUT10:-}" "hash-bound to the generated credential confirmed" || FAIL=1
-# -W PINNED FROM THE LOGGED ARGV (fresh-handoff leg C's own connect calls).
+# -W absence PINNED FROM THE LOGGED ARGV (fresh-handoff leg C's own
+# connect calls) -- Sec's PR #857 r2 correction: -W is now a fail-open
+# REGRESSION, not a requirement.
 if [[ ! -s "$CONNECT_CALL_LOG" ]]; then
-  echo "FAIL: [happy-path-initial] no -h db connect calls were logged at all -- the -W pin has nothing to check." >&2
+  echo "FAIL: [happy-path-initial] no -h db connect calls were logged at all -- the -W absence pin has nothing to check." >&2
   FAIL=1
-elif grep -qv -- '-W' "$CONNECT_CALL_LOG"; then
-  echo "FAIL: [happy-path-initial] at least one -h db connect call did not carry -W:" >&2
-  grep -v -- '-W' "$CONNECT_CALL_LOG" >&2
+elif grep -qF -- '-W' "$CONNECT_CALL_LOG"; then
+  echo "FAIL: [happy-path-initial] at least one -h db connect call carries -W (Sec's fail-open regression, PR #857 r2):" >&2
+  grep -F -- '-W' "$CONNECT_CALL_LOG" >&2
   FAIL=1
 fi
 unset CONNECT_CALL_LOG
@@ -677,26 +658,19 @@ fi
 OUT12="$(run_scenario "provider-sync happy-path-initial: succeeds" 0 pfin_provider_sync --apply clean "false|false" "true|true" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "provider-sync happy-path-initial" "${OUT12:-}" "hash-bound to the generated credential confirmed" || FAIL=1
 
-# 13. TRUST-PATH-NO-PROMPT (Sec VETO V-1, PR #846 review) -- paired golden
-#     test: the fake psql's step-C branch does NOT emit "Password for
-#     user" and instead echoes the piped credential back inside a
-#     fabricated syntax-error message (the measured 127.0.0.1/32 `trust`
-#     rule shape). Before the V-1 fix this scenario exited 0 (false OK).
-#     Sec C-1 (PR #856 round 1) -- leg C now scrubs cleartext BEFORE the
-#     missing-prompt check (F-2b), so on this realistic (credential-
-#     leaking) trust-path shape, the scrub now fires first -- still
-#     exit 1, but via a different, STRONGER guard. Asserts the scrub's
-#     own message, not the (now second-in-line) missing-prompt message.
-OUT13="$(run_scenario "trust-path-no-prompt: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 1)" || FAIL=1
-assert_output_contains "trust-path-no-prompt" "${OUT13:-}" "cleartext value appeared" || FAIL=1
-
-# 13b. TRUST-PATH-NO-PROMPT-CLEAN (Sec C-1 follow-up) -- the same bypass,
-#      but the fake's syntax-error text does NOT leak the credential,
-#      isolating the missing-prompt guard so it still has its own
-#      independent strike now that #13's realistic shape is caught by the
-#      scrub first.
-OUT13B="$(run_scenario "trust-path-no-prompt-clean: refuses via missing-prompt guard" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 1)" || FAIL=1
-assert_output_contains "trust-path-no-prompt-clean" "${OUT13B:-}" 'no password prompt ("Password:") was observed' || FAIL=1
+# 13. LEG-C-TRUST-PATH (Sec VETO V-1, PR #846 review; corrected design,
+#     Sec's PR #857 r2) -- TRUST-PATH BYPASS: a trust rule never validates
+#     the password at all, so it applies to ANY connect attempt (control
+#     OR real), and the fake's syntax-error echo never contains $PW for a
+#     CONTROL call (its first line is the fixed bogus literal, never the
+#     real credential). This means the trust bypass hits the CONTROL
+#     first, and the control's own exact-string check ("password
+#     authentication failed for user...") never finds it -- refuses
+#     before ever reaching the real connect. Before the V-1 fix (and
+#     before Sec's fail-open catch on the -W design) this scenario
+#     exited 0 (false OK).
+OUT13="$(run_scenario "leg-c-trust-path: refuses at the control" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 1)" || FAIL=1
+assert_output_contains "leg-c-trust-path" "${OUT13:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
 # 13c. WRONG-CURRENT-USER-FRESH-HANDOFF (Sec C-1, PR #856 round 1) -- leg
 #      C's own connect (the fresh-handoff path): prompt prints normally,
@@ -766,27 +740,35 @@ else
   echo "OK: [step-c-structural-pin] $DB_ROLE_HANDOFF_SH's connect-as-role invocation carries both '-v ON_ERROR_STOP=1' and '-h db'." >&2
 fi
 
-# 18a. ALREADY-HANDED-OFF-CONTROL-SUCCEEDS (team-lead, run-5, 2026-09-21)
-#      -- the trust-path control (a deliberately WRONG password) succeeds
-#      instead of failing -- the exact hazard the control exists to
-#      catch (a trust rule authenticating ANY password) -- refuses,
-#      never proceeding to try the real credential.
-OUT18A="$(run_scenario "already-handed-off-control-succeeds: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 0 0 1)" || FAIL=1
-assert_output_contains "already-handed-off-control-succeeds" "${OUT18A:-}" "did not fail with 'password authentication failed'" || FAIL=1
+# 18a. ALREADY-HANDED-OFF-TRUST-PATH (team-lead/Sec, PR #857 r2, 2026-09-21)
+#      -- same trust-path bypass as #13, against the bind-check's own
+#      connect site instead of the fresh-handoff leg C: the trust rule
+#      applies to ANY connect attempt, so the control call itself never
+#      sees the auth-failure string it requires -- refuses, never
+#      proceeding to try the real credential.
+OUT18A="$(run_scenario "already-handed-off-trust-path: refuses at the control" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 1 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")" || FAIL=1
+assert_output_contains "already-handed-off-trust-path" "${OUT18A:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
 # 18b. ALREADY-HANDED-OFF-CONTROL-WRONG-ERROR -- the control fails, but
-#      not with "password authentication failed" -- refuses.
+#      not with the exact 'password authentication failed for user "..."'
+#      text (e.g. a host-resolution error) -- refuses; rc alone is never
+#      trusted as proof (rc=2 is also what a missing container or wrong
+#      host produces).
 OUT18B="$(run_scenario "already-handed-off-control-wrong-error: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 0 0 0 1)" || FAIL=1
-assert_output_contains "already-handed-off-control-wrong-error" "${OUT18B:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "already-handed-off-control-wrong-error" "${OUT18B:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
-# 18c. LEG-C-CONTROL-SUCCEEDS -- same strike against the fresh-handoff
-#      leg C.
-OUT18C="$(run_scenario "leg-c-control-succeeds: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 1)" || FAIL=1
-assert_output_contains "leg-c-control-succeeds" "${OUT18C:-}" "did not fail with 'password authentication failed'" || FAIL=1
+# 18c. LEG-C-TRUST-PATH-FRESH-HANDOFF -- the same trust-path strike
+#      against the fresh-handoff leg C, redundant coverage with #13
+#      against the SAME site (kept from the pre-amendment scenario this
+#      one replaces, which modeled the now-retired FAKE_CONTROL_SUCCEEDS
+#      override).
+OUT18C="$(run_scenario "leg-c-trust-path-fresh-handoff: refuses at the control" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 1 0 "" 0 0 "")" || FAIL=1
+assert_output_contains "leg-c-trust-path-fresh-handoff" "${OUT18C:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
-# 18d. LEG-C-CONTROL-WRONG-ERROR -- same, non-auth-failure error shape.
+# 18d. LEG-C-CONTROL-WRONG-ERROR -- same, non-auth-failure error shape,
+#      against the fresh-handoff leg C.
 OUT18D="$(run_scenario "leg-c-control-wrong-error: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 0 1)" || FAIL=1
-assert_output_contains "leg-c-control-wrong-error" "${OUT18D:-}" "did not fail with 'password authentication failed'" || FAIL=1
+assert_output_contains "leg-c-control-wrong-error" "${OUT18D:-}" "did not fail with the exact text 'password authentication failed for user \"pfin_etl\"'" || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
