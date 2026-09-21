@@ -116,6 +116,27 @@
 #  25. PGRST-FLIP-CONTAINER-CHECK-UNREACHABLE (Sec C-1) -- the store
 #      matches but the container check itself cannot be attempted (rc=2)
 #      -> UNKNOWN, not done, falls through to a real call.
+#  26. DEPLOY-APP-USES-RESOLVED-VALUE-NOT-LITERAL-NAME (team-lead, run 4,
+#      2026-09-21) -- `--only deploy-app`: the deploy-app.sh fake's own
+#      calls.log entry for --require-network carries resolve-stack-
+#      network.sh's OWN resolved output, never the literal string
+#      "APP_STACK_NETWORK_NAME" -- and resolve-stack-network.sh's own
+#      call counter is exactly 1 for the whole run, proving
+#      resolve_stack_network_value() memoizes across the preflight AND
+#      apply calls to run_deploy_app() (two calls to the step, one
+#      resolution).
+#  27. DEPLOY-WORKERS-RESOLVE-MEMOIZED-ACROSS-ALL-THREE-WORKERS --
+#      `--only deploy-workers`: all three deploy-app.sh fake calls (etl,
+#      provider-sync, pdf-render) carry the IDENTICAL resolved value on
+#      --require-network, never a literal *_STACK_NETWORK_NAME, and
+#      resolve-stack-network.sh's own call counter is exactly 1 for the
+#      whole run (3 workers x 2 phases = 6 potential call sites, all
+#      served by one memoized resolution).
+#  28. RESOLVE-STACK-NETWORK-FAILURE-BLOCKS-DEPLOY-APP -- resolve-stack-
+#      network.sh itself fails (rc=1) -> run_deploy_app() propagates the
+#      failure (exit 2, a genuine FAILED-STOPS outcome) and deploy-app.sh
+#      is NEVER called -- a resolution failure must never fall through to
+#      passing an empty or stale network value.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -849,6 +870,83 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   grep -q "pgrst-schemas-live-check.sh could not even attempt the container read" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [pgrst-flip-container-unreachable] did not print the UNKNOWN-state line for the container check" >&2; cat "$CASE_LAST_DIR/out.txt" >&2; FAIL=1; }
   grep -q "^coolify-env .*--apply --deploy" "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [pgrst-flip-container-unreachable] no coolify-env call carried --apply --deploy despite the container check being unreachable" >&2; cat "$CASE_LAST_DIR/calls.log" >&2; FAIL=1; }
 fi
+
+# 26. DEPLOY-APP-USES-RESOLVED-VALUE-NOT-LITERAL-NAME (team-lead, run 4,
+#     2026-09-21) -- default env (mint-jwt's fake preflight already
+#     passes) -> `--only deploy-app` reaches deploy-app.sh; its
+#     --require-network argv carries resolve-stack-network.sh's own
+#     resolved stdout, never the literal env-var NAME, and
+#     resolve-stack-network.sh's own call counter is exactly 1 for the
+#     whole run (called from both the preflight and apply phases of
+#     run_deploy_app(), memoized down to one real resolution).
+run_case "deploy-app: --require-network carries the resolved value, not a literal name" 0 --only deploy-app || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  DEPLOY_APP_LINE="$(grep '^deploy-app ' "$CASE_LAST_DIR/calls.log" 2>/dev/null | head -1)"
+  if [[ -z "$DEPLOY_APP_LINE" ]]; then
+    echo "FAIL: [deploy-app-resolved-value] deploy-app.sh was never called" >&2
+    FAIL=1
+  elif echo "$DEPLOY_APP_LINE" | grep -qE -- '--require-network (APP_STACK_NETWORK_NAME|ETL_STACK_NETWORK_NAME|PROVIDER_SYNC_STACK_NETWORK_NAME|PDF_RENDER_STACK_NETWORK_NAME)( |$)'; then
+    echo "FAIL: [deploy-app-resolved-value] --require-network carried a literal env-var NAME token, not a resolved value:" >&2
+    echo "$DEPLOY_APP_LINE" >&2
+    FAIL=1
+  elif ! echo "$DEPLOY_APP_LINE" | grep -qF -- '--require-network FAKE resolve-stack-network'; then
+    echo "FAIL: [deploy-app-resolved-value] --require-network did not carry resolve-stack-network.sh's own fake output -- resolve_stack_network_value() may not be wired at all:" >&2
+    echo "$DEPLOY_APP_LINE" >&2
+    FAIL=1
+  fi
+  RESOLVE_COUNTER_FILE="$CASE_LAST_DIR/.fake-step-counter.resolve-stack-network"
+  if [[ ! -f "$RESOLVE_COUNTER_FILE" ]]; then
+    echo "FAIL: [deploy-app-resolved-value] resolve-stack-network.sh was never called at all" >&2
+    FAIL=1
+  elif [[ "$(cat "$RESOLVE_COUNTER_FILE")" != "1" ]]; then
+    echo "FAIL: [deploy-app-resolved-value] resolve-stack-network.sh was called $(cat "$RESOLVE_COUNTER_FILE") times across preflight+apply, expected exactly 1 (memoization broken)" >&2
+    FAIL=1
+  fi
+fi
+
+# 27. DEPLOY-WORKERS-RESOLVE-MEMOIZED-ACROSS-ALL-THREE-WORKERS --
+#     `--only deploy-workers`: all three deploy-app.sh fake calls carry
+#     the SAME resolved value, never a literal *_STACK_NETWORK_NAME, and
+#     resolve-stack-network.sh's own call counter is exactly 1 for the
+#     whole run (3 workers x 2 phases, one memoized resolution).
+run_case "deploy-workers: all three workers share one resolved --require-network value" 0 --only deploy-workers || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  WORKER_LINES="$(grep '^deploy-app ' "$CASE_LAST_DIR/calls.log" 2>/dev/null || true)"
+  WORKER_LINE_COUNT="$(echo "$WORKER_LINES" | grep -c . || true)"
+  if [[ "$WORKER_LINE_COUNT" -lt 3 ]]; then
+    echo "FAIL: [deploy-workers-resolved-value] expected calls for all 3 workers, found $WORKER_LINE_COUNT:" >&2
+    echo "$WORKER_LINES" >&2
+    FAIL=1
+  fi
+  if echo "$WORKER_LINES" | grep -qE -- '--require-network (APP_STACK_NETWORK_NAME|ETL_STACK_NETWORK_NAME|PROVIDER_SYNC_STACK_NETWORK_NAME|PDF_RENDER_STACK_NETWORK_NAME)( |$)'; then
+    echo "FAIL: [deploy-workers-resolved-value] at least one worker's --require-network carried a literal env-var NAME token:" >&2
+    echo "$WORKER_LINES" >&2
+    FAIL=1
+  fi
+  RESOLVE_COUNTER_FILE="$CASE_LAST_DIR/.fake-step-counter.resolve-stack-network"
+  if [[ ! -f "$RESOLVE_COUNTER_FILE" ]]; then
+    echo "FAIL: [deploy-workers-resolved-value] resolve-stack-network.sh was never called at all" >&2
+    FAIL=1
+  elif [[ "$(cat "$RESOLVE_COUNTER_FILE")" != "1" ]]; then
+    echo "FAIL: [deploy-workers-resolved-value] resolve-stack-network.sh was called $(cat "$RESOLVE_COUNTER_FILE") times across 3 workers x 2 phases, expected exactly 1 (memoization broken)" >&2
+    FAIL=1
+  fi
+fi
+
+# 28. RESOLVE-STACK-NETWORK-FAILURE-BLOCKS-DEPLOY-APP -- resolve-stack-
+#     network.sh itself fails -> run_deploy_app() must propagate the
+#     failure rather than falling through with an empty/stale value;
+#     deploy-app.sh is never reached.
+CASE_ENV=(FAKE_RC_resolve_stack_network=1)
+run_case "deploy-app: resolve-stack-network.sh failure blocks the call, never falls through" 2 --only deploy-app || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  if grep -q '^deploy-app ' "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
+    echo "FAIL: [resolve-failure-blocks-deploy-app] deploy-app.sh was called despite resolve-stack-network.sh failing" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  fi
+fi
+CASE_ENV=()
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

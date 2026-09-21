@@ -444,29 +444,79 @@ else
   # on any state that is neither "fully fresh" nor "fully handed off" --
   # only the two CONSISTENT states are treated as non-refusals now.
   if [[ "$ROLCANLOGIN" == "true" && "$HAS_PASSWORD" == "true" && "$STORE_HAS_PW" == "true" ]]; then
-    ok "role '$ROLE' already has LOGIN + a password set, and '$RESOURCE_NAME' already carries a production PFIN_DB_PASSWORD -- already handed off, nothing to do."
-    # Sec F-1 (PR #852 AMBER review), option (a)+(c): this no-op path is
-    # EXISTENCE-only -- it does not prove the store's CURRENT value is the
-    # SAME credential Postgres is actually authenticating with right now.
-    # Option (b) (bind it, e.g. via a persisted hash) was considered and
-    # rejected as not cheap: leg E's own hash-bound proof (further below)
-    # only exists because $PW -- the plaintext this run just generated --
-    # is still in scope at that moment; on a LATER no-op run there is no
-    # live plaintext to hash against (Postgres never stores or exposes
-    # the reversible plaintext, only its own opaque auth verifier), and a
-    # hash persisted box-side from a past run would only prove "the
-    # store's value has not changed since we last pushed it", never
-    # "Postgres's live password still equals it" -- a REAL two-sided proof
-    # would need an actual live authentication attempt using the stored
-    # plaintext, materially more machinery than this preflight check
-    # otherwise needs. Given that, the residual (a stale value from a
-    # half-completed --rotate, where Postgres and the store fell out of
-    # sync mid-run, would still read true|true|t and report VERIFIED here) is
-    # documented, not silently accepted -- see this file's own IDEMPOTENCY
-    # header -- and surfaced loudly on every no-op run, not just in a
-    # comment nobody re-reads.
-    echo "⚠ existence-only check: this confirms the role has LOGIN+password AND the store carries SOME PFIN_DB_PASSWORD row -- it does NOT re-verify that value still matches Postgres's live password (e.g. after a half-completed --rotate). If you suspect drift, run --apply --rotate to re-establish a coherent value from scratch." >&2
-    printf '\n\033[32mVERIFIED\033[0m  already handed off -- no-op, whether or not --apply was passed. Pass --apply --rotate to rotate the established credential.\n'
+    ok "role '$ROLE' already has LOGIN + a password set, and '$RESOURCE_NAME' already carries a production PFIN_DB_PASSWORD -- checking whether the store's value actually binds to Postgres's live password before reporting VERIFIED."
+    # Sec F-1 (PR #852 AMBER review) remedied here (team-lead, run-4
+    # follow-up, 2026-09-21): this no-op path used to be EXISTENCE-only --
+    # it never proved the store's CURRENT value was the SAME credential
+    # Postgres is actually authenticating with. The residual named at F-1
+    # (a stale value from a half-completed --rotate, where Postgres and the
+    # store fell out of sync mid-run, would read true|true|true and report
+    # VERIFIED with no further check) is now closed by an actual live
+    # authentication attempt using the store's own current value -- read
+    # via the same box-side tinker mechanism leg A of a fresh handoff
+    # would use to READ (never PATCH) the credential, then a real connect
+    # AS $ROLE over -h db with it (the same leg-C-shaped check the fresh
+    # handoff flow already runs further below, applied here read-only,
+    # never generating or pushing anything).
+    step "Preflight -- already-handed-off bind-check: does the store's current PFIN_DB_PASSWORD actually authenticate as '$ROLE'?"
+    # ⚠ Written to a real temp file, then fed via `< "$file"`, NEVER a
+    # heredoc nested inside this `$(...)` assignment -- bash 3.2 (the
+    # operator's own shell) has a parser bug on exactly that nesting shape
+    # (a heredoc inside a command substitution assigned inside/near an
+    # `if`): confirmed live while building this fix (`bad substitution` /
+    # `unexpected token` at an unrelated downstream line, the same class
+    # already documented for the `python3 - <<'PYEOF'` case elsewhere in
+    # this repo's own scripts). CI runs bash 5, where the nested form would
+    # have passed silently -- this would have shipped a script that only
+    # breaks under the operator's own bash 3.2, never caught here.
+    BIND_CHECK_SCRIPT="$(mktemp)"
+    cat > "$BIND_CHECK_SCRIPT" <<'REMOTE'
+set -e
+echo "== Reading the store's CURRENT PFIN_DB_PASSWORD (read-only -- no rotation, no PATCH) =="
+PW="$(docker exec coolify php artisan tinker --execute="
+\$app = \App\Models\Application::where('uuid','$RESOURCE_UUID')->firstOrFail();
+\$row = \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->where('is_preview', false)->first();
+echo \$row ? (string) \$row->value : '';
+" 2>/dev/null | tail -1 | tr -d ' \n')"
+if [ -z "$PW" ]; then
+  echo "FATAL: PFIN_DB_PASSWORD (is_preview=false) resolved to empty on the bind-check read, despite the earlier count read reporting exactly one row -- refusing to trust an inconsistent store." >&2
+  exit 1
+fi
+
+echo "== Connect AS $ROLE over -h db with the store's current credential (read-only proof; never rotates anything) =="
+set +e
+CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
+CONNECT_RC=$?
+set -e
+if printf '%s' "$CONNECT_OUT" | grep -qF -- "$PW"; then
+  echo "FATAL: the credential's cleartext value appeared in the bind-check connect step's own captured output -- refusing to proceed or print it." >&2
+  exit 1
+fi
+if ! printf '%s' "$CONNECT_OUT" | grep -qF "Password for user"; then
+  echo "FATAL: no password prompt was observed connecting AS $ROLE with the store's current credential -- a non-password-authenticated path, or the credential no longer authenticates at all." >&2
+  exit 1
+fi
+if [ $CONNECT_RC -ne 0 ]; then
+  echo "FATAL: could not connect AS $ROLE with the store's current credential (exit $CONNECT_RC) -- the store and the live role have drifted apart." >&2
+  exit 1
+fi
+if ! printf '%s' "$CONNECT_OUT" | grep -qE "^[[:space:]]*${ROLE}[[:space:]]*\$"; then
+  echo "FATAL: connected but current_user did not echo back '$ROLE' as its own output row." >&2
+  exit 1
+fi
+echo "OK: connected AS $ROLE over a non-loopback, password-prompted path with the store's current credential; current_user confirmed."
+REMOTE
+    if BIND_CHECK_OUT="$(sshx "env STACK_UUID=\"$STACK_UUID\" RESOURCE_UUID=\"$RESOURCE_UUID\" ROLE=\"$ROLE\" bash -s" < "$BIND_CHECK_SCRIPT")"; then
+      BIND_CHECK_RC=0
+    else
+      BIND_CHECK_RC=$?
+    fi
+    rm -f "$BIND_CHECK_SCRIPT"
+    if [[ "$BIND_CHECK_RC" -ne 0 ]]; then
+      die "role '$ROLE' / '$RESOURCE_NAME' state is INCONSISTENT(store≠role) -- rolcanlogin=$ROLCANLOGIN has_password=$HAS_PASSWORD store_has_PFIN_DB_PASSWORD=$STORE_HAS_PW, but the store's current PFIN_DB_PASSWORD does NOT authenticate as '$ROLE' against the live database (bind-check output: $BIND_CHECK_OUT). This is the exact half-completed-rotation residual Sec named at PR #852's F-1 review -- the existence-only check would have silently reported VERIFIED here. Run --apply --rotate to re-establish a coherent value from scratch."
+    fi
+    ok "bind-check confirmed: the store's current PFIN_DB_PASSWORD authenticates as '$ROLE' against the live database."
+    printf '\n\033[32mVERIFIED\033[0m  already handed off -- store and live role bind-checked, no-op whether or not --apply was passed. Pass --apply --rotate to rotate the established credential.\n'
     exit 0
   elif [[ "$ROLCANLOGIN" == "false" && "$HAS_PASSWORD" == "false" && "$STORE_HAS_PW" == "false" ]]; then
     : # genuinely fresh -- fall through to the existing Plan/Apply flow, unchanged.
@@ -609,24 +659,39 @@ step_r "C. Connect AS $ROLE over a non-loopback path with the generated credenti
 #    OWN connection-time prompt, piped over stdin (verified locally this
 #    PR, same mechanism as \password's own prompt) -- never PGPASSWORD
 #    (env or argv).
+# 4. Sec C-1 (PR #856 round 1) -- BACKPORTED from the already-handed-off
+#    bind-check below (Item 4, run-4 follow-up) into this ORIGINAL leg C,
+#    which must never diverge from its own copy: the scrub (2) now runs
+#    BEFORE the prompt check (Sec F-2b's actual requirement -- "scrub
+#    before OUT is ever printed, on every branch"), the scrub uses `--`
+#    (Sec N-1's option-injection guard), and the current_user match below
+#    is the F-1b-corrected exact-row form, not a bare substring (a bare
+#    `grep -qF "$ROLE"` is ALREADY satisfied by the "Password for user
+#    $ROLE:" prompt line itself, so it could never fail independently of
+#    the prompt check -- this was the actual defect: this original leg C
+#    still carried the PRE-F-1b form even though db-bootstrap.sh's own
+#    copy of this same mechanism already had the fix, and the new
+#    bind-check copied THIS site rather than db-bootstrap's corrected
+#    one). Both sites now match byte-for-byte in shape; keep them that
+#    way on any future edit.
 set +e
 CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U "$ROLE" -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
 CONNECT_RC=$?
 set -e
-if ! printf '%s' "$CONNECT_OUT" | grep -qF "Password for user"; then
-  echo "FATAL: no password prompt was observed connecting AS $ROLE -- this means the connection took a NON-password-authenticated path (e.g. a trust rule), which is the exact hazard this step exists to detect. Refusing regardless of exit code (this check does not trust ON_ERROR_STOP or the exit status alone)." >&2
+if printf '%s' "$CONNECT_OUT" | grep -qF -- "$PW"; then
+  echo "FATAL: the credential's cleartext value appeared in the connect-as-role step's own captured output -- refusing to proceed or print it. Investigate before retrying." >&2
   exit 1
 fi
-if printf '%s' "$CONNECT_OUT" | grep -qF "$PW"; then
-  echo "FATAL: the credential's cleartext value appeared in the connect-as-role step's own captured output -- refusing to proceed or print it. Investigate before retrying." >&2
+if ! printf '%s' "$CONNECT_OUT" | grep -qF "Password for user"; then
+  echo "FATAL: no password prompt was observed connecting AS $ROLE -- this means the connection took a NON-password-authenticated path (e.g. a trust rule), which is the exact hazard this step exists to detect. Refusing regardless of exit code (this check does not trust ON_ERROR_STOP or the exit status alone)." >&2
   exit 1
 fi
 if [ $CONNECT_RC -ne 0 ]; then
   echo "FATAL: could not connect AS $ROLE with the generated credential (exit $CONNECT_RC) -- the handoff did not take effect end to end." >&2
   exit 1
 fi
-if ! printf '%s' "$CONNECT_OUT" | grep -qF "$ROLE"; then
-  echo "FATAL: connected but current_user did not echo back '$ROLE'." >&2
+if ! printf '%s' "$CONNECT_OUT" | grep -qE "^[[:space:]]*${ROLE}[[:space:]]*\$"; then
+  echo "FATAL: connected but current_user did not echo back '$ROLE' as its own output row." >&2
   exit 1
 fi
 echo "OK: connected AS $ROLE over a non-loopback, password-prompted path with the generated credential; current_user confirmed."

@@ -43,14 +43,28 @@
 # of scope for this specific risk class).
 #
 # WHAT THIS DOES NOT CATCH -- a remote script delivered by piping a whole
-# FILE into `ssh ... < some-file.sh` (scripts/provision-vps.sh's own
-# migrator-orchestrate.sh dispatch is one such case) is a cross-file
-# concern this single-file scanner cannot see; not attempted here. A
-# `psql`/`python3` invocation reading ITS OWN script from inherited stdin
-# (never seen in this codebase outside the `python3 - ... <<'PYEOF'`
-# LOCAL command-substitution shape, which is not a "remote block" in the
-# sense this fence checks) is likewise out of scope -- flagged as a
-# residual, not silently assumed absent.
+# FILE from a DIFFERENT script into `ssh ... < some-file.sh`
+# (scripts/provision-vps.sh's own migrator-orchestrate.sh dispatch is one
+# such case) is a genuinely cross-file concern this single-file scanner
+# cannot see; not attempted here. A `psql`/`python3` invocation reading
+# ITS OWN script from inherited stdin (never seen in this codebase outside
+# the `python3 - ... <<'PYEOF'` LOCAL command-substitution shape, which is
+# not a "remote block" in the sense this fence checks) is likewise out of
+# scope -- flagged as a residual, not silently assumed absent.
+#
+# SAME-FILE "write heredoc to a temp file, then feed it" IS covered (Sec
+# C-2, PR #856 round 1) -- db-role-handoff.sh's bash-3.2 nested-heredoc
+# workaround (`cat > "$file" <<'REMOTE' ... REMOTE` followed later by
+# `sshx "... bash -s" < "$file"`) writes the remote block's content via a
+# heredoc that never itself matches REMOTE_BLOCK_OPEN (no bash -s/sh -s/
+# ssh on ITS OWN opening line) -- Sec measured this fence stays green with
+# an injected unredirected `docker compose exec -T` inside such a block.
+# find_forced_remote_ranges() below closes that gap: it finds every
+# `cat > TARGET <<DELIM` write, and if TARGET is later fed to a bash -s/
+# sh -s/sshx_in/sshx/ssh invocation via `< TARGET` (same normalized
+# variable name) ANYWHERE later in the SAME file, the write's own body is
+# treated as a remote block for the docker-risk scan, exactly as if
+# REMOTE_BLOCK_OPEN had matched its own opening line.
 #
 # Exit 0 only if zero findings across the whole scan.
 
@@ -104,6 +118,74 @@ NESTED_SSH = re.compile(r'(?<![\w.-])ssh\s')
 SAFE_MARKERS = ['</dev/null', '<<<']
 COMMENT_LINE = re.compile(r'^\s*#')
 
+# Sec C-2 (PR #856 round 1) -- see this file's own header, "SAME-FILE
+# write-then-feed IS covered". Deliberately narrow (variable-reference or
+# bare-token targets only, no general shell parsing) -- proportionate to
+# the one real instance Sec's own survey found plus a stated forward-
+# looking catch criterion, not a rewrite of this scanner into a shell
+# parser.
+FILE_HEREDOC_OPEN = re.compile(
+    r'\bcat\s*>\s*(\S+)\s*<<-?\s*([\'"]?)([A-Za-z_][A-Za-z0-9_]*)\2'
+)
+REMOTE_FEED_CMD = re.compile(r'\b(bash|sh)\s+-s\b|\bsshx_in\b|(?<![\w.-])(sshx|ssh)\b')
+STDIN_REDIRECT = re.compile(r'(?<!<)<(?!<)\s*(\S+)')
+
+def _normalize_token(tok):
+    # Self-found bug while building this fix: a symmetric quote-strip
+    # (`tok[0] == tok[-1]`) fails on `"$BIND_CHECK_SCRIPT")";` -- the token
+    # STDIN_REDIRECT's own greedy `\S+` captures from a real invocation
+    # line, where trailing shell punctuation (`)`, `"`, `;`) follows the
+    # closing quote, so first-char and last-char never match and the
+    # quote is never stripped at all. Strip leading and trailing noise
+    # INDEPENDENTLY instead.
+    tok = tok.strip()
+    tok = tok.lstrip('"\'')
+    tok = tok.rstrip(');"\'')
+    m = re.match(r'^\$\{?([A-Za-z_]\w*)\}?', tok)
+    if m:
+        return m.group(1)
+    return tok
+
+def find_forced_remote_ranges(lines):
+    # -> set of 0-indexed line numbers that must be treated as `in_remote`
+    # even though they sit inside a heredoc whose OWN opening line matched
+    # no REMOTE_BLOCK_OPEN pattern.
+    forced = set()
+    n = len(lines)
+    for i in range(n):
+        raw = lines[i].rstrip('\n')
+        if COMMENT_LINE.match(raw):
+            continue
+        m = FILE_HEREDOC_OPEN.search(raw)
+        if not m:
+            continue
+        target = _normalize_token(m.group(1))
+        delim = m.group(3)
+        close_idx = None
+        for j in range(i + 1, n):
+            if lines[j].rstrip('\n').strip() == delim:
+                close_idx = j
+                break
+        if close_idx is None:
+            continue  # unterminated on this scan -- not this check's concern
+        fed_remote = False
+        for k in range(close_idx + 1, n):
+            kline = lines[k].rstrip('\n')
+            if COMMENT_LINE.match(kline):
+                continue
+            if not REMOTE_FEED_CMD.search(kline):
+                continue
+            for mm in STDIN_REDIRECT.finditer(kline):
+                if _normalize_token(mm.group(1)) == target:
+                    fed_remote = True
+                    break
+            if fed_remote:
+                break
+        if fed_remote:
+            for k in range(i + 1, close_idx):
+                forced.add(k)
+    return forced
+
 def scan_file(path):
     findings = []
     with open(path) as f:
@@ -112,6 +194,7 @@ def scan_file(path):
     i = 0
     remote_stack = []
     generic_stack = []
+    forced_remote = find_forced_remote_ranges(lines)
     while i < n:
         raw = lines[i].rstrip('\n')
         stripped = raw.strip()
@@ -121,8 +204,19 @@ def scan_file(path):
                 remote_stack.pop()
             i += 1
             continue
-        in_remote = bool(remote_stack) and generic_stack and generic_stack[-1] == remote_stack[-1]
-        if in_remote and len(generic_stack) == len(remote_stack) and not COMMENT_LINE.match(raw):
+        in_remote_via_stack = (
+            bool(remote_stack) and generic_stack and generic_stack[-1] == remote_stack[-1]
+            and len(generic_stack) == len(remote_stack)
+        )
+        # `i in forced_remote` (Sec C-2) is an unconditional override, not
+        # subject to the depth-equality check above -- a forced-remote
+        # block's own opening line pushes ONLY generic_stack (its `cat >
+        # file <<DELIM` matches no REMOTE_BLOCK_OPEN alternative), so
+        # generic_stack is always exactly one deeper than remote_stack for
+        # every line inside it; requiring depth-equality would silently
+        # exclude every forced-remote line from ever being checked.
+        in_remote = in_remote_via_stack or i in forced_remote
+        if in_remote and not COMMENT_LINE.match(raw):
             m_risk = DOCKER_RISK.search(raw) or NESTED_SSH.search(raw)
             if m_risk:
                 # Lookahead window widened to 6 lines (found while
@@ -132,7 +226,28 @@ def scan_file(path):
                 # intermediate curl-flag line is NOT a stdin redirect and
                 # correctly does not satisfy SAFE_MARKERS, which requires
                 # the LEADING `<`).
-                window = [raw] + [lines[j].rstrip('\n') for j in range(i + 1, min(i + 7, n))]
+                #
+                # Sec C-2a (PR #856 round 2) -- TRUNCATE the window at the
+                # next risk-matching line, don't let it run the full 6
+                # regardless. Measured: db-role-handoff.sh's bind-check
+                # block has TWO risky lines close together (the injected
+                # strike, and the block's own real `docker compose ...
+                # exec -T db psql ... <<< ...` a few lines later) -- the
+                # untruncated window let an injected, genuinely
+                # UNREDIRECTED exec "borrow" the LATER line's own `<<<`
+                # marker as if it were its own, going undetected for every
+                # insertion point within 6 lines of that later line (Sec's
+                # own table: caught at :474-:481, silently missed at
+                # :482-:487, where the later line's `<<<` first enters the
+                # window). A safe-marker belonging to a DIFFERENT
+                # statement was never a valid witness for THIS one.
+                lookahead = []
+                for j in range(i + 1, min(i + 7, n)):
+                    jline = lines[j].rstrip('\n')
+                    if (DOCKER_RISK.search(jline) or NESTED_SSH.search(jline)) and not COMMENT_LINE.match(jline):
+                        break
+                    lookahead.append(jline)
+                window = [raw] + lookahead
                 safe = any(any(m in w for m in SAFE_MARKERS) for w in window)
                 if not safe and HEREDOC_OPEN_ANY.search(raw):
                     safe = True  # opens its own nested heredoc -- explicit stdin source
