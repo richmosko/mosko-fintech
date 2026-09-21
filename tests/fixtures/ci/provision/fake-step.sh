@@ -37,16 +37,30 @@
 #                             resources() to grep (live --dry-run
 #                             BLOCKED-BY classifier follow-up,
 #                             2026-09-20). Never affects FAKE_RC_<NAME>.
+#   FAKE_STDOUT_LIST_<NAME>   PIPE-delimited (never comma -- a real
+#                             "current state: fqdn=SET (...), ports_
+#                             exposes=ABSENT" line contains commas), ONE
+#                             ENTRY PER CALL to this name, same cycle/
+#                             hold-on-last-entry semantics as FAKE_RC_
+#                             <NAME> above. Added 2026-09-21 (deploy-
+#                             workers resume-path re-read fix): the
+#                             single-value FAKE_STDOUT_<NAME> cannot
+#                             express "this name's Nth call reports a
+#                             DIFFERENT state than its (N-1)th" (e.g.
+#                             SET before a clear, ABSENT/EMPTY on the
+#                             POST-clear re-read) -- a fixture "restating
+#                             the lie" on every call is exactly the shape
+#                             that let a real fail-open regression here
+#                             go undetected. Takes precedence over
+#                             FAKE_STDOUT_<NAME> when set; falls back to
+#                             it (unchanged, every existing scenario byte-
+#                             identical) when unset.
 
 set -euo pipefail
 
 NAME="$(basename "$0" .sh)"
 VARNAME="FAKE_RC_${NAME//-/_}"
 RC_LIST="${!VARNAME:-0}"
-STDOUT_VARNAME="FAKE_STDOUT_${NAME//-/_}"
-if [[ -n "${!STDOUT_VARNAME:-}" ]]; then
-  printf '%s\n' "${!STDOUT_VARNAME}"
-fi
 
 COUNTER_FILE="${FAKE_COUNTER_DIR:-/tmp}/.fake-step-counter.$NAME"
 CALL_N=1
@@ -61,6 +75,21 @@ if [[ $IDX -ge ${#RC_ARR[@]} ]]; then
   IDX=$((${#RC_ARR[@]} - 1))
 fi
 RC="${RC_ARR[$IDX]}"
+
+STDOUT_LIST_VARNAME="FAKE_STDOUT_LIST_${NAME//-/_}"
+STDOUT_VARNAME="FAKE_STDOUT_${NAME//-/_}"
+if [[ -n "${!STDOUT_LIST_VARNAME:-}" ]]; then
+  IFS='|' read -r -a STDOUT_ARR <<< "${!STDOUT_LIST_VARNAME}"
+  SIDX=$((CALL_N - 1))
+  if [[ $SIDX -ge ${#STDOUT_ARR[@]} ]]; then
+    SIDX=$((${#STDOUT_ARR[@]} - 1))
+  fi
+  if [[ -n "${STDOUT_ARR[$SIDX]:-}" ]]; then
+    printf '%s\n' "${STDOUT_ARR[$SIDX]}"
+  fi
+elif [[ -n "${!STDOUT_VARNAME:-}" ]]; then
+  printf '%s\n' "${!STDOUT_VARNAME}"
+fi
 
 if [[ -n "${FAKE_CALL_LOG:-}" ]]; then
   printf '%s BOX_IP=%s %s\n' "$NAME" "${BOX_IP:-<ABSENT>}" "$*" >> "$FAKE_CALL_LOG"

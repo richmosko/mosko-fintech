@@ -79,6 +79,15 @@ for a in "$@"; do
 done
 URL="${*: -1}"
 
+# --state provably-read-only proof (Sec run-11-stop requirement 3):
+# when this is set, ANY non-GET call fails closed -- a --state
+# scenario that still exits 0 against this fake proves the code path
+# makes zero POST/PATCH/DELETE calls, not merely that this fixture
+# happens not to model one.
+if [[ -n "${FAKE_FAIL_ON_WRITE:-}" && "$METHOD" != "GET" ]]; then
+  respond '{"message":"fake-curl: write call attempted under FAKE_FAIL_ON_WRITE -- --state must be provably read-only"}' 500
+fi
+
 RESOURCE_NAME="${FAKE_RESOURCE_NAME:-pfin-back-etl}"
 NETWORK_VAR="${FAKE_NETWORK_VAR:-ETL_STACK_NETWORK_NAME}"
 
@@ -137,7 +146,15 @@ if [[ "$METHOD" == "POST" && "$URL" == *"/applications/public" ]]; then
   respond "$(printf '{"uuid":"%s"}' "$NEW_APP_UUID")"
 fi
 
-if [[ "$METHOD" == "GET" && "$URL" == *"/applications/$NEW_APP_UUID" ]]; then
+if [[ "$METHOD" == "GET" && ( "$URL" == *"/applications/$NEW_APP_UUID" || "$URL" == *"/applications/$OLD_APP_UUID" ) ]]; then
+  # --state (run-11 stop fix) reads an EXISTING resource, resolved to
+  # $OLD_APP_UUID under "clean" mode -- same response shape as the
+  # post-create readback below (parameterized on which uuid actually
+  # matched), so a --state scenario can drive FAKE_DEFAULT_FQDN/
+  # FAKE_DEFAULT_PORTS_EXPOSES exactly like every other CA-1 scenario
+  # here, without a second near-duplicate branch.
+  REPORT_UUID="$NEW_APP_UUID"
+  [[ "$URL" == *"/applications/$OLD_APP_UUID" ]] && REPORT_UUID="$OLD_APP_UUID"
   # CA-1 (run-8 stop, 2026-09-21; mechanism split confirmed by team-lead's
   # live measurement): $FAKE_DEFAULT_FQDN/$FAKE_DEFAULT_PORTS_EXPOSES
   # simulate Coolify's own default-assigned domain/port on a fresh
@@ -173,7 +190,7 @@ if [[ "$METHOD" == "GET" && "$URL" == *"/applications/$NEW_APP_UUID" ]]; then
 import json
 fqdn = '$FQDN_VAL' or None
 ports = '$PORTS_VAL' or None
-print(json.dumps({'uuid': '$NEW_APP_UUID', 'settings': {'include_source_commit_in_build': False}, 'fqdn': fqdn, 'ports_exposes': ports}))
+print(json.dumps({'uuid': '$REPORT_UUID', 'settings': {'include_source_commit_in_build': False}, 'fqdn': fqdn, 'ports_exposes': ports}))
 ")"
   respond "$RESPONSE_BODY"
 fi

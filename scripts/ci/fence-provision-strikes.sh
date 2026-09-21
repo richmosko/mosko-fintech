@@ -178,6 +178,18 @@ PROVISION_SH="$REPO_ROOT/scripts/provision.sh"
 [[ -d "$FAKE_SCRIPTS_DIR" ]] || { echo "FATAL: $FAKE_SCRIPTS_DIR missing" >&2; exit 2; }
 [[ -f "$PROVISION_SH" ]] || { echo "FATAL: $PROVISION_SH not found" >&2; exit 2; }
 
+# SENTINEL_PREFIX/SENTINEL_MID (Sec run-11-stop requirement 1) -- the
+# LITERAL shape scripts/provision-worker.sh's --state prints and
+# scripts/provision.sh's own worker_fqdn_clear_if_needed() greps for,
+# pinned HERE ONCE so every fixture string in this fence (including
+# run_case()'s own default baseline below) is built from these, never
+# retyped -- see the SENTINEL-FORMAT-PINNED check further down (grep'd
+# against the REAL, never the fixture, producer/consumer files) for why:
+# a fixture that no longer matches what ships is exactly the failure
+# class that caused run 11.
+SENTINEL_PREFIX='current state: fqdn='
+SENTINEL_MID=', ports_exposes='
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -280,9 +292,24 @@ run_case() {
   # name from `basename "$0" .sh` verbatim, lowercase, dashes to
   # underscores; it does NOT uppercase, despite this file's own header
   # comment claiming it does.)
+  #
+  # Same default-baseline shape for FAKE_STDOUT_provision_worker
+  # (run-11 stop fix, 2026-09-21): worker_fqdn_clear_if_needed() now
+  # REQUIRES a parseable "current state: ..." line on every --state
+  # call and REFUSES (never "no line -> assume clear") when one is
+  # missing -- correct behavior for the real regression this closes,
+  # but it means every scenario that exercises deploy-workers and does
+  # NOT care about this mechanism needs a clean, already-cleared
+  # default so it isn't dragged into asserting fqdn/ports_exposes
+  # state it never set out to test. A scenario that DOES want to
+  # exercise the clear-path overrides this default via CASE_ENV's own
+  # FAKE_STDOUT_LIST_provision_worker (takes precedence -- see
+  # fake-step.sh's own header), same override discipline as
+  # FAKE_STDOUT_db_role_handoff above.
   env REPO_ROOT="$case_dir" SCRIPTS="$FAKE_SCRIPTS_DIR" PATH="$FAKE_BIN:$PATH" \
     FAKE_CALL_LOG="$call_log" FAKE_COUNTER_DIR="$case_dir" FAKE_SSH_KEYGEN_LOG="$keygen_log" \
     FAKE_STDOUT_db_role_handoff="VERIFIED already handed off -- store and live role bind-checked, no-op." \
+    FAKE_STDOUT_provision_worker="${SENTINEL_PREFIX}ABSENT${SENTINEL_MID}ABSENT" \
     ${CASE_ENV[@]+"${CASE_ENV[@]}"} \
     bash "$PROVISION_SH" ${extra_args[@]+"${extra_args[@]}"} > "$case_dir/out.txt" 2>&1
   local rc=$?
@@ -1075,8 +1102,52 @@ fi
 #      that worker's own deploy-app.sh --apply call. Proven by call-log
 #      ORDER (line number), not just call presence -- presence alone
 #      would not catch a clear invoked too late to matter.
-CASE_ENV=(FAKE_STDOUT_provision_worker="current state: fqdn=SET ('https://default-assigned.sslip.io'), ports_exposes=ABSENT")
-run_case "deploy-workers: fqdn SET at deploy time invokes the clear before deploying" 0 --only deploy-workers || FAIL=1
+#
+#      Sec's run-11-stop requirement 2 (reachability leg): the state-
+#      read is now `provision-worker.sh <name> --state`, called TWICE
+#      per worker by worker_fqdn_clear_if_needed() -- once pre-clear
+#      (must read SET to trigger the clear) and once post-clear (must
+#      read ABSENT/EMPTY for the run to proceed, run-11's own fail-open
+#      bug). FAKE_STDOUT_LIST_provision_worker (not the single-value
+#      FAKE_STDOUT_provision_worker -- a fixture that reports the SAME
+#      state on every call could never distinguish "the clear worked"
+#      from "the clear silently no-op'd", which is exactly the class of
+#      fixture defect run 11's real regression exposed) gives call 1
+#      (state, pre-clear) = SET, call 2 (the --apply clear itself,
+#      value irrelevant) = nothing, call 3 (state, post-clear) =
+#      ABSENT/EMPTY -- repeating per worker, 3 workers x 3 calls = 9.
+# SENTINEL-FORMAT-PINNED (Sec run-11-stop requirement 1): SENTINEL_PREFIX/
+# SENTINEL_MID are defined once, near the top of this file (see that
+# definition's own header) -- checked here against the REAL (never the
+# fixture) producer and consumer files, so a future edit to either side
+# that silently drifts the format reddens this fence instead of passing
+# on a fixture that no longer matches what ships. This is the fix for
+# exactly the failure class that caused run 11: this fence's own
+# scenarios asserted against a format string nobody had checked against
+# the real script's actual output.
+#
+# ⚠ ANCHORED ON THE CODE, NOT THE BARE LITERAL -- self-caught by
+# inversion-testing THIS check: `grep -qF "$SENTINEL_PREFIX" <file>` alone
+# is VACUOUS, because this file's own USAGE-header comment quotes the
+# same literal ("...the PREFLIGHT-mode \"current state: fqdn=...\"
+# line...") -- changing ONLY the two real `info "current state: ..."`
+# producer lines to a different format left that stale comment behind,
+# and a bare `grep -qF` on the literal alone still matched IT, missing
+# the actual drift entirely. Anchoring on `info "current state: fqdn=$`
+# (the producer's own code shape, dollar sign immediately after `=`,
+# never how prose refers to it) and on the exact `grep -E '...'`
+# consumer pattern closes that hole.
+PRODUCER_ANCHOR='info "current state: fqdn=$'
+CONSUMER_ANCHOR="grep -E 'current state: fqdn=(ABSENT|EMPTY|SET).*ports_exposes=(ABSENT|EMPTY|SET)'"
+grep -qF "$PRODUCER_ANCHOR" "$REPO_ROOT/scripts/provision-worker.sh" \
+  || { echo "FAIL: [sentinel-format-pinned] scripts/provision-worker.sh no longer contains the producer code shape '$PRODUCER_ANCHOR...' this fence's fixtures assume -- producer drift, update both." >&2; FAIL=1; }
+grep -qF "$CONSUMER_ANCHOR" "$REPO_ROOT/scripts/provision.sh" \
+  || { echo "FAIL: [sentinel-format-pinned] scripts/provision.sh no longer contains the consumer grep pattern '$CONSUMER_ANCHOR' -- consumer/producer drift." >&2; FAIL=1; }
+
+SET_STATE="${SENTINEL_PREFIX}SET ('https://default-assigned.sslip.io')${SENTINEL_MID}ABSENT"
+CLEARED_STATE="${SENTINEL_PREFIX}ABSENT${SENTINEL_MID}ABSENT"
+CASE_ENV=(FAKE_STDOUT_LIST_provision_worker="$SET_STATE||$CLEARED_STATE|$SET_STATE||$CLEARED_STATE|$SET_STATE||$CLEARED_STATE")
+run_case "deploy-workers: fqdn SET at deploy time invokes the clear before deploying, confirmed by re-read" 0 --only deploy-workers || FAIL=1
 CASE_ENV=()
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   for pair in pfin-back-etl pfin-provider-sync pfin-pdf-render; do
@@ -1088,8 +1159,9 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
     # deliberately breaking the target and finding the fence died
     # instead of reddening -- same "the instrument can't observe a
     # miss" class this repo's other fences already learned from.
-    CLEAR_LN="$(grep -nE "^provision-worker .*${pair}.*--apply" "$CASE_LAST_DIR/calls.log" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+    CLEAR_LN="$(grep -nE "^provision-worker .*${pair} --apply" "$CASE_LAST_DIR/calls.log" 2>/dev/null | head -1 | cut -d: -f1 || true)"
     DEPLOY_LN="$(grep -nE "^deploy-app .*${pair} .*--apply" "$CASE_LAST_DIR/calls.log" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+    REREAD_LN="$(grep -nE "^provision-worker .*${pair} --state" "$CASE_LAST_DIR/calls.log" 2>/dev/null | tail -1 | cut -d: -f1 || true)"
     if [[ -z "$CLEAR_LN" ]]; then
       echo "FAIL: [resume-clear-before-deploy] no provision-worker --apply (clear) call found for $pair despite fqdn=SET." >&2
       FAIL=1
@@ -1098,6 +1170,9 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
       FAIL=1
     elif [[ "$CLEAR_LN" -ge "$DEPLOY_LN" ]]; then
       echo "FAIL: [resume-clear-before-deploy] $pair's clear-apply call (calls.log line $CLEAR_LN) did not precede its deploy-app --apply call (line $DEPLOY_LN)." >&2
+      FAIL=1
+    elif [[ -z "$REREAD_LN" || "$REREAD_LN" -le "$CLEAR_LN" ]]; then
+      echo "FAIL: [resume-clear-before-deploy] $pair has no --state re-read call AFTER its clear-apply call (clear at line $CLEAR_LN, last --state at ${REREAD_LN:-<none>}) -- the post-clear confirmation leg never ran." >&2
       FAIL=1
     fi
   done
@@ -1118,6 +1193,25 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   # at all (it already was, harmlessly, during the preceding preflight
   # phase every `--only <step>` runs before its own apply phase).
   grep -qE '^deploy-app .*--apply' "$CASE_LAST_DIR/calls.log" 2>/dev/null && { echo "FAIL: [resume-clear-read-fails] an APPLY-phase deploy-app call happened despite the state-read failure -- must never deploy against an unknown state." >&2; FAIL=1; }
+fi
+
+# 27g. DEPLOY-WORKERS-RESUME-PATH-CLEAR-DOES-NOT-TAKE-REFUSES (Sec
+#      run-11-stop requirement 4): the clear is invoked but the POST-
+#      clear re-read still shows a SET field (e.g. Coolify's clear
+#      silently no-op'd) -- must REFUSE to deploy, never proceed on the
+#      strength of having merely CALLED the clear. Every provision-
+#      worker --state call reports SET, forever (no CLEARED entry in
+#      the list) -- etl (the first worker in the loop) invokes the
+#      clear, re-reads, still SET, refuses before its own deploy-app
+#      --apply call ever fires.
+CASE_ENV=(FAKE_STDOUT_LIST_provision_worker="$SET_STATE")
+run_case "deploy-workers: clear invoked but re-read still SET refuses, never deploys" 2 --only deploy-workers || FAIL=1
+CASE_ENV=()
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -qF "invoked the clear but the RE-READ still shows a SET field" "$CASE_LAST_DIR/out.txt" \
+    || { echo "FAIL: [resume-clear-does-not-take] refusal did not name the unconfirmed clear." >&2; FAIL=1; }
+  grep -qE '^deploy-app .*pfin-back-etl .*--apply' "$CASE_LAST_DIR/calls.log" 2>/dev/null \
+    && { echo "FAIL: [resume-clear-does-not-take] an APPLY-phase deploy-app call happened for pfin-back-etl despite the clear never being confirmed." >&2; FAIL=1; }
 fi
 
 # 28. RESOLVE-STACK-NETWORK-FAILURE-BLOCKS-DEPLOY-APP -- resolve-stack-
