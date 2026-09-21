@@ -58,6 +58,14 @@
 #      and MUST NOT print "CA-1 clear... confirmed" -- the exact
 #      fail-open the OLD `2>/dev/null || true` form let through
 #      (a failed read and a clean "no match" both came back empty).
+#  11. UUID-MISMATCH (team-lead's own follow-up, same review round) --
+#      `docker exec` SUCCEEDS (rc 0) but its output does NOT carry
+#      COOLIFY_RESOURCE_UUID=<the resolved app uuid> -- an empty read,
+#      a wrong/unrelated container, or a race against a container
+#      recycle. Must exit non-zero and must NOT print the clear
+#      message, even though the read itself technically succeeded --
+#      the read succeeding is not the same as it having read the RIGHT
+#      thing.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -97,8 +105,14 @@ REAL_SHAPE_CID="provider-sync-hmjeuhdaolhw8tlz3qi6lopi-194853542981"
 #     every id it's given as RUNNING (same as fence-deploy-app-
 #     strikes.sh's own fake: the compose-ps mock above only returns ids
 #     meant to look running).
-#   `docker exec <id> env | grep -E '...' || true` -- prints
-#     $FAKE_ROUTE_SIGNAL verbatim (empty by default -- clean).
+#   `docker exec <id> env` -- prints a COOLIFY_RESOURCE_UUID=<the
+#     resolved app uuid> line (the real script's own F-1 positive-token
+#     assertion greps for exactly this, team-lead's follow-up, same
+#     review round) plus $FAKE_ROUTE_SIGNAL verbatim (empty by default
+#     -- clean). $FAKE_EXEC_ENV_FAILS=1 makes the call itself fail (a
+#     failed read); $FAKE_UUID_MISMATCH=1 makes it SUCCEED but omit the
+#     COOLIFY_RESOURCE_UUID line entirely (rc 0, empty/unrelated read --
+#     the shape the positive-token check exists to catch).
 cat > "$FAKE_BIN/docker" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -117,6 +131,9 @@ if [[ "\$*" == *"exec"* && "\$*" == *" env"* ]]; then
   if [[ "\${FAKE_EXEC_ENV_FAILS:-0}" == "1" ]]; then
     echo "Error response from daemon: Container \$2 is not running" >&2
     exit 1
+  fi
+  if [[ "\${FAKE_UUID_MISMATCH:-0}" != "1" ]]; then
+    printf 'COOLIFY_RESOURCE_UUID=%s\n' "\${FAKE_APP_UUID:-hmjeuhdaolhw8tlz3qi6lop1}"
   fi
   printf '%s' "\${FAKE_ROUTE_SIGNAL:-}"
   exit 0
@@ -165,7 +182,7 @@ fi
 CMD="\${@: -1}"
 CMD_REWRITTEN="\$(printf '%s' "\$CMD" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
 PATH="$FAKE_BIN:\$PATH" FAKE_COMPOSE_CIDS="\${FAKE_COMPOSE_CIDS-$REAL_SHAPE_CID}" FAKE_ROUTE_SIGNAL="\${FAKE_ROUTE_SIGNAL:-}" \\
-  FAKE_EXEC_ENV_FAILS="\${FAKE_EXEC_ENV_FAILS:-0}" \\
+  FAKE_EXEC_ENV_FAILS="\${FAKE_EXEC_ENV_FAILS:-0}" FAKE_APP_UUID="\${FAKE_APP_UUID:-}" FAKE_UUID_MISMATCH="\${FAKE_UUID_MISMATCH:-0}" \\
   bash -c "\$CMD_REWRITTEN"
 EOF
 chmod +x "$FAKE_BIN/ssh"
@@ -268,6 +285,17 @@ READFAIL_OUT="$(FAKE_EXEC_ENV_FAILS=1 \
 if [[ -n "${READFAIL_OUT:-}" ]]; then
   grep -qF "READ FAILURE" <<<"$READFAIL_OUT" || { echo "FAIL: [stage-3-read-fails] refusal did not name it as a read failure." >&2; FAIL=1; }
   grep -qF "CA-1 clear" <<<"$READFAIL_OUT" && { echo "FAIL: [stage-3-read-fails] the fail-open message ('CA-1 clear') is STILL present alongside the refusal -- this is exactly the property F-1 exists to remove." >&2; FAIL=1; }
+fi
+
+# 11. UUID-MISMATCH -- team-lead's own follow-up, same review round.
+#     `docker exec` SUCCEEDS (rc 0) but its output carries NO
+#     COOLIFY_RESOURCE_UUID=<resolved uuid> line -- must still refuse,
+#     never treat "the call didn't error" as "we read the right thing".
+MISMATCH_OUT="$(FAKE_UUID_MISMATCH=1 \
+  run_scenario "uuid-mismatch: rc 0 with no matching COOLIFY_RESOURCE_UUID still refuses" 2 pfin-provider-sync --service provider-sync)" || FAIL=1
+if [[ -n "${MISMATCH_OUT:-}" ]]; then
+  grep -qF "COOLIFY_RESOURCE_UUID" <<<"$MISMATCH_OUT" || { echo "FAIL: [uuid-mismatch] refusal did not name the missing COOLIFY_RESOURCE_UUID token." >&2; FAIL=1; }
+  grep -qF "CA-1 clear" <<<"$MISMATCH_OUT" && { echo "FAIL: [uuid-mismatch] the fail-open message ('CA-1 clear') is STILL present alongside the refusal." >&2; FAIL=1; }
 fi
 
 if [[ $FAIL -ne 0 ]]; then

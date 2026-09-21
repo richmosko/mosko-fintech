@@ -183,17 +183,36 @@ step "CA-1 post-deploy container-env check ($CONTAINER)"
 # grep -- either way ROUTE_SIGNAL came back empty and this script
 # printed "CA-1 clear... confirmed" for a property it never actually
 # observed. Fail-open on the one check that exists to be authoritative.
-# Fixed: the remote body now signals a FAILED `docker exec` distinctly
-# (exit 90) from a genuine "no match" (grep's OWN `|| true`, unchanged,
-# still absorbs grep's normal exit-1-on-no-match) -- and the outer
-# `2>/dev/null` is REMOVED so a real error's stderr reaches the
-# operator (Sec: "the stderr is the operator's only clue").
+#
+# TWO checks now, not one, before an empty ROUTE_SIGNAL counts as
+# "clean" (team-lead's own follow-up, same review round): (a) did the
+# read even SUCCEED (exit 90 signals a failed `docker exec` distinctly
+# from grep's own `|| true`-absorbed no-match); (b) did it read the
+# RIGHT container's env at all, not an empty or unrelated one (exit 91
+# signals a missing `COOLIFY_RESOURCE_UUID=<this app's own uuid>` line)
+# -- a `docker exec` that returns rc 0 with EMPTY output (a stopped
+# container, a race against a recycle) must not silently pass either.
+# COOLIFY_RESOURCE_UUID is a REAL Coolify-injected name, MEASURED
+# present on a live dockercompose deploy (scripts/smoke-ca1-env-
+# pattern.sh's own header, team-lead, 2026-09-21) -- not invented for
+# this check. Both grep passes stay entirely inside the remote command,
+# on data already captured into $ENV_OUT there -- the outer
+# `2>/dev/null` is REMOVED so a real error's stderr reaches the operator
+# (Sec: "the stderr is the operator's only clue"), but the FULL env dump
+# itself is never pulled across the wire or echoed anywhere -- same
+# discipline as before, COOLIFY_RESOURCE_UUID/FQDN/URL are the only
+# names this script ever surfaces.
+REMOTE_ENV_CHECK="ENV_OUT=\$(docker exec $CONTAINER env) || exit 90"
+REMOTE_ENV_CHECK+="; printf '%s' \"\$ENV_OUT\" | grep -qF 'COOLIFY_RESOURCE_UUID=$APP_UUID' || exit 91"
+REMOTE_ENV_CHECK+="; printf '%s' \"\$ENV_OUT\" | grep -E '^(COOLIFY_FQDN|COOLIFY_URL)=.' || true"
 set +e
-ROUTE_SIGNAL="$(sshx "ENV_OUT=\$(docker exec $CONTAINER env) || exit 90; printf '%s\n' \"\$ENV_OUT\" | grep -E '^(COOLIFY_FQDN|COOLIFY_URL)=.' || true" </dev/null)"
+ROUTE_SIGNAL="$(sshx "$REMOTE_ENV_CHECK" </dev/null)"
 SSHX_RC=$?
 set -e
 if [[ "$SSHX_RC" -eq 90 ]]; then
   die2 "docker exec $CONTAINER env FAILED on the box -- the container may have died between resolution (stage 2) and this check, or this was a transient docker/ssh error. This is a READ FAILURE, not a clean result: CA-1 state is UNVERIFIED, not confirmed clear. Re-run this check; do not treat this deploy as done on the strength of this run. See stderr above for the underlying error."
+elif [[ "$SSHX_RC" -eq 91 ]]; then
+  die2 "docker exec $CONTAINER env succeeded but did NOT carry COOLIFY_RESOURCE_UUID=$APP_UUID -- this read cannot be trusted as this resource's own container env (empty read, wrong container, a race against a container recycle, or a Coolify injection gap). CA-1 state is UNVERIFIED, not confirmed clear. Re-run this check."
 elif [[ "$SSHX_RC" -ne 0 ]]; then
   die2 "the CA-1 env check itself failed unexpectedly (ssh/remote exit $SSHX_RC) -- CA-1 state is UNVERIFIED. See stderr above for the underlying error."
 fi
