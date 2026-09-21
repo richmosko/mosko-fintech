@@ -194,6 +194,7 @@
 #   See the verify-live block itself for the full reasoning.
 #
 # USAGE
+#   BOX_IP=<box-ip> scripts/mint-supabase-jwt-keys.sh         # required, not defaulted -- see below
 #   scripts/mint-supabase-jwt-keys.sh                        # preflight only
 #   scripts/mint-supabase-jwt-keys.sh --apply                # mint + overwrite
 #                                                   # + redeploy the stack app
@@ -210,7 +211,17 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BOX_IP="${BOX_IP:-188.245.166.206}"
+# BOX_IP is required, not defaulted -- this script used to carry a
+# hardcoded `${BOX_IP:-188.245.166.206}` fallback, the EXACT
+# silent-fall-through-to-prod shape the 2026-09-11 incident (see
+# provision-supabase-stack.sh's own header) already fixed everywhere
+# else in this repo. Masked here until provision.sh's own D-1 sweep
+# (live --dry-run, 2026-09-20) found it: run_mint_jwt() never passed
+# BOX_IP either, so every orchestrated run silently relied on this
+# default -- which happened to equal the real prod box's IP, so it
+# "worked" by accident. No default means no silent fall-through; see
+# this script's own USAGE block above.
+BOX_IP="${BOX_IP:-}"
 AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
 # NAME, not uuid -- provision-supabase-stack.sh's create-path mints a fresh
 # uuid on every from-scratch stand-up, so a uuid can never be safely
@@ -245,6 +256,8 @@ die()  { printf '\n\033[31mFAIL\033[0m  %s\n' "$*" >&2; exit 1; }
 ok()   { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
 info() { printf '      %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+[[ -n "$BOX_IP" ]] || die "BOX_IP is required, not defaulted (deliberately, after 2026-09-11's incident) -- set it explicitly, e.g. BOX_IP=188.245.166.206 for prod or BOX_IP=<scratch-ip> for a scratch box. No default means no silent fall-through to prod."
 
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=6 -i "$AUTOMATION_KEY")
 sshx() { ssh "${SSH_OPTS[@]}" "root@$BOX_IP" "$@"; }
