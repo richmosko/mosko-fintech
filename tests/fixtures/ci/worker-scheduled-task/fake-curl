@@ -11,7 +11,17 @@
 #   match            -- GET .../scheduled-tasks returns one task that
 #                        matches $FAKE_WANT_COMMAND/$FAKE_WANT_CONTAINER/
 #                        $FAKE_WANT_FREQUENCY exactly.
-#   mismatch         -- returns one task with a DIFFERENT command.
+#   mismatch         -- returns one task with a DIFFERENT command but a
+#                        matching container/frequency/enabled -- the
+#                        RECONCILABLE shape (run-12 stop fix, 2026-09-21:
+#                        --apply PATCHes command in place for this case).
+#                        A PATCH call "succeeds" (200 {}); the read-back
+#                        GET (call #2) reports $FAKE_PATCHED_COMMAND
+#                        (default: $FAKE_WANT_COMMAND, i.e. the PATCH
+#                        took) unless $FAKE_PATCH_TAKES_EFFECT=0.
+#   mismatch-other   -- returns one task with a matching command but a
+#                        DIFFERENT container -- the NON-reconcilable
+#                        shape; still refuses unconditionally.
 #   ambiguous        -- returns TWO tasks with the same name.
 #   readback-mismatch -- GET before POST returns []; the POST "succeeds"
 #                        but the read-back GET (call #2) reports a task
@@ -29,9 +39,11 @@ LOG="${FAKE_CURL_LOG:-/dev/null}"
 printf '%s\n' "$ARGS" >> "$LOG"
 
 TASK_NAME="${FAKE_WANT_NAME:-pfin-back-etl-monthly-report}"
-WANT_COMMAND="${FAKE_WANT_COMMAND:-python run_monthly_report.py}"
+WANT_COMMAND="${FAKE_WANT_COMMAND:-/app/.venv/bin/python run_monthly_report.py}"
 WANT_CONTAINER="${FAKE_WANT_CONTAINER:-pfin-back-etl-monthly-report}"
 WANT_FREQUENCY="${FAKE_WANT_FREQUENCY:-0 6 1 * *}"
+STALE_COMMAND="${FAKE_STALE_COMMAND:-python run_monthly_report.py}"
+PATCH_TAKES_EFFECT="${FAKE_PATCH_TAKES_EFFECT:-1}"
 COUNTER_FILE="${FAKE_CALL_COUNTER:-/dev/null}"
 
 if [[ "$ARGS" == *"/applications" && "$ARGS" != *"/scheduled-tasks"* ]]; then
@@ -56,6 +68,14 @@ if [[ "$ARGS" == *"scheduled-tasks"* ]]; then
     # Body content doesn't matter to this fake -- creation always
     # "succeeds" (returns 200 {}), the read-back GET is what decides the
     # outcome.
+    echo '{"message":"ok"}'
+    exit 0
+  fi
+
+  if [[ "$METHOD" == "PATCH" ]]; then
+    # Same convention -- the PATCH always "succeeds" (200 {}); the
+    # read-back GET (call #2, gated on $PATCH_TAKES_EFFECT) is what
+    # decides whether the reconcile is trusted.
     echo '{"message":"ok"}'
     exit 0
   fi
@@ -92,8 +112,24 @@ if [[ "$ARGS" == *"scheduled-tasks"* ]]; then
         "$TASK_NAME" "$WANT_COMMAND" "$WANT_CONTAINER" "$WANT_FREQUENCY"
       ;;
     mismatch)
-      printf '[{"uuid":"taskuuid0000000001","name":"%s","command":"DIFFERENT COMMAND","container":"%s","frequency":"%s","enabled":true}]\n' \
-        "$TASK_NAME" "$WANT_CONTAINER" "$WANT_FREQUENCY"
+      # RECONCILABLE shape (run-12 stop fix): command differs, container/
+      # frequency/enabled all match -- call #1 (pre-check) reports the
+      # STALE command; call #2 (post-PATCH read-back) reports WANT_COMMAND
+      # unless $FAKE_PATCH_TAKES_EFFECT=0 (the PATCH did not take).
+      if [[ "$CALL_N" -ge 2 ]]; then
+        REPORTED_COMMAND="$STALE_COMMAND"
+        [[ "$PATCH_TAKES_EFFECT" == "1" ]] && REPORTED_COMMAND="$WANT_COMMAND"
+      else
+        REPORTED_COMMAND="$STALE_COMMAND"
+      fi
+      printf '[{"uuid":"taskuuid0000000001","name":"%s","command":"%s","container":"%s","frequency":"%s","enabled":true}]\n' \
+        "$TASK_NAME" "$REPORTED_COMMAND" "$WANT_CONTAINER" "$WANT_FREQUENCY"
+      ;;
+    mismatch-other)
+      # NON-reconcilable shape: command MATCHES, container does not --
+      # still refuses unconditionally, no PATCH ever attempted.
+      printf '[{"uuid":"taskuuid0000000001","name":"%s","command":"%s","container":"WRONG-CONTAINER","frequency":"%s","enabled":true}]\n' \
+        "$TASK_NAME" "$WANT_COMMAND" "$WANT_FREQUENCY"
       ;;
     ambiguous)
       printf '[{"uuid":"taskuuid0000000001","name":"%s","command":"%s","container":"%s","frequency":"%s","enabled":true},{"uuid":"taskuuid0000000002","name":"%s","command":"%s","container":"%s","frequency":"%s","enabled":true}]\n' \

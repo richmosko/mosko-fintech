@@ -18,8 +18,17 @@
 #   4. ALREADY-MATCH -- a task with this name already exists and matches
 #      the table's command/container/frequency/enabled exactly -> exit 0,
 #      no create call made (idempotent).
-#   5. ALREADY-MISMATCH -- an existing task disagrees on `command` ->
-#      refuses (never mutates a live, disagreeing Scheduled Task).
+#   5. ALREADY-MISMATCH-COMMAND-ONLY (run-12 stop fix, 2026-09-21) -- an
+#      existing task disagrees ONLY on `command` (container/frequency/
+#      enabled all match) -- preflight (no --apply) reports it would
+#      PATCH, issues no write; --apply PATCHes `command` in place and
+#      confirms the read-back byte-exact.
+#   5b. ALREADY-MISMATCH-COMMAND-ONLY-PATCH-DOES-NOT-TAKE -- the PATCH
+#      "succeeds" but the read-back still shows the stale command ->
+#      refuses (does not trust the PATCH response alone).
+#   5c. ALREADY-MISMATCH-OTHER -- an existing task disagrees on
+#      `container` (a non-reconcilable field), even though `command`
+#      matches -> refuses unconditionally, no PATCH ever attempted.
 #   6. AMBIGUOUS -- two tasks share the same name -> refuses, never
 #      guesses which is authoritative.
 #   7. READBACK-MISMATCH -- the create call "succeeds" but the post-create
@@ -70,7 +79,8 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
   PATH="$FAKE_BIN:\$PATH" FAKE_CURL_LOG="\${FAKE_CURL_LOG:-}" FAKE_TASK_MODE="\${FAKE_TASK_MODE:-}" \\
     FAKE_CALL_COUNTER="\${FAKE_CALL_COUNTER:-}" FAKE_WANT_NAME="\${FAKE_WANT_NAME:-}" \\
     FAKE_WANT_COMMAND="\${FAKE_WANT_COMMAND:-}" FAKE_WANT_CONTAINER="\${FAKE_WANT_CONTAINER:-}" \\
-    FAKE_WANT_FREQUENCY="\${FAKE_WANT_FREQUENCY:-}" \\
+    FAKE_WANT_FREQUENCY="\${FAKE_WANT_FREQUENCY:-}" FAKE_STALE_COMMAND="\${FAKE_STALE_COMMAND:-}" \\
+    FAKE_PATCH_TAKES_EFFECT="\${FAKE_PATCH_TAKES_EFFECT:-}" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -91,6 +101,7 @@ run_scenario() {
     FAKE_TASK_MODE="$task_mode" FAKE_CALL_COUNTER="$counter" \
     FAKE_WANT_NAME="$task_name" FAKE_WANT_COMMAND="$want_command" \
     FAKE_WANT_CONTAINER="$want_container" FAKE_WANT_FREQUENCY="$want_frequency" \
+    FAKE_STALE_COMMAND="${FAKE_STALE_COMMAND:-}" FAKE_PATCH_TAKES_EFFECT="${FAKE_PATCH_TAKES_EFFECT:-1}" \
     bash "$TASK_SH" "$task_name" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -113,27 +124,46 @@ OUT1="$(run_scenario "unknown task name: refuses" 2 pfin-does-not-exist "" absen
 grep -qF "unrecognised task-name" <<<"${OUT1:-}" || { echo "FAIL: [unknown task name] did not name the offending predicate" >&2; FAIL=1; }
 
 # 2. ABSENT-PREFLIGHT
-OUT2="$(run_scenario "absent, preflight: exit 0, creates nothing" 0 pfin-back-etl-monthly-report "" absent "python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
+OUT2="$(run_scenario "absent, preflight: exit 0, creates nothing" 0 pfin-back-etl-monthly-report "" absent "/app/.venv/bin/python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
 grep -qF "PREFLIGHT ONLY" <<<"${OUT2:-}" || { echo "FAIL: [absent preflight] did not print PREFLIGHT ONLY" >&2; FAIL=1; }
 
 # 3. ABSENT-APPLY
-OUT3="$(run_scenario "absent, --apply: creates, read-back matches" 0 pfin-back-etl-monthly-report --apply absent "python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
+OUT3="$(run_scenario "absent, --apply: creates, read-back matches" 0 pfin-back-etl-monthly-report --apply absent "/app/.venv/bin/python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
 grep -qF "created 'pfin-back-etl-monthly-report'" <<<"${OUT3:-}" || { echo "FAIL: [absent apply] did not report a create" >&2; FAIL=1; }
 
 # 4. ALREADY-MATCH
-OUT4="$(run_scenario "already matches: exit 0, no create" 0 pfin-back-etl-monthly-report --apply match "python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
+OUT4="$(run_scenario "already matches: exit 0, no create" 0 pfin-back-etl-monthly-report --apply match "/app/.venv/bin/python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
 grep -qF "already matches" <<<"${OUT4:-}" || { echo "FAIL: [already match] did not report an existing match" >&2; FAIL=1; }
 
-# 5. ALREADY-MISMATCH
-OUT5="$(run_scenario "already mismatched: refuses" 1 pfin-back-etl-monthly-report --apply mismatch "python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
-grep -qF "disagrees with this script" <<<"${OUT5:-}" || { echo "FAIL: [already mismatch] did not name the disagreement" >&2; FAIL=1; }
+# 5. ALREADY-MISMATCH-COMMAND-ONLY -- preflight: reports would-PATCH,
+#    issues no write.
+OUT5A="$(run_scenario "command-only mismatch, preflight: would PATCH, no write" 0 pfin-back-etl-monthly-report "" mismatch "/app/.venv/bin/python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
+grep -qF "would PATCH command in place" <<<"${OUT5A:-}" || { echo "FAIL: [command-only mismatch preflight] did not report the would-PATCH plan" >&2; FAIL=1; }
+
+# 5. ALREADY-MISMATCH-COMMAND-ONLY -- apply: PATCHes in place, read-back
+#    verified byte-exact.
+OUT5="$(run_scenario "command-only mismatch, --apply: reconciled" 0 pfin-back-etl-monthly-report --apply mismatch "/app/.venv/bin/python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
+grep -qF "command reconciled and read-back verified byte-exact" <<<"${OUT5:-}" || { echo "FAIL: [command-only mismatch apply] did not report the reconcile" >&2; FAIL=1; }
+
+# 5b. ALREADY-MISMATCH-COMMAND-ONLY-PATCH-DOES-NOT-TAKE -- the PATCH
+#    "succeeds" but the read-back still shows the stale command ->
+#    refuses, never trusts the PATCH response alone.
+FAKE_PATCH_TAKES_EFFECT=0
+OUT5B="$(run_scenario "command-only mismatch, PATCH does not take: refuses" 1 pfin-back-etl-monthly-report --apply mismatch "/app/.venv/bin/python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
+FAKE_PATCH_TAKES_EFFECT=1
+grep -qF "command PATCH read-back MISMATCH" <<<"${OUT5B:-}" || { echo "FAIL: [command-only mismatch PATCH does not take] did not name the read-back mismatch" >&2; FAIL=1; }
+
+# 5c. ALREADY-MISMATCH-OTHER -- container disagrees (command matches) ->
+#    refuses unconditionally, never a PATCH.
+OUT5C="$(run_scenario "container mismatch (command matches): refuses, no PATCH" 1 pfin-back-etl-monthly-report --apply mismatch-other "/app/.venv/bin/python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
+grep -qF "disagrees with this script's table on container/frequency/enabled" <<<"${OUT5C:-}" || { echo "FAIL: [container mismatch] did not name the disagreement" >&2; FAIL=1; }
 
 # 6. AMBIGUOUS
-OUT6="$(run_scenario "ambiguous: refuses" 1 pfin-back-etl-monthly-report --apply ambiguous "python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
+OUT6="$(run_scenario "ambiguous: refuses" 1 pfin-back-etl-monthly-report --apply ambiguous "/app/.venv/bin/python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
 grep -qF "ambiguous" <<<"${OUT6:-}" || { echo "FAIL: [ambiguous] did not name the ambiguity" >&2; FAIL=1; }
 
 # 7. READBACK-MISMATCH
-OUT7="$(run_scenario "post-create readback mismatch: refuses" 1 pfin-back-etl-monthly-report --apply readback-mismatch "python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
+OUT7="$(run_scenario "post-create readback mismatch: refuses" 1 pfin-back-etl-monthly-report --apply readback-mismatch "/app/.venv/bin/python run_monthly_report.py" "pfin-back-etl-monthly-report" "0 6 1 * *")" || FAIL=1
 grep -qF "read-back MISMATCH" <<<"${OUT7:-}" || { echo "FAIL: [readback mismatch] did not name the mismatch" >&2; FAIL=1; }
 
 # 8. SECOND-TASK -- the other table row resolves correctly (table-driven,

@@ -2,15 +2,28 @@
 #
 # fake-docker -- offline stand-in for docker, used by
 # scripts/ci/fence-smoke-etl-poll-strikes.sh. Handles container
-# resolution (compose ps -q / inspect), the PRE-CHECK active-tenant
-# count (`docker exec ... python3 -c ...` against pfin.account, Sec F-3
-# / F/CTO ruling 2026-09-20), the worker run
-# (`docker exec ... python run_nav_daily.py`), and the row-count
-# read-back (`docker exec ... python3 -c ...` against pfin.nav_daily).
+# resolution (compose ps -q / inspect), the interpreter preflight
+# (`docker exec ... test -x /app/.venv/bin/python` + a standalone
+# `import psycopg2` probe -- run-12 stop fix, 2026-09-21), the PRE-CHECK
+# active-tenant count (`docker exec ... /app/.venv/bin/python -c ...`
+# against pfin.account, Sec F-3 / F/CTO ruling 2026-09-20), the worker
+# run (`docker exec ... /app/.venv/bin/python run_nav_daily.py`), and
+# the row-count read-back (`docker exec ... /app/.venv/bin/python -c
+# ...` against pfin.nav_daily).
+#
+# WRONG-INTERPRETER GOLDEN PATH (run-12 stop, MEASURED live): the
+# python:3.14-slim BASE image's own system `python3` (/usr/local/bin)
+# has NO psycopg2 at all -- only `/app/.venv/bin/python` (uv sync's own
+# venv) does. This fixture models that precisely: ANY invocation that
+# does not use the exact venv path fails with a NO_PSYCOPG2-shaped
+# message, the same failure mode run 12 hit -- so a regression back to
+# a bare `python3`/`python` call reddens this fence, never silently
+# passes because "some interpreter" answered.
 
 set -euo pipefail
 
 ARGS="$*"
+ETL_PYTHON="/app/.venv/bin/python"
 
 if [[ "$ARGS" == *"compose --project-name"*"ps -q"* ]]; then
   echo "container-abc123"
@@ -26,7 +39,41 @@ if [[ "$ARGS" == *"inspect --format"* ]]; then
   exit 0
 fi
 
+# Interpreter-existence preflight (run-12 stop fix) -- `test -x
+# $ETL_PYTHON`, no `-c` anywhere in the invocation.
+if [[ "$ARGS" == *"test -x $ETL_PYTHON"* ]]; then
+  if [[ "${FAKE_INTERPRETER_MISSING:-0}" == "1" ]]; then
+    exit 1
+  fi
+  exit 0
+fi
+
+# Standalone `import psycopg2` probe (run-12 stop fix) -- distinguished
+# from the tenant/count scripts below by ABSENCE of their own SQL
+# markers (pfin.account / pfin.nav_daily / os.environ): this probe's
+# body is exactly `import psycopg2`, nothing else.
+if [[ "$ARGS" == *"import psycopg2"* && "$ARGS" != *"pfin.account"* && "$ARGS" != *"pfin.nav_daily"* && "$ARGS" != *"os.environ"* ]]; then
+  if [[ "$ARGS" != *"$ETL_PYTHON -c"* ]]; then
+    echo "ModuleNotFoundError: No module named 'psycopg2'" >&2
+    exit 1
+  fi
+  if [[ "${FAKE_PSYCOPG2_IMPORT_FAILS:-0}" == "1" ]]; then
+    echo "ImportError: libpq.so.5: cannot open shared object file" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
 if [[ "$ARGS" == *"run_nav_daily.py"* ]]; then
+  # Sec / run-12 stop: the worker invocation itself must use the venv
+  # interpreter too -- a bare `python run_nav_daily.py` fails at its own
+  # first `import psycopg2` (or whatever DB driver it needs), same class
+  # as the two -c checks below.
+  if [[ "$ARGS" != *"$ETL_PYTHON run_nav_daily.py"* ]]; then
+    echo "Traceback (most recent call last):" >&2
+    echo "ModuleNotFoundError: No module named 'psycopg2'" >&2
+    exit 1
+  fi
   if [[ "${FAKE_WORKER_MODE:-ok}" == "fail" ]]; then
     echo "Traceback: something broke" >&2
     exit 1
@@ -40,11 +87,15 @@ if [[ "$ARGS" == *"run_nav_daily.py"* ]]; then
   exit 0
 fi
 
-# Sec F-3 / F/CTO ruling 2026-09-20: TWO distinct python3 -c invocations now
+# Sec F-3 / F/CTO ruling 2026-09-20: TWO distinct -c invocations now
 # exist (the pre-check tenant count against pfin.account, and the post-run
 # row-count check against pfin.nav_daily) -- distinguish by the literal SQL
-# text each embeds, since both otherwise match "python3 -c".
-if [[ "$ARGS" == *"python3 -c"* && "$ARGS" == *"pfin.account"* ]]; then
+# text each embeds, since both otherwise match "$ETL_PYTHON -c".
+if [[ "$ARGS" == *"pfin.account"* ]]; then
+  if [[ "$ARGS" != *"$ETL_PYTHON -c"* ]]; then
+    echo "NO_PSYCOPG2" >&2
+    exit 2
+  fi
   # Sec F-6 (PR #848 round-2 review) -- same class as the nav_daily branch
   # below: PFIN_DB_USER (pfin_etl) is NOINHERIT with no direct table
   # privileges; a real Postgres would 42501 this SELECT without an explicit
@@ -63,7 +114,11 @@ if [[ "$ARGS" == *"python3 -c"* && "$ARGS" == *"pfin.account"* ]]; then
   exit 0
 fi
 
-if [[ "$ARGS" == *"python3 -c"* && "$ARGS" == *"pfin.nav_daily"* ]]; then
+if [[ "$ARGS" == *"pfin.nav_daily"* ]]; then
+  if [[ "$ARGS" != *"$ETL_PYTHON -c"* ]]; then
+    echo "NO_PSYCOPG2" >&2
+    exit 2
+  fi
   # Sec V-2 (PR #848 round-2 review) -- PFIN_DB_USER (pfin_etl) is
   # NOINHERIT with no direct table privileges; a real Postgres would
   # 42501 this exact SELECT without an explicit `set local role

@@ -25,9 +25,14 @@
 #     Container    pfin-back-etl-monthly-report  (workers/etl/docker-compose.yaml
 #                    service name — the SAME image as the nightly unit,
 #                    its own independently-deployed Coolify unit)
-#     Command      python run_monthly_report.py  (workers/etl/docker-compose.yaml
-#                    lines ~61-64; workers/etl/run_monthly_report.py's own
-#                    docstring proposes the identical literal)
+#     Command      /app/.venv/bin/python run_monthly_report.py  (run-12
+#                    stop fix, 2026-09-21: the base image's system python
+#                    has no psycopg2, only the uv-managed venv at
+#                    /app/.venv does -- see this table's own inline
+#                    comment for the measurement; workers/etl/docker-
+#                    compose.yaml lines ~61-64 / run_monthly_report.py's
+#                    own docstring predate this fix and need updating to
+#                    match, tracked separately)
 #     Frequency    0 6 1 * *  (06:00 UTC, 1st of the month — same file,
 #                    same lines; known UTC-boundary residual, BACKLOG
 #                    §7.34 item 3, not this script's to fix)
@@ -51,11 +56,18 @@
 #   4. If one ALREADY exists: asserts it is IDENTICAL on `command` /
 #      `container` / `frequency` / `enabled` (byte-exact on `command`,
 #      same strip_ws — leading/trailing whitespace only — as
-#      scripts/migrator-scheduled-task.sh's own comparison) — and REFUSES
-#      to mutate a live, disagreeing resource. This script never PATCHes
-#      an existing task.
-#   5. Reads the task back after creation and compares byte-exact before
-#      declaring success.
+#      scripts/migrator-scheduled-task.sh's own comparison). If
+#      `container`/`frequency`/`enabled` all match and ONLY `command`
+#      differs: with `--apply`, PATCHes `command` in place and confirms
+#      the read-back byte-exact (run-12 stop fix, 2026-09-21 — added so
+#      this script's own table fix for the venv-interpreter bug could
+#      reconcile the ALREADY-CREATED `pfin-back-etl-monthly-report` task
+#      without a human editing it by hand in the dashboard). Any OTHER
+#      disagreement (`container`/`frequency`/`enabled`) still REFUSES to
+#      mutate — those are identity/schedule fields a human should decide
+#      about, never silently reconciled by this script.
+#   5. Reads the task back after creation (or after a command-only
+#      PATCH) and compares byte-exact before declaring success.
 #
 # No secret value or Coolify API token is ever placed in curl's own argv
 # on either machine — same `-K -` stdin-token + temp-file-body pattern as
@@ -87,9 +99,11 @@
 #      to change" on a no-op re-run, never a silent success with no
 #      signal of which branch fired).
 #   1  REFUSED -- unresolvable application, a live task that disagrees
-#      with this table (refuses to mutate it -- a human decision, not
-#      this script's to make), a post-create read-back mismatch, or
-#      ambiguous (>1) same-named task
+#      with this table on container/frequency/enabled (refuses to mutate
+#      it -- a human decision, not this script's to make; a COMMAND-only
+#      disagreement is reconciled instead, see item 4 above), a post-
+#      create or post-PATCH read-back mismatch, or ambiguous (>1)
+#      same-named task
 #   2  FAILED -- structural/usage error: unrecognised <task-name>,
 #      missing BOX_IP, unreachable box
 #
@@ -131,7 +145,17 @@ case "$TASK_NAME" in
   pfin-back-etl-monthly-report)
     APP_NAME="pfin-back-etl"
     TASK_CONTAINER="pfin-back-etl-monthly-report"
-    TASK_COMMAND="python run_monthly_report.py"
+    # run-12 stop fix, 2026-09-21 (same measurement as scripts/smoke-etl-
+    # poll.sh's own header): the python:3.14-slim base image's own system
+    # `python` has NO psycopg2 -- only /app/.venv/bin/python (uv sync's
+    # own venv, workers/etl/Dockerfile's `WORKDIR /app` + `uv sync
+    # --frozen`) does. A bare `python run_monthly_report.py` cron command
+    # would ImportError on its first real invocation (0 6 1 * *) -- fixed
+    # here at the source, and reconciled on any EXISTING live task via
+    # this script's own --apply PATCH-on-command-mismatch below (see that
+    # step's own header for why command is the only field auto-
+    # reconciled).
+    TASK_COMMAND="/app/.venv/bin/python run_monthly_report.py"
     TASK_FREQUENCY="0 6 1 * *"
     ;;
   pfin-provider-sync-daily-poll)
@@ -254,22 +278,37 @@ if not matches:
 if len(matches) > 1:
     die(f"found {len(matches)} Scheduled Tasks named '{name}' -- ambiguous, refusing to guess which one is authoritative. Resolve by hand (Coolify dashboard) before re-running.")
 t = matches[0]
-mismatches = []
-if strip_ws(str(t.get("command", ""))) != strip_ws(command):
-    mismatches.append(f"command: live={t.get('command')!r} want={command!r}")
+command_mismatch = strip_ws(str(t.get("command", ""))) != strip_ws(command)
+other_mismatches = []
 if t.get("container") != container:
-    mismatches.append(f"container: live={t.get('container')!r} want={container!r}")
+    other_mismatches.append(f"container: live={t.get('container')!r} want={container!r}")
 if strip_ws(str(t.get("frequency", ""))) != strip_ws(frequency):
-    mismatches.append(f"frequency: live={t.get('frequency')!r} want={frequency!r}")
+    other_mismatches.append(f"frequency: live={t.get('frequency')!r} want={frequency!r}")
 if t.get("enabled", False) != True:
-    mismatches.append(f"enabled: live={t.get('enabled')!r} want=True")
-if mismatches:
-    print("MISMATCH")
-    for m in mismatches:
-        print("  " + m)
-else:
+    other_mismatches.append(f"enabled: live={t.get('enabled')!r} want=True")
+# run-12 stop fix, 2026-09-21: a COMMAND-only disagreement is
+# reconcilable (the --apply PATCH below fixes it in place) -- every
+# OTHER field disagreement still refuses, unchanged. Distinguished
+# here, not left for bash to re-derive from prose, so the two paths
+# cannot drift out of sync with each other. NO APOSTROPHE, NO DOLLAR-
+# PAREN LITERAL, ANYWHERE IN THIS HEREDOC BLOCK, DELIBERATELY -- either
+# one, nested inside a heredoc that is itself inside this file own
+# outer command-substitution assignment, breaks the OUTER bash parser
+# quote/expansion tracking (same trap this repo has hit before in
+# assign-app-domain.sh); reword around it, do not fight it.
+if not command_mismatch and not other_mismatches:
     print("MATCH")
     print(t["uuid"])
+elif command_mismatch and not other_mismatches:
+    print("MISMATCH_COMMAND_ONLY")
+    print(t["uuid"])
+    print(t.get("command", ""))
+else:
+    print("MISMATCH_OTHER")
+    if command_mismatch:
+        print(f"  command: live={t.get('command')!r} want={command!r}")
+    for m in other_mismatches:
+        print("  " + m)
 PYEOF
 REMOTE
 )"
@@ -277,12 +316,51 @@ REMOTE
 if [[ "$CHECK_OUT" == ABSENT ]]; then
   info "no existing '$TASK_NAME' task -- would create: container=$TASK_CONTAINER frequency='$TASK_FREQUENCY' enabled=true command='$TASK_COMMAND'"
   EXISTING_TASK_UUID=""
+  COMMAND_ONLY_MISMATCH_UUID=""
 elif [[ "$CHECK_OUT" == MATCH* ]]; then
   EXISTING_TASK_UUID="$(printf '%s\n' "$CHECK_OUT" | tail -1)"
+  COMMAND_ONLY_MISMATCH_UUID=""
   ok "existing '$TASK_NAME' task ($EXISTING_TASK_UUID) already matches this script's table -- nothing to change"
+elif [[ "$CHECK_OUT" == MISMATCH_COMMAND_ONLY* ]]; then
+  COMMAND_ONLY_MISMATCH_UUID="$(sed -n '2p' <<<"$CHECK_OUT")"
+  LIVE_COMMAND="$(sed -n '3p' <<<"$CHECK_OUT")"
+  EXISTING_TASK_UUID=""
+  if [[ $APPLY -eq 0 ]]; then
+    info "existing '$TASK_NAME' task ($COMMAND_ONLY_MISMATCH_UUID) command differs (live='$LIVE_COMMAND', want='$TASK_COMMAND') but container/frequency/enabled all match -- would PATCH command in place on --apply."
+  else
+    step "Reconciling '$TASK_NAME' ($COMMAND_ONLY_MISMATCH_UUID) -- command-only mismatch, PATCHing in place"
+    info "live command: '$LIVE_COMMAND' -> '$TASK_COMMAND'"
+    PATCH_ENV="task_uuid=$(printf '%q' "$COMMAND_ONLY_MISMATCH_UUID") $TASK_COMMAND_ENV"
+    # Byte-exact comparison happens ON THE REMOTE SIDE (same shape the
+    # existing post-create check already uses) -- die()s there on
+    # mismatch and prints only the uuid on success, so bash never
+    # re-implements strip_ws() or re-quotes TASK_COMMAND a second time.
+    NEW_TASK_UUID="$(sshx "env $PATCH_ENV bash -s" <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "$APP_UUID" "\$task_uuid" "\$task_command" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, app_uuid, task_uuid, command = sys.argv[1:5]
+api(token, "PATCH", f"/applications/{app_uuid}/scheduled-tasks/{task_uuid}", {"command": command})
+tasks = api(token, "GET", f"/applications/{app_uuid}/scheduled-tasks")
+matches = [t for t in tasks if t.get("uuid") == task_uuid]
+if len(matches) != 1:
+    die(f"expected exactly one Scheduled Task with uuid {task_uuid!r} after PATCH, found {len(matches)}")
+t = matches[0]
+if strip_ws(str(t.get("command", ""))) != strip_ws(command):
+    die(f"command PATCH read-back MISMATCH: live={t.get('command')!r} want={command!r} -- investigate the live Coolify APIs actual write path for this field before treating the reconcile as done.")
+print(t["uuid"])
+PYEOF
+REMOTE
+)"
+    [[ -n "$NEW_TASK_UUID" ]] || die "command PATCH did not return a task uuid"
+    ok "'$TASK_NAME' ($NEW_TASK_UUID) command reconciled and read-back verified byte-exact"
+    EXISTING_TASK_UUID="$NEW_TASK_UUID"
+  fi
 else
   printf '%s\n' "$CHECK_OUT" >&2
-  die "existing '$TASK_NAME' task disagrees with this script's table (see above) -- resolve by hand (Coolify dashboard), this script refuses to mutate a live, disagreeing Scheduled Task."
+  die "existing '$TASK_NAME' task disagrees with this script's table on container/frequency/enabled (see above) -- resolve by hand (Coolify dashboard), this script refuses to mutate those fields. A command-only disagreement would have been reconciled automatically; this is not that case."
 fi
 
 if [[ -n "$EXISTING_TASK_UUID" ]]; then
