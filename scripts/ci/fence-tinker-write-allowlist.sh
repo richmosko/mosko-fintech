@@ -99,6 +99,13 @@
 # call with an UNRELATED, independently-markered literal write is not
 # modelled -- Sec's own re-measurement note applies here too: this is a
 # stated limit, not a silent gap.
+# This fence reads `scripts/*.sh` ONLY -- PHP text that lives in a
+# non-`.sh` file (a `.php` fixture, a heredoc sourced from a separate
+# template file, etc.) and is `cat`'d or otherwise fed into a tinker
+# body is outside this fence's reach, same as fence-no-source-
+# credential-files.sh's own "visibility control, not access control"
+# framing (Sec, PR #862 review). No such file exists in this tree
+# today; stated so the next person doesn't have to rediscover it.
 #
 # Structural / source-literal, same convention as fence-heredoc-stdin-
 # drain.sh and fence-boolean-cast-pairing.sh -- parses the tree's own
@@ -147,7 +154,23 @@ trap 'rm -f "$PY_TMP"' EXIT
 cat > "$PY_TMP" <<'PYEOF'
 import re, sys, os
 
-WRITE_RE = re.compile(r'->save\(|->update\(|->delete\(|->create\(|->fill\(|DB::\s*(?:update|insert|delete|statement)\s*\(')
+# F-5 (Sec, PR #862 review): widened from the original 5-verb list.
+# Stated plainly, same as the SCOPE note below -- this is a denylist
+# over an open vocabulary, not a claim of exhaustive Eloquent-write
+# coverage. The unresolvable-`--execute=` detection mode is the
+# fail-closed backstop for whatever this list still misses (a body
+# built into a variable is caught regardless of which verb it hides).
+# Re-verified zero hits for every added verb in scripts/*.sh today
+# (grep, positive-controlled against `->save(` which does match) --
+# this widening is a no-behavior-change addition on the current tree.
+WRITE_RE = re.compile(
+    r'->save\(|->saveQuietly\(|->update\(|->updateOrCreate\(|'
+    r'->delete\(|->forceDelete\(|->create\(|->firstOrCreate\(|'
+    r'->fill\(|->insert\(|->upsert\(|->increment\(|->decrement\(|'
+    r'->truncate\(|->push\(|->attach\(|->sync\(|->detach\(|'
+    r'::destroy\(|'
+    r'DB::\s*(?:update|insert|delete|statement|unprepared)\s*\('
+)
 MARKER_RE = re.compile(r'/\*\s*TINKER-WRITE-ALLOW-(\d+)\s*\*/')
 COMMENT_LINE = re.compile(r'^\s*#')
 # A `tinker --execute=` value that is ENTIRELY a bash variable reference
