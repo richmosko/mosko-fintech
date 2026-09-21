@@ -303,10 +303,14 @@ jqp() { python3 -c "import json,sys;$1"; }
 # supabase_functions_admin, cardinality itself checked -- Sec C-1, PR
 # #852 AMBER review: a single matching row used to pass this check
 # silently, since a non-empty one-line result is still non-empty) all
-# have a password set; (5) `app.settings.jwt_secret` is set (Sec F-2, PR
-# #852 AMBER review -- the "Verification battery" step below already
-# treats (4) and (5) together as ONE two-part tell that init scripts
-# genuinely ran; this function only carried the first half until now).
+# have a password set; (5) `app.settings.jwt_secret` is set and
+# non-empty, asserted server-side without retrieving the value (Sec F-2 +
+# C-4, PR #852 AMBER review -- the "Verification battery" step below
+# already treats (4) and (5) together as ONE two-part tell that init
+# scripts genuinely ran; this function only carried the first half until
+# now, and the first version of (5) here retrieved the secret into this
+# process and was fail-open on any non-canonical answer other than the
+# one error string it checked for).
 # (4) and (5) are the ones that actually answer "was this volume
 # initialized by a real deploy of THIS stack, not a bogus mount" -- (1)-
 # (3) only prove "something is currently running and answering", which a
@@ -364,17 +368,35 @@ check_stack_already_healthy() {
   # check_stack_already_healthy() only carried the first half; this adds
   # the second so --check-healthy's own live done-predicate proves the
   # SAME two-part tell the archive's own procedure relies on, not a
-  # narrower one. Value never printed -- only whether the GUC is set at
-  # all (an unset custom GUC makes `show` itself ERROR with "unrecognized
-  # configuration parameter", the same detection shape that step already
-  # uses).
-  local jwt_setting
-  jwt_setting="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc 'show app.settings.jwt_secret;'" 2>&1 || true)"
-  if [[ "$jwt_setting" == *"unrecognized configuration parameter"* ]]; then
-    info "healthy-check FAILED at (5/5): app.settings.jwt_secret is unset -- init scripts did not run against this volume"
+  # narrower one.
+  #
+  # Sec C-4 (PR #852 AMBER review round 2): the ORIGINAL version here
+  # (`show app.settings.jwt_secret;`, refuse only on the literal
+  # "unrecognized configuration parameter" substring) was fail-open on
+  # every OTHER non-canonical answer -- an empty result (psql/container
+  # gone), a different error string, or the GUC explicitly set to the
+  # empty string all read as "healthy" (a negative-only check: "absence
+  # of one string" instead of "presence of the expected positive
+  # token"). It also RETRIEVED the secret's actual value into this
+  # script's own process via `2>&1` to see that error text at all --
+  # `secrets-manifest.yml` classes JWT_SECRET production_only, and this
+  # file's own header (SS3 CORRECTED 2026-09-11) names exactly one value
+  # that legitimately crosses into local memory (SMTP_PASS); this probe
+  # silently added a second, and unlike the "Verification battery" step
+  # below (which only runs once, after a fresh deploy), this probe runs
+  # on EVERY `provision.sh --dry-run` (live_done_standup calls
+  # --check-healthy every time). `current_setting(name, true)` moves the
+  # boolean decision server-side -- returns NULL (never an error) for an
+  # unset GUC, so a two-arg equality test collapses "unset", "empty",
+  # "unreachable db", and "dead psql" into the SAME refusal, and the
+  # secret's value never leaves Postgres at all.
+  local jwt_present
+  jwt_present="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc \"select current_setting('app.settings.jwt_secret', true) <> '';\"" 2>/dev/null || true)"
+  info "healthy-check (5/5): app.settings.jwt_secret present: '${jwt_present:-<none>}' (value never leaves Postgres)"
+  if [[ "$jwt_present" != "t" ]]; then
+    info "healthy-check FAILED at (5/5): app.settings.jwt_secret is unset, empty, or the db did not answer -- init scripts did not run against this volume"
     return 1
   fi
-  info "healthy-check (5/5): app.settings.jwt_secret is set (value never read or printed)"
 
   ok "healthy-check: all five probes pass -- this db-data volume was genuinely initialized by a real deploy of this stack"
   return 0
@@ -1117,8 +1139,15 @@ while IFS=: read -r role has_pw; do
   info "  $role password set: $has_pw"
   [[ "$has_pw" == "true" ]] || die "role $role has no password set -- init scripts did not run (or db-data was already initialized before this deploy)"
 done < <(printf '%s\n' "$INIT_STATE")
-JWT_SETTING="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc \"show app.settings.jwt_secret;\"" 2>&1 || true)"
-[[ "$JWT_SETTING" != *"unrecognized configuration parameter"* ]] || die "app.settings.jwt_secret unset -- init scripts did not run"
+# Sec N-5 (PR #852 AMBER review round 2): identical shape to
+# check_stack_already_healthy()'s own probe (5/5), fixed there under C-4
+# for the same two reasons -- negative-only (refuses on one error string,
+# fail-open on every other non-canonical answer) and it retrieved the
+# secret's actual value into this process via `2>&1` just to see that
+# error text. `current_setting(name, true)` moves the boolean decision
+# server-side; the value never leaves Postgres.
+JWT_PRESENT="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc \"select current_setting('app.settings.jwt_secret', true) <> '';\"" 2>/dev/null || true)"
+[[ "$JWT_PRESENT" == "t" ]] || die "app.settings.jwt_secret is unset, empty, or the db did not answer -- init scripts did not run"
 ok "all four role passwords set + app.settings.jwt_secret present"
 
 ENVOY_LOG="$(sshx "docker compose --project-name $APP_UUID logs api-gw 2>&1 | tail -80")"

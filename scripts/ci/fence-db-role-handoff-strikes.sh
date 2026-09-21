@@ -31,6 +31,10 @@
 #   2d. AMBIGUOUS-STORE-STATE (Sec F-5, PR #852 AMBER review) -- the store
 #       readback itself finds MORE than one matching row (store_count=2)
 #       -> refuses, "refusing to trust an ambiguous store state".
+#   2e. STORE-READ-FAILED (Sec N-3, PR #852 AMBER review round 2) -- the
+#       tinker call produces NO output at all (crashed/unreachable) ->
+#       refuses the same way, "refusing to trust an ambiguous store
+#       state".
 #   3. ROTATE-BUT-NOT-YET-LOGIN -- preflight reads 'f|f' and --rotate IS
 #      passed -> refuses, naming "not yet LOGIN".
 #   4. RESOURCE-ABSENT  -- the target Coolify resource does not exist ->
@@ -138,7 +142,15 @@ if [[ "$ARGS" == *"artisan tinker --execute"* ]]; then
   # ABSENCE of "hash(" in the tinker script body -- leg E's own query
   # always contains "hash('sha256'".
   if [[ "$ARGS" != *"hash("* ]]; then
-    echo "${FAKE_STORE_COUNT:-0}"
+    # Sec N-3 (PR #852 AMBER review round 2): `${FAKE_STORE_COUNT:-0}`
+    # (with the colon) treats "set but empty" the SAME as "unset" --
+    # scenario 2e below passes an EXPLICIT empty string to model the
+    # tinker call itself producing no output (crashed/timed out, the
+    # store-read-failed case db-role-handoff.sh:381's `*)` arm also
+    # catches, far likelier in practice than two rows), which the colon
+    # form would have silently defaulted back to "0" ("fresh"). No
+    # colon -- only a genuinely OMITTED FAKE_STORE_COUNT defaults.
+    echo "${FAKE_STORE_COUNT-0}"
     exit 0
   fi
   # F-2/F-4 (PR #846 review) -- the real readback is now
@@ -342,7 +354,7 @@ run_scenario() {
   # unaffected by this parameter's addition); scenarios exercising the
   # already-handed-off / mismatched-state logic set it explicitly.
   local desc="$1" expect_exit="$2" role="$3" apply_flag="$4" curl_mode="$5" \
-        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17:-0}"
+        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   local resource_name="pfin-back-etl"
@@ -426,6 +438,18 @@ assert_output_contains "already-handed-off" "${OUT2:-}" "existence-only check" |
 #     had, but which no fence scenario exercised until now.
 OUT2D="$(run_scenario "ambiguous-store-state: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "" 0 0 "" 0 2)" || FAIL=1
 assert_output_contains "ambiguous-store-state" "${OUT2D:-}" "refusing to trust an ambiguous store state" || FAIL=1
+
+# 2e. STORE-READ-FAILED (Sec N-3, PR #852 AMBER review round 2) -- the
+#     tinker call itself produces NO output (crashed, timed out, docker
+#     unreachable) -- a case db-role-handoff.sh:381's `*)` arm ALSO
+#     catches (STORE_COUNT is neither "0" nor "1"), and far likelier in
+#     practice than 2d's two-rows case, but nothing in this fence
+#     exercised it until now: the fake's own `${FAKE_STORE_COUNT:-0}`
+#     (with the colon) silently defaulted an explicit empty string back
+#     to "0" ("fresh"), masking exactly the scenario meant to prove the
+#     refusal fires on this path too.
+OUT2E="$(run_scenario "store-read-failed: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "" 0 0 "" 0 "")" || FAIL=1
+assert_output_contains "store-read-failed" "${OUT2E:-}" "refusing to trust an ambiguous store state" || FAIL=1
 
 # 2b. MISMATCH-LOGIN-NO-STORE-VALUE (team-lead's own named strike --
 #     "LOGIN but no store value") -- role already LOGIN + password set,

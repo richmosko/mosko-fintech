@@ -64,6 +64,12 @@
 #   8. JWT-SECRET-UNSET (Sec F-2, PR #852 AMBER review) -- probe (5/5)
 #      alone fails (app.settings.jwt_secret unset) -> die, isolated from
 #      the other four probes (all of which would pass).
+#   9-11. PROBE-5-FAIL-OPEN (Sec C-4, PR #852 AMBER review round 2) -- the
+#      ORIGINAL probe 5 (refuse only on one literal error string) was
+#      fail-open on every OTHER non-canonical answer -- empty output, a
+#      different error string, and the GUC explicitly set to the empty
+#      string all must refuse identically under the new positive-token
+#      check, not just the one string scenario 8 alone would catch.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -95,17 +101,33 @@ if [[ ! -s "$EXTRACT" || "$LINES" -lt 30 ]]; then
 fi
 bash -n "$EXTRACT" || { echo "FATAL: extracted block does not parse as valid bash" >&2; exit 2; }
 
-# Structural pin (Sec C-3, PR #852 AMBER review): the OLD pin matched
-# `grep -qE 'check_stack_already_healthy'` against the WHOLE FILE, which
-# is vacuous -- the function's own DEFINITION always matches that pattern,
-# so the pin could never go red even if the --check-healthy dispatch
-# block stopped calling it. Replaced with Sec's two pins: (a) a
-# zero-byte-separated, multi-line-spanning regex proving the dispatch
-# block's OWN `if` actually calls the function (not just that the
-# function exists somewhere in the file), and (b) a pin on the literal
-# mutual-exclusion message, independent of (a).
-if ! grep -qzoE 'if \[\[ \$CHECK_HEALTHY -eq 1 \]\]; then(.|\n)*?check_stack_already_healthy' "$TARGET_SH"; then
-  echo "FATAL: --check-healthy's own dispatch block no longer appears to call check_stack_already_healthy() -- structural pin failed" >&2
+# Structural pin (Sec C-3, PR #852 AMBER review; corrected under Sec C-5
+# round 2): the ORIGINAL pin (`grep -qE 'check_stack_already_healthy'`
+# against the whole file) was vacuous -- the function's own DEFINITION
+# always matches. The round-1 replacement (`grep -qzoE 'if \[\[
+# \$CHECK_HEALTHY -eq 1 \]\]; then(.|\n)*?check_stack_already_healthy'`)
+# was ALSO vacuous, for a different reason Sec caught and I did not:
+# `(.|\n)*?` is not a lazy quantifier in POSIX/GNU ERE (ERE has no lazy
+# quantifier at all) -- `X*?` parses as `(X*)?`, i.e. plain `X*`. The
+# pattern actually read "the --check-healthy `if` line, then ANYTHING,
+# then the token check_stack_already_healthy ANYWHERE LATER IN THE
+# FILE" -- and the db-data-volume dispatcher further down always
+# supplies that token, so deleting ONLY the call inside the
+# --check-healthy block (leaving the `if` wrapper and the later
+# dispatcher both intact) still passed. Fixed by extracting the
+# --check-healthy dispatch block BY RANGE (its own `if`/`fi` anchors,
+# bash's own extraction primitive, not a regex trying to bound a match)
+# and requiring the call WITHIN that extracted text specifically -- the
+# later dispatcher's own identical call can no longer satisfy it, and an
+# empty extraction (the block itself removed, or its anchors reworded)
+# fails closed on its own, independent of the call-presence check.
+CHECK_BLOCK="$(sed -n '/^if \[\[ \$CHECK_HEALTHY -eq 1 \]\]; then$/,/^fi$/p' "$TARGET_SH")"
+if [[ -z "$CHECK_BLOCK" ]]; then
+  echo "FATAL: the --check-healthy dispatch block was not found by its own range anchors -- structural pin failed" >&2
+  exit 2
+fi
+if ! printf '%s\n' "$CHECK_BLOCK" | grep -q 'check_stack_already_healthy'; then
+  echo "FATAL: --check-healthy's own dispatch block no longer calls check_stack_already_healthy() -- structural pin failed" >&2
   exit 2
 fi
 if ! grep -q -- '--apply and --check-healthy are mutually exclusive' "$TARGET_SH"; then
@@ -177,11 +199,14 @@ sshx() {
     *"pg_authid"*)
       printf '%s\n' "$FAKE_INIT_STATE"
       ;;
-    *"show app.settings.jwt_secret;"*)
-      # Sec F-2 (PR #852 AMBER review): probe (5/5). Default (see run_case)
-      # is a healthy, non-error value; scenario 8 overrides it to the
-      # literal "unrecognized configuration parameter" substring the real
-      # script's own detection matches on.
+    *"app.settings.jwt_secret"*)
+      # Sec C-4 (PR #852 AMBER review round 2): the real script's probe
+      # (5/5) is now `select current_setting('app.settings.jwt_secret',
+      # true) <> '';` -- a positive boolean token ('t'/'f'), never the
+      # secret's own value or an error-string match. Default (see
+      # run_case) is 't' (healthy); scenarios 8/9/10/11 override it to
+      # exercise every non-canonical answer, not just the one string the
+      # OLD version's fake modeled.
       printf '%s' "$FAKE_JWT_SETTING"
       ;;
     *)
@@ -194,7 +219,17 @@ export -f ok info die step sshx
 
 run_case() {
   local desc="$1" expect_rc="$2" expect_need_deploy="$3" FAKE_CONTAINERS="$4" FAKE_GW_STATUS="$5" FAKE_PGVER="$6" FAKE_INIT_STATE="$7" FAKE_VOLUME_EXISTS="$8"
-  local FAKE_JWT_SETTING="${9:-healthy-jwt-secret-value}"
+  # `${9-t}`, no colon -- scenario 9 (probe5-empty-output) passes an
+  # EXPLICIT empty string as the 9th positional arg to model psql dying /
+  # the container being gone, which must be distinguished from the arg
+  # being OMITTED entirely (every scenario 1-7 call, which should default
+  # to the healthy 't'). `${9:-t}` (with the colon) treats "set but
+  # empty" the SAME as "unset" and would have silently defaulted
+  # scenario 9's empty string back to 't' -- caught by this fence's own
+  # strike (scenario 9 first went green when it should have gone red,
+  # with the captured output showing "present: 't'" instead of
+  # "present: '<none>'").
+  local FAKE_JWT_SETTING="${9-t}"
   local out="$WORK/out.$$.$RANDOM"
   local combined="$WORK/combined.$$.$RANDOM.sh"
   # The extracted block is APPENDED to, never sourced from -- this file is
@@ -292,16 +327,33 @@ if [[ -n "${OUT7:-}" ]]; then
   echo "$OUT7" | grep -q "expected 4 role rows, got 1" || { echo "FAIL: [partial-init-state-one-role] did not name the actual row count" >&2; FAIL=1; }
 fi
 
-# 8. JWT-SECRET-UNSET (Sec F-2, PR #852 AMBER review) -- probe (5/5) alone
-#    fails: all four role passwords set, but app.settings.jwt_secret is
-#    unset (the "unrecognized configuration parameter" error `show`
-#    itself raises for an unset custom GUC) -> refuses, isolated from the
-#    other four probes (all of which would pass).
-OUT8="$(run_case "jwt-secret-unset" 1 "" 7 200 17 "$HEALTHY_ROLES" 1 "unrecognized configuration parameter \"app.settings.jwt_secret\"")" || FAIL=1
+# 8. JWT-SECRET-UNSET (Sec F-2, PR #852 AMBER review; updated under Sec
+#    C-4 round 2) -- probe (5/5) alone fails: all four role passwords
+#    set, but current_setting('app.settings.jwt_secret', true) returns
+#    NULL for a genuinely unset GUC -> the fake's positive-token check
+#    ('t'/anything-else) refuses, isolated from the other four probes
+#    (all of which would pass).
+OUT8="$(run_case "jwt-secret-unset" 1 "" 7 200 17 "$HEALTHY_ROLES" 1 "f")" || FAIL=1
 if [[ -n "${OUT8:-}" ]]; then
   echo "$OUT8" | grep -q "FAILED at (5/5)" || { echo "FAIL: [jwt-secret-unset] did not isolate the failure to probe (5/5)" >&2; FAIL=1; }
   echo "$OUT8" | grep -q "app.settings.jwt_secret is unset" || { echo "FAIL: [jwt-secret-unset] did not name jwt_secret as the cause" >&2; FAIL=1; }
 fi
+
+# 9/10/11. PROBE-5-FAIL-OPEN (Sec C-4, PR #852 AMBER review round 2) -- an
+#    unset GUC is not the only way probe 5 can be unsatisfiable. The
+#    ORIGINAL version here (refuse only on the literal "unrecognized
+#    configuration parameter" error string) was fail-open on every OTHER
+#    non-canonical answer -- struck three ways by Sec, all green when
+#    they should have been red: empty output (psql died / container
+#    gone), a DIFFERENT error string (db unreachable), and the GUC
+#    explicitly set to the empty string. The new positive-token check
+#    ('t'/anything-else) must refuse identically on all three.
+OUT9="$(run_case  "probe5-empty-output"      1 "" 7 200 17 "$HEALTHY_ROLES" 1 "")" || FAIL=1
+OUT10="$(run_case "probe5-psql-error"        1 "" 7 200 17 "$HEALTHY_ROLES" 1 "psql: error: connection to server on socket failed")" || FAIL=1
+OUT11="$(run_case "probe5-guc-empty-string"  1 "" 7 200 17 "$HEALTHY_ROLES" 1 "f")" || FAIL=1
+for O in "${OUT9:-}" "${OUT10:-}" "${OUT11:-}"; do
+  [[ -n "$O" ]] && { echo "$O" | grep -q "FAILED at (5/5)" || { echo "FAIL: [probe5-fail-open] a non-canonical probe-5 answer did not refuse at (5/5)" >&2; FAIL=1; }; }
+done
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
