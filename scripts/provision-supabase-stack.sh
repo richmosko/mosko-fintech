@@ -294,7 +294,13 @@ jqp() { python3 -c "import json,sys;$1"; }
 # "Verification battery" step below already runs after a fresh deploy);
 # (2) api-gw's /auth/v1/health route is a TWO-PART probe (measured
 # 2026-09-21 against the live box -- team-lead's own `--from standup`
-# run: this stack's Kong route enforces key-auth on this path, so an
+# run -- and structurally: this stack's gateway is ENVOY (infra/supabase/
+# docker-compose.yml api-gw = envoyproxy/envoy, container_name
+# supabase-envoy; the `kong` name there is a legacy network ALIAS only),
+# and its inline Lua apikey filter lists `auth-v1-protected` in
+# PROTECTED_ROUTES (infra/supabase/volumes/api/envoy/lds.template.yaml).
+# That route is the bare `/auth/v1/` PREFIX and there is no exact-path
+# carve-out for /auth/v1/health, so an
 # unkeyed GET answers 401, never 200; the ORIGINAL one-part version here
 # expected 200 unkeyed and refused a genuinely healthy stack on every
 # re-run): unkeyed GET -> 401 (proves the gateway is up AND key-auth is
@@ -362,7 +368,8 @@ check_stack_already_healthy() {
   # codes cross back.
   local gw_probe anon_key_present gw_nokey gw_withkey
   # Strike-tested: removing each of the three checks below in turn takes
-  # the fence red at exactly the right scenario (5a / 5d / 5b).
+  # the fence red at exactly the right scenario (5a+5c / 5d / 5b -- 5c
+  # watches the no-key half's own message, so it moves with 5a).
   gw_probe="$(sshx "env APP_UUID=\"$APP_UUID\" bash -s" 2>/dev/null <<'REMOTE' || true
 set -e
 ANON_KEY="$(docker exec coolify php artisan tinker --execute="

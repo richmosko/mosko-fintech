@@ -266,7 +266,7 @@ sshx() {
       esac
       local anon_present=1
       [[ "${FAKE_GW_ANON_PRESENT:-1}" == "0" ]] && anon_present=0
-      # Sec C-3 (PR #853): GW_SENTINEL_FMT is exported below and pinned
+      # Sec C-3 (PR #853): GW_SENTINEL_FMT is exported above and pinned
       # against the shipping script -- the fake's answer and the real
       # parser's read must be two copies of the SAME wire format, or a
       # drift here (or there) makes this fence green while the real
