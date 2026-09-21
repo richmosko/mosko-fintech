@@ -68,6 +68,27 @@
 # USAGE
 #   BOX_IP=<box-ip> scripts/provision-worker.sh <resource-name>          # preflight
 #   BOX_IP=<box-ip> scripts/provision-worker.sh <resource-name> --apply  # delete-if-needed + create + set network var
+#   BOX_IP=<box-ip> scripts/provision-worker.sh <resource-name> --state  # PROVABLY READ-ONLY: print current
+#                                                                         # fqdn/ports_exposes state, nothing else
+#
+#   --state (run-11 stop fix, 2026-09-21, Sec's five requirements) exists
+#   because the PREFLIGHT-mode "current state: fqdn=..., ports_exposes=..."
+#   line that provision.sh's worker_fqdn_clear_if_needed() reads is
+#   produced by code that sits AFTER the `if [[ $APPLY -eq 0 ]]; then exit
+#   0; fi` gate below -- a plain preflight run (no flag) NEVER reaches it,
+#   and never printed it, contrary to this script's own prior header claim
+#   ("printed unconditionally, apply or not"). That gap made the caller's
+#   `grep` silently see NO state line and read absence-of-match as
+#   "nothing is SET" -- fail-open on exactly the resume-path gap this
+#   script exists to close. --state short-circuits IMMEDIATELY after
+#   resolving the resource's own uuid by name (one GET /applications) with
+#   ONE more GET (/applications/<uuid>) + the same classify_domain_state()
+#   used by --apply's own pre/post-clear reads, then exits -- before the
+#   stack-application check, project/environment resolution, network
+#   lookup, or ANY create/delete/PATCH/tinker call. Two GETs, zero writes,
+#   by construction (see fence-provision-worker-strikes.sh's own
+#   provably-read-only scenario: a fake that fails closed on ANY
+#   POST/PATCH/DELETE/tinker call, and --state still exits 0 against it).
 #
 #   <resource-name> is a Coolify APPLICATION NAME, one of:
 #     pfin-back-etl       -- workers/etl/          -- ETL_STACK_NETWORK_NAME
@@ -96,13 +117,19 @@ fi
 # --- Argument parsing --------------------------------------------------------
 RESOURCE_NAME="${1:-}"
 APPLY=0
+STATE_ONLY=0
 if [[ $# -ge 1 ]]; then shift; fi
 for arg in "$@"; do
   case "$arg" in
     --apply) APPLY=1 ;;
-    *) echo "unknown flag: $arg" >&2; echo "usage: $0 <resource-name> [--apply]" >&2; exit 2 ;;
+    --state) STATE_ONLY=1 ;;
+    *) echo "unknown flag: $arg" >&2; echo "usage: $0 <resource-name> [--apply | --state]" >&2; exit 2 ;;
   esac
 done
+if [[ "$APPLY" -eq 1 && "$STATE_ONLY" -eq 1 ]]; then
+  echo "FATAL: --apply and --state are mutually exclusive." >&2
+  exit 2
+fi
 
 # --- Table: resource-name -> base_directory / network-var-name -------------
 # The ONLY per-worker difference in this script's own logic. Refusing an
@@ -234,6 +261,73 @@ jqp() {
   [[ -n "$input" ]] || exit 1
   printf '%s' "$input" | python3 -c "import json,sys;$1"
 }
+
+# Sec (PR #862 review): the read must distinguish ABSENT (key not in the
+# JSON at all), EMPTY (present but null/""), and SET (present with a
+# real value) -- not collapse all three via a Python-truthiness `or ''`.
+# This is the same class of bug this repo already paid for once
+# (Coolify compose-parse env rows: a row existing is not the same fact
+# as a row holding a real value) -- one shared classifier used for the
+# pre-clear read, the post-clear read-back, AND --state's own read below,
+# so none of the three can drift apart on what "cleared" means. Read from
+# stdin via a STATIC heredoc (no bash variable spliced into the python
+# source) -- also closes Sec's separate note on an earlier revision of
+# this step that interpolated a bash variable into a python string
+# literal. Moved up from its original position (just before the
+# ports_exposes-clear step) so --state's short-circuit below can use it
+# without duplicating it.
+read -r -d '' PY_CLASSIFY_HELPER <<'PY' || true
+import json, sys
+d = json.load(sys.stdin)
+for key in ('fqdn', 'ports_exposes'):
+    if key not in d:
+        state, val = 'ABSENT', ''
+    else:
+        v = d[key]
+        if v is None or v == '':
+            state, val = 'EMPTY', ''
+        else:
+            state, val = 'SET', str(v)
+    print(f'{state}\t{val}')
+PY
+classify_domain_state() {
+  # stdin: the application JSON. stdout: "FQDN_STATE\tFQDN_VAL\nPORTS_STATE\tPORTS_VAL".
+  python3 -c "$PY_CLASSIFY_HELPER"
+}
+
+# --state (run-11 stop fix) -- see this script's own USAGE header for the
+# full gap this closes. Resolves the resource by NAME (one GET), refuses
+# on >1 match (same discipline as every other by-name resolution in this
+# repo), dies if it does not exist at all (a resource that was never
+# provisioned has no fqdn/ports_exposes state to report -- this is a
+# precondition failure, not a "state: absent" fact), then ONE more GET
+# for the classify + the SAME "current state: ..." line format the
+# apply-path already prints (byte-for-byte -- provision.sh's caller greps
+# this exact format). Exits before the stack-application check, before
+# project/environment resolution, before the network lookup, and before
+# ANY create/delete/PATCH/tinker call exists in this script's control
+# flow -- two GETs total, nothing else, so a hostile fake that fails
+# closed on any write call still sees --state exit 0 (Sec requirement 3).
+if [[ "$STATE_ONLY" -eq 1 ]]; then
+  step "State-only read for '$RESOURCE_NAME' (--state: two GETs, zero writes)"
+  STATE_APP_JSON="$(api GET /applications | jqp "
+d=json.load(sys.stdin)
+m=[a for a in d if a['name']=='$RESOURCE_NAME']
+if len(m) > 1:
+    raise SystemExit('FATAL: %d applications named %r (%r) -- refusing to pick one.' % (len(m), '$RESOURCE_NAME', [x['uuid'] for x in m]))
+print(json.dumps(m[0]) if m else '')")"
+  [[ -n "$STATE_APP_JSON" ]] || die "'$RESOURCE_NAME' does not exist -- cannot report fqdn/ports_exposes state for a resource that was never created. Run scripts/provision-worker.sh $RESOURCE_NAME --apply first (provision-resources step)."
+  STATE_APP_UUID="$(echo "$STATE_APP_JSON" | jqp "print(json.load(sys.stdin)['uuid'])")"
+  [[ "$STATE_APP_UUID" =~ $UUID_RE ]] || die "resolved '$RESOURCE_NAME' uuid '$STATE_APP_UUID' does not match the expected uuid shape -- refusing to use it in a GET call."
+  STATE_APP_JSON_FULL="$(api GET "/applications/$STATE_APP_UUID")"
+  STATE_CLASSIFIED="$(echo "$STATE_APP_JSON_FULL" | classify_domain_state)"
+  STATE_FQDN_STATE="$(sed -n '1p' <<<"$STATE_CLASSIFIED" | cut -f1)"
+  STATE_FQDN_VAL="$(sed -n '1p' <<<"$STATE_CLASSIFIED" | cut -f2)"
+  STATE_PORTS_STATE="$(sed -n '2p' <<<"$STATE_CLASSIFIED" | cut -f1)"
+  STATE_PORTS_VAL="$(sed -n '2p' <<<"$STATE_CLASSIFIED" | cut -f2)"
+  info "current state: fqdn=$STATE_FQDN_STATE${STATE_FQDN_VAL:+ ('$STATE_FQDN_VAL')}, ports_exposes=$STATE_PORTS_STATE${STATE_PORTS_VAL:+ ('$STATE_PORTS_VAL')}"
+  exit 0
+fi
 
 step "Preflight — the Supabase-stack application must already be deployed"
 STACK_APP_JSON="$(api GET /applications | jqp "
@@ -492,35 +586,9 @@ step "Clearing any default Coolify-assigned domain/ports_exposes (CA-1, run-8 st
 # injection), which is explicitly refused, not a shortcut available
 # here.
 #
-# Sec (PR #862 review): the read must distinguish ABSENT (key not in the
-# JSON at all), EMPTY (present but null/""), and SET (present with a
-# real value) -- not collapse all three via a Python-truthiness `or ''`.
-# This is the same class of bug this repo already paid for once
-# (Coolify compose-parse env rows: a row existing is not the same fact
-# as a row holding a real value) -- one shared classifier used for BOTH
-# the pre-clear read and the post-clear read-back, so the two checks
-# cannot drift apart on what "cleared" means. Read from stdin via a
-# STATIC heredoc (no bash variable spliced into the python source) --
-# also closes Sec's separate note on an earlier revision of this step
-# that interpolated a bash variable into a python string literal.
-read -r -d '' PY_CLASSIFY_HELPER <<'PY' || true
-import json, sys
-d = json.load(sys.stdin)
-for key in ('fqdn', 'ports_exposes'):
-    if key not in d:
-        state, val = 'ABSENT', ''
-    else:
-        v = d[key]
-        if v is None or v == '':
-            state, val = 'EMPTY', ''
-        else:
-            state, val = 'SET', str(v)
-    print(f'{state}\t{val}')
-PY
-classify_domain_state() {
-  # stdin: the application JSON. stdout: "FQDN_STATE\tFQDN_VAL\nPORTS_STATE\tPORTS_VAL".
-  python3 -c "$PY_CLASSIFY_HELPER"
-}
+# (classify_domain_state()/PY_CLASSIFY_HELPER now live earlier in this
+# file, right after jqp() -- --state needs them before this step exists,
+# see that definition's own header for the ABSENT/EMPTY/SET rationale.)
 
 CURRENT_APP_JSON="$(api GET "/applications/$APP_UUID")"
 CURRENT_CLASSIFIED="$(echo "$CURRENT_APP_JSON" | classify_domain_state)"

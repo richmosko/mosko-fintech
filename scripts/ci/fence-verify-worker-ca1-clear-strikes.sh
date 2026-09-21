@@ -22,12 +22,28 @@
 # leg. Runs entirely without a live box; the target script itself is
 # never modified or made aware this exists.
 #
+# ⚠ CORRECTED (team-lead, PR fix/pdf-render-chromium-pin-and-resume-
+# clear review, 2026-09-21): an earlier revision of THIS FIXTURE modeled
+# its positive-leg id in the `<service>-<uuid>-<timestamp>` NAME shape
+# team-lead measured for the CONTAINER'S NAME on the box -- but
+# `docker compose --project-name <uuid> ps -q <service>` (what the
+# target script actually calls, and what this fixture's fake docker
+# stands in for) returns container IDs, 64 lowercase-hex characters,
+# never names. The distinction the original run-9 bug turned on --
+# Coolify's real container NAME vs the bare compose SERVICE name -- is
+# real and still what the target script's resolution mechanism exists
+# to get right; it just never surfaces as the STRING this fixture feeds
+# through `ps -q`. Fixed to a 64-hex id; the name-shape fact is kept in
+# this comment for the historical record, not modeled as fixture data
+# anymore -- exactly the same class of "fixture restates the lie" this
+# file's own opening paragraph already names, found a second time in
+# its own fix.
+#
 # Scenarios:
 #   1. CLEAN -- resolves an application by NAME, then its ONE running
-#      container (id in the real `<service>-<uuid>-<timestamp>` shape,
-#      Sec req 2's POSITIVE leg -- team-lead's own measured example:
-#      provider-sync-hmjeuhdaolhw8tlz3qi6lopi-194853542981), whose env
-#      carries no non-empty COOLIFY_FQDN/COOLIFY_URL -> exit 0.
+#      container (a 64-hex CONTAINER ID, the real shape `docker compose
+#      ps -q` returns -- Sec req 2's POSITIVE leg), whose env carries no
+#      non-empty COOLIFY_FQDN/COOLIFY_URL -> exit 0.
 #   2. ROUTE-SIGNAL-PRESENT (Sec req 3: strike-prove the check CAN
 #      catch a real finding, not just that a green run exists) --
 #      same resolution succeeds, but the container's env carries a
@@ -92,12 +108,16 @@ FAKE_ROOT_PFIN="$WORK/fakebox/root/pfin"
 mkdir -p "$FAKE_ROOT_PFIN"
 printf 'COOLIFY_API_TOKEN=%s\n' "fake-token-do-not-leak" > "$FAKE_ROOT_PFIN/coolify.env"
 
-# The real container-id shape team-lead measured on the box, run 9:
-# `provider-sync-<uuid>-<timestamp>`. Used as the DEFAULT id the fake
+# A REAL container-id shape -- 64 lowercase-hex characters, exactly
+# what `docker compose ps -q` returns (fixed: an earlier revision used
+# team-lead's `<service>-<uuid>-<timestamp>` NAME shape here instead,
+# conflating the container's NAME -- what run 9's own bug was about --
+# with the ID this specific call actually returns; see this file's
+# header for the full correction). Used as the DEFAULT id the fake
 # compose-ps/inspect chain resolves to, so the CLEAN scenario proves
-# resolution succeeds against exactly this shape, not a bare literal
-# service name (Sec req 2's positive leg).
-REAL_SHAPE_CID="provider-sync-hmjeuhdaolhw8tlz3qi6lopi-194853542981"
+# resolution succeeds against the real return shape (Sec req 2's
+# positive leg), not an id this call could never actually produce.
+REAL_SHAPE_CID="dcd567b91e6121b1e8eaa6071d8e70bf06a022b73656655ad9a440fa25c0d671"
 
 # Fake `docker` -- the compose-resolution mechanism COPIED from
 # deploy-app.sh (see that script's own fake docker in
@@ -263,7 +283,7 @@ if [[ -n "${NORUN_OUT:-}" ]] && ! grep -qF "no running container found" <<<"$NOR
 fi
 
 # 6. AMBIGUOUS-CONTAINERS -- Sec's own phrase, req 1: "never take the first of several".
-AMBIG_CID_OUT="$(FAKE_COMPOSE_CIDS="$REAL_SHAPE_CID provider-sync-hmjeuhdaolhw8tlz3qi6lopi-999999999999" \
+AMBIG_CID_OUT="$(FAKE_COMPOSE_CIDS="$REAL_SHAPE_CID 90ae08b3a254a57f3a1ac34f9e2524347e4953b373543be1f959184b2d644451" \
   run_scenario "ambiguous-containers: refuses, never picks one" 2 pfin-provider-sync --service provider-sync)" || FAIL=1
 if [[ -n "${AMBIG_CID_OUT:-}" ]]; then
   grep -qF "AMBIGUOUS" <<<"$AMBIG_CID_OUT" || { echo "FAIL: [ambiguous-containers] refusal did not say AMBIGUOUS." >&2; FAIL=1; }

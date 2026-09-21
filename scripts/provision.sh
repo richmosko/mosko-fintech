@@ -929,58 +929,162 @@ verify_worker_store_binds() {
   return 0
 }
 
-# worker_has_admission_guard <base-directory> -- DERIVES whether a
-# worker carries an HTTP admission surface that CA-1's container-env
-# check must guard, rather than a hardcoded name list (Sec req 4, CA-1
-# identity review, run-9 stop 2026-09-21: "derive... don't list it").
-# Reads the worker's OWN committed docker-compose.yaml (never executed,
-# structural grep only) for a `command:` override naming
-# `serve-admission.js` -- the SAME entrypoint
-# workers/provider-sync/docker-compose.yaml's own header comment
-# documents as "the ADMISSION SERVER ENTRYPOINT... nothing starts the
-# admission server without this override." A worker whose compose file
-# carries no such override (workers/etl, workers/pdf-render, as of this
-# writing) has no admission surface for CA-1's check to be meaningful
-# against -- this function returns 1 for it, and the caller logs an
-# explicit skip naming the worker and the reason, never a silent no-op.
+# worker_has_admission_guard <base-directory> -- reads the worker's OWN
+# committed docker-compose.yaml (never executed, structural grep only)
+# for a `command:` override naming `serve-admission.js` -- the SAME
+# entrypoint workers/provider-sync/docker-compose.yaml's own header
+# comment documents as "the ADMISSION SERVER ENTRYPOINT... nothing
+# starts the admission server without this override."
 #
-# F-2 FIX (Sec, CA-1 identity review): the match is DELIBERATELY loose
-# -- `serve-admission` anywhere in the file, not `command:.*serve-
-# admission\.js` coupled onto one line. The tighter pattern matched
-# provider-sync's current inline-array form (`command: ["node", "dist/
-# cli/serve-admission.js"]`) but missed the equally standard multi-line
-# YAML list form (`command:\n  - node\n  - dist/cli/serve-admission.js`),
-# where `command:` and the filename are on DIFFERENT lines -- a worker
-# using that form would be silently dropped from CA-1 verification, the
-# exact gap this derivation exists to close. The loose match can also
-# fire on a COMMENTED-OUT reference; that is deliberately accepted
-# (Sec: "over-matching is the safe direction here") -- a false positive
-# merely verifies a worker that did not strictly need it (harmless), a
-# false negative skips one that did (the actual hazard).
+# ⚠ INFORMATIONAL ONLY -- DOES NOT GATE THE CA-1 CHECK (Sec's own
+# correction of their prior requirement 4, run-10/step-16 review,
+# 2026-09-21). The original design (CA-1 identity review, run-9 stop)
+# used this function's return value to SKIP the container-env check for
+# a worker with no declared guard -- reasoning that a worker with no
+# admission surface has "nothing to guard". Sec's own run-10 grading
+# corrected that: `pfin-pdf-render` has NO admission guard AND a real
+# HTTP listener (`expose: "8080"`, a live server, no startup refusal on
+# a bad fqdn) -- it is MORE exposed to a leaked route signal than
+# provider-sync, not less, because provider-sync's OWN guard can refuse
+# to boot while pdf-render's cannot. "No guard -> skip" was exactly
+# backwards for the one worker that needed the check most. The CA-1
+# container-env check therefore now runs on EVERY worker,
+# unconditionally, in run_deploy_workers() below -- this function's
+# result is logged as a tag for the operator's own situational
+# awareness (does this worker have a code-level refusal as a SECOND
+# layer, or does the container-env check stand alone for it), never
+# used to decide whether the check runs.
+#
+# F-2 FIX (Sec, CA-1 identity review, still current): the match is
+# DELIBERATELY loose -- `serve-admission` anywhere in the file, not
+# `command:.*serve-admission\.js` coupled onto one line. The tighter
+# pattern matched provider-sync's current inline-array form
+# (`command: ["node", "dist/cli/serve-admission.js"]`) but missed the
+# equally standard multi-line YAML list form (`command:\n  - node\n  -
+# dist/cli/serve-admission.js`), where `command:` and the filename are
+# on DIFFERENT lines. The loose match can also fire on a COMMENTED-OUT
+# reference; deliberately accepted (Sec: "over-matching is the safe
+# direction here") -- now doubly true since a false positive/negative
+# here only mislabels the informational tag, never skips a check.
 worker_has_admission_guard() {
   local base_dir="$1" compose_file
   compose_file="$REPO_ROOT/${base_dir#/}/docker-compose.yaml"
-  [[ -f "$compose_file" ]] || die3 "worker_has_admission_guard: no docker-compose.yaml at $compose_file -- cannot derive admission-guard membership for '$base_dir'. This is a hard stop, not a silent skip: a missing compose file where one is expected is a bigger problem than the check it would have gated."
+  [[ -f "$compose_file" ]] || die3 "worker_has_admission_guard: no docker-compose.yaml at $compose_file -- cannot derive the admission-guard informational tag for '$base_dir'."
   grep -q 'serve-admission' "$compose_file"
 }
 
-# CA-1 post-deploy gate (Sec ruling, PR #862 review, option C; identity
-# fix + loop generalization, CA-1 identity review, run-9 stop
-# 2026-09-21): every worker whose own docker-compose.yaml declares an
-# admission-guard command override (worker_has_admission_guard above,
-# not a hardcoded list) also runs scripts/verify-worker-ca1-clear.sh, a
-# die-level check of the ACTUALLY RUNNING container's own env for a
-# non-empty COOLIFY_FQDN/COOLIFY_URL -- the authoritative half of the
-# fqdn-clear done-predicate that provision-worker.sh itself cannot make
-# (it never deploys, so it can only assert the API-level state; a
-# container-env check there would be either inapplicable or read a
-# stale pre-clear value). This is the point a fresh container is
+# worker_fqdn_clear_if_needed <resource-name> -- resume-path gap fix
+# (run-10 stop, team-lead's own live measurement, 2026-09-21):
+# `--from deploy-workers` deployed pfin-pdf-render with its DEFAULT
+# Coolify-assigned fqdn still SET (the clear lives in step 8,
+# provision-resources -- a resume starting later than that never
+# revisits it). Harmless for a worker with no admission guard, but the
+# ON-RESOURCE RECORD is wrong regardless, and for a guarded worker
+# (provider-sync) resuming into this same gap would crash-loop it
+# again.
+#
+# ⚠ RUN-11 STOP CORRECTION (2026-09-21) -- this function's ORIGINAL
+# design called `provision-worker.sh "$name"` with NO flag (plain
+# preflight) and grepped its output for the "current state: ..." line,
+# on the strength of a header claim (this function's own, and
+# provision-worker.sh's) that the line was "printed unconditionally,
+# apply or not". MEASURED FALSE, live, run 11: preflight mode exits at
+# provision-worker.sh's own `if [[ $APPLY -eq 0 ]]; then exit 0; fi`
+# gate, well BEFORE the code that reads/classifies/prints that line ever
+# runs. The plain-preflight invocation therefore printed NOTHING
+# matching the grep, on EVERY worker, EVERY time -- and "no match" fell
+# through to "not SET", the exact opposite of "unknown, refuse to
+# guess". Result: etl's stale default fqdn/ports_exposes sailed through
+# this gate uncleared and the post-deploy CA-1 check (correctly) failed
+# on it. Fixed at the root in provision-worker.sh: a new `--state` mode,
+# provably read-only (two GETs, zero writes, exits before any
+# create/delete/PATCH/tinker call in that script's control flow -- see
+# its own header), is what this function calls now. Never revert to a
+# plain-preflight call for a state read.
+#
+# Sec's five requirements (run-11 stop, all held below):
+#   1. The sentinel format ("current state: fqdn=..., ports_exposes=...")
+#      is defined ONCE in provision-worker.sh and this function's own
+#      grep pattern is the same shape, not a copy that can drift --
+#      fence-provision-strikes.sh's own scenario pins the producer's
+#      literal format string, not just the consumer's regex.
+#   2. This function's `--state` call is REQUIRED to print a parseable
+#      state line whenever it exits 0 -- an rc-0 read with NO matching
+#      line is a refusal (`return 1`), never "no match -> assume clear",
+#      closing the exact absence-as-negative hole that caused run 11.
+#   3. `--state` is provably read-only (provision-worker.sh's own
+#      header + fence-provision-worker-strikes.sh's own scenario: a fake
+#      that fails closed on ANY write call, `--state` still exits 0).
+#   4. The POST-clear re-read is REQUIRED to show ABSENT/EMPTY on both
+#      fields -- if the clear ran but the re-read still shows SET, this
+#      function refuses (`return 1`, propagated by run_deploy_workers'
+#      own `|| return $?` into the whole run aborting) rather than
+#      warning and deploying anyway. This file's own convention is
+#      warn-then-`return <nonzero>` rather than a hard `die` exit (see
+#      require_box_ip/resolve_stack_network_value above) -- functionally
+#      identical here: run_deploy_workers propagates the failure and the
+#      step-runner stops, exactly as a `die` would, without breaking the
+#      composability every other run_* function in this file relies on.
+#   5. Live remediation is part of "done" for this fix -- see the PR
+#      this landed in for the actual resume run against the real box.
+worker_fqdn_clear_if_needed() {
+  local name="$1" out rc=0 state_line
+  if out="$(bash "$SCRIPTS/provision-worker.sh" "$name" --state 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    warn "$name: pre-deploy fqdn/ports_exposes state-read FAILED (exit $rc) -- cannot confirm the resume-path clear gap is closed for this worker before deploying. Output:"
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  state_line="$(printf '%s' "$out" | grep -E 'current state: fqdn=(ABSENT|EMPTY|SET).*ports_exposes=(ABSENT|EMPTY|SET)' || true)"
+  if [[ -z "$state_line" ]]; then
+    warn "$name: --state exited 0 but printed no parseable 'current state: fqdn=..., ports_exposes=...' line -- refusing to treat an unparseable read as 'nothing is SET' (the exact failure mode this fix closes). Output:"
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if printf '%s' "$state_line" | grep -qE '(fqdn=SET|ports_exposes=SET)'; then
+    warn "$name: fqdn and/or ports_exposes is SET at deploy time ($state_line) -- a resume starting later than provision-resources never revisits that step's own clear (BACKLOG item, run-10 stop). Invoking the clear now, before deploying, rather than deploying against a stale/default-assigned domain record."
+    bash "$SCRIPTS/provision-worker.sh" "$name" --apply || return $?
+    local reread rc2=0 reread_line
+    if reread="$(bash "$SCRIPTS/provision-worker.sh" "$name" --state 2>&1)"; then
+      rc2=0
+    else
+      rc2=$?
+    fi
+    if [[ "$rc2" -ne 0 ]]; then
+      warn "$name: post-clear state re-read FAILED (exit $rc2) -- cannot confirm the clear took before deploying. Output:"
+      printf '%s\n' "$reread" >&2
+      return 1
+    fi
+    reread_line="$(printf '%s' "$reread" | grep -E 'current state: fqdn=(ABSENT|EMPTY|SET).*ports_exposes=(ABSENT|EMPTY|SET)' || true)"
+    if [[ -z "$reread_line" ]]; then
+      warn "$name: post-clear re-read exited 0 but printed no parseable state line -- refusing to guess. Output:"
+      printf '%s\n' "$reread" >&2
+      return 1
+    fi
+    if printf '%s' "$reread_line" | grep -qE '(fqdn=SET|ports_exposes=SET)'; then
+      warn "$name: invoked the clear but the RE-READ still shows a SET field ($reread_line) -- refusing to deploy against an unconfirmed clear."
+      return 1
+    fi
+    ok "$name: clear confirmed via post-clear re-read ($reread_line)"
+  fi
+  return 0
+}
+
+# CA-1 post-deploy gate (Sec ruling, PR #862 review, option C; run-10
+# correction, 2026-09-21: runs on EVERY worker unconditionally -- see
+# worker_has_admission_guard's own header for why "skip when no guard"
+# was wrong): a die-level check of the ACTUALLY RUNNING container's own
+# env for a non-empty COOLIFY_FQDN/COOLIFY_URL -- the authoritative
+# half of the fqdn-clear done-predicate that provision-worker.sh itself
+# cannot make (it never deploys, so it can only assert the API-level
+# state; a container-env check there would be either inapplicable or
+# read a stale pre-clear value). This is the point a fresh container is
 # guaranteed to exist, and the exact signal admissionGuard.ts's own
 # detectPublicRouteSignal reacts to -- see that script's own header.
-# Today this resolves to provider-sync only (etl/pdf-render's compose
-# files carry no admission-guard override), but the loop no longer
-# names it -- a future worker gaining an admission surface is picked up
-# automatically the moment its own compose file declares one.
 run_deploy_workers() {
   require_box_ip || return 2
   resolve_stack_network_value || return $?
@@ -992,6 +1096,9 @@ run_deploy_workers() {
       pfin-provider-sync) base_dir=/workers/provider-sync; compose_svc=provider-sync;                role=pfin_provider_sync ;;
       pfin-pdf-render)    base_dir=/workers/pdf-render;    compose_svc=pdf-render;                    role="" ;;
     esac
+    if [[ -n "${1:-}" ]]; then
+      worker_fqdn_clear_if_needed "$name" || return $?
+    fi
     if [[ "$name" == "pfin-pdf-render" ]]; then
       bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory "$base_dir" --expect-build-pack dockercompose --compose-service "$compose_svc" --require-network "$net" ${1:+--apply} || return $?
     else
@@ -1002,10 +1109,11 @@ run_deploy_workers() {
     fi
     if [[ -n "${1:-}" ]]; then
       if worker_has_admission_guard "$base_dir"; then
-        bash "$SCRIPTS/verify-worker-ca1-clear.sh" "$name" --service "$compose_svc" || return $?
+        info "$name: admission-guard command override declared in $base_dir/docker-compose.yaml (informational -- this worker has a second, code-level refusal layer in addition to the check below)."
       else
-        info "$name: no admission-guard command override in $base_dir/docker-compose.yaml -- CA-1 container-env check skipped (not applicable, no HTTP admission surface to guard)."
+        info "$name: no admission-guard command override in $base_dir/docker-compose.yaml (informational only -- the CA-1 container-env check below still runs regardless; a worker with no code-level refusal is NOT lower-risk here, see worker_has_admission_guard's own header)."
       fi
+      bash "$SCRIPTS/verify-worker-ca1-clear.sh" "$name" --service "$compose_svc" || return $?
     fi
   done
 }
