@@ -148,6 +148,16 @@ done
 # session. The unnumbered "GitHub Environment reviewer approval" row is
 # deliberately NOT a step here -- it recurs on every migrator trigger
 # fire, not once at stand-up.
+#
+# `remaining-checks` MOVED a FOURTH time (QA, BACKLOG.md §7.36 item 81):
+# now runs immediately before `cutover`, after `deploy-on-success`, not
+# between `ca1-gate` and `discord`. scripts/smoke-remaining-checks.sh's
+# own auth-login leg needs the app's public domain (assigned at `dns`)
+# to exercise anything beyond a SKIPPED result -- placing this step
+# before `dns` would make it structurally unable to do the one thing it
+# was built to add over the old always-`return 4` stub. STEP_REQUIRES
+# below states this as a hard prerequisite (`dns`), not just registry
+# order.
 STEP_KEYS=(
   provision-vps
   standup
@@ -168,12 +178,12 @@ STEP_KEYS=(
   scheduled-tasks
   smokes
   ca1-gate
-  remaining-checks
   discord
   dns
   ci-keypair
   github-ci
   deploy-on-success
+  remaining-checks
   cutover
 )
 STEP_LABELS=(
@@ -196,12 +206,12 @@ STEP_LABELS=(
   "Create the etl monthly-report and provider-sync daily-poll Scheduled Tasks"
   "Smoke: admission endpoint (CA-2), ETL poll, PDF round-trip, pfin exposure"
   "CA-1 deploy-gate: provider-sync's injected env names vs PUBLIC_ROUTE_ENV_MATCHERS"
-  "Remaining §10 checks: CA-7 reachability, TZ-1 pin, RLS isolation, auth login (unavoidable manual, no script exists for any)"
   "Re-establish Coolify -> Discord notifications (§8) -- unavoidable manual, no API surface measured"
   "DNS + Coolify domain assignment + LE cert (§2)"
   "CI-trigger keypair + box-side wiring (§6.4)"
   "GitHub-side CI setup: Actions secret/variable, production-migrator Environment (§6.4)"
   "Flip DEPLOY_ON_SUCCESS=1 (provision-vps.sh re-run)"
+  "Remaining §10 checks: CA-7/TZ-1/RLS-isolation scripted + auth-login scripted-as-far-as-honestly-possible (scripts/smoke-remaining-checks.sh) -- the email-confirmation round-trip is the one unavoidable manual moment left"
   "Cutover: tear down the incumbent pfindash.com stack (§9)"
 )
 
@@ -254,12 +264,12 @@ STEP_REQUIRES=(
   "deploy-workers"           # scheduled-tasks
   "deploy-app,deploy-workers" # smokes
   "deploy-workers"           # ca1-gate -- provider-sync must be deployed
-  "smokes"                   # remaining-checks
   ""                          # discord -- independent notification wiring, no hard prerequisite
   "deploy-app"               # dns
   "provision-vps"            # ci-keypair
   "ci-keypair"                # github-ci
   "github-ci"                 # deploy-on-success
+  "dns"                       # remaining-checks -- QA, BACKLOG §7.36 item 81: scripts/smoke-remaining-checks.sh's own auth-login leg needs the app's public domain (assigned at `dns`) to do anything beyond report SKIPPED; TZ-1/CA-7/RLS don't themselves need it, but the combined script does to fully attempt all four legs
   ""                          # cutover -- gated separately by --confirm-cutover, not this mechanism
 )
 
@@ -1144,12 +1154,17 @@ run_smokes() {
 
 run_ca1_gate() { require_box_ip || return 2; bash "$SCRIPTS/smoke-ca1-env-pattern.sh"; }
 
-run_remaining_checks() {
-  step "remaining-checks: BY-HAND (CA-7 reachability, TZ-1 pin, RLS isolation, auth login -- see docs/archive/deployment-runbook-rationale-2026-09-20.md §10)"
-  info "No script covers any of these four today. TZ-1's own canonical query is fenced verbatim in this file's own header comment block (kept token-identical to supabase/tests/01_session_timezone.sql's (T3) by scripts/ci/check-tz-sweep-identical.py) -- scripting it was considered and deliberately NOT done in this pass (not named in team-lead's explicit ask; a hasty SSH-logic addition inside this orchestrator, duplicating the sshx() pattern every sibling script already carries in its OWN file, was judged worse than leaving this one query manual for now). CA-7 (Supabase datastore reachability) has no smoke script built at all. RLS isolation and auth login are QA-owned by design, not a DevOps scripting gap."
-  info "Ship-block gate on the cutover step -- all four must pass before that step's own --confirm-cutover is meaningful."
-  return 4
-}
+# QA, BACKLOG.md §7.36 item 81: scripts/smoke-remaining-checks.sh now
+# scripts CA-7/TZ-1/RLS-isolation completely and auth-login as far as it
+# honestly can (login-page reachability, signup validation, Resend send-
+# acceptance) -- see that script's own header for full mechanism and the
+# ONE genuinely unscriptable piece it names (the email-confirmation
+# round-trip). Same shape as run_ca1_gate() above: a pure read/probe
+# script, no --apply distinction of its own, so $mode is ignored and its
+# own exit code (0 VERIFIED / 3 SKIPPED / 4 MANUAL / else FAILED --
+# already this file's own step vocabulary, not translated) is returned
+# directly.
+run_remaining_checks() { require_box_ip || return 2; bash "$SCRIPTS/smoke-remaining-checks.sh"; }
 
 run_discord() {
   step "discord: BY-HAND (BACKLOG §7.36 item 74). Measured-as-absent by omission, not confirmed by a live 404: every api() call in every script in this repo targets /applications, /applications/<uuid>, /environments -- grepped across scripts/*.sh for a notification-channel or webhook-config endpoint, zero hits. No live Coolify 4.3.18 install was reachable to confirm this offline -- if a notification-config surface DOES exist and this measurement is wrong, correct this step, don't just work around it by hand indefinitely."
