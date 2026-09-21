@@ -352,9 +352,27 @@ set +e
 OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -U supabase_admin -d postgres <<< "$PSQL_SCRIPT" 2>&1)"
 RC=$?
 set -e
+# Sec F-2b (PR #849 r3 review): the cleartext scrub MUST run before OUT is
+# ever printed, on every branch -- not just the exit-0 happy path. The old
+# order (RC check first, printing $OUT raw, THEN the scrub) meant that on
+# any non-zero exit the scrub never ran at all: if \password's two piped PW
+# lines are not consumed (the trust-path shift leg C exists to detect),
+# they get parsed as SQL -> `ERROR: syntax error at or near "<pw>"`, and
+# -v ON_ERROR_STOP=1 (Sec F-1) turns that into RC!=0 -- so the F-1 fix
+# moved this exact case from the scrubbed branch to the unscrubbed one,
+# disclosing the 64-char credential on stderr over ssh to the operator's
+# terminal. Leg C already had the right order (cleartext check before its
+# own RC check); this mirrors it: scrub first, and only once OUT is proven
+# NOT to contain $PW is it safe to print raw in the RC-failure diagnostic
+# below. `--` guards the scrub itself (Sec N-1): without it, a stored
+# value starting with `-` would be parsed by grep as an option instead of
+# matched, failing the scrub OPEN.
+if printf '%s' "$OUT" | grep -qF -- "$PW"; then
+  echo "FATAL: the credential's cleartext value appeared in psql's own captured output (handoff exited $RC) -- refusing to print it." >&2
+  exit 1
+fi
 if [ $RC -ne 0 ]; then echo "FATAL: psql handoff script exited $RC: $OUT" >&2; exit 1; fi
 if printf '%s' "$OUT" | grep -qi "didn't match"; then echo "FATAL: password confirmation mismatch inside \\password." >&2; exit 1; fi
-if printf '%s' "$OUT" | grep -qF "$PW"; then echo "FATAL: the credential's cleartext value appeared in psql's own captured output." >&2; exit 1; fi
 echo "OK: migrator credential handoff completed (exit 0, no mismatch, no cleartext echo)."
 
 echo "== B. Catalog verify (rolcanlogin + pg_authid.rolpassword IS NOT NULL, re-read fresh) =="
@@ -376,7 +394,7 @@ if ! printf '%s' "$CONNECT_OUT" | grep -qF "Password for user"; then
   echo "FATAL: no password prompt was observed connecting AS migrator -- this means the connection took a NON-password-authenticated path (e.g. a trust rule), which is the exact hazard this step exists to detect. Refusing regardless of exit code." >&2
   exit 1
 fi
-if printf '%s' "$CONNECT_OUT" | grep -qF "$PW"; then
+if printf '%s' "$CONNECT_OUT" | grep -qF -- "$PW"; then
   echo "FATAL: the credential's cleartext value appeared in the connect-as-migrator step's own captured output -- refusing to proceed or print it." >&2
   exit 1
 fi

@@ -51,6 +51,19 @@
 #      back -> refuses, "cleartext value appeared" (proves the guard is
 #      load-bearing, not decorative, inside db-bootstrap.sh's OWN copy of
 #      the mechanism, not just db-role-handoff.sh's).
+#  8b. LEG-A-NONZERO-WITH-CLEARTEXT-LEAK (Sec F-2b, PR #849 r3 review) --
+#      psql exits NON-ZERO (the trust-path-not-consumed hazard -- the
+#      piped PW lines parsed as SQL instead of consumed by \password,
+#      turned into a failing exit by -v ON_ERROR_STOP=1) AND the
+#      credential appears in that SAME captured output -> refuses via the
+#      cleartext scrub, which must run BEFORE the RC-failure branch ever
+#      prints the captured output raw. The old guard order (RC check,
+#      print raw, THEN scrub) disclosed the 64-char credential on stderr
+#      on exactly this failure -- a real defect found at r3 review, not a
+#      hypothetical. This scenario's own assertion checks BOTH that the
+#      refusal happens AND that the credential's own value never appears
+#      anywhere in the captured output -- scenario 8 alone (exit-0 leak)
+#      does not exercise the RC!=0 branch at all.
 #   9. LEG-B-CATALOG-VERIFY-MISMATCH -- leg A "succeeds" but the fresh
 #      post-handoff catalog re-read does not show t|t -> refuses.
 #  10. LEG-C-CONNECT-FAIL -- connect AS migrator fails outright (prompt
@@ -307,6 +320,18 @@ if [[ "$ARGS" == *"-v ON_ERROR_STOP=1"* ]]; then
   if printf '%s' "$SCRIPT_IN" | grep -qF '\password migrator'; then
     echo 'Enter new password for user "migrator": '
     echo "Enter it again: "
+    if [[ "${FAKE_LEG_A_RC_LEAK:-0}" == "1" ]]; then
+      # Sec F-2b (PR #849 r3 review) -- models the exact trust-path-not-
+      # consumed hazard: \password's two piped PW lines get parsed as SQL
+      # instead of consumed as password input, producing a syntax error
+      # whose message embeds the raw credential, with a non-zero exit
+      # (-v ON_ERROR_STOP=1, Sec F-1). This is the case that proved the
+      # OLD guard order (RC check first, printing $OUT raw, THEN the
+      # scrub) disclosed the credential on a real failure.
+      PW_LINE="$(printf '%s\n' "$SCRIPT_IN" | sed -n '2p')"
+      echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$PW_LINE\""
+      exit 3
+    fi
     if [[ "${FAKE_MISMATCH:-0}" == "1" ]]; then
       echo "Passwords didn't match."
       exit 0
@@ -372,7 +397,8 @@ FAKE_VARS=(FAKE_CURL_LOG FAKE_CURL_MODE FAKE_MIGRATOR_STATE FAKE_BOOTSTRAP_COMPL
   FAKE_PUSH_FAIL FAKE_PUSH_NO_COMPLETION_LINE FAKE_MISMATCH FAKE_ECHO_PASSWORD_IN_OUTPUT FAKE_REVOKE_FAIL \\
   FAKE_ROLES_FAIL FAKE_AUTH_GRANTS_FAIL FAKE_VAULT_VIEW_FAIL FAKE_ROLE_COMMENT_FAIL \\
   FAKE_MARKER_FILE FAKE_POST_PUSH_BOOTSTRAP FAKE_LEG_B_STATE FAKE_CONNECT_FAIL FAKE_NO_PASSWORD_PROMPT \\
-  FAKE_ECHO_PW_IN_CONNECT FAKE_WRONG_CURRENT_USER FAKE_READBACK_COUNT FAKE_READBACK_DIVERGE FAKE_STORE_PW)
+  FAKE_ECHO_PW_IN_CONNECT FAKE_WRONG_CURRENT_USER FAKE_READBACK_COUNT FAKE_READBACK_DIVERGE FAKE_STORE_PW \
+  FAKE_LEG_A_RC_LEAK)
 FORWARD=()
 for v in "\${FAKE_VARS[@]}"; do
   FORWARD+=("\$v=\${!v:-}")
@@ -393,12 +419,12 @@ EOF
 chmod +x "$FAKE_BIN/ssh"
 
 run_scenario() {
-  # run_scenario <desc> <expect_exit> <extra_flag> <curl_mode> <migrator_state> <bootstrap_complete> <census_bad> <push_fail> <push_no_completion> <mismatch> <echo_pw> <roles_fail> <vault_view_fail> <post_push_bootstrap> <leg_b_state> <connect_fail> <no_password_prompt> <echo_pw_in_connect> <wrong_current_user> <readback_count> <readback_diverge> <store_pw>
+  # run_scenario <desc> <expect_exit> <extra_flag> <curl_mode> <migrator_state> <bootstrap_complete> <census_bad> <push_fail> <push_no_completion> <mismatch> <echo_pw> <roles_fail> <vault_view_fail> <post_push_bootstrap> <leg_b_state> <connect_fail> <no_password_prompt> <echo_pw_in_connect> <wrong_current_user> <readback_count> <readback_diverge> <store_pw> <leg_a_rc_leak>
   local desc="$1" expect_exit="$2" extra_flag="$3" curl_mode="$4" migrator_state="$5" bootstrap_complete="$6" \
         census_bad="$7" push_fail="$8" push_no_completion="$9" mismatch="${10}" echo_pw="${11}" roles_fail="${12}" \
         vault_view_fail="${13}" post_push_bootstrap="${14}" leg_b_state="${15}" connect_fail="${16}" \
         no_password_prompt="${17}" echo_pw_in_connect="${18}" wrong_current_user="${19}" readback_count="${20}" \
-        readback_diverge="${21}" store_pw="${22}"
+        readback_diverge="${21}" store_pw="${22}" leg_a_rc_leak="${23}"
   local log="$WORK/curl.log.$$.$RANDOM"
   local marker="$WORK/push_marker.$$.$RANDOM"
   : > "$log"
@@ -414,6 +440,7 @@ run_scenario() {
     FAKE_LEG_B_STATE="$leg_b_state" FAKE_CONNECT_FAIL="$connect_fail" FAKE_NO_PASSWORD_PROMPT="$no_password_prompt" \
     FAKE_ECHO_PW_IN_CONNECT="$echo_pw_in_connect" FAKE_WRONG_CURRENT_USER="$wrong_current_user" \
     FAKE_READBACK_COUNT="$readback_count" FAKE_READBACK_DIVERGE="$readback_diverge" FAKE_STORE_PW="$store_pw" \
+    FAKE_LEG_A_RC_LEAK="$leg_a_rc_leak" \
     bash "$TARGET_SH" $extra_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -461,81 +488,97 @@ assert_output_lacks() {
 FAIL=0
 
 # 1. ALREADY-BOOTSTRAPPED-CLEAN
-OUT1="$(run_scenario "already-bootstrapped-clean: no-op VERIFIED" 0 "" clean "f|f" t 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT1="$(run_scenario "already-bootstrapped-clean: no-op VERIFIED" 0 "" clean "f|f" t 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "already-bootstrapped-clean" "${OUT1:-}" "VERIFIED, nothing to do" || FAIL=1
 assert_output_lacks "already-bootstrapped-clean" "${OUT1:-}" "roles.sql applied" || FAIL=1
 
 # 2. ALREADY-BOOTSTRAPPED-CENSUS-BAD
-OUT2="$(run_scenario "already-bootstrapped-census-bad: refuses" 1 "" clean "f|f" t 1 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT2="$(run_scenario "already-bootstrapped-census-bad: refuses" 1 "" clean "f|f" t 1 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "already-bootstrapped-census-bad" "${OUT2:-}" "the pfin_owner sweep broke somewhere" || FAIL=1
 
 # 3. PARTIAL-STATE
-OUT3="$(run_scenario "partial-state: refuses" 1 "" clean "t|t" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT3="$(run_scenario "partial-state: refuses" 1 "" clean "t|t" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "partial-state" "${OUT3:-}" "PARTIAL bootstrap state" || FAIL=1
 
 # 4. PREFLIGHT-NO-APPLY
-OUT4="$(run_scenario "preflight-no-apply: exit 0, no phases run" 0 "" clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT4="$(run_scenario "preflight-no-apply: exit 0, no phases run" 0 "" clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "preflight-no-apply" "${OUT4:-}" "re-run with --apply" || FAIL=1
 
 # 5. PHASE1-ROLES-FAIL
-OUT5="$(run_scenario "phase1-roles-fail: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 1 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT5="$(run_scenario "phase1-roles-fail: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 1 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "phase1-roles-fail" "${OUT5:-}" "supabase/roles.sql failed" || FAIL=1
 
 # 6. STORE-EMPTY-REFUSES (Sec VETO-1 r2 -- PATH A precondition)
-OUT6="$(run_scenario "store-empty: FAILED (exit 2)" 2 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "")" || FAIL=1
+OUT6="$(run_scenario "store-empty: FAILED (exit 2)" 2 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "" 0)" || FAIL=1
 assert_output_contains "store-empty" "${OUT6:-}" "run scripts/provision-migrator-app.sh first" || FAIL=1
 
 # 7. CREDENTIAL-MISMATCH
-OUT7="$(run_scenario "credential-mismatch: refuses" 1 --apply clean "f|f" f 0 0 0 1 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT7="$(run_scenario "credential-mismatch: refuses" 1 --apply clean "f|f" f 0 0 0 1 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "credential-mismatch" "${OUT7:-}" "confirmation mismatch" || FAIL=1
 
 # 8. CREDENTIAL-CLEARTEXT-LEAK
-OUT8="$(run_scenario "credential-cleartext-leak: refuses" 1 --apply clean "f|f" f 0 0 0 0 1 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT8="$(run_scenario "credential-cleartext-leak: refuses" 1 --apply clean "f|f" f 0 0 0 0 1 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "credential-cleartext-leak" "${OUT8:-}" "cleartext value appeared" || FAIL=1
 
+# 8b. LEG-A-NONZERO-WITH-CLEARTEXT-LEAK (Sec F-2b, PR #849 r3 review) --
+#     psql exits NON-ZERO (the trust-path-not-consumed hazard: \password's
+#     two piped PW lines parsed as SQL instead, and -v ON_ERROR_STOP=1,
+#     Sec F-1, turns that into a failing exit) AND the credential appears
+#     in that SAME captured output. Must refuse via the cleartext scrub --
+#     and the scrub must run BEFORE the RC-failure branch ever prints $OUT
+#     raw. Distinct from scenario 8, which only proves the scrub on an
+#     exit-0 psql; this is the exact branch the OLD guard order (RC check
+#     first, print $OUT raw, THEN scrub) left completely unscrubbed --
+#     the assert_output_lacks below fails on that old order, since the
+#     "psql handoff script exited $RC: $OUT" message would carry the raw
+#     credential.
+OUT8B="$(run_scenario "leg-a-nonzero-with-cleartext-leak: refuses via the scrub, never prints the value" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 1)" || FAIL=1
+assert_output_contains "leg-a-nonzero-with-cleartext-leak" "${OUT8B:-}" "cleartext value appeared in psql's own captured output" || FAIL=1
+assert_output_lacks "leg-a-nonzero-with-cleartext-leak" "${OUT8B:-}" "$FIXED_STORE_PW" || FAIL=1
+
 # 9. LEG-B-CATALOG-VERIFY-MISMATCH
-OUT9="$(run_scenario "leg-b-catalog-verify-mismatch: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "f|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT9="$(run_scenario "leg-b-catalog-verify-mismatch: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "f|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-b-catalog-verify-mismatch" "${OUT9:-}" "post-handoff catalog verify expected 't|t'" || FAIL=1
 
 # 10. LEG-C-CONNECT-FAIL
-OUT10="$(run_scenario "leg-c-connect-fail: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 1 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT10="$(run_scenario "leg-c-connect-fail: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 1 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-c-connect-fail" "${OUT10:-}" "did not take effect end to end" || FAIL=1
 
 # 11. LEG-C-TRUST-PATH-NO-PROMPT
-OUT11="$(run_scenario "leg-c-trust-path-no-prompt: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 1 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT11="$(run_scenario "leg-c-trust-path-no-prompt: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 1 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-c-trust-path-no-prompt" "${OUT11:-}" "no password prompt was observed" || FAIL=1
 
 # 12. LEG-C-CLEARTEXT-LEAK-IN-CONNECT
-OUT12="$(run_scenario "leg-c-cleartext-leak-in-connect: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 1 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT12="$(run_scenario "leg-c-cleartext-leak-in-connect: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 1 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-c-cleartext-leak-in-connect" "${OUT12:-}" "cleartext value appeared in the connect-as-migrator step" || FAIL=1
 
 # 13. LEG-C-WRONG-CURRENT-USER (Sec F-1b, PR #849 r2 review)
-OUT13="$(run_scenario "leg-c-wrong-current-user: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 1 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT13="$(run_scenario "leg-c-wrong-current-user: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 1 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-c-wrong-current-user" "${OUT13:-}" "current_user did not echo back 'migrator'" || FAIL=1
 
 # 14. LEG-E-READBACK-COUNT-MISMATCH
-OUT14="$(run_scenario "leg-e-readback-count-mismatch: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 0 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT14="$(run_scenario "leg-e-readback-count-mismatch: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 0 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-e-readback-count-mismatch" "${OUT14:-}" "expected exactly 1" || FAIL=1
 
 # 15. LEG-E-READBACK-DIVERGE (Sec VETO-1 r2's own named scenario)
-OUT15="$(run_scenario "leg-e-readback-diverge: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 1 "$FIXED_STORE_PW")" || FAIL=1
+OUT15="$(run_scenario "leg-e-readback-diverge: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 1 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "leg-e-readback-diverge" "${OUT15:-}" "no longer hash-matches" || FAIL=1
 
 # 16. PHASE2-PUSH-FAILS
-OUT16="$(run_scenario "phase2-push-fails: refuses" 1 --apply clean "f|f" f 0 1 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT16="$(run_scenario "phase2-push-fails: refuses" 1 --apply clean "f|f" f 0 1 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "phase2-push-fails" "${OUT16:-}" "supabase db push exited" || FAIL=1
 
 # 17. PHASE2-NO-COMPLETION-LINE
-OUT17="$(run_scenario "phase2-no-completion-line: refuses" 1 --apply clean "f|f" f 0 0 1 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT17="$(run_scenario "phase2-no-completion-line: refuses" 1 --apply clean "f|f" f 0 0 1 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "phase2-no-completion-line" "${OUT17:-}" "incomplete run, not a pass" || FAIL=1
 
 # 18. PHASE2-CENSUS-BAD-AFTER-PUSH
-OUT18="$(run_scenario "phase2-census-bad-after-push: refuses" 1 --apply clean "f|f" f 1 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT18="$(run_scenario "phase2-census-bad-after-push: refuses" 1 --apply clean "f|f" f 1 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "phase2-census-bad-after-push" "${OUT18:-}" "broke somewhere in the apply" || FAIL=1
 
 # 19. PHASE2-BOOTSTRAP-NOT-COMPLETE-AFTER-PUSH -- census clean but the
 #     118 ledger row still absent after a "successful" push.
-OUT19="$(run_scenario "phase2-bootstrap-not-complete-after-push: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 f "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT19="$(run_scenario "phase2-bootstrap-not-complete-after-push: refuses" 1 --apply clean "f|f" f 0 0 0 0 0 0 0 f "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "phase2-bootstrap-not-complete-after-push" "${OUT19:-}" "did not actually land 118" || FAIL=1
 
 # 20. PHASE3-VAULT-VIEW-FAILS -- everything up to Phase 2 verify passes;
@@ -563,7 +606,7 @@ fi
 
 # 21. HAPPY-PATH-FULL-APPLY -- legs A/B/C/E all pass together; leg A's
 #     read and leg E's re-read both resolve to FIXED_STORE_PW.
-OUT21="$(run_scenario "happy-path-full-apply: succeeds, absent role-comment files skipped" 0 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT21="$(run_scenario "happy-path-full-apply: succeeds, absent role-comment files skipped" 0 --apply clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "happy-path-full-apply" "${OUT21:-}" "Phase 1 -> 2 -> 3 complete" || FAIL=1
 assert_output_contains "happy-path-full-apply" "${OUT21:-}" "migrator: LOGIN + password set from pfin-migrator's own existing MIGRATOR_DB_PASSWORD" || FAIL=1
 for f in 116_pfin_provider_sync_role 117_pfin_etl_role_comment_c1_reattribution 119_migrator_role_comment_amendment3_recitation; do
@@ -572,11 +615,11 @@ done
 
 # 22. RESOURCE-ABSENT (measured exit 1, not the header's documented 2 --
 #     see the note in the header comment above)
-OUT22="$(run_scenario "resource-absent: refuses" 1 --apply migrator-absent "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT22="$(run_scenario "resource-absent: refuses" 1 --apply migrator-absent "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "resource-absent" "${OUT22:-}" "expected exactly one application named" || FAIL=1
 
 # 23. UNKNOWN-FLAG
-OUT23="$(run_scenario "unknown-flag: rejected" 2 --bogus clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW")" || FAIL=1
+OUT23="$(run_scenario "unknown-flag: rejected" 2 --bogus clean "f|f" f 0 0 0 0 0 0 0 t "t|t" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "unknown-flag" "${OUT23:-}" "unknown flag" || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
