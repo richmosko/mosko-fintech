@@ -292,10 +292,23 @@ jqp() { python3 -c "import json,sys;$1"; }
 # elsewhere in this file (never a new, heavier mechanism invented just for
 # this): (1) N/7 containers report Docker health=healthy (same query the
 # "Verification battery" step below already runs after a fresh deploy);
-# (2) api-gw answers GET /auth/v1/health with HTTP 200, probed from
-# inside the supavisor container -- no API key needed for that path, same
-# probe() shape mint-supabase-jwt-keys.sh's own --verify-live already
-# uses; (3) Postgres is reachable and reports major version 17 (same
+# (2) api-gw's /auth/v1/health route is a TWO-PART probe (measured
+# 2026-09-21 against the live box -- team-lead's own `--from standup`
+# run -- and structurally: this stack's gateway is ENVOY (infra/supabase/
+# docker-compose.yml api-gw = envoyproxy/envoy, container_name
+# supabase-envoy; the `kong` name there is a legacy network ALIAS only),
+# and its inline Lua apikey filter lists `auth-v1-protected` in
+# PROTECTED_ROUTES (infra/supabase/volumes/api/envoy/lds.template.yaml).
+# That route is the bare `/auth/v1/` PREFIX and there is no exact-path
+# carve-out for /auth/v1/health, so an
+# unkeyed GET answers 401, never 200; the ORIGINAL one-part version here
+# expected 200 unkeyed and refused a genuinely healthy stack on every
+# re-run): unkeyed GET -> 401 (proves the gateway is up AND key-auth is
+# genuinely enforced), THEN the same anon apikey -> 200 (proves the key
+# itself authenticates). Both probed from inside the supavisor container,
+# same probe() shape and same box-side ANON_KEY tinker readback
+# mint-supabase-jwt-keys.sh's own --verify-live already uses -- reused,
+# not reinvented; (3) Postgres is reachable and reports major version 17 (same
 # `select server_version` query below); (4) the STATE-BASED init marker
 # below already documents as the real proof that /docker-entrypoint-
 # initdb.d/ actually ran (Postgres runs it exactly once, ever) --
@@ -327,10 +340,73 @@ check_stack_already_healthy() {
   info "healthy-check (1/5): $containers/7 containers healthy"
   if [[ "$containers" != "7" ]]; then info "healthy-check FAILED at (1/5): expected 7 healthy containers, got $containers"; return 1; fi
 
-  local gw_status
-  gw_status="$(sshx "docker compose --project-name $APP_UUID exec -T supavisor curl -s -o /dev/null -w '%{http_code}' http://api-gw:8000/auth/v1/health </dev/null" 2>/dev/null || true)"
-  info "healthy-check (2/5): api-gw GET /auth/v1/health -> HTTP ${gw_status:-<none>}"
-  if [[ "$gw_status" != "200" ]]; then info "healthy-check FAILED at (2/5): api-gw did not answer 200"; return 1; fi
+  # team-lead's live measurement, 2026-09-21: this stack's gateway route
+  # for /auth/v1/health enforces key-auth -- an unkeyed GET answers 401,
+  # not 200 (measured from a sibling container: no apikey -> 401, anon
+  # apikey -> 200, same for /rest/v1/). The gateway is ENVOY, not Kong
+  # (infra/supabase/docker-compose.yml: api-gw = envoyproxy/envoy,
+  # container_name supabase-envoy; the `kong` name there is a legacy
+  # network ALIAS). The enforcement lives in Envoy's inline Lua apikey
+  # filter, whose PROTECTED_ROUTES table lists `auth-v1-protected` --
+  # the bare `/auth/v1/` PREFIX route, with no exact-path carve-out for
+  # /auth/v1/health (infra/supabase/volumes/api/envoy/lds.template.yaml).
+  # So the 401 is a repo-grounded invariant, not only a one-off live
+  # observation. The ORIGINAL probe here expected 200
+  # unkeyed and refused a genuinely healthy stack on every re-run --
+  # exactly the false-negative that stopped the live `--from standup`
+  # pass. Fixed to a two-part probe, reusing the SAME mechanism
+  # mint-supabase-jwt-keys.sh's own --verify-live already uses (same
+  # supavisor-exec-curl container, same box-side tinker readback of
+  # ANON_KEY, never a new mechanism): no-key MUST answer 401 (proves the
+  # gateway is up AND key-auth is genuinely enforced -- the RT-32/
+  # private-bind posture, not merely "something answers"), and the SAME
+  # anon key MUST answer 200 (proves the key itself authenticates, not
+  # just that a key was supplied). ANON_KEY is read back on the box via
+  # the same on-box Eloquent tinker pattern used throughout this file and
+  # in mint-supabase-jwt-keys.sh -- never echoed to this script's own
+  # stdout -- only the ANON_KEY_PRESENT boolean and the two HTTP status
+  # codes cross back.
+  local gw_probe anon_key_present gw_nokey gw_withkey
+  # Strike-tested: removing each of the three checks below in turn takes
+  # the fence red at exactly the right scenario (5a+5c / 5d / 5b -- 5c
+  # watches the no-key half's own message, so it moves with 5a).
+  gw_probe="$(sshx "env APP_UUID=\"$APP_UUID\" bash -s" 2>/dev/null <<'REMOTE' || true
+set -e
+ANON_KEY="$(docker exec coolify php artisan tinker --execute="
+\$app = \App\Models\Application::where('uuid','$APP_UUID')->firstOrFail();
+echo (string) \$app->environment_variables()->where('key','ANON_KEY')->first()->value;
+" 2>/dev/null | tail -1)"
+set +e
+NOKEY_STATUS="$(docker compose --project-name $APP_UUID exec -T supavisor curl -s -o /dev/null -w '%{http_code}' http://api-gw:8000/auth/v1/health </dev/null)"
+if [[ -n "$ANON_KEY" ]]; then
+  WITHKEY_STATUS="$(docker compose --project-name $APP_UUID exec -T supavisor curl -s -o /dev/null -w '%{http_code}' -H "apikey: $ANON_KEY" -H "Authorization: Bearer $ANON_KEY" http://api-gw:8000/auth/v1/health </dev/null)"
+else
+  WITHKEY_STATUS=""
+fi
+set -e
+printf 'ANON_KEY_PRESENT=%s NOKEY=%s WITHKEY=%s\n' "$([[ -n "$ANON_KEY" ]] && echo 1 || echo 0)" "${NOKEY_STATUS:-<none>}" "${WITHKEY_STATUS:-<none>}"
+REMOTE
+)"
+  anon_key_present="$(printf '%s' "$gw_probe" | grep -oE 'ANON_KEY_PRESENT=[01]' | cut -d= -f2)"
+  gw_nokey="$(printf '%s' "$gw_probe" | grep -oE 'NOKEY=[^ ]+' | cut -d= -f2)"
+  gw_withkey="$(printf '%s' "$gw_probe" | grep -oE 'WITHKEY=[^ ]+' | cut -d= -f2)"
+  info "healthy-check (2/5, no-key): api-gw GET /auth/v1/health without an apikey -> HTTP ${gw_nokey:-<none>} (expect 401 -- proves the gateway is up AND key-auth is enforced)"
+  if [[ "$gw_nokey" != "401" ]]; then
+    info "healthy-check FAILED at (2/5, no-key half): expected 401 without an apikey, got ${gw_nokey:-<none>}"
+    if [[ "$gw_nokey" == "200" ]]; then
+      info "  ^ a 200 here means the gateway served /auth/v1/ with NO apikey -- key-auth is not being enforced. That is a security finding, not a health blip: fix the gateway (Envoy lds PROTECTED_ROUTES / apikey filter), never relax this expectation to make the check pass."
+    fi
+    return 1
+  fi
+  if [[ "$anon_key_present" != "1" ]]; then
+    info "healthy-check FAILED at (2/5, with-key half): could not read ANON_KEY back from the Coolify store -- cannot probe the with-key case"
+    return 1
+  fi
+  info "healthy-check (2/5, with-key): api-gw GET /auth/v1/health with the anon apikey -> HTTP ${gw_withkey:-<none>} (expect 200)"
+  if [[ "$gw_withkey" != "200" ]]; then
+    info "healthy-check FAILED at (2/5, with-key half): expected 200 with the anon apikey, got ${gw_withkey:-<none>}. Most likely cause: the Coolify store's ANON_KEY and the key baked into the RUNNING Envoy config have diverged -- Envoy renders the expected key into its lds config at container-start, so rotating the store value without redeploying the stack leaves the gateway checking the OLD key (mint-supabase-jwt-keys.sh's header documents the same hazard)."
+    return 1
+  fi
 
   local pgver
   pgver="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc 'show server_version;'" 2>/dev/null | cut -d. -f1)"
