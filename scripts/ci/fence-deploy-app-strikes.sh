@@ -19,7 +19,11 @@
 # `external:` network, making a pre-deploy declared-settings check
 # irrelevant; the new checks verify the DEPLOYED reality instead). Keep
 # this count current, it is read, not decorative (N4, PR #833 Sec joint
-# review) -- sixteen scenarios in total:
+# review) -- fifteen TOP-LEVEL numbered scenarios below (a lettered
+# sub-scenario -- 1a, 5a, 10a, 10b, 14a, 15a -- is a variant of its own
+# top-level number, not counted separately in this total; verify against
+# the actual `run_scenario "` call count if this ever needs re-deriving,
+# not against this sentence):
 #   1. MATCH -- a resolved application whose base_directory AND
 #      build_pack equal the caller's --expect-* flags proceeds through
 #      preflight AND (in --apply) through a full deploy+poll to
@@ -65,6 +69,23 @@
 #      exact live defect: provision.sh used to pass
 #      `APP_STACK_NETWORK_NAME` literally) refuses immediately, before
 #      any docker/API call.
+#   15. RESOLVE-HOST-CRASHLOOP (CA-1 run-8 stop, team-lead's own brief,
+#      2026-09-21; redesigned per Sec, PR #862 review) -- `docker exec
+#      ... getent hosts` fails because the TARGET CONTAINER ITSELF is
+#      restarting (Docker's own daemon error, "Container ... is
+#      restarting, wait until the container is running") -- must FATAL
+#      naming the crash loop explicitly with STRUCTURED, non-secret
+#      container state (status/restart-count/exit-code/oom-killed) and
+#      point the operator at `docker logs <container>` ON THE BOX --
+#      NEVER report this as "could not resolve '<host>'" (a real getent
+#      failure, scenario 12, is a DISTINCT code path and message), and
+#      NEVER invoke `docker logs` itself (Sec: pattern-based redaction
+#      over arbitrary log text is a denylist over an unbounded space
+#      that fails open on any secret shape not anticipated, and no
+#      script in this repo opens that egress path today -- this one
+#      does not become the first). Its 15a sibling (inline at the call
+#      site below) is the STRUCTURAL proof of that non-invocation, not
+#      an output-absence check.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -107,10 +128,28 @@ ln -s "$FIXTURE_DIR/fake-curl" "$FAKE_BIN/curl"
 #     (default "stack-net"; "none" reports only "bridge", exercising the
 #     network-attachment guard's refusal).
 #   `docker exec <container> getent hosts <hostname>` -- $FAKE_DOCKER_RESOLVE
-#     selects success ("ok", default) or failure ("fail", exit 2, no
-#     output), exercising the hostname-resolve guard's refusal.
+#     selects success ("ok", default), a real getent failure ("fail",
+#     exit 2, no output -- host genuinely not found), or "crashloop"
+#     (exit 1, Docker's own real daemon error text, "Container ... is
+#     restarting, wait until the container is running" -- `docker exec`
+#     itself never even reaches getent). Scenario 15's own distinction.
+#   `docker inspect --format '{{.State.Status}}{{"\t"}}{{.RestartCount}}
+#     {{"\t"}}{{.State.ExitCode}}{{"\t"}}{{.State.OOMKilled}}' <container>`
+#     -- reports canned structured state (status=restarting, restarts=9,
+#     exit_code=1, oom_killed=false -- CA-1 run-8's own measured shape)
+#     for scenario 15's crash-loop diagnostic. Sec (PR #862 review): NO
+#     `docker logs` call exists anywhere in deploy-app.sh any more --
+#     this fixture deliberately has NO `docker logs` handler at all
+#     (falls through to the catch-all `exit 0` with empty output), so
+#     scenario 15a below can assert its NON-invocation structurally,
+#     not just its absence from a printed diagnostic.
 cat > "$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
+# Every invocation logged verbatim -- lets a scenario assert structurally
+# that a given docker subcommand (e.g. `logs`) was NEVER invoked, not just
+# that its absence went unnoticed (Sec, PR #862 review: no `docker logs`
+# call may exist anywhere in deploy-app.sh's own logic).
+printf '%s\n' "$*" >> "${FAKE_DOCKER_CALL_LOG:-/dev/null}"
 if [[ "$*" == *"ps"* && "$*" == *"status=running"* ]]; then
   echo -e "app-abc123def456ghi789jk01-000000000000\tUp 5 seconds\t2026-09-19 12:00:00"
   if [[ "${FAKE_DOCKER_CONTAINERS:-1}" == "2" ]]; then
@@ -158,12 +197,29 @@ if [[ "$*" == *"inspect"* && "$*" == *"NetworkSettings.Networks"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"exec"* && "$*" == *"getent hosts"* ]]; then
-  if [[ "${FAKE_DOCKER_RESOLVE:-ok}" == "ok" ]]; then
-    echo "10.0.0.5   api-gw"
-    exit 0
-  else
-    exit 2
-  fi
+  case "${FAKE_DOCKER_RESOLVE:-ok}" in
+    ok)
+      echo "10.0.0.5   api-gw"
+      exit 0
+      ;;
+    crashloop)
+      # argv shape: exec <container> getent hosts <hostname> -- $2 is the
+      # container, matching how deploy-app.sh itself invokes this.
+      echo "Error response from daemon: Container $2 is restarting, wait until the container is running" >&2
+      exit 1
+      ;;
+    *)
+      exit 2
+      ;;
+  esac
+fi
+if [[ "$*" == *"inspect"* && "$*" == *"RestartCount"* ]]; then
+  # Structured-state format: {{.State.Status}}\t{{.RestartCount}}\t
+  # {{.State.ExitCode}}\t{{.State.OOMKilled}} -- CA-1 run-8's own
+  # measured shape (provider-sync: restarting, 9 restarts, exit 1, not
+  # OOM-killed).
+  printf 'restarting\t9\t1\tfalse\n'
+  exit 0
 fi
 exit 0
 EOF
@@ -404,6 +460,76 @@ fi
 #    post-deploy attachment check, which scenario 10a already covers.
 run_scenario "network-arg: real network-shaped value is not blocked by the guard" 0 match \
   pfin-app --expect-base-directory /api --expect-build-pack dockercompose --require-network stack-net >/dev/null || FAIL=1
+
+# 15. RESOLVE-HOST-CRASHLOOP (CA-1 run-8 stop, 2026-09-21; redesigned
+#    per Sec, PR #862 review) -- `docker exec` itself fails because the
+#    container is restarting -- must FATAL naming the crash loop with
+#    STRUCTURED state only (status/restarts/exit-code/oom-killed), never
+#    reporting this as "could not resolve" (scenario 12's own, distinct
+#    message/code path), and must NEVER call `docker logs`.
+CRASHLOOP_OUT="$WORK/crashloop-out.$$"
+CRASHLOOP_DOCKER_LOG="$WORK/crashloop-docker-calls.$$"
+: > "$CRASHLOOP_DOCKER_LOG"
+set +e
+BOX_IP=127.0.0.1 AUTOMATION_KEY=/dev/null \
+  PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$WORK/crashloop-curl.log.$$" FAKE_CURL_MODE=match \
+  FAKE_DOCKER_RESOLVE=crashloop FAKE_DOCKER_CALL_LOG="$CRASHLOOP_DOCKER_LOG" \
+  bash "$DEPLOY_APP_SH" pfin-app --expect-base-directory /api --expect-build-pack dockercompose \
+  --compose-service app --resolve-host api-gw --apply </dev/null >"$CRASHLOOP_OUT" 2>&1
+CRASHLOOP_RC=$?
+set -e
+if [[ "$CRASHLOOP_RC" != 1 ]]; then
+  echo "FAIL: [resolve-host: crash-looping container refuses] expected exit 1, got $CRASHLOOP_RC" >&2
+  cat "$CRASHLOOP_OUT" >&2
+  FAIL=1
+elif ! grep -qi "crash-looping" "$CRASHLOOP_OUT"; then
+  echo "FAIL: [resolve-host: crash-looping container refuses] death message does not name the crash loop -- looks like it fell through to the generic 'could not resolve' message instead:" >&2
+  cat "$CRASHLOOP_OUT" >&2
+  FAIL=1
+elif grep -qi "could not resolve" "$CRASHLOOP_OUT"; then
+  echo "FAIL: [resolve-host: crash-looping container refuses] death message wrongly says 'could not resolve' -- this is a crash-loop, not a DNS failure, and the two messages must not both fire." >&2
+  cat "$CRASHLOOP_OUT" >&2
+  FAIL=1
+elif ! grep -q "restarts=9" "$CRASHLOOP_OUT"; then
+  echo "FAIL: [resolve-host: crash-looping container refuses] death message does not carry the measured restart count." >&2
+  cat "$CRASHLOOP_OUT" >&2
+  FAIL=1
+elif ! grep -qE "status=restarting" "$CRASHLOOP_OUT"; then
+  echo "FAIL: [resolve-host: crash-looping container refuses] death message does not carry the container's status." >&2
+  cat "$CRASHLOOP_OUT" >&2
+  FAIL=1
+elif ! grep -qE "last_exit_code=1" "$CRASHLOOP_OUT"; then
+  echo "FAIL: [resolve-host: crash-looping container refuses] death message does not carry the container's last exit code." >&2
+  cat "$CRASHLOOP_OUT" >&2
+  FAIL=1
+elif ! grep -qE "oom_killed=false" "$CRASHLOOP_OUT"; then
+  echo "FAIL: [resolve-host: crash-looping container refuses] death message does not carry the OOM-killed state." >&2
+  cat "$CRASHLOOP_OUT" >&2
+  FAIL=1
+elif ! grep -qF "docker logs" "$CRASHLOOP_OUT"; then
+  echo "FAIL: [resolve-host: crash-looping container refuses] death message does not point the operator at 'docker logs <container>' on the box." >&2
+  cat "$CRASHLOOP_OUT" >&2
+  FAIL=1
+else
+  echo "OK: [resolve-host: crash-looping container refuses] exit 1, correctly named as a crash loop with structured state (status/restarts/exit-code/oom-killed), not misreported as a resolve failure." >&2
+fi
+
+# 15a. CRASHLOOP-NO-LOG-CALL (Sec, PR #862 review) -- structural proof,
+#    not just an output-absence check: `docker logs` must NEVER be
+#    invoked anywhere in this code path, on either outcome. Sec's own
+#    finding: zero `docker logs`/`compose logs` sites exist anywhere in
+#    scripts/*.sh -- this asserts THIS script never becomes the first
+#    one to open that egress path, structurally (the fixture's own
+#    call-log captures literally every docker invocation deploy-app.sh
+#    made, not just the ones this fence anticipated).
+if grep -qF "logs" "$CRASHLOOP_DOCKER_LOG"; then
+  echo "FAIL: [crash-loop: no docker logs call] deploy-app.sh invoked 'docker logs' (or something matching) during the crash-loop path -- Sec's review requires this NEVER happen. Logged docker invocations:" >&2
+  cat "$CRASHLOOP_DOCKER_LOG" >&2
+  FAIL=1
+else
+  echo "OK: [crash-loop: no docker logs call] zero 'docker logs' invocations across the entire crash-loop code path." >&2
+fi
+rm -f "$CRASHLOOP_OUT" "$WORK/crashloop-curl.log.$$" "$CRASHLOOP_DOCKER_LOG"
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

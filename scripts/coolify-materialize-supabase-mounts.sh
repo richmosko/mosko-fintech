@@ -208,6 +208,13 @@ PHPBODY
 # side changed, from "pipe straight into tinker" to "capture on the remote
 # shell, then hand it to tinker as --execute's value" (see
 # scripts/ci/fence-tinker-no-echo.sh, unlabeled pending F/CTO ratify).
+# /* TINKER-WRITE-ALLOW-06 */ -- this line's --execute value is a bash
+# variable ($SCRIPT_CONTENT), not literal PHP text, so the write verb
+# it carries (`$row->save()`, in the PHPBODY heredoc above this
+# function, ~30 lines up) is invisible to a scan of THIS line. Sec
+# ruling (PR #862 review): the marker for an indirect/unresolvable
+# --execute body goes at the INVOCATION line, not the body, since the
+# fence's own unresolvable-body detection anchors here.
 ssh -i "$SSH_KEY" "$SSH_HOST" 'SCRIPT_CONTENT="$(cat)"; docker exec coolify php artisan tinker --execute="$SCRIPT_CONTENT"' < "$PHP_SCRIPT"
 rm -f "$PHP_SCRIPT"
 

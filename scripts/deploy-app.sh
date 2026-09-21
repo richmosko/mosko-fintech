@@ -484,9 +484,44 @@ if [[ -n "$RESOLVE_HOST" ]]; then
   if sshx "docker exec $CONTAINER getent hosts $RESOLVE_HOST" >/tmp/deploy-app-resolve.$$ 2>&1; then
     ok "container resolves '$RESOLVE_HOST': $(cat /tmp/deploy-app-resolve.$$ | tr -s ' ')"
   else
-    cat /tmp/deploy-app-resolve.$$ >&2
+    RESOLVE_OUT="$(cat /tmp/deploy-app-resolve.$$)"
     rm -f /tmp/deploy-app-resolve.$$
-    die "HOSTNAME-RESOLVE CHECK FAILED: container $CONTAINER could not resolve '$RESOLVE_HOST' -- the network attachment (checked above, if requested) may be present without DNS actually working, or the hostname may be wrong."
+    # CA-1 run-8 stop (team-lead's own brief, 2026-09-21): `docker exec`
+    # ITSELF fails, with its own daemon error ("Container ... is
+    # restarting, wait until the container is running" / "is not
+    # running" / "is paused"), when the target container is crash-
+    # looping -- getent never even runs. That error text was previously
+    # captured into this exact code path and reported as if it were
+    # getent's own "hostname not found" output, producing a misleading
+    # "could not resolve 'X'" message that sent the reader looking at
+    # DNS/network config for a problem that was actually the container
+    # never staying up long enough to exec into. MEASURED (run-8,
+    # realrun8.clean.log): provider-sync crash-looped (restarts=9) while
+    # this check reported "could not resolve 'db'" -- the real error,
+    # visible in `docker logs`, was an admission-guard CA-1 refusal, not
+    # a DNS problem. Distinguish the two BEFORE reporting either.
+    if printf '%s' "$RESOLVE_OUT" | grep -qiE 'is restarting|is not running|is paused|is dead|No such container'; then
+      # Sec (PR #862 review): NO container log text reaches an operator
+      # terminal from any script in this repo -- zero `docker logs` /
+      # `compose logs` sites exist in scripts/*.sh today, and pattern-
+      # based redaction over arbitrary log text is a denylist over an
+      # unbounded space that fails OPEN on any secret shape not in the
+      # list (an earlier revision of this fix tried exactly that; Sec
+      # named the closed-criterion alternative below and it is
+      # strictly better for the same diagnostic value). STRUCTURED,
+      # non-secret container STATE only -- status, restart count, exit
+      # code, OOM-killed -- is enough to say "this is a crash loop, not
+      # a DNS problem," and the operator is pointed at `docker logs
+      # <container>` ON THE BOX themselves, where the logs already are
+      # and no new egress path is created.
+      CRASH_STATE="$(sshx "docker inspect --format '{{.State.Status}}{{\"\\t\"}}{{.RestartCount}}{{\"\\t\"}}{{.State.ExitCode}}{{\"\\t\"}}{{.State.OOMKilled}}' $CONTAINER" 2>/dev/null || echo "unknown	unknown	unknown	unknown")"
+      CRASH_STATUS="$(awk -F'\t' '{print $1}' <<<"$CRASH_STATE")"
+      CRASH_RESTARTS="$(awk -F'\t' '{print $2}' <<<"$CRASH_STATE")"
+      CRASH_EXITCODE="$(awk -F'\t' '{print $3}' <<<"$CRASH_STATE")"
+      CRASH_OOMKILLED="$(awk -F'\t' '{print $4}' <<<"$CRASH_STATE")"
+      die "HOSTNAME-RESOLVE CHECK COULD NOT RUN: container $CONTAINER is crash-looping -- 'docker exec' itself failed ($RESOLVE_OUT), this is NOT a DNS/resolve failure -- investigate the crash loop, not the network. State: status=$CRASH_STATUS restarts=$CRASH_RESTARTS last_exit_code=$CRASH_EXITCODE oom_killed=$CRASH_OOMKILLED. Run 'docker logs $CONTAINER' on the box to see why it is restarting -- this script does not print container log content."
+    fi
+    die "HOSTNAME-RESOLVE CHECK FAILED: container $CONTAINER could not resolve '$RESOLVE_HOST' ($RESOLVE_OUT) -- the network attachment (checked above, if requested) may be present without DNS actually working, or the hostname may be wrong."
   fi
   rm -f /tmp/deploy-app-resolve.$$
 fi

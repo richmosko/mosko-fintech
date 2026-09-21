@@ -944,7 +944,7 @@ if [[ "$TOKEN_STATE" == "EXISTS" ]]; then
     if [[ $APPLY -eq 0 ]]; then
       info "token row 'provisioning-automation' exists in the DB but /root/.pfin/coolify.env has no usable value -- orphan from a failed capture. Would delete the row and re-mint."
     else
-      sshx "docker exec coolify php artisan tinker --execute=\"\\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','provisioning-automation')->delete();\"" >/dev/null
+      sshx "docker exec coolify php artisan tinker --execute=\"/* TINKER-WRITE-ALLOW-01 */\\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','provisioning-automation')->delete();\"" >/dev/null
       ok "deleted orphaned 'provisioning-automation' token row -- re-minting"
     fi
     TOKEN_STATE="ABSENT"
@@ -1099,6 +1099,7 @@ else
       # either.
       sshx_in <<REMOTE
 docker exec --env-file $SEED_ENV_FILE coolify php artisan tinker --execute='
+/* TINKER-WRITE-ALLOW-02 */
 (function () {
   \$pw = getenv("ROOT_USER_PASSWORD");
   \\App\\Models\\User::where("id", 0)->update(["password" => \\Illuminate\\Support\\Facades\\Hash::make(\$pw)]);
@@ -1234,7 +1235,7 @@ if [[ "$API_ENABLED" == "YES" ]]; then
 elif [[ $APPLY -eq 0 ]]; then
   info "Coolify API is disabled (Coolify's own default) -- would enable it"
 else
-  sshx "docker exec coolify php artisan tinker --execute=\"\\\\App\\\\Models\\\\InstanceSettings::get()->update(['is_api_enabled' => true]);\"" >/dev/null
+  sshx "docker exec coolify php artisan tinker --execute=\"/* TINKER-WRITE-ALLOW-03 */\\\\App\\\\Models\\\\InstanceSettings::get()->update(['is_api_enabled' => true]);\"" >/dev/null
   ok "Coolify API enabled (was off by Coolify's own default; provision-supabase-stack.sh needs it)"
 fi
 
@@ -1609,7 +1610,7 @@ if [[ "$MIGRATOR_TOKEN_STATE" == "EXISTS" && $ROTATE_MIGRATOR_TOKEN -eq 1 ]]; th
   if [[ $APPLY -eq 0 ]]; then
     info "--rotate-migrator-token: would delete the existing 'migrator-trigger' token row and re-mint"
   else
-    sshx "docker exec coolify php artisan tinker --execute=\"\\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','migrator-trigger')->delete();\"" >/dev/null
+    sshx "docker exec coolify php artisan tinker --execute=\"/* TINKER-WRITE-ALLOW-04 */\\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','migrator-trigger')->delete();\"" >/dev/null
     ok "--rotate-migrator-token: deleted the existing 'migrator-trigger' token row -- re-minting"
     MIGRATOR_TOKEN_STATE="ABSENT"
   fi
@@ -1624,7 +1625,7 @@ if [[ "$MIGRATOR_TOKEN_STATE" == "EXISTS" ]]; then
     if [[ $APPLY -eq 0 ]]; then
       info "migrator-trigger token row exists in the DB but /etc/pfin/migrator-coolify-token.env has no usable value -- orphan from a failed capture. Would delete the row and re-mint."
     else
-      sshx "docker exec coolify php artisan tinker --execute=\"\\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','migrator-trigger')->delete();\"" >/dev/null
+      sshx "docker exec coolify php artisan tinker --execute=\"/* TINKER-WRITE-ALLOW-05 */\\\\App\\\\Models\\\\User::find(0)?->tokens()->where('name','migrator-trigger')->delete();\"" >/dev/null
       ok "deleted orphaned 'migrator-trigger' token row -- re-minting"
     fi
     MIGRATOR_TOKEN_STATE="ABSENT"

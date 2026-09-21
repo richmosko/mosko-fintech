@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 #
 # fence-provision-worker-strikes.sh -- offline strike-proof for
-# scripts/provision-worker.sh's delete-if-empty-shell guard and its
-# unknown-resource-name refusal. Copies scripts/ci/fence-provision-app-
+# scripts/provision-worker.sh's delete-if-empty-shell guard, its
+# unknown-resource-name refusal, and (CA-1, run-8 stop, 2026-09-21) its
+# default-domain-clear step. Copies scripts/ci/fence-provision-app-
 # strikes.sh's own scenario shapes 1-7 verbatim (same fake ssh/docker,
-# same tests/fixtures/ci/provision-worker/fake-curl shape) and adds scenario
-# 8 (unknown resource-name refusal, this script's own new surface). Runs
-# entirely without a live box or network.
+# same tests/fixtures/ci/provision-worker/fake-curl shape), then adds
+# scenarios 8-9a below (CA-1 domain-clear: ports_exposes success/
+# failure, fqdn's measured-no-clear-path stop), then the unknown-name
+# refusal -- this script's own new surface, renumbered as the CA-1
+# scenarios were inserted ahead of it. Runs entirely without a live box
+# or network.
 #
 # Scenarios 1-7 run against EACH of the three known resource names
 # (pfin-back-etl / pfin-pdf-render / pfin-provider-sync) in a loop, so the
@@ -28,7 +32,38 @@
 #      validates for every required key, completes through the resource's
 #      OWN uniquely-named network var's set-and-readback with a byte-exact
 #      match -> exits 0, output names "application created".
-#   8. UNKNOWN-NAME    -- this script's OWN new surface, not present in
+#   8. CA1-PORTS-CLEAR-SUCCEEDS (mechanism confirmed live, team-lead,
+#      2026-09-21) -- ports_exposes carries Coolify's default "80", fqdn
+#      already clear -- the ports_exposes PATCH (the ONLY field this
+#      script writes -- MEASURED: fqdn has no public-API clear path for
+#      a dockercompose app, see provision-worker.sh's own header) clears
+#      it, read-back confirms -- apply succeeds. Run once (pfin-
+#      provider-sync only), not per-resource -- the logic is generic,
+#      already proven table-driven by scenarios 1-7's own loop.
+#   9. CA1-PORTS-PATCH-DOES-NOT-TAKE (defensive) -- the ports_exposes
+#      PATCH 200s but the value never actually changes -- the read-back
+#      must catch this and refuse, naming the still-present value.
+#   9a. CA1-FQDN-TINKER-CLEAR-SUCCEEDS (Sec-ruled mechanism, PR #862
+#      review) -- fqdn AND ports_exposes both SET (the true run-8
+#      shape): ports_exposes clears via the API PATCH first, then the
+#      tinker write clears fqdn end to end (write -> CLEARED echo ->
+#      API read-back confirms) -- apply succeeds.
+#   9b. CA1-FQDN-TINKER-DOES-NOT-REPORT-CLEARED -- the tinker write's
+#      own echo comes back STILL_SET -- refuses immediately, naming
+#      what was actually returned.
+#   9c. CA1-FQDN-API-DRIFT-AFTER-CLEARED -- the tinker write reports
+#      CLEARED but the immediate API read-back still shows fqdn SET --
+#      refuses with a message distinct from 9b's (the write's own
+#      self-report is not the same fact as the API agreeing with it).
+#   9d. CA1-FQDN-CLEARED-STALE-CONTAINER-WARNS (Sec option C) -- fqdn
+#      clears successfully, but a container already running for this
+#      resource still carries the pre-clear COOLIFY_FQDN -- WARNS
+#      (never dies, never silent) naming the exposure window, and still
+#      exits 0 (expected/not-yet-redeployed state, not a failure of
+#      this step -- the die-level assertion on this lives in
+#      run_deploy_workers, post-deploy, see
+#      scripts/verify-worker-ca1-clear.sh).
+#   10. UNKNOWN-NAME    -- this script's OWN new surface, not present in
 #      provision-app.sh (which has no resource-name argument at all):
 #      `provision-worker.sh some-other-name` must refuse with exit 2 BEFORE
 #      any SSH/API call is attempted -- proven by running it with BOX_IP
@@ -99,13 +134,43 @@ if [[ "$*" == *"images --format"* ]]; then
   done
   exit 0
 fi
+# CA-1 fqdn tinker write (Sec-ruled mechanism, PR #862 review). Reports
+# CLEARED and touches $FAKE_FQDN_CLEAR_MARKER (a SEPARATE marker file
+# from ports_exposes's own $FAKE_CLEAR_MARKER -- these are two
+# independent mechanisms, API PATCH vs tinker write, and must not share
+# a marker) unless $FAKE_TINKER_BROKEN=1 simulates the write not taking.
+if [[ "$*" == *"tinker --execute"* && "$*" == *"fqdn = null"* ]]; then
+  if [[ "${FAKE_TINKER_BROKEN:-0}" == "1" ]]; then
+    echo "STILL_SET"
+  else
+    [[ -n "${FAKE_FQDN_CLEAR_MARKER:-}" ]] && touch "$FAKE_FQDN_CLEAR_MARKER" 2>/dev/null
+    echo "CLEARED"
+  fi
+  exit 0
+fi
+# Running-container resolution for the post-tinker-write WARNING path
+# (Sec option C) -- $FAKE_EXISTING_CID controls whether a container is
+# reported as currently running (empty = none, the common no-container-
+# yet case).
+if [[ "$*" == *"ps --filter"* && "$*" == *"status=running"* && "$*" == *"--format"*"{{.ID}}"* ]]; then
+  printf '%s' "${FAKE_EXISTING_CID:-}"
+  exit 0
+fi
+# `docker exec <cid> env | grep ...` -- the stale-route-signal read for
+# the same WARNING path. $FAKE_STALE_ROUTE_SIGNAL (empty by default --
+# clean) is whatever the grep would have found on the box.
+if [[ "$*" == *"exec"* && "$*" == *" env"* ]]; then
+  printf '%s' "${FAKE_STALE_ROUTE_SIGNAL:-}"
+  exit 0
+fi
 exit 0
 EOF
 chmod +x "$FAKE_BIN/docker"
 
 # Same fake `ssh` shape as fence-provision-app-strikes.sh's own -- rewrites
-# the /root/.pfin path, forwards FAKE_RESOURCE_NAME/FAKE_NETWORK_VAR through
-# to the sub-shell so fake-curl sees them too.
+# the /root/.pfin path, forwards FAKE_RESOURCE_NAME/FAKE_NETWORK_VAR (and,
+# CA-1, FAKE_DEFAULT_FQDN/FAKE_DEFAULT_PORTS_EXPOSES/FAKE_CLEAR_MARKER/
+# FAKE_CLEAR_BROKEN) through to the sub-shell so fake-curl sees them too.
 cat > "$FAKE_BIN/ssh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -123,6 +188,9 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
   REWRITTEN="\$(sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
   PATH="$FAKE_BIN:\$PATH" FAKE_CURL_LOG="\$FAKE_CURL_LOG" FAKE_CURL_MODE="\$FAKE_CURL_MODE" \\
     FAKE_RESOURCE_NAME="\$FAKE_RESOURCE_NAME" FAKE_NETWORK_VAR="\$FAKE_NETWORK_VAR" \\
+    FAKE_DEFAULT_FQDN="\${FAKE_DEFAULT_FQDN:-}" FAKE_DEFAULT_PORTS_EXPOSES="\${FAKE_DEFAULT_PORTS_EXPOSES:-}" \\
+    FAKE_CLEAR_MARKER="\${FAKE_CLEAR_MARKER:-}" FAKE_CLEAR_BROKEN="\${FAKE_CLEAR_BROKEN:-0}" \\
+    FAKE_FQDN_CLEAR_MARKER="\${FAKE_FQDN_CLEAR_MARKER:-}" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -130,6 +198,8 @@ CMD="\${@: -1}"
 CMD_REWRITTEN="\$(printf '%s' "\$CMD" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
 PATH="$FAKE_BIN:\$PATH" FAKE_CONTAINER_COUNT="\$FAKE_CONTAINER_COUNT" FAKE_IMAGE_COUNT="\$FAKE_IMAGE_COUNT" \\
   FAKE_DOCKER_PS_FAIL="\${FAKE_DOCKER_PS_FAIL:-0}" FAKE_DOCKER_IMAGES_FAIL="\${FAKE_DOCKER_IMAGES_FAIL:-0}" \\
+  FAKE_TINKER_BROKEN="\${FAKE_TINKER_BROKEN:-0}" FAKE_FQDN_CLEAR_MARKER="\${FAKE_FQDN_CLEAR_MARKER:-}" \\
+  FAKE_EXISTING_CID="\${FAKE_EXISTING_CID:-}" FAKE_STALE_ROUTE_SIGNAL="\${FAKE_STALE_ROUTE_SIGNAL:-}" \\
   bash -c "\$CMD_REWRITTEN"
 EOF
 chmod +x "$FAKE_BIN/ssh"
@@ -234,9 +304,88 @@ for entry in "${RESOURCES[@]}"; do
     echo "FAIL: [$RESOURCE: create-happy] did not confirm $NETVAR's own byte-exact readback -- the per-resource network-var name may not actually be wired through." >&2
     FAIL=1
   fi
+  # CA-1 (run-8 stop, 2026-09-21): the fake-curl fixture's default GET
+  # .../applications/<uuid> carries no fqdn/ports_exposes at all
+  # ($FAKE_DEFAULT_FQDN/$FAKE_DEFAULT_PORTS_EXPOSES unset in this call),
+  # so create-happy's own success ALSO exercises the "already clear,
+  # nothing to do" branch of the new domain-clear step -- assert it
+  # explicitly rather than only incidentally passing through it.
+  if [[ -n "${CREATEHAPPY_OUT:-}" ]] && ! grep -qF "nothing to clear" <<<"$CREATEHAPPY_OUT"; then
+    echo "FAIL: [$RESOURCE: create-happy] did not report the domain-clear step's 'nothing to clear' branch -- the CA-1 step may not be running at all." >&2
+    FAIL=1
+  fi
 done
 
-# 8. UNKNOWN-NAME -- refuses BEFORE any SSH/API call. No fake ssh/curl on
+# 8. CA1-PORTS-CLEAR-SUCCEEDS (mechanism confirmed live, team-lead,
+#    2026-09-21) -- ports_exposes carries Coolify's default "80", fqdn
+#    already ABSENT/EMPTY (e.g. a resource that never had a domain
+#    assigned in the first place) -- the ports_exposes PATCH clears it,
+#    read-back confirms, apply succeeds. Only pfin-provider-sync run
+#    here -- this logic is generic across the table, not resource-
+#    specific (already proven generic by the shared network-var/
+#    create-happy loop above); testing it three times would be the same
+#    assertion three times, not new coverage.
+CA1_MARKER="$WORK/ca1-clear-marker.$$"
+rm -f "$CA1_MARKER"
+CA1_CLEAR_OUT="$(FAKE_DEFAULT_PORTS_EXPOSES='80' FAKE_CLEAR_MARKER="$CA1_MARKER" \
+  run_scenario "CA-1: ports_exposes default cleared, fqdn already clear, apply succeeds" 0 absent 0 0 pfin-provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME --apply)" || FAIL=1
+assert_output_contains "CA-1: ports_exposes cleared" "${CA1_CLEAR_OUT:-}" "ports_exposes cleared via PATCH and byte-exact read-back verified not SET" || FAIL=1
+assert_output_contains "CA-1: ports_exposes cleared" "${CA1_CLEAR_OUT:-}" "fqdn already EMPTY — nothing to clear" || FAIL=1
+rm -f "$CA1_MARKER"
+
+# 9. CA1-PORTS-PATCH-DOES-NOT-TAKE (defensive, not live-observed) -- the
+#    ports_exposes PATCH 200s but the value never actually changes
+#    ($FAKE_CLEAR_BROKEN=1) -- the read-back must catch this and refuse,
+#    naming the still-present value. Never "probably fine."
+CA1_BROKEN_OUT="$(FAKE_DEFAULT_PORTS_EXPOSES='80' FAKE_CLEAR_MARKER="$WORK/ca1-broken-marker.$$" FAKE_CLEAR_BROKEN=1 \
+  run_scenario "CA-1: ports_exposes PATCH does not take, refuses" 1 absent 0 0 pfin-provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME --apply)" || FAIL=1
+assert_output_contains "CA-1: ports_exposes PATCH does not take" "${CA1_BROKEN_OUT:-}" "measured working on provider-sync" || FAIL=1
+if [[ -n "${CA1_BROKEN_OUT:-}" ]] && ! grep -qF "ports_exposes SET ('80')" <<<"$CA1_BROKEN_OUT"; then
+  echo "FAIL: [CA-1: ports_exposes PATCH does not take] the refusal did not name the actual still-present ports_exposes value." >&2
+  FAIL=1
+fi
+
+# 9a. CA1-FQDN-TINKER-CLEAR-SUCCEEDS (Sec-ruled mechanism, PR #862
+#    review) -- fqdn AND ports_exposes both SET (the true run-8 default-
+#    create shape): ports_exposes clears via the API PATCH first, then
+#    the tinker write clears fqdn, reports CLEARED, and the API
+#    read-back confirms -- apply succeeds end to end.
+CA1_TINKER_OUT="$(FAKE_DEFAULT_FQDN='http://abc123.1.2.3.4.sslip.io' FAKE_DEFAULT_PORTS_EXPOSES='80' \
+  FAKE_CLEAR_MARKER="$WORK/ca1-ports-marker.$$" FAKE_FQDN_CLEAR_MARKER="$WORK/ca1-fqdn-marker.$$" \
+  run_scenario "CA-1: fqdn tinker-clear succeeds, ports_exposes cleared first" 0 absent 0 0 pfin-provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME --apply)" || FAIL=1
+assert_output_contains "CA-1: fqdn tinker-clear succeeds" "${CA1_TINKER_OUT:-}" "ports_exposes cleared via PATCH and byte-exact read-back verified not SET" || FAIL=1
+assert_output_contains "CA-1: fqdn tinker-clear succeeds" "${CA1_TINKER_OUT:-}" "fqdn cleared via tinker write and API read-back verified" || FAIL=1
+
+# 9b. CA1-FQDN-TINKER-DOES-NOT-REPORT-CLEARED -- the tinker write's own
+#    echo comes back STILL_SET (the model-layer write failed, or
+#    firstOrFail() found no matching record) -- refuses immediately,
+#    naming what was actually returned. Never treated as a soft warning.
+CA1_TINKER_BROKEN_OUT="$(FAKE_DEFAULT_FQDN='http://abc123.1.2.3.4.sslip.io' FAKE_TINKER_BROKEN=1 \
+  run_scenario "CA-1: fqdn tinker write does not report CLEARED, refuses" 1 absent 0 0 pfin-provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME --apply)" || FAIL=1
+assert_output_contains "CA-1: fqdn tinker write does not report CLEARED" "${CA1_TINKER_BROKEN_OUT:-}" "did not report CLEARED" || FAIL=1
+
+# 9c. CA1-FQDN-API-DRIFT-AFTER-CLEARED -- the tinker write DOES report
+#    CLEARED, but the immediate API read-back still shows fqdn SET (a
+#    cache, or DB/API drift) -- refuses, distinct message from 9b's
+#    (the write's own self-report is not the same fact as the API
+#    agreeing with it).
+CA1_DRIFT_OUT="$(FAKE_DEFAULT_FQDN='http://abc123.1.2.3.4.sslip.io' FAKE_FQDN_CLEAR_MARKER="$WORK/nonexistent-dir-$$/marker" \
+  run_scenario "CA-1: fqdn tinker reports CLEARED but API read-back still SET, refuses" 1 absent 0 0 pfin-provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME --apply)" || FAIL=1
+assert_output_contains "CA-1: fqdn API drift" "${CA1_DRIFT_OUT:-}" "API/DB drift" || FAIL=1
+
+# 9d. CA1-FQDN-CLEARED-STALE-CONTAINER-WARNS (Sec option C) -- fqdn
+#    clears successfully, but a container is ALREADY running for this
+#    resource carrying the pre-clear COOLIFY_FQDN -- must WARN (not
+#    die, not silently pass) naming the exposure window, and the script
+#    must still exit 0 (this is expected/not-yet-redeployed state, not
+#    a failure of THIS step).
+CA1_STALE_OUT="$(FAKE_DEFAULT_FQDN='http://abc123.1.2.3.4.sslip.io' FAKE_FQDN_CLEAR_MARKER="$WORK/ca1-fqdn-marker2.$$" \
+  FAKE_EXISTING_CID='cid-stale-1' FAKE_STALE_ROUTE_SIGNAL='COOLIFY_FQDN=http://abc123.1.2.3.4.sslip.io' \
+  run_scenario "CA-1: fqdn cleared, stale container warns, still succeeds" 0 absent 0 0 pfin-provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME --apply)" || FAIL=1
+assert_output_contains "CA-1: stale container warns" "${CA1_STALE_OUT:-}" "WARN" || FAIL=1
+assert_output_contains "CA-1: stale container warns" "${CA1_STALE_OUT:-}" "still running with a non-empty route signal" || FAIL=1
+
+# 10. UNKNOWN-NAME -- refuses BEFORE any SSH/API call. No fake ssh/curl on
 #    PATH at all for this scenario: if the script somehow reached a network
 #    call, the REAL ssh/curl on this runner would either hang or fail with
 #    a connection error, not the expected structural refusal -- proving the
@@ -266,5 +415,5 @@ if [[ $FAIL -ne 0 ]]; then
   exit 1
 fi
 
-echo "OK: all provision-worker.sh strike-proofs passed (3 resources x 7 scenarios + unknown-name refusal)."
+echo "OK: all provision-worker.sh strike-proofs passed (3 resources x 7 scenarios + CA-1 ports-clear-succeeds + CA-1 ports-patch-does-not-take + CA-1 fqdn-tinker-clear-succeeds + CA-1 fqdn-tinker-not-cleared + CA-1 fqdn-api-drift + CA-1 stale-container-warns + unknown-name refusal)."
 exit 0

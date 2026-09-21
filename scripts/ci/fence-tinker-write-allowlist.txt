@@ -1,0 +1,27 @@
+# fence-tinker-write-allowlist.txt -- the ENTIRE escape hatch for
+# fence-tinker-write-allowlist.sh (Sec ruling, PR #862 review). One line
+# per allowlisted marker ID: `<ID> <file:function-or-marker> -- <one-line purpose>`.
+# A marker not listed here exempts nothing. Pinned by
+# fence-tinker-write-allowlist.sha256 -- regenerate that file (sha256sum
+# fence-tinker-write-allowlist.txt > fence-tinker-write-allowlist.sha256)
+# whenever this file changes, in the SAME commit, or the fence fails
+# closed on the drift.
+#
+# CONVENTION (Sec, PR #862 review, single-namespace ruling): both anchor
+# classes share this ONE marker namespace -- there is no separate ID
+# series for an indirect/unresolvable-body site. Because of that, an
+# entry for a marker bound to an unresolvable `--execute=` invocation
+# (mode ii -- see fence-tinker-write-allowlist.sh's own header) MUST
+# lead its purpose text with the tag `[INDIRECT-BODY]` and state which
+# literal write-verb line, if any, it stands in for and how far away it
+# is. This is the only place that distinction is carried once the
+# namespace is shared -- a reviewer must be able to tell "we reviewed
+# this specific write" from "we accepted a body we could not read" from
+# this file's text alone.
+TINKER-WRITE-ALLOW-01 provision-vps.sh:delete-orphaned-provisioning-automation-token -- clears an orphaned automation-token DB row (no usable host-side value) so a fresh one can be minted
+TINKER-WRITE-ALLOW-02 provision-vps.sh:root-user-password-reset -- sets the Coolify root user's password from a value read via getenv() inside the remote PHP process, never interpolated
+TINKER-WRITE-ALLOW-03 provision-vps.sh:enable-coolify-api -- flips InstanceSettings.is_api_enabled to true (Coolify ships it off by default; provision-supabase-stack.sh needs it)
+TINKER-WRITE-ALLOW-04 provision-vps.sh:rotate-migrator-trigger-token -- deletes the existing migrator-trigger token row on --rotate-migrator-token, immediately followed by a re-mint
+TINKER-WRITE-ALLOW-05 provision-vps.sh:delete-orphaned-migrator-trigger-token -- clears an orphaned migrator-trigger token row (no usable host-side value) so a fresh one can be minted
+TINKER-WRITE-ALLOW-06 [INDIRECT-BODY] coolify-materialize-supabase-mounts.sh:sync-local-file-volume-rows -- marker sits at the --execute="$SCRIPT_CONTENT" invocation line (statically unresolvable there); stands in for the one $row->save() write-verb line ~30 lines above, inside a heredoc PHP body -- syncs local_file_volumes.content/mount_path/is_directory for up to 12 known mounts via Coolify's own Eloquent model (content is encrypted-cast, so raw SQL cannot write it)
+TINKER-WRITE-ALLOW-07 provision-worker.sh:clear-fqdn-ca1 -- clears a worker resource's fqdn column directly (no public-API path exists for a dockercompose app; PATCH {"fqdn":""} and {"domains":""} both 422, MEASURED 2026-09-21) -- CA-1 fix, PR #862

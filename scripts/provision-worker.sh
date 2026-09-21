@@ -48,6 +48,19 @@
 #      check provision-app.sh's own header states for api/Dockerfile), so
 #      this setting does not gate a successful deploy for any of them
 #      either — reported for visibility only.
+#   6. Clear any default Coolify-assigned `fqdn`/`ports_exposes` (CA-1,
+#      run-8 stop, 2026-09-19) — runs on EVERY --apply, not just at
+#      create, so it is a live done-predicate as much as a one-time
+#      action: Coolify 4.3.18 assigns a default sslip.io domain + 80 to
+#      every application at create, whether or not one was requested,
+#      which trips `admissionGuard.ts`'s CA-1 refusal on boot (correct
+#      behavior — the fix belongs here, on the resource, never in the
+#      guard). `ports_exposes` clears via a MEASURED-working PATCH,
+#      read-back verified. `fqdn` has NO public-API clear path for a
+#      dockercompose application (MEASURED 2026-09-21) — this script
+#      STOPS (die) rather than build around it; see the step's own
+#      header for the full measurement and why a box-side tinker write
+#      is not implemented here without Sec's sign-off.
 #   Does NOT deploy. A deploy vehicle (mirroring scripts/deploy-app.sh) is
 #   named in this PR's hand-off as a PENDING follow-up (docs/deployment-
 #   runbook.md §7.2), not built here.
@@ -142,6 +155,7 @@ die()  { printf '\n\033[31mFAIL\033[0m  %s\n' "$*" >&2; exit 1; }
 ok()   { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
 info() { printf '      %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+warn() { printf '\033[33mWARN\033[0m  %s\n' "$*" >&2; }
 
 [[ -n "$BOX_IP" ]] || die "BOX_IP is required, not defaulted -- set it explicitly (same discipline as every other scripts/provision-*.sh)."
 
@@ -415,6 +429,186 @@ print(m[0]['value'] if m else '')")"
 [[ "$READBACK" == "$STACK_NETWORK_NAME" ]] \
   || die "wrote $NETWORK_VAR_NAME='$STACK_NETWORK_NAME' but read back '$READBACK' -- byte-exact mismatch, refusing to trust the store."
 ok "$NETWORK_VAR_NAME set and byte-exact read-back verified — $STACK_NETWORK_NAME"
+
+step "Clearing any default Coolify-assigned domain/ports_exposes (CA-1, run-8 stop, 2026-09-21)"
+# MEASURED (team-lead, run-8, realrun8.clean.log): Coolify 4.3.18 assigns
+# a DEFAULT `fqdn` (`http://<uuid>.<box-ip>.sslip.io`) and
+# `ports_exposes` ("80") to every application AT CREATE, whether or not
+# a domain was ever requested -- none of the three worker resources'
+# create bodies above ask for one. No Traefik labels exist and the proxy
+# 404s for these hosts (no LIVE exposure), but the RESOURCE RECORD
+# itself claims a public domain -- and `workers/provider-sync/src/http/
+# admissionGuard.ts`'s CA-1 guard correctly refuses to boot on exactly
+# that signal (`COOLIFY_FQDN` non-empty), which is what crash-looped
+# provider-sync in run-8. Fixed here, not in the guard -- Sec's own
+# pre-review for this PR refuses in advance any change to
+# PUBLIC_ROUTE_ENV_MATCHERS or any value-based exception: the guard's
+# own header already says "never narrow to exact names," and this is
+# the correct place to fix it -- the resource should never have carried
+# a domain in the first place.
+#
+# TWO FIELDS, TWO DIFFERENT MECHANISMS -- MEASURED LIVE (team-lead,
+# provider-sync hmjeuhdaolhw8tlz3qi6lopi, 2026-09-21), not guessed:
+#   ports_exposes -- `PATCH {"ports_exposes": ""}` on
+#     `/applications/<uuid>` -> HTTP 200, read-back confirms cleared.
+#     WORKS via the public API. This is the mechanism below.
+#   fqdn -- has NO public-API clear path for a `dockercompose`
+#     application. `PATCH {"fqdn": ""}` -> HTTP 422 "This field is not
+#     allowed." `PATCH {"domains": ""}` -> HTTP 422 "The domains field
+#     cannot be used for dockercompose applications. Use
+#     docker_compose_domains instead." `docker_compose_domains` IS
+#     PATCHable (as a real JSON array, `[]`) but it is PER-SERVICE
+#     compose routing, not the app-level `fqdn` column -- clearing it
+#     left `fqdn` unchanged. The only mechanism that actually clears it
+#     is a box-side Laravel tinker WRITE directly against the Eloquent
+#     model -- a direct DB/model-layer mutation that bypasses the API's
+#     own validation and authorization entirely, a materially different,
+#     more privileged mechanism than every other write this script
+#     makes. Sec-RULED acceptable (PR #862 review) under three
+#     conditions, all held below: (a) narrow and literal -- the tinker
+#     body sets ONLY `$app->fqdn = null` on a resolved-by-uuid record,
+#     the pre-validated `$APP_UUID` (matched against `UUID_RE` above)
+#     is the ONLY interpolation, no dynamic field/array; (b) the done-
+#     predicate asserts the API read-back (this script) AND the running
+#     container's env, split by WHERE each is actually checkable --
+#     see below; (c) a tree-wide, sha256-pinned allowlist fence
+#     (`scripts/ci/fence-tinker-write-allowlist.sh`) so a future
+#     unmarked write, or this marker copy-pasted onto a new site,
+#     cannot land silently. Marker `TINKER-WRITE-ALLOW-07`.
+#
+# ports_exposes is invisible to the admission guard (env-name based --
+# it never injects a COOLIFY_*PORTS* variable) and, per team-lead's own
+# measurement, not currently exploitable (no Traefik labels exist
+# regardless of its value while no domain is assigned) -- cleared anyway
+# for defense-in-depth: a bare ports_exposes='80' left in place is a
+# residual that a FUTURE domain (re-)assignment could turn into live
+# exposure without anyone re-checking this value at that time.
+#
+# PROVENANCE (Sec pre-review requirement): this step clears the
+# Coolify-side RESOURCE field only. It never writes a
+# `COOLIFY_FQDN=''`-shaped override into this resource's OWN env store
+# -- doing so would make the guard's "empty value" pass a LIE about
+# where the emptiness came from (a config override, not Coolify's own
+# injection), which is explicitly refused, not a shortcut available
+# here.
+#
+# Sec (PR #862 review): the read must distinguish ABSENT (key not in the
+# JSON at all), EMPTY (present but null/""), and SET (present with a
+# real value) -- not collapse all three via a Python-truthiness `or ''`.
+# This is the same class of bug this repo already paid for once
+# (Coolify compose-parse env rows: a row existing is not the same fact
+# as a row holding a real value) -- one shared classifier used for BOTH
+# the pre-clear read and the post-clear read-back, so the two checks
+# cannot drift apart on what "cleared" means. Read from stdin via a
+# STATIC heredoc (no bash variable spliced into the python source) --
+# also closes Sec's separate note on an earlier revision of this step
+# that interpolated a bash variable into a python string literal.
+read -r -d '' PY_CLASSIFY_HELPER <<'PY' || true
+import json, sys
+d = json.load(sys.stdin)
+for key in ('fqdn', 'ports_exposes'):
+    if key not in d:
+        state, val = 'ABSENT', ''
+    else:
+        v = d[key]
+        if v is None or v == '':
+            state, val = 'EMPTY', ''
+        else:
+            state, val = 'SET', str(v)
+    print(f'{state}\t{val}')
+PY
+classify_domain_state() {
+  # stdin: the application JSON. stdout: "FQDN_STATE\tFQDN_VAL\nPORTS_STATE\tPORTS_VAL".
+  python3 -c "$PY_CLASSIFY_HELPER"
+}
+
+CURRENT_APP_JSON="$(api GET "/applications/$APP_UUID")"
+CURRENT_CLASSIFIED="$(echo "$CURRENT_APP_JSON" | classify_domain_state)"
+CURRENT_FQDN_STATE="$(sed -n '1p' <<<"$CURRENT_CLASSIFIED" | cut -f1)"
+CURRENT_FQDN_VAL="$(sed -n '1p' <<<"$CURRENT_CLASSIFIED" | cut -f2)"
+CURRENT_PORTS_STATE="$(sed -n '2p' <<<"$CURRENT_CLASSIFIED" | cut -f1)"
+CURRENT_PORTS_VAL="$(sed -n '2p' <<<"$CURRENT_CLASSIFIED" | cut -f2)"
+info "current state: fqdn=$CURRENT_FQDN_STATE${CURRENT_FQDN_VAL:+ ('$CURRENT_FQDN_VAL')}, ports_exposes=$CURRENT_PORTS_STATE${CURRENT_PORTS_VAL:+ ('$CURRENT_PORTS_VAL')}"
+
+if [[ "$CURRENT_PORTS_STATE" == "SET" ]]; then
+  # Body built into a variable FIRST -- same bash-3.2 argument-position
+  # discipline this file's own header documents, and no bash variable's
+  # VALUE is spliced into the python source (the literal body is
+  # static; only the fixed field name is written by this script, not
+  # anything read from the API response).
+  PORTS_CLEAR_BODY='{"ports_exposes": ""}'
+  api PATCH "/applications/$APP_UUID" "$PORTS_CLEAR_BODY" >/dev/null
+  AFTER_PORTS_JSON="$(api GET "/applications/$APP_UUID")"
+  AFTER_PORTS_CLASSIFIED="$(echo "$AFTER_PORTS_JSON" | classify_domain_state)"
+  AFTER_PORTS_STATE="$(sed -n '2p' <<<"$AFTER_PORTS_CLASSIFIED" | cut -f1)"
+  AFTER_PORTS_VAL="$(sed -n '2p' <<<"$AFTER_PORTS_CLASSIFIED" | cut -f2)"
+  if [[ "$AFTER_PORTS_STATE" == "SET" ]]; then
+    die "PATCHed {\"ports_exposes\": \"\"} on '$RESOURCE_NAME' ($APP_UUID) but the read-back still shows ports_exposes SET ('$AFTER_PORTS_VAL') -- this mechanism was measured working on provider-sync (2026-09-21); a different result here means something about THIS resource differs, investigate before re-running."
+  fi
+  ok "ports_exposes cleared via PATCH and byte-exact read-back verified not SET (measured-working mechanism)"
+else
+  ok "ports_exposes already $CURRENT_PORTS_STATE — nothing to clear"
+fi
+
+if [[ "$CURRENT_FQDN_STATE" == "SET" ]]; then
+  # Sec-ruled mechanism (PR #862 review, conditions a/c) -- box-side
+  # Laravel tinker WRITE. MEASURED 2026-09-21 (why the API can't do
+  # this): PATCH {"fqdn":""} -> HTTP 422 'This field is not allowed.';
+  # PATCH {"domains":""} -> HTTP 422 'Use docker_compose_domains
+  # instead'; docker_compose_domains is per-SERVICE routing, not this
+  # app-level field, and clearing it does not touch fqdn.
+  #
+  # Condition (a): the tinker body sets ONLY `$app->fqdn = null` --
+  # never ports_exposes (that stays on the API PATCH above, per Sec's
+  # explicit instruction not to fold it in here) -- on a record
+  # resolved by the pre-validated `$APP_UUID` (matched against UUID_RE
+  # above), the ONLY interpolation. No dynamic field name, no array, no
+  # value read from anywhere but this script's own validated variable.
+  # `$app->refresh()` + an explicit CLEARED/STILL_SET echo makes the
+  # write's own outcome self-reporting, not inferred from a bare exit
+  # code. Marker TINKER-WRITE-ALLOW-07 (condition c) sits inline, at
+  # the write itself, per fence-tinker-write-allowlist.sh's own catch
+  # criterion (anchored on the write verb, not the --execute call).
+  TINKER_OUT="$(sshx "docker exec coolify php artisan tinker --execute='/* TINKER-WRITE-ALLOW-07 */\$app = \\App\\Models\\Application::where(\"uuid\",\"$APP_UUID\")->firstOrFail(); \$app->fqdn = null; \$app->save(); \$app->refresh(); echo \$app->fqdn === null ? \"CLEARED\" : \"STILL_SET\";'" </dev/null 2>&1 | tail -1 | tr -d ' \n')"
+  if [[ "$TINKER_OUT" != "CLEARED" ]]; then
+    die "tinker fqdn-clear write on '$RESOURCE_NAME' ($APP_UUID) did not report CLEARED (got '$TINKER_OUT') -- the model-layer write may have failed, or firstOrFail() found no matching record. Investigate on the box before re-running."
+  fi
+
+  # Condition (b), API half -- die-level, this script's own authority.
+  # The container-env half is NOT checkable here (see WARNING below and
+  # this step's own header) -- it lives in run_deploy_workers, where a
+  # fresh container is guaranteed to exist post-deploy.
+  AFTER_FQDN_JSON="$(api GET "/applications/$APP_UUID")"
+  AFTER_FQDN_CLASSIFIED="$(echo "$AFTER_FQDN_JSON" | classify_domain_state)"
+  AFTER_FQDN_STATE="$(sed -n '1p' <<<"$AFTER_FQDN_CLASSIFIED" | cut -f1)"
+  AFTER_FQDN_VAL="$(sed -n '1p' <<<"$AFTER_FQDN_CLASSIFIED" | cut -f2)"
+  if [[ "$AFTER_FQDN_STATE" == "SET" ]]; then
+    die "tinker fqdn-clear write reported CLEARED but the API read-back still shows fqdn SET ('$AFTER_FQDN_VAL') -- API/DB drift (e.g. a cache), investigate before re-running."
+  fi
+  ok "fqdn cleared via tinker write and API read-back verified $AFTER_FQDN_STATE"
+
+  # Sec ruling (option C, PR #862 review): a container may already be
+  # running for this resource, still carrying the PRE-clear env --
+  # Coolify only injects env at container START, and this script never
+  # deploys, so that is an EXPECTED state here, not a failure of this
+  # step. It IS a live exposure window though (the API record now says
+  # cleared, but the running container still answers on the old
+  # route), so warn loudly rather than staying silent -- the die-level
+  # assertion on this lives in run_deploy_workers, post-deploy.
+  EXISTING_CID="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.ID}}' | head -1" </dev/null 2>/dev/null || true)"
+  if [[ -n "$EXISTING_CID" ]]; then
+    STALE_ROUTE_ENV="$(sshx "docker exec $EXISTING_CID env | grep -E '^(COOLIFY_FQDN|COOLIFY_URL)=.' || true" </dev/null 2>/dev/null || true)"
+    if [[ -n "$STALE_ROUTE_ENV" ]]; then
+      warn "container $EXISTING_CID is still running with a non-empty route signal -- API-level cleared, but the OLD route remains live until this resource is redeployed. Names: $(printf '%s' "$STALE_ROUTE_ENV" | cut -d= -f1 | tr '\n' ' ')-- not a failure of this step (Coolify only injects env at container start); redeploy to close this window."
+    else
+      ok "running container $EXISTING_CID already carries no non-empty COOLIFY_FQDN/URL -- no exposure window open"
+    fi
+  else
+    info "no container currently running for this resource -- container-env half of the done-predicate is not applicable until first deploy"
+  fi
+else
+  ok "fqdn already $CURRENT_FQDN_STATE — nothing to clear"
+fi
 
 step "Done"
 info "Resource '$RESOURCE_NAME' ($APP_UUID) is a dockercompose application, network var set, NOT yet deployed."

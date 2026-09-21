@@ -4264,6 +4264,42 @@ jobs:
       - name: tree-wide boolean-cast pairing scan (scripts/*.sh)
         run: bash scripts/ci/fence-boolean-cast-pairing.sh
 
+  fence-tinker-write-allowlist:
+    name: tinker --execute write-verb allowlist fence (tree-wide, sha-pinned)
+    runs-on: ubuntu-latest
+    # Sec ruling, PR #862 review (CA-1 fix): TWO independent anchors,
+    # not one -- (i) every Eloquent write-verb occurrence in scripts/
+    # *.sh PHP text destined for `artisan tinker --execute`, AND (ii)
+    # every `--execute=` invocation whose value is a bash variable
+    # reference (body built elsewhere, statically unresolvable) --
+    # each must carry a unique /* TINKER-WRITE-ALLOW-NN */ marker in
+    # the sha256-pinned allowlist (scripts/ci/fence-tinker-write-
+    # allowlist.txt / .sha256) -- same visibility-not-access-control
+    # shape as fence-no-source-credential-files.sh's own allowlist pin
+    # (PR #780 C-a). Anchor (ii) exists because anchor (i) alone was
+    # found fail-OPEN on a site whose PHP body is built into a variable
+    # far from its own --execute invocation (scripts/coolify-
+    # materialize-supabase-mounts.sh) -- caught by inverting that
+    # site's marker and finding the fence stayed GREEN. A bound
+    # unresolvable site exempts at most ONE nearby write verb (1:1, not
+    # file-wide -- an earlier revision let one indirect call exempt
+    # every write in the file, Sec's review's own finding, F-6).
+    # Full 6-scenario golden-test battery in
+    # fence-tinker-write-allowlist-strikes.sh, run as its own step
+    # below: clean baseline; unmarked write reddens; duplicated marker
+    # reddens (DUPLICATE); allowlist edited without regenerating its
+    # pin FATALs; a write moved into a bash variable with no write-verb
+    # text anywhere reddens via anchor (ii) specifically; a second,
+    # unrelated write in a file that also has a bound unresolvable site
+    # still reddens (the F-6 control leg). Structural / source-literal,
+    # same convention as fence-heredoc-stdin-drain.sh.
+    steps:
+      - uses: actions/checkout@v4
+      - name: tree-wide tinker-write allowlist scan (scripts/*.sh)
+        run: bash scripts/ci/fence-tinker-write-allowlist.sh
+      - name: tinker-write allowlist fence -- golden-test battery (6 scenarios)
+        run: bash scripts/ci/fence-tinker-write-allowlist-strikes.sh
+
   fence-docker-inspect-format-tab:
     name: docker inspect --format templates — literal-tab fence (tree-wide)
     runs-on: ubuntu-latest

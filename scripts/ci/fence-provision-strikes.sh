@@ -533,7 +533,7 @@ fi
 CASE_ENV=()
 run_case "BOX_IP reaches every sub-script that requires it" 0 --dry-run || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
-  BOX_IP_REQUIRED_NAMES="coolify-env provision-migrator-app migrator-scheduled-task provision-app provision-worker record-coolify-uuids push-production-secrets mint-supabase-jwt-keys db-role-handoff deploy-app smoke-admission-endpoint smoke-etl-poll smoke-pdf-roundtrip smoke-pfin-exposure smoke-ca1-env-pattern worker-scheduled-task"
+  BOX_IP_REQUIRED_NAMES="coolify-env provision-migrator-app migrator-scheduled-task provision-app provision-worker record-coolify-uuids push-production-secrets mint-supabase-jwt-keys db-role-handoff deploy-app smoke-admission-endpoint smoke-etl-poll smoke-pdf-roundtrip smoke-pfin-exposure smoke-ca1-env-pattern worker-scheduled-task verify-worker-ca1-clear"
   CHECKED_ANY=0
   for n in $BOX_IP_REQUIRED_NAMES; do
     if grep -q "^$n " "$CASE_LAST_DIR/calls.log" 2>/dev/null; then

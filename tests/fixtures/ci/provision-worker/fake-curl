@@ -44,6 +44,15 @@
 #                              empty body on success, else 400 with
 #                              Coolify's own measured error text for a
 #                              body-less/malformed PATCH.
+#   PATCH /applications/<uuid> (bare, not .../envs/*) -- CA-1 domain-clear:
+#                              200 always; writes $FAKE_CLEAR_MARKER unless
+#                              $FAKE_CLEAR_BROKEN=1 (simulates a wrong
+#                              field-name guess Coolify 200s but ignores).
+#                              The following GET .../applications/<uuid>
+#                              reports fqdn/ports_exposes empty only once
+#                              that marker exists -- see
+#                              $FAKE_DEFAULT_FQDN/$FAKE_DEFAULT_PORTS_EXPOSES
+#                              above the GET branch itself.
 #
 # Logs its OWN ARGV (never the -K config FILE's contents, never a
 # --data-binary body FILE's contents) to $FAKE_CURL_LOG, so the fence can
@@ -129,7 +138,59 @@ if [[ "$METHOD" == "POST" && "$URL" == *"/applications/public" ]]; then
 fi
 
 if [[ "$METHOD" == "GET" && "$URL" == *"/applications/$NEW_APP_UUID" ]]; then
-  respond "$(printf '{"uuid":"%s","settings":{"include_source_commit_in_build":false}}' "$NEW_APP_UUID")"
+  # CA-1 (run-8 stop, 2026-09-21; mechanism split confirmed by team-lead's
+  # live measurement): $FAKE_DEFAULT_FQDN/$FAKE_DEFAULT_PORTS_EXPOSES
+  # simulate Coolify's own default-assigned domain/port on a fresh
+  # application. `fqdn` is NEVER PATCHed by the real script any more (no
+  # public-API clear path exists for it on a dockercompose app -- MEASURED,
+  # see provision-worker.sh's own header) -- FQDN_VAL is therefore always
+  # just the default, unaffected by any marker. `ports_exposes` DOES have
+  # a working PATCH mechanism, so PORTS_VAL reacts to $FAKE_CLEAR_MARKER
+  # (written by the bare PATCH /applications/<uuid> branch below, UNLESS
+  # $FAKE_CLEAR_BROKEN=1 simulates that PATCH not taking) -- reproducing
+  # "the clear actually took, verified by a fresh read."
+  FQDN_VAL="${FAKE_DEFAULT_FQDN:-}"
+  PORTS_VAL="${FAKE_DEFAULT_PORTS_EXPOSES:-}"
+  if [[ -n "${FAKE_CLEAR_MARKER:-}" && -f "$FAKE_CLEAR_MARKER" ]]; then
+    PORTS_VAL=""
+  fi
+  # CA-1 fqdn tinker write (Sec-ruled mechanism, PR #862 review) -- a
+  # SEPARATE marker from ports_exposes's own $FAKE_CLEAR_MARKER, since
+  # these are two independent clear mechanisms (API PATCH vs box-side
+  # tinker write) that must not be conflated.
+  if [[ -n "${FAKE_FQDN_CLEAR_MARKER:-}" && -f "$FAKE_FQDN_CLEAR_MARKER" ]]; then
+    FQDN_VAL=""
+  fi
+  # Built into a variable FIRST, never an inline $(...) as a direct
+  # function argument -- the SAME bash-3.2 argument-position defect
+  # provision-app.sh's/provision-worker.sh's own headers document in
+  # full: an inline `respond "$(python3 -c "...")"` mis-parses under
+  # bash 3.2, splitting the dict literal's braces at the comma into
+  # multiple SyntaxErrors and silently sending an empty response body
+  # (measured while golden-testing this exact fixture edit -- caught it
+  # myself before it shipped).
+  RESPONSE_BODY="$(python3 -c "
+import json
+fqdn = '$FQDN_VAL' or None
+ports = '$PORTS_VAL' or None
+print(json.dumps({'uuid': '$NEW_APP_UUID', 'settings': {'include_source_commit_in_build': False}, 'fqdn': fqdn, 'ports_exposes': ports}))
+")"
+  respond "$RESPONSE_BODY"
+fi
+
+if [[ "$METHOD" == "PATCH" && "$URL" == *"/applications/$NEW_APP_UUID" && "$URL" != *"/envs"* ]]; then
+  # The bare application-resource PATCH -- ports_exposes clear ONLY now
+  # (the real script never PATCHes fqdn here any more; see this file's
+  # own GET branch comment). Distinct endpoint shape from the
+  # /envs/bulk PATCH below. Writes the marker file UNLESS
+  # $FAKE_CLEAR_BROKEN=1 (models a PATCH that 200s but the value never
+  # actually changes -- a defensive scenario for "this resource behaves
+  # differently than the measured-working case," not a live-observed
+  # Coolify behavior).
+  if [[ "${FAKE_CLEAR_BROKEN:-0}" != "1" && -n "${FAKE_CLEAR_MARKER:-}" ]]; then
+    touch "$FAKE_CLEAR_MARKER" 2>/dev/null || true
+  fi
+  respond '{}'
 fi
 
 if [[ "$METHOD" == "PATCH" && "$URL" == *"/envs/bulk" ]]; then

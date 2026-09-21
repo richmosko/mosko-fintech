@@ -929,6 +929,16 @@ verify_worker_store_binds() {
   return 0
 }
 
+# CA-1 post-deploy gate (Sec ruling, PR #862 review, option C): provider-
+# sync's --apply leg also runs scripts/verify-worker-ca1-clear.sh, a
+# die-level check of the ACTUALLY RUNNING container's own env for a
+# non-empty COOLIFY_FQDN/COOLIFY_URL -- the authoritative half of the
+# fqdn-clear done-predicate that provision-worker.sh itself cannot make
+# (it never deploys, so it can only assert the API-level state; a
+# container-env check there would be either inapplicable or read a
+# stale pre-clear value). This is the point a fresh container is
+# guaranteed to exist, and the exact signal admissionGuard.ts's own
+# detectPublicRouteSignal reacts to -- see that script's own header.
 run_deploy_workers() {
   require_box_ip || return 2
   resolve_stack_network_value || return $?
@@ -938,7 +948,8 @@ run_deploy_workers() {
       pfin-back-etl)      bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/etl --expect-build-pack dockercompose --compose-service pfin-back-etl-monthly-report --require-network "$net" --resolve-host db ${1:+--apply} || return $?
                           [[ -z "${1:-}" ]] || verify_worker_store_binds pfin_etl || return $? ;;
       pfin-provider-sync) bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/provider-sync --expect-build-pack dockercompose --compose-service provider-sync --require-network "$net" --resolve-host db ${1:+--apply} || return $?
-                          [[ -z "${1:-}" ]] || verify_worker_store_binds pfin_provider_sync || return $? ;;
+                          [[ -z "${1:-}" ]] || verify_worker_store_binds pfin_provider_sync || return $?
+                          [[ -z "${1:-}" ]] || bash "$SCRIPTS/verify-worker-ca1-clear.sh" provider-sync || return $? ;;
       pfin-pdf-render)    bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/pdf-render --expect-build-pack dockercompose --compose-service pdf-render --require-network "$net" ${1:+--apply} || return $? ;;
     esac
   done
