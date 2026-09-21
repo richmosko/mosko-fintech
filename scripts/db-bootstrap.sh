@@ -369,7 +369,75 @@ if [[ "$BOOTSTRAP_COMPLETE" == "true" ]]; then
   CENSUS_BAD="$(read_gate "ownership census" "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and pg_get_userbyid(c.relowner) not in ('pfin_owner');")"
   [[ "$CENSUS_BAD" =~ ^[0-9]+$ ]] || die2 "ownership census read returned unparseable output ('$CENSUS_BAD') -- refusing to guess; expected a non-negative integer."
   [[ "$CENSUS_BAD" == "0" ]] || die "bootstrap_complete=true but the ownership census shows $CENSUS_BAD non-pfin_owner-owned pfin object(s) -- the pfin_owner sweep broke somewhere. Investigate by hand; this script does not auto-repair an ownership mismatch."
-  ok "ownership census clean (zero non-pfin_owner-owned pfin objects) -- VERIFIED, nothing to do"
+  ok "ownership census clean (zero non-pfin_owner-owned pfin objects)"
+
+  # Sec's PR #854 finding, remedied here (team-lead, run-4 follow-up,
+  # 2026-09-21): the ownership census ALONE was a falsified verification
+  # record on THIS path -- it says nothing about the migrator credential
+  # actually working end to end. Legs C (connect AS migrator over -h db)
+  # and E (store-hash still matches what was just used) from the Phase 1
+  # credential-handoff block below are re-run here READ-ONLY (no \password,
+  # no ALTER ROLE -- the credential is read from the store, never minted
+  # or rewritten) before this path is allowed to report VERIFIED.
+  step "Already bootstrapped -- read-only legs C+E against the live migrator credential"
+  sshx "env STACK_UUID=\"$STACK_UUID\" MIGRATOR_UUID=\"$MIGRATOR_UUID\" bash -s" <<'REMOTE'
+set -e
+umask 077
+
+echo "== A (read-only). Reading the CURRENT MIGRATOR_DB_PASSWORD from pfin-migrator's own env store =="
+PW="$(docker exec coolify php artisan tinker --execute="
+\$app = \App\Models\Application::where('uuid','$MIGRATOR_UUID')->firstOrFail();
+\$row = \$app->environment_variables()->where('key', 'MIGRATOR_DB_PASSWORD')->where('is_preview', false)->first();
+echo \$row ? (string) \$row->value : '';
+" 2>/dev/null | tail -1 | tr -d ' \n')"
+if [ -z "$PW" ]; then
+  echo "FATAL: pfin-migrator's env store holds no MIGRATOR_DB_PASSWORD (is_preview=false), but bootstrap_complete=true -- credential/store drift. Investigate by hand (see docs/archive/deployment-runbook-rationale-2026-09-20.md sec6.3); do not re-run this script with --apply against an already-bootstrapped box." >&2
+  exit 2
+fi
+
+echo "== C (read-only). Connect AS migrator over -h db with the store's current credential =="
+set +e
+CONNECT_OUT="$(docker compose --project-name "$STACK_UUID" exec -T db psql -v ON_ERROR_STOP=1 -h db -p 5432 -U migrator -d postgres <<< "$(printf '%s\nselect current_user;\n' "$PW")" 2>&1)"
+CONNECT_RC=$?
+set -e
+if printf '%s' "$CONNECT_OUT" | grep -qF -- "$PW"; then
+  echo "FATAL: the credential's cleartext value appeared in the connect-as-migrator step's own captured output -- refusing to proceed or print it." >&2
+  exit 1
+fi
+if ! printf '%s' "$CONNECT_OUT" | grep -qF "Password for user"; then
+  echo "FATAL: no password prompt was observed connecting AS migrator with the store's current credential -- this means the connection took a NON-password-authenticated path (a trust rule), or the credential no longer authenticates at all. Investigate by hand." >&2
+  exit 1
+fi
+if [ $CONNECT_RC -ne 0 ]; then
+  echo "FATAL: could not connect AS migrator with the store's current credential (exit $CONNECT_RC) -- the store and the live role have drifted apart. Investigate by hand (see docs/archive/deployment-runbook-rationale-2026-09-20.md sec6.3); this script does not auto-repair a migrator credential mismatch on an already-bootstrapped box." >&2
+  exit 1
+fi
+if ! printf '%s' "$CONNECT_OUT" | grep -qE '^[[:space:]]*migrator[[:space:]]*$'; then
+  echo "FATAL: connected but current_user did not echo back 'migrator' as its own output row." >&2
+  exit 1
+fi
+echo "OK: connected AS migrator over a non-loopback, password-prompted path with the store's current credential; current_user confirmed."
+
+echo "== E (read-only). Re-read the store immediately after connecting -- the value used to connect must still hash-match the store's CURRENT value (guards a concurrent rotation racing this very check) =="
+EXPECTED_HASH="$(printf '%s' "$PW" | sha256sum | cut -c1-16)"
+READBACK_OUT="$(docker exec coolify php artisan tinker --execute="
+\$app = \App\Models\Application::where('uuid','$MIGRATOR_UUID')->firstOrFail();
+\$rows = \$app->environment_variables()->where('key', 'MIGRATOR_DB_PASSWORD')->where('is_preview', false)->get();
+if (\$rows->count() !== 1) { echo \$rows->count(); } else { echo '1|' . substr(hash('sha256', (string) \$rows->first()->value), 0, 16); }
+" 2>/dev/null | tail -1 | tr -d ' \n')"
+READBACK_COUNT="${READBACK_OUT%%|*}"
+READBACK_HASH="${READBACK_OUT#*|}"
+if [ "$READBACK_COUNT" != "1" ]; then
+  echo "FATAL: MIGRATOR_DB_PASSWORD (is_preview=false) re-read found $READBACK_COUNT matching row(s) on pfin-migrator, expected exactly 1 -- refusing to trust the store." >&2
+  exit 1
+fi
+if [ "$READBACK_HASH" != "$EXPECTED_HASH" ]; then
+  echo "FATAL: the store's MIGRATOR_DB_PASSWORD changed between leg A's read and leg C's connect attempt (concurrent rotation) -- refusing to report VERIFIED against a value that may no longer be current." >&2
+  exit 1
+fi
+echo "OK: the store's current MIGRATOR_DB_PASSWORD still hash-matches the value just used to connect -- no drift (value never printed)."
+REMOTE
+  ok "already-bootstrapped: migrator credential's live connect path (leg C) and store-hash match (leg E) both verified read-only -- VERIFIED, nothing to do"
   exit 0
 fi
 

@@ -29,6 +29,22 @@
 #      ownership census is dirty -> refuses, "the pfin_owner sweep broke
 #      somewhere" (proves this script does NOT treat bootstrap_complete
 #      alone as sufficient evidence).
+#  2a. ALREADY-BOOTSTRAPPED-STORE-ABSENT (team-lead, run-4 follow-up,
+#      2026-09-21 -- remedies Sec's PR #854 "falsified verification
+#      record" finding: the census alone, scenario 1's own check, said
+#      nothing about the migrator credential actually working) -- census
+#      clean, but pfin-migrator's env store holds no MIGRATOR_DB_PASSWORD
+#      -> FAILED (exit 2), "credential/store drift", never a false
+#      VERIFIED.
+#  2b. ALREADY-BOOTSTRAPPED-LEG-C-FAILS -- census clean, store holds a
+#      credential, but connecting AS migrator with it fails outright ->
+#      refuses (exit 1), "store and the live role have drifted apart" --
+#      proves this path's own leg C is load-bearing, not decorative.
+#  2c. ALREADY-BOOTSTRAPPED-LEG-E-DIVERGES -- census clean, leg C connects
+#      fine, but the store's re-read value no longer hash-matches what
+#      leg C just used (a rotation racing this very check) -> refuses
+#      (exit 1), "changed between leg A's read and leg C's connect
+#      attempt".
 #   3. PARTIAL-STATE -- migrator already has LOGIN+password but
 #      bootstrap_complete=false -> refuses, "PARTIAL bootstrap state" (proves
 #      the script refuses to GUESS a repair rather than re-running
@@ -537,6 +553,19 @@ assert_output_lacks "already-bootstrapped-clean" "${OUT1:-}" "roles.sql applied"
 # 2. ALREADY-BOOTSTRAPPED-CENSUS-BAD
 OUT2="$(run_scenario "already-bootstrapped-census-bad: refuses" 1 "" clean "false|false" true 1 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
 assert_output_contains "already-bootstrapped-census-bad" "${OUT2:-}" "the pfin_owner sweep broke somewhere" || FAIL=1
+
+# 2a. ALREADY-BOOTSTRAPPED-STORE-ABSENT -- store_pw="" models "no
+#     MIGRATOR_DB_PASSWORD (is_preview=false) on pfin-migrator".
+OUT2A="$(run_scenario "already-bootstrapped-store-absent: FAILED (exit 2)" 2 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "" 0)" || FAIL=1
+assert_output_contains "already-bootstrapped-store-absent" "${OUT2A:-}" "credential/store drift" || FAIL=1
+
+# 2b. ALREADY-BOOTSTRAPPED-LEG-C-FAILS
+OUT2B="$(run_scenario "already-bootstrapped-leg-c-fails: refuses" 1 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 1 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1
+assert_output_contains "already-bootstrapped-leg-c-fails" "${OUT2B:-}" "store and the live role have drifted apart" || FAIL=1
+
+# 2c. ALREADY-BOOTSTRAPPED-LEG-E-DIVERGES
+OUT2C="$(run_scenario "already-bootstrapped-leg-e-diverges: refuses" 1 "" clean "false|false" true 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 1 "$FIXED_STORE_PW" 0)" || FAIL=1
+assert_output_contains "already-bootstrapped-leg-e-diverges" "${OUT2C:-}" "changed between leg A's read and leg C's connect attempt" || FAIL=1
 
 # 3. PARTIAL-STATE
 OUT3="$(run_scenario "partial-state: refuses" 1 "" clean "true|true" false 0 0 0 0 0 0 0 true "true|true" 0 0 0 0 "" 0 "$FIXED_STORE_PW" 0)" || FAIL=1

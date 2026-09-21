@@ -35,6 +35,16 @@
 #       tinker call produces NO output at all (crashed/unreachable) ->
 #       refuses the same way, "refusing to trust an ambiguous store
 #       state".
+#   2f. ALREADY-HANDED-OFF-BIND-CHECK-STORE-EMPTY (team-lead, run-4, Item
+#       4, 2026-09-21 -- remedies Sec's PR #852 F-1 existence-only finding)
+#       -- the count-only preflight says the store carries a
+#       PFIN_DB_PASSWORD row, but the bind-check's OWN dedicated value read
+#       resolves to empty (a store/count inconsistency) -> refuses,
+#       "INCONSISTENT(store", never a false VERIFIED.
+#   2g. ALREADY-HANDED-OFF-BIND-CHECK-CONNECT-FAILS -- the store carries a
+#       value, but connecting AS the role with it fails (the exact
+#       half-completed-rotation residual F-1 named) -> refuses,
+#       "INCONSISTENT(store", never the old existence-only VERIFIED.
 #   3. ROTATE-BUT-NOT-YET-LOGIN -- preflight reads 'false|false' and --rotate IS
 #      passed -> refuses, naming "not yet LOGIN".
 #   4. RESOURCE-ABSENT  -- the target Coolify resource does not exist ->
@@ -143,8 +153,22 @@ cat > "$FAKE_BIN/docker" <<'EOF'
 ARGS="$*"
 
 if [[ "$ARGS" == *"artisan tinker --execute"* ]]; then
+  # team-lead follow-up, run-4 (Item 4, 2026-09-21): the NEW already-
+  # handed-off bind-check's own leg-A read (`->first()`, echoing the
+  # actual VALUE) is distinguished from the OLDER count-only preflight
+  # read (`->count()`) by the presence of "->first()" in the tinker script
+  # body -- checked BEFORE the count branch below, since both share the
+  # "no hash(" property and would otherwise collide on the same branch.
+  if [[ "$ARGS" == *"->first()"* && "$ARGS" != *"hash("* ]]; then
+    # FAKE_BIND_CHECK_PW unset/empty models "store resolved to no value on
+    # this specific read" (scenario 2f); a real-looking default keeps every
+    # OTHER scenario's already-handed-off bind-check passing without
+    # having to thread this var through explicitly.
+    echo "${FAKE_BIND_CHECK_PW-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+    exit 0
+  fi
   # team-lead follow-up (live --dry-run, provision.sh sweep, 2026-09-20):
-  # the NEW preflight store-count check (a bare `->count()`, no hash
+  # the OLDER preflight store-count check (a bare `->count()`, no hash
   # binding -- that only makes sense AFTER this run has generated a
   # credential) is distinguished from leg E's own readback (below) by the
   # ABSENCE of "hash(" in the tinker script body -- leg E's own query
@@ -330,7 +354,7 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_ECHO_PASSWORD_IN_OUTPUT="\$FAKE_ECHO_PASSWORD_IN_OUTPUT" FAKE_READBACK_COUNT="\$FAKE_READBACK_COUNT" \\
     FAKE_NO_PASSWORD_PROMPT="\$FAKE_NO_PASSWORD_PROMPT" FAKE_READBACK_HASH_MISMATCH="\$FAKE_READBACK_HASH_MISMATCH" \\
     FAKE_READBACK_USER="\$FAKE_READBACK_USER" FAKE_ECHO_PW_IN_CONNECT="\$FAKE_ECHO_PW_IN_CONNECT" \\
-    FAKE_STORE_COUNT="\$FAKE_STORE_COUNT" \\
+    FAKE_STORE_COUNT="\$FAKE_STORE_COUNT" FAKE_BIND_CHECK_PW="\$FAKE_BIND_CHECK_PW" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -361,8 +385,14 @@ run_scenario() {
   # every pre-existing "false|false" scenario's own fresh-state assumption,
   # unaffected by this parameter's addition); scenarios exercising the
   # already-handed-off / mismatched-state logic set it explicitly.
+  # <bind_check_pw> (team-lead, run-4, Item 4, 2026-09-21): the already-
+  # handed-off bind-check's OWN leg-A value read. Empty string models "the
+  # store resolved to no value on this specific read" (scenario 2f);
+  # unset/omitted defaults to a real-looking 64-char value so every other
+  # scenario's bind-check (including connect-fail strikes via
+  # <connect_fail>) passes through this read undisturbed.
   local desc="$1" expect_exit="$2" role="$3" apply_flag="$4" curl_mode="$5" \
-        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}"
+        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   local resource_name="pfin-back-etl"
@@ -375,7 +405,7 @@ run_scenario() {
     FAKE_ECHO_PASSWORD_IN_OUTPUT="$echo_pw" FAKE_READBACK_COUNT="$readback_count" \
     FAKE_NO_PASSWORD_PROMPT="$no_prompt" FAKE_READBACK_HASH_MISMATCH="$hash_mismatch" \
     FAKE_READBACK_USER="$readback_user" FAKE_ECHO_PW_IN_CONNECT="$echo_pw_in_connect" \
-    FAKE_STORE_COUNT="$store_count" \
+    FAKE_STORE_COUNT="$store_count" FAKE_BIND_CHECK_PW="$bind_check_pw" \
     bash "$DB_ROLE_HANDOFF_SH" "$role" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -432,11 +462,24 @@ assert_output_contains "role-missing" "${OUT1:-}" "does not exist" || FAIL=1
 OUT2="$(run_scenario "already-handed-off: VERIFIED no-op" 0 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1)" || FAIL=1
 assert_output_contains "already-handed-off" "${OUT2:-}" "already handed off" || FAIL=1
 assert_output_contains "already-handed-off" "${OUT2:-}" "VERIFIED" || FAIL=1
-# Sec F-1 (PR #852 AMBER review), option (a)+(c) -- this no-op path is
-# existence-only (does not re-verify the store's value still matches
-# Postgres's LIVE password); pin that the loud caveat actually prints on
-# every no-op run, not just in the header comment.
-assert_output_contains "already-handed-off" "${OUT2:-}" "existence-only check" || FAIL=1
+# Sec F-1 (PR #852 AMBER review) remedied (team-lead, run-4, Item 4,
+# 2026-09-21) -- this no-op path used to be existence-only; it now runs a
+# real bind-check (read the store's current value, connect AS the role
+# with it) before reporting VERIFIED. Pin the bind-check's own success
+# line, not the old existence-only caveat text (removed).
+assert_output_contains "already-handed-off" "${OUT2:-}" "bind-check confirmed" || FAIL=1
+
+# 2f. ALREADY-HANDED-OFF-BIND-CHECK-STORE-EMPTY -- count-only preflight
+#     says the store carries a row (store_count=1), but the bind-check's
+#     own dedicated value read resolves to empty.
+OUT2F="$(run_scenario "already-handed-off-bind-check: store-empty refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "")" || FAIL=1
+assert_output_contains "already-handed-off-bind-check-store-empty" "${OUT2F:-}" "INCONSISTENT(store" || FAIL=1
+
+# 2g. ALREADY-HANDED-OFF-BIND-CHECK-CONNECT-FAILS -- the store carries a
+#     real-looking value, but connecting AS the role with it fails --
+#     the exact half-completed-rotation residual Sec's F-1 named.
+OUT2G="$(run_scenario "already-handed-off-bind-check: connect-fails refuses" 1 pfin_etl --apply clean "true|true" "true|true" 1 0 0 0 "" 0 0 "" 0 1)" || FAIL=1
+assert_output_contains "already-handed-off-bind-check-connect-fails" "${OUT2G:-}" "INCONSISTENT(store" || FAIL=1
 
 # 2d. AMBIGUOUS-STORE-STATE (Sec F-5, PR #852 AMBER review) -- the store
 #     readback itself finds MORE than one matching row (store_count=2), a

@@ -55,6 +55,16 @@
 #      post-deploy.
 #   12. RESOLVE-HOST-FAIL -- --resolve-host given, `getent hosts` fails
 #      inside the container -> refuses, post-deploy.
+#   13. NETWORK-ARG-EMPTY-REFUSES (team-lead, run 4, 2026-09-21) --
+#      `--require-network ""` (an explicit empty value, e.g. from an
+#      unset caller variable) refuses immediately, BEFORE any docker/API
+#      call -- distinct from omitting the flag entirely (scenario 1's
+#      own happy path), which must still skip the check silently.
+#   14. NETWORK-ARG-NAME-SHAPED-REFUSES -- `--require-network
+#      SOME_VAR_NAME` (shaped like an unresolved shell variable name, the
+#      exact live defect: provision.sh used to pass
+#      `APP_STACK_NETWORK_NAME` literally) refuses immediately, before
+#      any docker/API call.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -356,6 +366,44 @@ FAKE_DOCKER_NETWORKS=none run_scenario "network-attachment: not attached refuses
 #    inside the container -- post-deploy refusal.
 FAKE_DOCKER_RESOLVE=fail run_scenario "resolve-host: getent failure refuses" 1 match \
   pfin-app --expect-base-directory /api --expect-build-pack dockercompose --compose-service app --resolve-host api-gw --apply >/dev/null || FAIL=1
+
+# 13. NETWORK-ARG-EMPTY-REFUSES (team-lead, run 4, 2026-09-21) --
+#    `--require-network ""` (an explicit empty value -- the shape a
+#    caller gets when it forgot to resolve a variable and the variable
+#    was unset, distinct from omitting the flag) refuses immediately,
+#    BEFORE any API call at all -- not just before /deploy. The live
+#    bug this covers: provision.sh's resolve_stack_network_value() can
+#    return empty on a soft failure path; deploy-app.sh must never
+#    silently treat empty-network the same as no-network-check-requested.
+NETWORK_EMPTY_LOG="$(run_scenario "network-arg: empty --require-network value refuses" 1 match \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --require-network "")" || FAIL=1
+if [[ -n "${NETWORK_EMPTY_LOG:-}" ]] && [[ -s "$NETWORK_EMPTY_LOG" ]]; then
+  echo "FAIL: [network-arg: empty --require-network value refuses] the empty-value guard did NOT run before any API call -- found logged curl invocation(s):" >&2
+  cat "$NETWORK_EMPTY_LOG" >&2
+  FAIL=1
+fi
+
+# 14. NETWORK-ARG-NAME-SHAPED-REFUSES -- `--require-network
+#    APP_STACK_NETWORK_NAME` (shaped like an unresolved shell variable
+#    name -- the EXACT live defect: provision.sh passed the env-var
+#    NAME literally instead of calling resolve-stack-network.sh first)
+#    refuses immediately, before any API call.
+NETWORK_NAME_SHAPED_LOG="$(run_scenario "network-arg: NAME-shaped --require-network value refuses" 1 match \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --require-network APP_STACK_NETWORK_NAME)" || FAIL=1
+if [[ -n "${NETWORK_NAME_SHAPED_LOG:-}" ]] && [[ -s "$NETWORK_NAME_SHAPED_LOG" ]]; then
+  echo "FAIL: [network-arg: NAME-shaped --require-network value refuses] the name-shape guard did NOT run before any API call -- found logged curl invocation(s):" >&2
+  cat "$NETWORK_NAME_SHAPED_LOG" >&2
+  FAIL=1
+fi
+
+# 14a. NETWORK-ARG-REAL-VALUE-STILL-PASSES -- positive control: a real
+#    Docker-network-shaped value (lowercase, matches scenario 10a's
+#    "stack-net") must NOT be caught by the empty/name-shape guard --
+#    the guard's regex must not overfire on legitimate values. Preflight
+#    only (no --apply): this checks the guard itself, not the full
+#    post-deploy attachment check, which scenario 10a already covers.
+run_scenario "network-arg: real network-shaped value is not blocked by the guard" 0 match \
+  pfin-app --expect-base-directory /api --expect-build-pack dockercompose --require-network stack-net >/dev/null || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

@@ -154,6 +154,7 @@ EXPECT_BUILD_PACK=""
 COMPOSE_SERVICE=""
 REQUIRE_ENV_RAW=""
 REQUIRE_NETWORK=""
+REQUIRE_NETWORK_SET=0
 RESOLVE_HOST=""
 APPLY=0
 HEALTH_PATH=""
@@ -163,7 +164,7 @@ while [[ $# -gt 0 ]]; do
     --expect-build-pack) [[ $# -ge 2 ]] || die "--expect-build-pack requires an argument"; EXPECT_BUILD_PACK="$2"; shift 2 ;;
     --compose-service) [[ $# -ge 2 ]] || die "--compose-service requires an argument"; COMPOSE_SERVICE="$2"; shift 2 ;;
     --require-env) [[ $# -ge 2 ]] || die "--require-env requires an argument"; REQUIRE_ENV_RAW="$2"; shift 2 ;;
-    --require-network) [[ $# -ge 2 ]] || die "--require-network requires an argument"; REQUIRE_NETWORK="$2"; shift 2 ;;
+    --require-network) [[ $# -ge 2 ]] || die "--require-network requires an argument"; REQUIRE_NETWORK="$2"; REQUIRE_NETWORK_SET=1; shift 2 ;;
     --resolve-host) [[ $# -ge 2 ]] || die "--resolve-host requires an argument"; RESOLVE_HOST="$2"; shift 2 ;;
     --apply) APPLY=1; shift ;;
     --health-path) [[ $# -ge 2 ]] || die "--health-path requires an argument"; HEALTH_PATH="$2"; shift 2 ;;
@@ -173,6 +174,25 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$EXPECT_BASE_DIR" ]] || die "--expect-base-directory is required -- this is the identity guard this script exists to enforce, not an optional extra."
 [[ -n "$BOX_IP" ]] || die "BOX_IP is required, not defaulted -- set it explicitly (same discipline as every other scripts/provision-*.sh / coolify-env.sh)."
+# team-lead's own live measurement, run 4 (realrun4.log), 2026-09-21:
+# provision.sh's run_deploy_app()/run_deploy_workers() passed the ENV-VAR
+# NAME (`APP_STACK_NETWORK_NAME` etc.) as this flag's argument, a literal
+# string that can never match a real Docker network attachment -- step 15
+# FAILED on a genuinely-successful deploy. Guarded here, not only fixed at
+# the caller: a caller passing `--require-network ""` (an empty value,
+# e.g. from an unset variable expanding to nothing) would otherwise be
+# silently treated the SAME as never passing the flag at all (the check
+# below only runs `if [[ -n "$REQUIRE_NETWORK" ]]`), turning a caller bug
+# into a silent no-check rather than a loud refusal -- REQUIRE_NETWORK_SET
+# distinguishes "flag never passed" from "flag passed empty". A value
+# shaped like an all-caps shell identifier (`FOO_BAR_NAME`) is refused for
+# the same reason -- a real Coolify-assigned Docker network name is never
+# shaped that way (see this script's own README/callers for what a real
+# value looks like: `nz7mbexygw9lesjlazcxeltn`).
+if [[ "$REQUIRE_NETWORK_SET" -eq 1 ]]; then
+  [[ -n "$REQUIRE_NETWORK" ]] || die "--require-network was passed an EMPTY value -- refusing rather than silently skipping the network-attachment check (this is very likely a caller bug: an unresolved variable expanded to nothing). Pass a real, resolved Docker network name, or omit the flag entirely if the check genuinely does not apply."
+  [[ "$REQUIRE_NETWORK" =~ ^[A-Z_][A-Z0-9_]*$ ]] && die "--require-network was passed '$REQUIRE_NETWORK', which is shaped like an UNRESOLVED SHELL VARIABLE NAME, not a real Docker network value -- refusing (this is very likely a caller bug: the caller's own variable NAME leaked through instead of its resolved VALUE, e.g. \`--require-network SOME_VAR_NAME\` instead of \`--require-network \"\$SOME_VAR_NAME\"\`). A real Coolify-assigned network name is never all-caps-with-underscores."
+fi
 
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=6 -i "$AUTOMATION_KEY")
 sshx() { ssh "${SSH_OPTS[@]}" "root@$BOX_IP" "$@"; }

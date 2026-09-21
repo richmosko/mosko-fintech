@@ -811,22 +811,69 @@ handoff_role_run() {
 run_etl_role()             { require_box_ip || return 2; handoff_role_run pfin_etl "${1:-}"; }
 run_provider_sync_role()   { require_box_ip || return 2; handoff_role_run pfin_provider_sync "${1:-}"; }
 
+# resolve_stack_network_value -- team-lead's own live measurement, run 4
+# (realrun4.log), 2026-09-21: run_deploy_app()/run_deploy_workers() used
+# to pass `--require-network APP_STACK_NETWORK_NAME` (etc.) -- the ENV-
+# VAR NAME, as a literal string -- to deploy-app.sh, which compares its
+# argument byte-for-byte against the deployed container's REAL Docker
+# network attachments. `.env` also defines no `*_STACK_NETWORK_NAME` name
+# at all, so even `"${APP_STACK_NETWORK_NAME}"` would have expanded to
+# empty. Step 15 (deploy-app) FAILED on a genuinely-successful deploy:
+# "NETWORK-ATTACHMENT CHECK FAILED: container ... is not attached to
+# network 'APP_STACK_NETWORK_NAME'. Networks it IS attached to: ...
+# nz7mbexygw9lesjlazcxeltn" -- the real value was RIGHT THERE in the
+# error, never passed. Resolved live ONCE via scripts/resolve-stack-
+# network.sh (the SAME lookup provision-migrator-app.sh already performs
+# correctly for MIGRATOR_STACK_NETWORK_NAME -- extracted, not
+# re-derived) and reused for all four call sites below, since app and
+# every worker attach to the SAME stack network (confirmed live: run 4's
+# own MIGRATOR_STACK_NETWORK_NAME resolution and pfin-app's actual
+# attachment both read `nz7mbexygw9lesjlazcxeltn`). Memoized the same way
+# PGRST_FLIP_LIVE_DONE/PROVISION_RESOURCES_LIVE_DONE are above -- one live
+# re-check per provision.sh invocation, not once per caller.
+# ⚠ CALL THIS AS A PLAIN STATEMENT, NEVER VIA COMMAND SUBSTITUTION -- self-
+# found bug (fence-provision-strikes.sh scenarios 26/27, 2026-09-21): bash
+# forks a SUBSHELL for `$(...)`, so `net="$(resolve_stack_network_value)"`
+# ran this function's `STACK_NETWORK_VALUE="..."` assignment inside that
+# subshell -- it never survived back to the parent process, silently
+# re-resolving on every call (measured: 2 calls for one step; would have
+# been 2 for deploy-app and up to 2 more per worker for deploy-workers).
+# Fixed to set the global as a side effect and have callers read it back
+# directly -- never capture this function's own stdout again.
+STACK_NETWORK_VALUE=""
+resolve_stack_network_value() {
+  if [[ -z "$STACK_NETWORK_VALUE" ]]; then
+    local out rc
+    if out="$(bash "$SCRIPTS/resolve-stack-network.sh")"; then
+      STACK_NETWORK_VALUE="$out"
+    else
+      rc=$?
+      return "$rc"
+    fi
+  fi
+  return 0
+}
+
 run_deploy_app() {
   require_box_ip || return 2
+  resolve_stack_network_value || return $?
+  local net="$STACK_NETWORK_VALUE"
   bash "$SCRIPTS/deploy-app.sh" pfin-app --expect-base-directory /api --expect-build-pack dockercompose --compose-service app \
     --require-env PUBLIC_SUPABASE_URL,PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY \
-    --require-network APP_STACK_NETWORK_NAME --resolve-host api-gw ${1:+--apply} || return $?
+    --require-network "$net" --resolve-host api-gw ${1:+--apply} || return $?
   [[ -n "${1:-}" ]] || return 0
   bash "$SCRIPTS/smoke-pfin-exposure.sh" pfin-app --compose-service app
 }
 
 run_deploy_workers() {
   require_box_ip || return 2
+  resolve_stack_network_value || return $?
+  local net="$STACK_NETWORK_VALUE"
   for name in pfin-back-etl pfin-provider-sync pfin-pdf-render; do
     case "$name" in
-      pfin-back-etl)      bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/etl --expect-build-pack dockercompose --compose-service pfin-back-etl-monthly-report --require-network ETL_STACK_NETWORK_NAME --resolve-host db ${1:+--apply} || return $? ;;
-      pfin-provider-sync) bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/provider-sync --expect-build-pack dockercompose --compose-service provider-sync --require-network PROVIDER_SYNC_STACK_NETWORK_NAME --resolve-host db ${1:+--apply} || return $? ;;
-      pfin-pdf-render)    bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/pdf-render --expect-build-pack dockercompose --compose-service pdf-render --require-network PDF_RENDER_STACK_NETWORK_NAME ${1:+--apply} || return $? ;;
+      pfin-back-etl)      bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/etl --expect-build-pack dockercompose --compose-service pfin-back-etl-monthly-report --require-network "$net" --resolve-host db ${1:+--apply} || return $? ;;
+      pfin-provider-sync) bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/provider-sync --expect-build-pack dockercompose --compose-service provider-sync --require-network "$net" --resolve-host db ${1:+--apply} || return $? ;;
+      pfin-pdf-render)    bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/pdf-render --expect-build-pack dockercompose --compose-service pdf-render --require-network "$net" ${1:+--apply} || return $? ;;
     esac
   done
 }
