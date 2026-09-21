@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-assign-app-domain-strikes.sh. Distinguishes THREE call
+# shapes by URL:
+#   1. Porkbun DNS API (api.porkbun.com/api/json/v3/dns/...) -- responds
+#      per FAKE_PORKBUN_RECORDS (dns/retrieve) or a canned SUCCESS
+#      (dns/create, dns/editByNameType).
+#   2. Coolify API (localhost:8000/api/v1/...) -- canned application list
+#      / detail / PATCH read-back, same shape as sibling fences.
+#   3. The public HTTPS poll (https://<domain>/ or https://www.<domain>/)
+#      -- responds per FAKE_APEX_CODE / FAKE_WWW_CODE.
+#
+# LEAK CHECK (Sec ask: keys never touch argv) -- if either
+# FAKE_PORKBUN_API_KEY_VALUE or FAKE_PORKBUN_SECRET_KEY_VALUE appears
+# ANYWHERE in this invocation's own argv ($*), this writes a sentinel to
+# $FAKE_LEAK_LOG and exits 99 -- the fence asserts that file never gets
+# written across every scenario.
+
+set -euo pipefail
+
+ARGS="$*"
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$ARGS" >> "$LOG"
+
+if [[ -n "${FAKE_PORKBUN_API_KEY_VALUE:-}" && "$ARGS" == *"$FAKE_PORKBUN_API_KEY_VALUE"* ]]; then
+  printf 'LEAK: PORKBUN_API_KEY value found in curl argv: %s\n' "$ARGS" >> "${FAKE_LEAK_LOG:-/dev/null}"
+  exit 99
+fi
+if [[ -n "${FAKE_PORKBUN_SECRET_KEY_VALUE:-}" && "$ARGS" == *"$FAKE_PORKBUN_SECRET_KEY_VALUE"* ]]; then
+  printf 'LEAK: PORKBUN_SECRET_KEY value found in curl argv: %s\n' "$ARGS" >> "${FAKE_LEAK_LOG:-/dev/null}"
+  exit 99
+fi
+
+# --- Porkbun DNS API ---------------------------------------------------
+if [[ "$ARGS" == *"api.porkbun.com"* ]]; then
+  # The request body (containing apikey/secretapikey) is delivered via
+  # --data-binary @<tempfile> -- find and read it to prove keys never sat
+  # in argv (already checked above) and, for retrieve, to prove SOMETHING
+  # was actually sent.
+  BODY_FILE=""
+  prev=""
+  for a in "$@"; do
+    if [[ "$prev" == "--data-binary" ]]; then
+      BODY_FILE="${a#@}"
+    fi
+    prev="$a"
+  done
+  [[ -n "$BODY_FILE" && -f "$BODY_FILE" ]] || { echo '{"status":"ERROR","message":"fake-curl: no --data-binary body file found"}'; exit 0; }
+
+  if [[ "$ARGS" == *"/dns/retrieve/"* ]]; then
+    printf '{"status":"SUCCESS","records":%s}\n' "${FAKE_PORKBUN_RECORDS:-[]}"
+    exit 0
+  fi
+  if [[ "$ARGS" == *"/dns/create/"* || "$ARGS" == *"/dns/editByNameType/"* ]]; then
+    if [[ "${FAKE_PORKBUN_WRITE_MODE:-ok}" == "error" ]]; then
+      echo '{"status":"ERROR","message":"fake Porkbun write failure"}'
+      exit 0
+    fi
+    echo '{"status":"SUCCESS"}'
+    exit 0
+  fi
+  echo '{"status":"ERROR","message":"fake-curl: unrecognised Porkbun path"}'
+  exit 0
+fi
+
+# --- Coolify API ---------------------------------------------------------
+# api()'s own argv shape: -fsS -K - -X <METHOD> [--data-binary @<file>]
+# http://localhost:8000/api/v1<path> -- the URL is always the LAST token.
+if [[ "$ARGS" == *"localhost:8000/api/v1"* ]]; then
+  METHOD="GET"
+  [[ "$ARGS" == *"-X PATCH"* ]] && METHOD="PATCH"
+  URL="${*: -1}"
+  if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
+    cat <<JSON
+[
+  {"uuid": "${FAKE_APP_UUID:-appuuid0000000000001}", "name": "${FAKE_APP_NAME:-pfin-app}", "fqdn": "${FAKE_OLD_FQDN:-}"}
+]
+JSON
+    exit 0
+  fi
+  if [[ "$METHOD" == "PATCH" ]]; then
+    # Record that a PATCH happened; the subsequent GET read-back reports
+    # FAKE_NEW_FQDN if PATCH_TAKES_EFFECT=1, else the OLD value (simulates
+    # the "field name guess was wrong" case).
+    [[ -n "${FAKE_PATCH_MARKER:-}" ]] && echo "1" > "$FAKE_PATCH_MARKER"
+    echo '{}'
+    exit 0
+  fi
+  if [[ "$METHOD" == "GET" ]]; then
+    if [[ -n "${FAKE_PATCH_MARKER:-}" && -f "$FAKE_PATCH_MARKER" && "${FAKE_PATCH_TAKES_EFFECT:-1}" == "1" ]]; then
+      printf '{"uuid": "%s", "name": "%s", "fqdn": "%s"}\n' "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "${FAKE_NEW_FQDN:-}"
+    else
+      printf '{"uuid": "%s", "name": "%s", "fqdn": "%s"}\n' "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "${FAKE_OLD_FQDN:-}"
+    fi
+    exit 0
+  fi
+  echo '{}'
+  exit 0
+fi
+
+# --- Public HTTPS poll -----------------------------------------------------
+if [[ "$ARGS" == *"https://www."* ]]; then
+  printf '%s' "${FAKE_WWW_CODE:-200}"
+  exit 0
+fi
+if [[ "$ARGS" == *"https://"* ]]; then
+  printf '%s' "${FAKE_APEX_CODE:-200}"
+  exit 0
+fi
+
+echo "FAKE CURL: unrecognised invocation: $ARGS" >&2
+exit 1

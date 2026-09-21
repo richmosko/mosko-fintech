@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+#
+# fake-gh -- offline stand-in for the GitHub CLI, used by
+# scripts/ci/fence-github-ci-setup-strikes.sh. State that must persist
+# ACROSS calls within one script invocation (e.g. "gh variable set" then
+# a later "gh variable get" seeing the new value) lives in files under
+# $FAKE_STATE_DIR, seeded once per scenario by the fence. Matched by
+# PREFIX (case), not exact string equality -- robust to whatever --repo
+# value the real script's own REPO_SLUG resolves to.
+
+set -euo pipefail
+
+ARGS="$*"
+STATE="${FAKE_STATE_DIR:?FAKE_STATE_DIR must be set}"
+
+case "$ARGS" in
+  "auth status")
+    exit "${FAKE_GH_AUTH_RC:-0}"
+    ;;
+  "repo view --json nameWithOwner -q .nameWithOwner")
+    printf '%s\n' "${FAKE_REPO_SLUG:-owner/repo}"
+    exit 0
+    ;;
+  "api user --jq .login")
+    printf '%s\n' "${FAKE_REVIEWER_LOGIN:-fcto}"
+    exit 0
+    ;;
+  "api user --jq .id")
+    printf '%s\n' "${FAKE_REVIEWER_ID:-12345}"
+    exit 0
+    ;;
+  "secret list --json name,updatedAt")
+    if [[ "${FAKE_SECRET_PRESENT:-0}" == "1" ]]; then
+      echo '[{"name":"CI_MIGRATE_SSH_PRIVATE_KEY","updatedAt":"2026-01-01T00:00:00Z"}]'
+    else
+      echo '[]'
+    fi
+    exit 0
+    ;;
+  "variable get PROD_SSH_HOST"*)
+    if [[ -f "$STATE/var_PROD_SSH_HOST" ]]; then
+      cat "$STATE/var_PROD_SSH_HOST"
+    else
+      printf '%s' "${FAKE_VAR_INITIAL:-}"
+    fi
+    exit 0
+    ;;
+  "api repos/"*"/environments/"*)
+    REVIEWER=""
+    [[ -f "$STATE/env_reviewer_login" ]] && REVIEWER="$(cat "$STATE/env_reviewer_login")"
+    EXISTS=0
+    [[ -f "$STATE/env_exists" ]] && EXISTS=1
+    [[ "${FAKE_ENV_EXISTS:-0}" == "1" ]] && EXISTS=1
+    if [[ -z "$REVIEWER" && -n "${FAKE_ENV_REVIEWER_LOGIN:-}" && "$EXISTS" == "1" ]]; then
+      REVIEWER="${FAKE_ENV_REVIEWER_LOGIN}"
+    fi
+    if [[ "$EXISTS" != "1" ]]; then
+      echo '{"message":"Not Found"}' >&2
+      exit 1
+    fi
+    if [[ -n "$REVIEWER" ]]; then
+      printf '{"protection_rules":[{"type":"required_reviewers","reviewers":[{"reviewer":{"type":"User","login":"%s"}}]}]}\n' "$REVIEWER"
+    else
+      echo '{"protection_rules":[]}'
+    fi
+    exit 0
+    ;;
+  "secret set CI_MIGRATE_SSH_PRIVATE_KEY --repo "*)
+    cat > /dev/null  # consume stdin (the "private key" file content), never echoed
+    touch "$STATE/secret_set_called"
+    exit "${FAKE_SECRET_SET_RC:-0}"
+    ;;
+  "variable set PROD_SSH_HOST --repo "*)
+    if [[ "${FAKE_VAR_SET_TAKES_EFFECT:-1}" == "1" ]]; then
+      # last word is the --body value
+      printf '%s' "${*: -1}" > "$STATE/var_PROD_SSH_HOST"
+    fi
+    exit "${FAKE_VAR_SET_RC:-0}"
+    ;;
+  "api --method PUT repos/"*"--input -")
+    cat > /dev/null  # consume the JSON body from stdin
+    touch "$STATE/env_exists"
+    if [[ "${FAKE_ENV_PUT_TAKES_EFFECT:-1}" == "1" ]]; then
+      printf '%s' "${FAKE_REVIEWER_LOGIN:-fcto}" > "$STATE/env_reviewer_login"
+    fi
+    echo '{}'
+    exit "${FAKE_ENV_PUT_RC:-0}"
+    ;;
+  *)
+    echo "FAKE GH: unrecognised invocation: $ARGS" >&2
+    exit 1
+    ;;
+esac
