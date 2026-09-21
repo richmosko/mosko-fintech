@@ -253,8 +253,20 @@ security-scan.yml	fence-boolean-cast-pairing	psql boolean reads — cast/compari
 # was added in the same commit that first drafted this batch, so it now runs
 # advisory on every PR like its siblings above -- just not listed here as a
 # required context, per the criterion this batch applies.
-security-scan.yml	fence-tinker-write-allowlist	tinker --execute write-verb allowlist fence (tree-wide, sha-pinned) -- enforces: Sec ruling, PR #862 review (tinker-write allowlist)
-security-scan.yml	fence-docker-inspect-format-tab	docker inspect --format templates — literal-tab fence (tree-wide) -- enforces: Sec finding, PR #861 review (generalized escape-class)
+# ⚠ CONTEXT FIELD MUST BE BYTE-EXACT WITH THE JOB'S OWN `name:` -- Sec F-1,
+# PR #855 review. An earlier revision of the two rows below appended an
+# "-- enforces: ..." annotation INTO the context field itself; that string
+# then matches NO job's rendered name, so the context would never report,
+# hang Pending forever once required, and deadlock every PR -- recoverable
+# only by an F/CTO branch-protection edit. `required_unfiltered.py` now
+# asserts this byte-equality (its own 16th self-test probe: an appended
+# sentinel must fail). The annotation moves to this comment instead:
+#   fence-tinker-write-allowlist enforces Sec's PR #862-review ruling
+#     (tinker-write allowlist).
+#   fence-docker-inspect-format-tab enforces Sec's PR #861-review finding
+#     (generalized escape-class).
+security-scan.yml	fence-tinker-write-allowlist	tinker --execute write-verb allowlist fence (tree-wide, sha-pinned)
+security-scan.yml	fence-docker-inspect-format-tab	docker inspect --format templates — literal-tab fence (tree-wide)
 
 # The fence that enforces this file, listed in it deliberately. If
 # `required-unfiltered` is not itself a required context, someone can break it and
