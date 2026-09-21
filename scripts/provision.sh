@@ -929,8 +929,46 @@ verify_worker_store_binds() {
   return 0
 }
 
-# CA-1 post-deploy gate (Sec ruling, PR #862 review, option C): provider-
-# sync's --apply leg also runs scripts/verify-worker-ca1-clear.sh, a
+# worker_has_admission_guard <base-directory> -- DERIVES whether a
+# worker carries an HTTP admission surface that CA-1's container-env
+# check must guard, rather than a hardcoded name list (Sec req 4, CA-1
+# identity review, run-9 stop 2026-09-21: "derive... don't list it").
+# Reads the worker's OWN committed docker-compose.yaml (never executed,
+# structural grep only) for a `command:` override naming
+# `serve-admission.js` -- the SAME entrypoint
+# workers/provider-sync/docker-compose.yaml's own header comment
+# documents as "the ADMISSION SERVER ENTRYPOINT... nothing starts the
+# admission server without this override." A worker whose compose file
+# carries no such override (workers/etl, workers/pdf-render, as of this
+# writing) has no admission surface for CA-1's check to be meaningful
+# against -- this function returns 1 for it, and the caller logs an
+# explicit skip naming the worker and the reason, never a silent no-op.
+#
+# F-2 FIX (Sec, CA-1 identity review): the match is DELIBERATELY loose
+# -- `serve-admission` anywhere in the file, not `command:.*serve-
+# admission\.js` coupled onto one line. The tighter pattern matched
+# provider-sync's current inline-array form (`command: ["node", "dist/
+# cli/serve-admission.js"]`) but missed the equally standard multi-line
+# YAML list form (`command:\n  - node\n  - dist/cli/serve-admission.js`),
+# where `command:` and the filename are on DIFFERENT lines -- a worker
+# using that form would be silently dropped from CA-1 verification, the
+# exact gap this derivation exists to close. The loose match can also
+# fire on a COMMENTED-OUT reference; that is deliberately accepted
+# (Sec: "over-matching is the safe direction here") -- a false positive
+# merely verifies a worker that did not strictly need it (harmless), a
+# false negative skips one that did (the actual hazard).
+worker_has_admission_guard() {
+  local base_dir="$1" compose_file
+  compose_file="$REPO_ROOT/${base_dir#/}/docker-compose.yaml"
+  [[ -f "$compose_file" ]] || die3 "worker_has_admission_guard: no docker-compose.yaml at $compose_file -- cannot derive admission-guard membership for '$base_dir'. This is a hard stop, not a silent skip: a missing compose file where one is expected is a bigger problem than the check it would have gated."
+  grep -q 'serve-admission' "$compose_file"
+}
+
+# CA-1 post-deploy gate (Sec ruling, PR #862 review, option C; identity
+# fix + loop generalization, CA-1 identity review, run-9 stop
+# 2026-09-21): every worker whose own docker-compose.yaml declares an
+# admission-guard command override (worker_has_admission_guard above,
+# not a hardcoded list) also runs scripts/verify-worker-ca1-clear.sh, a
 # die-level check of the ACTUALLY RUNNING container's own env for a
 # non-empty COOLIFY_FQDN/COOLIFY_URL -- the authoritative half of the
 # fqdn-clear done-predicate that provision-worker.sh itself cannot make
@@ -939,19 +977,36 @@ verify_worker_store_binds() {
 # stale pre-clear value). This is the point a fresh container is
 # guaranteed to exist, and the exact signal admissionGuard.ts's own
 # detectPublicRouteSignal reacts to -- see that script's own header.
+# Today this resolves to provider-sync only (etl/pdf-render's compose
+# files carry no admission-guard override), but the loop no longer
+# names it -- a future worker gaining an admission surface is picked up
+# automatically the moment its own compose file declares one.
 run_deploy_workers() {
   require_box_ip || return 2
   resolve_stack_network_value || return $?
   local net="$STACK_NETWORK_VALUE"
+  local name base_dir compose_svc role
   for name in pfin-back-etl pfin-provider-sync pfin-pdf-render; do
     case "$name" in
-      pfin-back-etl)      bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/etl --expect-build-pack dockercompose --compose-service pfin-back-etl-monthly-report --require-network "$net" --resolve-host db ${1:+--apply} || return $?
-                          [[ -z "${1:-}" ]] || verify_worker_store_binds pfin_etl || return $? ;;
-      pfin-provider-sync) bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/provider-sync --expect-build-pack dockercompose --compose-service provider-sync --require-network "$net" --resolve-host db ${1:+--apply} || return $?
-                          [[ -z "${1:-}" ]] || verify_worker_store_binds pfin_provider_sync || return $?
-                          [[ -z "${1:-}" ]] || bash "$SCRIPTS/verify-worker-ca1-clear.sh" provider-sync || return $? ;;
-      pfin-pdf-render)    bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory /workers/pdf-render --expect-build-pack dockercompose --compose-service pdf-render --require-network "$net" ${1:+--apply} || return $? ;;
+      pfin-back-etl)      base_dir=/workers/etl;           compose_svc=pfin-back-etl-monthly-report; role=pfin_etl ;;
+      pfin-provider-sync) base_dir=/workers/provider-sync; compose_svc=provider-sync;                role=pfin_provider_sync ;;
+      pfin-pdf-render)    base_dir=/workers/pdf-render;    compose_svc=pdf-render;                    role="" ;;
     esac
+    if [[ "$name" == "pfin-pdf-render" ]]; then
+      bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory "$base_dir" --expect-build-pack dockercompose --compose-service "$compose_svc" --require-network "$net" ${1:+--apply} || return $?
+    else
+      bash "$SCRIPTS/deploy-app.sh" "$name" --expect-base-directory "$base_dir" --expect-build-pack dockercompose --compose-service "$compose_svc" --require-network "$net" --resolve-host db ${1:+--apply} || return $?
+    fi
+    if [[ -n "${1:-}" && -n "$role" ]]; then
+      verify_worker_store_binds "$role" || return $?
+    fi
+    if [[ -n "${1:-}" ]]; then
+      if worker_has_admission_guard "$base_dir"; then
+        bash "$SCRIPTS/verify-worker-ca1-clear.sh" "$name" --service "$compose_svc" || return $?
+      else
+        info "$name: no admission-guard command override in $base_dir/docker-compose.yaml -- CA-1 container-env check skipped (not applicable, no HTTP admission surface to guard)."
+      fi
+    fi
   done
 }
 

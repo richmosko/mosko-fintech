@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-verify-worker-ca1-clear-strikes.sh to drive
+# scripts/verify-worker-ca1-clear.sh's remote python driver (COPIED from
+# deploy-app.sh's own resolution -- see that script's header) against
+# CANNED Coolify API responses instead of a live box. Selected by PATH
+# precedence inside the fence's fake `ssh` wrapper -- verify-worker-ca1-
+# clear.sh itself is never modified or made aware this exists.
+#
+# The target script only ever calls ONE endpoint (GET /applications, for
+# name/uuid resolution) -- unlike deploy-app.sh's own fake-curl, there is
+# no /envs, /deploy, or /deployments/<id> shape to model here.
+#
+# Behaviour selected by $FAKE_CURL_MODE:
+#   match      (default) -- exactly one application matches the queried
+#              name/uuid ($FAKE_APP_NAME / $FAKE_APP_UUID).
+#   no-match   -- zero applications match -- resolution must refuse
+#              ("found 0"). Models a caller passing a name that isn't a
+#              real Coolify application at all (e.g. the bare compose
+#              SERVICE name, which is not this app's Coolify NAME).
+#   ambiguous  -- two applications share the same name -- resolution
+#              must refuse ("found 2"), never silently pick one.
+
+set -euo pipefail
+
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+METHOD="GET"
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+  prev="$a"
+done
+URL="${*: -1}"
+
+APP_NAME="${FAKE_APP_NAME:-pfin-provider-sync}"
+APP_UUID="${FAKE_APP_UUID:-hmjeuhdaolhw8tlz3qi6lop1}"
+
+if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
+  case "${FAKE_CURL_MODE:-match}" in
+    no-match)
+      echo '[]'
+      ;;
+    ambiguous)
+      printf '[{"uuid":"%s","name":"%s"},{"uuid":"%sdupe","name":"%s"}]' \
+        "$APP_UUID" "$APP_NAME" "$APP_UUID" "$APP_NAME"
+      ;;
+    *)
+      printf '[{"uuid":"%s","name":"%s"}]' "$APP_UUID" "$APP_NAME"
+      ;;
+  esac
+  exit 0
+fi
+
+echo '{}'
+exit 0
