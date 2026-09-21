@@ -24,8 +24,26 @@
 #
 #   SECOND, THIS IS A MANIFEST, NOT A MIRROR. Nothing mechanically proves it matches
 #   the actual branch-protection configuration: that read needs repo-ADMIN scope and
-#   CI's `GITHUB_TOKEN` cannot do it (`GET /repos/{o}/{r}/branches/main/protection`
-#   404s for the token). So:
+#   CI's `GITHUB_TOKEN` cannot do it. MEASURED LIVE, not assumed (team-lead ask,
+#   PR #855, 2026-09-21, sha 74952674 -- two probe jobs, both since removed):
+#     (1) `GET /repos/{o}/{r}/branches/main/protection` with the default GITHUB_TOKEN
+#         (no explicit `permissions:` grant -- the shape every job in this file runs
+#         under) returns HTTP 403 `"Resource not accessible by integration"` -- NOT
+#         404 as an earlier draft of this paragraph claimed. Corrected here because
+#         a stale claim about the exact failure mode invites the wrong diagnosis if
+#         someone later sees a real 404 (e.g. branch renamed) and assumes it's this
+#         known limitation.
+#     (2) There is no `permissions:` grant that can unlock this read for a
+#         GITHUB_TOKEN: `administration` is not a valid GITHUB_TOKEN permission scope
+#         name in GitHub Actions' schema at all -- adding `permissions:
+#         administration: read` to a job does not get a 403 either, it makes the
+#         ENTIRE WORKFLOW FILE fail validation before any job runs (0 jobs executed).
+#         This forecloses a live-divergence check via GITHUB_TOKEN + an in-workflow
+#         permissions grant categorically, not just under today's default settings --
+#         a future live-divergence check (not being built now) would need a PAT or
+#         GitHub App installation token, which reopens the exact CI/production
+#         secret-store non-overlap tradeoff this file's own "gap accepted
+#         deliberately" paragraph below already declined once. So:
 #
 #     - An entry listed here that is NOT actually required → the fence over-enforces.
 #       Harmless: it holds an unfiltered workflow unfiltered.

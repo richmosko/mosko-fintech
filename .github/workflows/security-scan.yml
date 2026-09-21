@@ -4285,47 +4285,6 @@ jobs:
       - name: tree-wide boolean-cast pairing scan (scripts/*.sh)
         run: bash scripts/ci/fence-boolean-cast-pairing.sh
 
-  probe-branch-protection-token-scope-default:
-    # TEMPORARY, one-shot measurement job -- team-lead asked whether CI's
-    # GITHUB_TOKEN can read branches/main/protection, for a possible future
-    # live-divergence check against .github/required-contexts.tsv (NOT
-    # being built now -- measurement only). required_unfiltered.py's own
-    # printed output already ASSERTS "CI's GITHUB_TOKEN does not have
-    # [this]" -- that claim had never actually been tested live, per this
-    # role's own standing discipline (verify a claim before repeating it).
-    #
-    # This job originally had a sibling, `probe-branch-protection-token-
-    # scope-admin-grant`, testing `permissions: administration: read` --
-    # REMOVED after it broke this ENTIRE WORKFLOW FILE (GitHub Actions
-    # rejected the run outright, 0 jobs executed, "workflow file issue")
-    # because `administration` is not a valid GITHUB_TOKEN permission
-    # scope name at all. That failure IS the measurement for that half of
-    # the question: there is no `permissions:` grant that can unlock this
-    # read for a GITHUB_TOKEN -- it is not a matter of asking for the
-    # right scope, the scope does not exist in Actions' schema. Caught via
-    # `gh run view` showing 0 jobs ran and the run API's job list empty,
-    # not assumed from the failure message alone.
-    #
-    # This remaining job (default/no explicit permissions -- the shape
-    # every other job in this file already runs under) will be REMOVED in
-    # the next commit once its own result is captured in required-
-    # contexts.tsv's header and the PR body -- it is not meant to survive
-    # as a permanent CI job.
-    name: "PROBE (temporary) -- GITHUB_TOKEN branch-protection read, default permissions"
-    runs-on: ubuntu-latest
-    steps:
-      - name: attempt read of branches/main/protection, NO explicit permissions grant
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          CODE=$(curl -s -o /tmp/resp.json -w '%{http_code}' \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/branches/main/protection")
-          echo "MEASUREMENT (no permissions: block on this job) http_code=$CODE"
-          cat /tmp/resp.json
-
   fence-tinker-write-allowlist:
     name: tinker --execute write-verb allowlist fence (tree-wide, sha-pinned)
     runs-on: ubuntu-latest
