@@ -981,17 +981,55 @@ worker_has_admission_guard() {
 # revisits it). Harmless for a worker with no admission guard, but the
 # ON-RESOURCE RECORD is wrong regardless, and for a guarded worker
 # (provider-sync) resuming into this same gap would crash-loop it
-# again. Preflight-reads provision-worker.sh's own current-state line
-# (`current state: fqdn=<STATE> (...), ports_exposes=<STATE> (...)`,
-# printed unconditionally by that script, apply or not) and, only if
-# either is SET, invokes provision-worker.sh's existing --apply clear
-# for this resource -- the SAME code path ALLOW-07 already covers,
-# untouched here. A preflight-read FAILURE is treated as fail-closed
-# (propagated), not silently skipped -- an unknown state ahead of a
-# deploy is not a state this function is willing to guess past.
+# again.
+#
+# ⚠ RUN-11 STOP CORRECTION (2026-09-21) -- this function's ORIGINAL
+# design called `provision-worker.sh "$name"` with NO flag (plain
+# preflight) and grepped its output for the "current state: ..." line,
+# on the strength of a header claim (this function's own, and
+# provision-worker.sh's) that the line was "printed unconditionally,
+# apply or not". MEASURED FALSE, live, run 11: preflight mode exits at
+# provision-worker.sh's own `if [[ $APPLY -eq 0 ]]; then exit 0; fi`
+# gate, well BEFORE the code that reads/classifies/prints that line ever
+# runs. The plain-preflight invocation therefore printed NOTHING
+# matching the grep, on EVERY worker, EVERY time -- and "no match" fell
+# through to "not SET", the exact opposite of "unknown, refuse to
+# guess". Result: etl's stale default fqdn/ports_exposes sailed through
+# this gate uncleared and the post-deploy CA-1 check (correctly) failed
+# on it. Fixed at the root in provision-worker.sh: a new `--state` mode,
+# provably read-only (two GETs, zero writes, exits before any
+# create/delete/PATCH/tinker call in that script's control flow -- see
+# its own header), is what this function calls now. Never revert to a
+# plain-preflight call for a state read.
+#
+# Sec's five requirements (run-11 stop, all held below):
+#   1. The sentinel format ("current state: fqdn=..., ports_exposes=...")
+#      is defined ONCE in provision-worker.sh and this function's own
+#      grep pattern is the same shape, not a copy that can drift --
+#      fence-provision-strikes.sh's own scenario pins the producer's
+#      literal format string, not just the consumer's regex.
+#   2. This function's `--state` call is REQUIRED to print a parseable
+#      state line whenever it exits 0 -- an rc-0 read with NO matching
+#      line is a refusal (`return 1`), never "no match -> assume clear",
+#      closing the exact absence-as-negative hole that caused run 11.
+#   3. `--state` is provably read-only (provision-worker.sh's own
+#      header + fence-provision-worker-strikes.sh's own scenario: a fake
+#      that fails closed on ANY write call, `--state` still exits 0).
+#   4. The POST-clear re-read is REQUIRED to show ABSENT/EMPTY on both
+#      fields -- if the clear ran but the re-read still shows SET, this
+#      function refuses (`return 1`, propagated by run_deploy_workers'
+#      own `|| return $?` into the whole run aborting) rather than
+#      warning and deploying anyway. This file's own convention is
+#      warn-then-`return <nonzero>` rather than a hard `die` exit (see
+#      require_box_ip/resolve_stack_network_value above) -- functionally
+#      identical here: run_deploy_workers propagates the failure and the
+#      step-runner stops, exactly as a `die` would, without breaking the
+#      composability every other run_* function in this file relies on.
+#   5. Live remediation is part of "done" for this fix -- see the PR
+#      this landed in for the actual resume run against the real box.
 worker_fqdn_clear_if_needed() {
-  local name="$1" out rc=0
-  if out="$(bash "$SCRIPTS/provision-worker.sh" "$name" 2>&1)"; then
+  local name="$1" out rc=0 state_line
+  if out="$(bash "$SCRIPTS/provision-worker.sh" "$name" --state 2>&1)"; then
     rc=0
   else
     rc=$?
@@ -1001,9 +1039,37 @@ worker_fqdn_clear_if_needed() {
     printf '%s\n' "$out" >&2
     return 1
   fi
-  if printf '%s' "$out" | grep -qE 'current state:.*(fqdn=SET|ports_exposes=SET)'; then
-    warn "$name: fqdn and/or ports_exposes is SET at deploy time -- a resume starting later than provision-resources never revisits that step's own clear (BACKLOG item, run-10 stop). Invoking the clear now, before deploying, rather than deploying against a stale/default-assigned domain record."
+  state_line="$(printf '%s' "$out" | grep -E 'current state: fqdn=(ABSENT|EMPTY|SET).*ports_exposes=(ABSENT|EMPTY|SET)' || true)"
+  if [[ -z "$state_line" ]]; then
+    warn "$name: --state exited 0 but printed no parseable 'current state: fqdn=..., ports_exposes=...' line -- refusing to treat an unparseable read as 'nothing is SET' (the exact failure mode this fix closes). Output:"
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if printf '%s' "$state_line" | grep -qE '(fqdn=SET|ports_exposes=SET)'; then
+    warn "$name: fqdn and/or ports_exposes is SET at deploy time ($state_line) -- a resume starting later than provision-resources never revisits that step's own clear (BACKLOG item, run-10 stop). Invoking the clear now, before deploying, rather than deploying against a stale/default-assigned domain record."
     bash "$SCRIPTS/provision-worker.sh" "$name" --apply || return $?
+    local reread rc2=0 reread_line
+    if reread="$(bash "$SCRIPTS/provision-worker.sh" "$name" --state 2>&1)"; then
+      rc2=0
+    else
+      rc2=$?
+    fi
+    if [[ "$rc2" -ne 0 ]]; then
+      warn "$name: post-clear state re-read FAILED (exit $rc2) -- cannot confirm the clear took before deploying. Output:"
+      printf '%s\n' "$reread" >&2
+      return 1
+    fi
+    reread_line="$(printf '%s' "$reread" | grep -E 'current state: fqdn=(ABSENT|EMPTY|SET).*ports_exposes=(ABSENT|EMPTY|SET)' || true)"
+    if [[ -z "$reread_line" ]]; then
+      warn "$name: post-clear re-read exited 0 but printed no parseable state line -- refusing to guess. Output:"
+      printf '%s\n' "$reread" >&2
+      return 1
+    fi
+    if printf '%s' "$reread_line" | grep -qE '(fqdn=SET|ports_exposes=SET)'; then
+      warn "$name: invoked the clear but the RE-READ still shows a SET field ($reread_line) -- refusing to deploy against an unconfirmed clear."
+      return 1
+    fi
+    ok "$name: clear confirmed via post-clear re-read ($reread_line)"
   fi
   return 0
 }

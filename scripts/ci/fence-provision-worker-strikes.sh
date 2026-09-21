@@ -63,6 +63,15 @@
 #      this step -- the die-level assertion on this lives in
 #      run_deploy_workers, post-deploy, see
 #      scripts/verify-worker-ca1-clear.sh).
+#   10a. STATE-PROVABLY-READ-ONLY (Sec run-11-stop requirement 3,
+#      2026-09-21) -- --state against a resource with fqdn AND
+#      ports_exposes both SET still exits 0 and reports both correctly,
+#      even under fakes that fail closed on ANY non-GET curl call and
+#      ANY non-api ssh command (docker ps/images, stack-network lookup,
+#      tinker) -- "two GETs, zero writes" proven for THIS run, not
+#      merely read off the code.
+#   10b. STATE-ABSENT-RESOURCE-DIES -- --state against a resource that
+#      was never created refuses (exit 1), never fabricates a state.
 #   10. UNKNOWN-NAME    -- this script's OWN new surface, not present in
 #      provision-app.sh (which has no resource-name argument at all):
 #      `provision-worker.sh some-other-name` must refuse with exit 2 BEFORE
@@ -190,9 +199,19 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_RESOURCE_NAME="\$FAKE_RESOURCE_NAME" FAKE_NETWORK_VAR="\$FAKE_NETWORK_VAR" \\
     FAKE_DEFAULT_FQDN="\${FAKE_DEFAULT_FQDN:-}" FAKE_DEFAULT_PORTS_EXPOSES="\${FAKE_DEFAULT_PORTS_EXPOSES:-}" \\
     FAKE_CLEAR_MARKER="\${FAKE_CLEAR_MARKER:-}" FAKE_CLEAR_BROKEN="\${FAKE_CLEAR_BROKEN:-0}" \\
-    FAKE_FQDN_CLEAR_MARKER="\${FAKE_FQDN_CLEAR_MARKER:-}" \\
+    FAKE_FQDN_CLEAR_MARKER="\${FAKE_FQDN_CLEAR_MARKER:-}" FAKE_FAIL_ON_WRITE="\${FAKE_FAIL_ON_WRITE:-}" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
+fi
+if [[ -n "\${FAKE_FAIL_ON_ANY_DOCKER_CALL:-}" ]]; then
+  # --state provably-read-only proof, docker half (Sec run-11-stop
+  # requirement 3): --state never resolves the stack network, never
+  # runs the delete-guard's docker ps/images reads, never execs a
+  # tinker write -- ALL of those go through this non-api-helper ssh
+  # branch, so refusing here too (not just fake-curl's writes) proves
+  # --state touches NEITHER surface, not just that it avoids POSTs.
+  echo "FAKE ssh: a non-api command ran under FAKE_FAIL_ON_ANY_DOCKER_CALL -- --state must never reach docker/tinker at all" >&2
+  exit 97
 fi
 CMD="\${@: -1}"
 CMD_REWRITTEN="\$(printf '%s' "\$CMD" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
@@ -385,6 +404,32 @@ CA1_STALE_OUT="$(FAKE_DEFAULT_FQDN='http://abc123.1.2.3.4.sslip.io' FAKE_FQDN_CL
 assert_output_contains "CA-1: stale container warns" "${CA1_STALE_OUT:-}" "WARN" || FAIL=1
 assert_output_contains "CA-1: stale container warns" "${CA1_STALE_OUT:-}" "still running with a non-empty route signal" || FAIL=1
 
+# 10a. STATE-PROVABLY-READ-ONLY (Sec run-11-stop requirement 3): --state
+#    against a resource that HAS a domain assigned (fqdn AND
+#    ports_exposes both SET, the true default-create shape) must still
+#    exit 0 and report the SET state correctly, even under fakes that
+#    fail closed on ANY non-GET curl call (POST/PATCH/DELETE) and on
+#    ANY non-api ssh command at all (the delete-guard's docker ps/
+#    images reads, the stack-network lookup, a tinker write) --
+#    together, "two GETs, zero writes" becomes a falsifiable claim about
+#    THIS invocation, not just a description of what the code happens
+#    to do today. Run against "clean" mode (the resource already
+#    exists, resolved to OLD_APP_UUID) since --state dies on an absent
+#    resource -- there is nothing to report state FOR.
+STATE_READONLY_OUT="$(FAKE_FAIL_ON_WRITE=1 FAKE_FAIL_ON_ANY_DOCKER_CALL=1 \
+  FAKE_DEFAULT_FQDN='http://abc123.1.2.3.4.sslip.io' FAKE_DEFAULT_PORTS_EXPOSES='80' \
+  run_scenario "STATE: --state is provably read-only (fails closed on ANY write/docker call)" 0 clean 0 0 pfin-provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME --state)" || FAIL=1
+assert_output_contains "STATE: provably read-only" "${STATE_READONLY_OUT:-}" "current state: fqdn=SET" || FAIL=1
+assert_output_contains "STATE: provably read-only" "${STATE_READONLY_OUT:-}" "ports_exposes=SET" || FAIL=1
+
+# 10b. STATE-ABSENT-RESOURCE-DIES -- --state against a resource that does
+#    not exist at all must refuse (exit 1, this script's own `die()`),
+#    never report a fabricated "ABSENT" state for something that was
+#    never created. "absent" mode -> fake-curl's GET /applications
+#    returns only the Supabase-stack app, never $RESOURCE_NAME.
+STATE_ABSENT_OUT="$(run_scenario "STATE: absent resource dies, never fabricates a state" 1 absent 0 0 pfin-provider-sync PROVIDER_SYNC_STACK_NETWORK_NAME --state)" || FAIL=1
+assert_output_contains "STATE: absent resource dies" "${STATE_ABSENT_OUT:-}" "does not exist" || FAIL=1
+
 # 10. UNKNOWN-NAME -- refuses BEFORE any SSH/API call. No fake ssh/curl on
 #    PATH at all for this scenario: if the script somehow reached a network
 #    call, the REAL ssh/curl on this runner would either hang or fail with
@@ -415,5 +460,5 @@ if [[ $FAIL -ne 0 ]]; then
   exit 1
 fi
 
-echo "OK: all provision-worker.sh strike-proofs passed (3 resources x 7 scenarios + CA-1 ports-clear-succeeds + CA-1 ports-patch-does-not-take + CA-1 fqdn-tinker-clear-succeeds + CA-1 fqdn-tinker-not-cleared + CA-1 fqdn-api-drift + CA-1 stale-container-warns + unknown-name refusal)."
+echo "OK: all provision-worker.sh strike-proofs passed (3 resources x 7 scenarios + CA-1 ports-clear-succeeds + CA-1 ports-patch-does-not-take + CA-1 fqdn-tinker-clear-succeeds + CA-1 fqdn-tinker-not-cleared + CA-1 fqdn-api-drift + CA-1 stale-container-warns + --state provably-read-only + --state absent-resource-dies + unknown-name refusal)."
 exit 0
