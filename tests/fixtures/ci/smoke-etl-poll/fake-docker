@@ -2,9 +2,11 @@
 #
 # fake-docker -- offline stand-in for docker, used by
 # scripts/ci/fence-smoke-etl-poll-strikes.sh. Handles container
-# resolution (compose ps -q / inspect), the worker run
+# resolution (compose ps -q / inspect), the PRE-CHECK active-tenant
+# count (`docker exec ... python3 -c ...` against pfin.account, Sec F-3
+# / F/CTO ruling 2026-09-20), the worker run
 # (`docker exec ... python run_nav_daily.py`), and the row-count
-# read-back (`docker exec ... python3 -c ...`).
+# read-back (`docker exec ... python3 -c ...` against pfin.nav_daily).
 
 set -euo pipefail
 
@@ -38,7 +40,20 @@ if [[ "$ARGS" == *"run_nav_daily.py"* ]]; then
   exit 0
 fi
 
-if [[ "$ARGS" == *"python3 -c"* ]]; then
+# Sec F-3 / F/CTO ruling 2026-09-20: TWO distinct python3 -c invocations now
+# exist (the pre-check tenant count against pfin.account, and the post-run
+# row-count check against pfin.nav_daily) -- distinguish by the literal SQL
+# text each embeds, since both otherwise match "python3 -c".
+if [[ "$ARGS" == *"python3 -c"* && "$ARGS" == *"pfin.account"* ]]; then
+  if [[ "${FAKE_TENANT_MODE:-ok}" == "conn-error" ]]; then
+    echo "CONN_ERROR could not connect" >&2
+    exit 2
+  fi
+  echo "${FAKE_TENANT_COUNT:-1}"
+  exit 0
+fi
+
+if [[ "$ARGS" == *"python3 -c"* && "$ARGS" == *"pfin.nav_daily"* ]]; then
   if [[ "${FAKE_COUNT_MODE:-ok}" == "conn-error" ]]; then
     echo "CONN_ERROR could not connect" >&2
     exit 2

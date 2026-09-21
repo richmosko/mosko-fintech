@@ -2,8 +2,10 @@
 #
 # fence-smoke-etl-poll-strikes.sh -- offline strike-proof for
 # scripts/smoke-etl-poll.sh's STRUCTURAL logic: container resolution,
-# worker exit-code propagation, the completion-log-line check, and the
-# row-count threshold (>=1 vs 0). BACKLOG.md §7.36 item 68 (W-3).
+# the pre-check active-tenant count and its SKIPPED short-circuit (Sec
+# F-3 / F/CTO ruling 2026-09-20), worker exit-code propagation, the
+# completion-log-line check, and the row-count threshold (>=1 vs 0).
+# BACKLOG.md §7.36 item 68 (W-3).
 #
 # ⚠ WHAT THIS FENCE DOES NOT, AND CANNOT, PROVE -- stated, not glossed:
 # whether `run_nav_daily.py` actually computes a correct NAV or whether
@@ -32,6 +34,12 @@
 #      attempt under, not a poll failure).
 #   6. AMBIGUOUS -- 2 running containers match the compose service ->
 #      refuses, never silently picking one (Sec F4 discipline).
+#   7. ZERO-TENANTS -- the pre-check reads zero active (account-owning)
+#      tenants -> SKIPPED, exit 3, and the worker is NEVER invoked (a
+#      worker_mode of "fail" in this scenario proves the short-circuit
+#      actually happens, not just that it would have passed anyway).
+#   8. TENANT-CONN-ERROR -- the pre-check's own connection attempt fails
+#      -> exit 2 (a precondition, same class as scenario 5).
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -80,17 +88,20 @@ CMD="\${@: -1}"
 CMD_REWRITTEN="\$(printf '%s' "\$CMD" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
 PATH="$FAKE_BIN:\$PATH" FAKE_WORKER_MODE="\${FAKE_WORKER_MODE:-}" FAKE_COUNT_MODE="\${FAKE_COUNT_MODE:-}" \\
   FAKE_COUNT="\${FAKE_COUNT:-}" FAKE_CONTAINERS="\${FAKE_CONTAINERS:-}" \\
+  FAKE_TENANT_MODE="\${FAKE_TENANT_MODE:-}" FAKE_TENANT_COUNT="\${FAKE_TENANT_COUNT:-}" \\
   bash -c "\$CMD_REWRITTEN"
 EOF
 chmod +x "$FAKE_BIN/ssh"
 
 run_scenario() {
-  # run_scenario <desc> <expect_exit> <worker_mode> <count_mode> <count> <containers>
+  # run_scenario <desc> <expect_exit> <worker_mode> <count_mode> <count> <containers> [tenant_mode] [tenant_count]
   local desc="$1" expect_exit="$2" worker_mode="$3" count_mode="$4" count="$5" containers="$6"
+  local tenant_mode="${7:-ok}" tenant_count="${8:-1}"
   set +e
   BOX_IP=127.0.0.1 AUTOMATION_KEY=/dev/null \
     PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$WORK/curl.log.$$.$RANDOM" \
     FAKE_WORKER_MODE="$worker_mode" FAKE_COUNT_MODE="$count_mode" FAKE_COUNT="$count" FAKE_CONTAINERS="$containers" \
+    FAKE_TENANT_MODE="$tenant_mode" FAKE_TENANT_COUNT="$tenant_count" \
     bash "$SMOKE_SH" < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -113,6 +124,17 @@ run_scenario "no completion line: refuses" 1 no-completion-line ok 3 1 || FAIL=1
 run_scenario "zero rows: refuses (silent no-op)" 1 ok ok 0 1 || FAIL=1
 run_scenario "row-count connection error: precondition, exit 2" 2 ok conn-error 3 1 || FAIL=1
 run_scenario "ambiguous: 2 running containers refuses" 1 ok ok 3 2 || FAIL=1
+
+# 7. ZERO-TENANTS -- Sec F-3 / F/CTO ruling 2026-09-20. Pre-check reads
+# zero active tenants -> SKIPPED, exit 3, the worker is NEVER invoked
+# (worker_mode "fail" here would flip this scenario to exit 1 if the
+# pre-check did not actually short-circuit before the worker run).
+run_scenario "zero active tenants: SKIPPED, exit 3, worker never runs" 3 fail ok 3 1 ok 0 || FAIL=1
+
+# 8. TENANT-CONN-ERROR -- the pre-check's own connection attempt fails
+# -> exit 2 (a precondition, same class as the post-run COUNT-CONN-ERROR
+# scenario above).
+run_scenario "tenant pre-check connection error: precondition, exit 2" 2 ok ok 3 1 conn-error 1 || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
