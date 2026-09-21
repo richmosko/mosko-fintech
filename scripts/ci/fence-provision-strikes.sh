@@ -137,17 +137,29 @@
 #      undocumented here despite existing in the script below) -- the
 #      post-deploy store re-verify failing for pfin-back-etl stops the
 #      whole step before provider-sync/pdf-render are ever reached.
-#  27c. DEPLOY-WORKERS-ADMISSION-GUARD-DERIVED (Sec req 4, CA-1 identity
-#      review, run-9 stop 2026-09-21) -- verify-worker-ca1-clear.sh runs
-#      for provider-sync (its compose file declares the serve-admission.js
-#      override) with the NEW <name> --service <svc> call shape, and is
-#      skipped -- explicitly, logged, naming the worker and the reason --
-#      for etl/pdf-render, whose compose files do not.
+#  27c. DEPLOY-WORKERS-CA1-CHECK-RUNS-ON-EVERY-WORKER (Sec's own
+#      correction of req 4, run-10/step-16 review, 2026-09-21) --
+#      verify-worker-ca1-clear.sh runs for ALL THREE workers
+#      unconditionally, each with the <name> --service <svc> call
+#      shape -- worker_has_admission_guard()'s result is now only an
+#      INFORMATIONAL log line, never a skip condition (pdf-render has a
+#      real HTTP listener + no code-level refusal, so "no guard" was
+#      backwards for exactly the worker that needed the check most).
 #  27d. DEPLOY-WORKERS-ADMISSION-GUARD-MISSING-COMPOSE-FILE-DIES -- a
 #      worker's docker-compose.yaml absent entirely (not merely lacking
 #      the override) hard-stops (die3, exit 3) rather than being treated
 #      as "no admission guard" -- a missing file where one is expected is
-#      a bigger problem than the check it would have gated.
+#      still a bigger problem than the informational tag it would have
+#      produced.
+#  27e. DEPLOY-WORKERS-RESUME-PATH-CLEAR-INVOKED-BEFORE-DEPLOY (team-
+#      lead's run-10 stop: a resume from/after deploy-workers never
+#      revisits provision-resources' own fqdn/ports_exposes clear) --
+#      fqdn reported SET on the pre-deploy read invokes provision-
+#      worker.sh's --apply clear BEFORE that worker's own deploy-app.sh
+#      --apply call, proven by call-log ORDER, not just presence.
+#  27f. DEPLOY-WORKERS-RESUME-PATH-READ-FAILURE-PROPAGATES -- the
+#      pre-deploy state-read itself failing fails CLOSED (propagates),
+#      never silently deploys against an unknown state.
 #  28. RESOLVE-STACK-NETWORK-FAILURE-BLOCKS-DEPLOY-APP -- resolve-stack-
 #      network.sh itself fails (rc=1) -> run_deploy_app() propagates the
 #      failure (exit 2, a genuine FAILED-STOPS outcome) and deploy-app.sh
@@ -1008,54 +1020,104 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
 fi
 CASE_ENV=()
 
-# 27c. DEPLOY-WORKERS-ADMISSION-GUARD-DERIVED (Sec req 4, CA-1 identity
-#      review, run-9 stop 2026-09-21) -- verify-worker-ca1-clear.sh is
-#      called for provider-sync (its docker-compose.yaml, seeded by
-#      run_case above, DOES declare a serve-admission.js command
-#      override) with the NEW call shape (<name> --service <svc>, not a
-#      bare container name), and is NEVER called for pfin-back-etl or
-#      pfin-pdf-render (whose seeded compose files do NOT) -- each of
-#      those two instead gets an explicit skip line in stdout naming the
-#      worker and the reason, never a silent no-op.
-run_case "deploy-workers: admission-guard check runs for provider-sync only, derived not listed" 0 --only deploy-workers || FAIL=1
+# 27c. DEPLOY-WORKERS-CA1-CHECK-RUNS-ON-EVERY-WORKER (Sec's own
+#      correction of req 4, run-10/step-16 review, 2026-09-21):
+#      verify-worker-ca1-clear.sh is called for ALL THREE workers
+#      unconditionally, each with the <name> --service <svc> shape --
+#      NOT gated on worker_has_admission_guard(). Its own result is now
+#      only an INFORMATIONAL log line: provider-sync's (seeded WITH the
+#      override) says so; etl/pdf-render's (seeded WITHOUT) say so too,
+#      but the check still runs for both regardless -- the exact
+#      reversal of the old derive-and-skip design, which Sec's own
+#      review found backwards for pdf-render specifically (a real HTTP
+#      listener with no code-level refusal is MORE exposed, not less).
+run_case "deploy-workers: CA-1 check runs for every worker; guard-derivation is informational only" 0 --only deploy-workers || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   CA1_LINES="$(grep '^verify-worker-ca1-clear ' "$CASE_LAST_DIR/calls.log" 2>/dev/null || true)"
   CA1_COUNT="$(echo "$CA1_LINES" | grep -c . || true)"
-  if [[ "$CA1_COUNT" -ne 1 ]]; then
-    echo "FAIL: [admission-guard-derived] expected exactly 1 verify-worker-ca1-clear call (provider-sync only), found $CA1_COUNT:" >&2
-    echo "$CA1_LINES" >&2
-    FAIL=1
-  elif ! echo "$CA1_LINES" | grep -qE -- 'pfin-provider-sync --service provider-sync( |$)'; then
-    echo "FAIL: [admission-guard-derived] the one verify-worker-ca1-clear call does not carry the new <name> --service <svc> shape:" >&2
+  if [[ "$CA1_COUNT" -ne 3 ]]; then
+    echo "FAIL: [ca1-every-worker] expected exactly 3 verify-worker-ca1-clear calls (all workers), found $CA1_COUNT:" >&2
     echo "$CA1_LINES" >&2
     FAIL=1
   fi
-  if ! grep -qE 'pfin-back-etl: no admission-guard command override' "$CASE_LAST_DIR/out.txt"; then
-    echo "FAIL: [admission-guard-derived] pfin-back-etl's skip was not logged explicitly (or was silent)." >&2
-    FAIL=1
-  fi
-  if ! grep -qE 'pfin-pdf-render: no admission-guard command override' "$CASE_LAST_DIR/out.txt"; then
-    echo "FAIL: [admission-guard-derived] pfin-pdf-render's skip was not logged explicitly (or was silent)." >&2
-    FAIL=1
-  fi
+  for pair in "pfin-back-etl --service pfin-back-etl-monthly-report" "pfin-provider-sync --service provider-sync" "pfin-pdf-render --service pdf-render"; do
+    echo "$CA1_LINES" | grep -qE -- "${pair}( |$)" || { echo "FAIL: [ca1-every-worker] missing/malformed call for: $pair" >&2; echo "$CA1_LINES" >&2; FAIL=1; }
+  done
+  grep -qE 'pfin-back-etl: no admission-guard command override' "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [ca1-every-worker] pfin-back-etl's informational tag not logged." >&2; FAIL=1; }
+  grep -qE 'pfin-pdf-render: no admission-guard command override' "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [ca1-every-worker] pfin-pdf-render's informational tag not logged." >&2; FAIL=1; }
+  grep -qE 'pfin-provider-sync: admission-guard command override declared' "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [ca1-every-worker] pfin-provider-sync's informational tag not logged." >&2; FAIL=1; }
 fi
 
 # 27d. DEPLOY-WORKERS-ADMISSION-GUARD-MISSING-COMPOSE-FILE-DIES -- a
 #      worker's docker-compose.yaml is absent entirely (not merely
 #      lacking the override) -- worker_has_admission_guard() must hard
 #      stop (die3, exit 3) rather than silently treating "file missing"
-#      the same as "override absent". A missing compose file where one
-#      is expected is a bigger problem than the check it would gate.
+#      the same as "override absent", EVEN THOUGH the tag is now purely
+#      informational -- a missing compose file where one is expected is
+#      still a bigger problem than the tag it would have produced.
 #      CASE_OMIT_PROVIDER_SYNC_COMPOSE=1 makes run_case itself leave the
 #      file out from the start -- deterministic, no timing dependency.
 CASE_OMIT_PROVIDER_SYNC_COMPOSE=1
 run_case "deploy-workers: missing compose file hard-stops (die3), never silently skips" 3 --only deploy-workers || FAIL=1
 CASE_OMIT_PROVIDER_SYNC_COMPOSE=0
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
-  if ! grep -qF "cannot derive admission-guard membership" "$CASE_LAST_DIR/out.txt"; then
+  if ! grep -qF "cannot derive the admission-guard informational tag" "$CASE_LAST_DIR/out.txt"; then
     echo "FAIL: [admission-guard-missing-compose] die3 did not name the derivation failure." >&2
     FAIL=1
   fi
+fi
+
+# 27e. DEPLOY-WORKERS-RESUME-PATH-CLEAR-INVOKED-BEFORE-DEPLOY (team-
+#      lead's own run-10 stop: a resume starting at/after deploy-
+#      workers never revisits provision-resources' own fqdn/
+#      ports_exposes clear) -- fqdn reported SET on the pre-deploy
+#      read invokes provision-worker.sh's existing --apply clear BEFORE
+#      that worker's own deploy-app.sh --apply call. Proven by call-log
+#      ORDER (line number), not just call presence -- presence alone
+#      would not catch a clear invoked too late to matter.
+CASE_ENV=(FAKE_STDOUT_provision_worker="current state: fqdn=SET ('https://default-assigned.sslip.io'), ports_exposes=ABSENT")
+run_case "deploy-workers: fqdn SET at deploy time invokes the clear before deploying" 0 --only deploy-workers || FAIL=1
+CASE_ENV=()
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  for pair in pfin-back-etl pfin-provider-sync pfin-pdf-render; do
+    # `|| true` on EVERY stage of these pipelines -- a zero-match grep
+    # exits 1, and under this file's own `set -o pipefail` an
+    # unguarded pipeline assignment aborts the WHOLE fence silently
+    # (no FAIL line, just a bare non-zero exit) instead of producing a
+    # clean assertion failure. Caught this in my own first draft by
+    # deliberately breaking the target and finding the fence died
+    # instead of reddening -- same "the instrument can't observe a
+    # miss" class this repo's other fences already learned from.
+    CLEAR_LN="$(grep -nE "^provision-worker .*${pair}.*--apply" "$CASE_LAST_DIR/calls.log" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+    DEPLOY_LN="$(grep -nE "^deploy-app .*${pair} .*--apply" "$CASE_LAST_DIR/calls.log" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+    if [[ -z "$CLEAR_LN" ]]; then
+      echo "FAIL: [resume-clear-before-deploy] no provision-worker --apply (clear) call found for $pair despite fqdn=SET." >&2
+      FAIL=1
+    elif [[ -z "$DEPLOY_LN" ]]; then
+      echo "FAIL: [resume-clear-before-deploy] no deploy-app --apply call found for $pair." >&2
+      FAIL=1
+    elif [[ "$CLEAR_LN" -ge "$DEPLOY_LN" ]]; then
+      echo "FAIL: [resume-clear-before-deploy] $pair's clear-apply call (calls.log line $CLEAR_LN) did not precede its deploy-app --apply call (line $DEPLOY_LN)." >&2
+      FAIL=1
+    fi
+  done
+fi
+
+# 27f. DEPLOY-WORKERS-RESUME-PATH-READ-FAILURE-PROPAGATES -- the
+#      pre-deploy fqdn/ports_exposes state-read itself fails (box
+#      issue, API issue) -> fail CLOSED (propagate), never silently
+#      proceed to deploy against an unknown state.
+CASE_ENV=(FAKE_RC_provision_worker=1)
+run_case "deploy-workers: pre-deploy state-read failure propagates, never silently deploys" 2 --only deploy-workers || FAIL=1
+CASE_ENV=()
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -qF "state-read FAILED" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [resume-clear-read-fails] refusal did not name the state-read failure." >&2; FAIL=1; }
+  # Preflight-phase deploy-app calls (no --apply) are expected and fine
+  # -- the assertion is that no APPLY-phase deploy-app call happens
+  # after the state-read fails, not that deploy-app is never invoked
+  # at all (it already was, harmlessly, during the preceding preflight
+  # phase every `--only <step>` runs before its own apply phase).
+  grep -qE '^deploy-app .*--apply' "$CASE_LAST_DIR/calls.log" 2>/dev/null && { echo "FAIL: [resume-clear-read-fails] an APPLY-phase deploy-app call happened despite the state-read failure -- must never deploy against an unknown state." >&2; FAIL=1; }
 fi
 
 # 28. RESOLVE-STACK-NETWORK-FAILURE-BLOCKS-DEPLOY-APP -- resolve-stack-
