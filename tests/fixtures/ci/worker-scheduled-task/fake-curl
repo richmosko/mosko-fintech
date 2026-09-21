@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-worker-scheduled-task-strikes.sh. Simulates the
+# Coolify API: GET /applications, GET/POST
+# /applications/<uuid>/scheduled-tasks. Behaviour selected by
+# $FAKE_TASK_MODE:
+#   absent           -- GET .../scheduled-tasks always returns [] (no
+#                        matching task; the create leg's own read-back
+#                        GET must then report the just-created task).
+#   match            -- GET .../scheduled-tasks returns one task that
+#                        matches $FAKE_WANT_COMMAND/$FAKE_WANT_CONTAINER/
+#                        $FAKE_WANT_FREQUENCY exactly.
+#   mismatch         -- returns one task with a DIFFERENT command.
+#   ambiguous        -- returns TWO tasks with the same name.
+#   readback-mismatch -- GET before POST returns []; the POST "succeeds"
+#                        but the read-back GET (call #2) reports a task
+#                        with the WRONG container, simulating a create
+#                        that silently did not take.
+# A stateful call counter (per fence-invocation $WORK dir, via
+# $FAKE_CALL_COUNTER) distinguishes GET call #1 (pre-create check) from
+# GET call #2 (post-create read-back) for the absent/readback-mismatch
+# modes, where the two calls must return DIFFERENT bodies.
+
+set -euo pipefail
+
+ARGS="$*"
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$ARGS" >> "$LOG"
+
+TASK_NAME="${FAKE_WANT_NAME:-pfin-back-etl-monthly-report}"
+WANT_COMMAND="${FAKE_WANT_COMMAND:-python run_monthly_report.py}"
+WANT_CONTAINER="${FAKE_WANT_CONTAINER:-pfin-back-etl-monthly-report}"
+WANT_FREQUENCY="${FAKE_WANT_FREQUENCY:-0 6 1 * *}"
+COUNTER_FILE="${FAKE_CALL_COUNTER:-/dev/null}"
+
+if [[ "$ARGS" == *"/applications" && "$ARGS" != *"/scheduled-tasks"* ]]; then
+  cat <<JSON
+[
+  {"uuid": "etluuid0000000000001", "name": "pfin-back-etl"},
+  {"uuid": "provsyncuuid00000001", "name": "pfin-provider-sync"}
+]
+JSON
+  exit 0
+fi
+
+if [[ "$ARGS" == *"scheduled-tasks"* ]]; then
+  METHOD="GET"
+  prev=""
+  for a in "$@"; do
+    if [[ "$prev" == "-X" ]]; then METHOD="$a"; fi
+    prev="$a"
+  done
+
+  if [[ "$METHOD" == "POST" ]]; then
+    # Body content doesn't matter to this fake -- creation always
+    # "succeeds" (returns 200 {}), the read-back GET is what decides the
+    # outcome.
+    echo '{"message":"ok"}'
+    exit 0
+  fi
+
+  # GET -- bump the call counter.
+  CALL_N=1
+  if [[ "$COUNTER_FILE" != "/dev/null" ]]; then
+    CALL_N="$(( $(cat "$COUNTER_FILE" 2>/dev/null || echo 0) + 1 ))"
+    echo "$CALL_N" > "$COUNTER_FILE"
+  fi
+
+  case "${FAKE_TASK_MODE:-absent}" in
+    absent)
+      if [[ "$CALL_N" -ge 2 ]]; then
+        # Post-create read-back -- report the task as created, matching.
+        printf '[{"uuid":"taskuuid0000000001","name":"%s","command":"%s","container":"%s","frequency":"%s","enabled":true}]\n' \
+          "$TASK_NAME" "$WANT_COMMAND" "$WANT_CONTAINER" "$WANT_FREQUENCY"
+      else
+        echo '[]'
+      fi
+      ;;
+    readback-mismatch)
+      if [[ "$CALL_N" -ge 2 ]]; then
+        # Post-create read-back -- WRONG container, simulating a create
+        # that silently did not take as specified.
+        printf '[{"uuid":"taskuuid0000000001","name":"%s","command":"%s","container":"WRONG-CONTAINER","frequency":"%s","enabled":true}]\n' \
+          "$TASK_NAME" "$WANT_COMMAND" "$WANT_FREQUENCY"
+      else
+        echo '[]'
+      fi
+      ;;
+    match)
+      printf '[{"uuid":"taskuuid0000000001","name":"%s","command":"%s","container":"%s","frequency":"%s","enabled":true}]\n' \
+        "$TASK_NAME" "$WANT_COMMAND" "$WANT_CONTAINER" "$WANT_FREQUENCY"
+      ;;
+    mismatch)
+      printf '[{"uuid":"taskuuid0000000001","name":"%s","command":"DIFFERENT COMMAND","container":"%s","frequency":"%s","enabled":true}]\n' \
+        "$TASK_NAME" "$WANT_CONTAINER" "$WANT_FREQUENCY"
+      ;;
+    ambiguous)
+      printf '[{"uuid":"taskuuid0000000001","name":"%s","command":"%s","container":"%s","frequency":"%s","enabled":true},{"uuid":"taskuuid0000000002","name":"%s","command":"%s","container":"%s","frequency":"%s","enabled":true}]\n' \
+        "$TASK_NAME" "$WANT_COMMAND" "$WANT_CONTAINER" "$WANT_FREQUENCY" \
+        "$TASK_NAME" "$WANT_COMMAND" "$WANT_CONTAINER" "$WANT_FREQUENCY"
+      ;;
+    *)
+      echo '[]'
+      ;;
+  esac
+  exit 0
+fi
+
+echo '{}'
+exit 0

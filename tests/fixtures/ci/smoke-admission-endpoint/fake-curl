@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#
+# fake-curl -- offline stand-in for curl, used by
+# scripts/ci/fence-smoke-admission-endpoint-strikes.sh. Distinguishes
+# THREE call shapes by URL/context:
+#   1. Coolify API (localhost:8000/api/v1/...) -- canned application list.
+#   2. N1 (operator-machine direct probe, :8081, FAKE_SSH_CONTEXT unset)
+#      -- responds per $FAKE_N1_CODE.
+#   3. N2 (box-host probe via the fake ssh wrapper, :8081,
+#      FAKE_SSH_CONTEXT=1) -- responds per $FAKE_N2_CODE.
+
+set -euo pipefail
+
+ARGS="$*"
+LOG="${FAKE_CURL_LOG:-/dev/null}"
+printf '%s\n' "$ARGS" >> "$LOG"
+
+if [[ "$ARGS" == *"localhost:8000/api/v1"* ]]; then
+  cat <<JSON
+[
+  {"uuid": "psuuid00000000000001", "name": "${FAKE_PS_NAME:-pfin-provider-sync}", "fqdn": "${FAKE_FQDN:-}"},
+  {"uuid": "siblinguuid000000001", "name": "${FAKE_SIBLING_NAME:-pfin-app}", "fqdn": ""}
+]
+JSON
+  exit 0
+fi
+
+# Sec V-1 (PR #848 review) -- curl-FAITHFUL exit code, not just curl-
+# faithful output. Real curl always exits non-zero (e.g. 7, "couldn't
+# connect") on the exact connection-level failure that produces "000" --
+# a fake that always exit 0 regardless of the printed code cannot strike
+# the real script's own `|| echo "000"` doubling defect (V-1), because
+# that defect only manifests when curl's own exit status is non-zero.
+if [[ "$ARGS" == *":8081"* ]]; then
+  CODE="${FAKE_N1_CODE:-000}"
+  EMPTY="${FAKE_N1_EMPTY:-0}"
+  if [[ "${FAKE_SSH_CONTEXT:-0}" == "1" ]]; then
+    CODE="${FAKE_N2_CODE:-000}"
+    EMPTY="${FAKE_N2_EMPTY:-0}"
+  fi
+  # FAKE_N{1,2}_EMPTY=1 -- simulates curl itself being missing/broken:
+  # NO output at all, not even "000". Distinct from a real "000"
+  # (connection refused, which curl DOES print before failing).
+  if [[ "$EMPTY" == "1" ]]; then
+    exit 7
+  fi
+  printf '%s' "$CODE"
+  if [[ "$CODE" == "000" ]]; then
+    exit 7
+  fi
+  exit 0
+fi
+
+printf '000'
+exit 0

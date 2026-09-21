@@ -3623,6 +3623,101 @@ jobs:
       - name: offline strike-proofs (3 resources x 7 scenarios + unknown-name refusal)
         run: bash scripts/ci/fence-provision-worker-strikes.sh
 
+  fence-smoke-admission-endpoint-strikes:
+    name: smoke-admission-endpoint.sh — CA-2 negative + positive control strike-proofs
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 68, W-3 (docs/deployment-runbook.md §10 CA-2:
+    # provider-sync's admission endpoint must be unreachable from outside
+    # the private Docker network while reachable, auth-gated, from a
+    # sibling app container). Unlabeled, same posture as
+    # fence-deploy-app-strikes above. DevOps-owned.
+    # scripts/ci/fence-smoke-admission-endpoint-strikes.sh proves both
+    # legs: any of the two negative-reachability probes returning a real
+    # HTTP status (not "000") refuses; a Coolify Domain assigned to
+    # provider-sync refuses; each of the three positive-control assertions
+    # (healthz 200, no-secret 401, with-secret 400) failing refuses; the
+    # sibling container's own env lacking the shared secret refuses; and
+    # an ambiguous (>1) running container match refuses -- offline via a
+    # PATH-shadowed fake ssh/curl/docker, never a live box.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (negative N1/N2/N3, positive P1/P2/P3, secret-absent, ambiguous)
+        run: bash scripts/ci/fence-smoke-admission-endpoint-strikes.sh
+
+  fence-worker-scheduled-task-strikes:
+    name: worker-scheduled-task.sh — Scheduled Task create/verify strike-proofs
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 68, W-3. Unlabeled, same posture as
+    # fence-provision-worker-strikes above. DevOps-owned.
+    # scripts/worker-scheduled-task.sh generalises scripts/migrator-
+    # scheduled-task.sh's own proven Scheduled Task create/verify shape,
+    # table-driven over the two REAL recurring worker cron units this
+    # repo has ratified fields for (pfin-back-etl-monthly-report,
+    # pfin-provider-sync-daily-poll). scripts/ci/fence-worker-scheduled-
+    # task-strikes.sh proves: an unrecognised task name refuses before
+    # any SSH/API call; preflight vs --apply behave correctly; an
+    # already-matching task is left alone (idempotent, no create call);
+    # an already-mismatched task refuses rather than being mutated; an
+    # ambiguous (>1) same-named task refuses; a post-create read-back
+    # mismatch refuses (does not trust the create response alone); and
+    # the table resolves the SECOND task correctly, not just the first --
+    # offline via a PATH-shadowed fake ssh/curl, never a live box.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (unknown-name / absent / match / mismatch / ambiguous / readback-mismatch / second-task)
+        run: bash scripts/ci/fence-worker-scheduled-task-strikes.sh
+
+  fence-smoke-etl-poll-strikes:
+    name: smoke-etl-poll.sh — worker exit-code + row-presence strike-proofs
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 68, W-3 (docs/deployment-runbook.md §10 "ETL
+    # container runs one poll"). Unlabeled, same posture as
+    # fence-smoke-admission-endpoint-strikes above. DevOps-owned.
+    # ⚠ This fence proves scripts/smoke-etl-poll.sh's own SHELL CONTROL
+    # FLOW only (container resolution, exit-code propagation, the
+    # completion-log-line check, the row-count threshold) -- both
+    # fake-docker legs it drives (the worker run and the row-count
+    # read-back) return canned output; neither touches a real Postgres.
+    # That leg is live-only by construction, stated in the fence's own
+    # header, not glossed. scripts/ci/fence-smoke-etl-poll-strikes.sh
+    # proves: a non-zero worker exit refuses; a worker that exits 0 but
+    # never prints its own completion line refuses; a worker that exits 0
+    # with a completion line but a ZERO row count refuses (a silent
+    # no-op) -- via an idempotency-safe presence check, not a count
+    # delta, per that script's own header on why a delta would
+    # false-negative on a legitimate same-day re-run; a row-count
+    # connection error is a precondition (exit 2), not a poll failure;
+    # and an ambiguous (>1) running container match refuses.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (happy-path / worker-fails / no-completion-line / zero-rows / conn-error / ambiguous)
+        run: bash scripts/ci/fence-smoke-etl-poll-strikes.sh
+
+  fence-smoke-pdf-roundtrip-strikes:
+    name: smoke-pdf-roundtrip.sh — status/magic-bytes strike-proofs
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 68, W-3 (docs/deployment-runbook.md §10 "PDF
+    # render round-trips via the signed-JWT path"). Unlabeled, same
+    # posture as fence-smoke-etl-poll-strikes above. DevOps-owned.
+    # ⚠ This fence proves scripts/smoke-pdf-roundtrip.sh's own SHELL
+    # CONTROL FLOW only -- the `docker exec ... node -e ...` round-trip
+    # probe is CANNED here, never re-executed; it never mints a real JWT,
+    # opens a real HTTP connection, or invokes headless Chromium. The
+    # JWT-construction logic itself (HS256, claims shape matching
+    # api/src/lib/server/pdf/renderClient.ts's own mint exactly,
+    # base64url encoding) was validated OFFLINE BY HAND this same PR --
+    # stated in the fence's own header, not glossed; the real network
+    # round trip is live-only. scripts/ci/fence-smoke-pdf-roundtrip-
+    # strikes.sh proves: the sibling container's own env lacking
+    # PDF_WORKER_SIGNING_KEY refuses; a non-200 response refuses; a 200
+    # response whose body does not start with the PDF magic bytes (%PDF)
+    # refuses (a 200 with a non-PDF body is not a pass); and an
+    # ambiguous (>1) running container match refuses.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (happy-path / no-signing-key / wrong-status / wrong-magic / ambiguous)
+        run: bash scripts/ci/fence-smoke-pdf-roundtrip-strikes.sh
+
   fence-db-role-handoff-strikes:
     name: db-role-handoff.sh — two-statement handoff + credential-transport strike-proofs
     runs-on: ubuntu-latest

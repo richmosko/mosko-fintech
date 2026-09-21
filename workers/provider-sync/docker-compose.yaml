@@ -65,6 +65,35 @@ services:
     container_name: provider-sync
     build: .
     restart: unless-stopped
+    # ADMISSION SERVER ENTRYPOINT (Sec F-1, PR #848 review). The Dockerfile's own
+    # CMD (`tail -f /dev/null`) is a bare-resident dev/debug default -- nothing
+    # starts the admission server without this override. Compose is the lintable
+    # carrier here (same ADR-073 precedent already used for network attachment
+    # above), so the OVERRIDE, not the Dockerfile, is the source of truth for what
+    # actually runs in production; the Dockerfile CMD is deliberately left
+    # unchanged as the documented "exec into it and poke around" dev default.
+    # Entrypoint per src/index.ts's own header comment: `node dist/cli/serve-
+    # admission.js` (SELF-212 Option C, DevOps-owned per that file's own note).
+    #
+    # This makes the container's PID 1 the admission HTTP server instead of
+    # `tail -f /dev/null`. The @daily `poll` Coolify Scheduled Task
+    # (`docker exec <container> node dist/cli/poll.js`, created by
+    # scripts/worker-scheduled-task.sh pfin-provider-sync-daily-poll) is
+    # UNAFFECTED: `docker exec` runs a new process inside the container's
+    # existing namespaces regardless of what PID 1 is -- it does not require
+    # PID 1 to be idle, only that the container is RUNNING, which the admission
+    # server being resident (`restart: unless-stopped`, never a one-shot exit)
+    # guarantees exactly as well as `tail -f /dev/null` did.
+    #
+    # NEW BEHAVIOR (Sec N-1, PR #848 round-2 review): with PID 1 = the admission
+    # server, a CA-1 startup refusal (the worker's own limb-(a) public-route
+    # tripwire, admissionGuard.ts) now CRASH-LOOPS the container under
+    # `restart: unless-stopped` instead of leaving a `tail -f /dev/null` shell
+    # sitting idle -- correct fail-closed behavior, but it ALSO removes the
+    # `poll` Scheduled Task's `docker exec` target while the loop is crashing
+    # (no running container to exec into). This is new relative to the prior
+    # `tail -f /dev/null` state and is stated here, not silently accepted.
+    command: ["node", "dist/cli/serve-admission.js"]
     # INTERNAL-ONLY admission port. `expose:` = reachable to sibling containers on
     # the project network; NOT host-published. NEVER convert this to a `ports:`
     # mapping (fence-admission-private-bind fails closed on `ports:`).
