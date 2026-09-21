@@ -288,7 +288,7 @@ jqp() { python3 -c "import json,sys;$1"; }
 # the volume is genuinely healthy; this function is the new, PRECISE
 # DEFINITION of "healthy" for that purpose, not a loosening of the guard.
 #
-# WHAT "HEALTHY" MEANS HERE -- four READ-ONLY checks, all reused from
+# WHAT "HEALTHY" MEANS HERE -- five READ-ONLY checks, all reused from
 # elsewhere in this file (never a new, heavier mechanism invented just for
 # this): (1) N/7 containers report Docker health=healthy (same query the
 # "Verification battery" step below already runs after a fresh deploy);
@@ -299,13 +299,20 @@ jqp() { python3 -c "import json,sys;$1"; }
 # `select server_version` query below); (4) the STATE-BASED init marker
 # below already documents as the real proof that /docker-entrypoint-
 # initdb.d/ actually ran (Postgres runs it exactly once, ever) --
-# authenticator/pgbouncer/supabase_auth_admin/supabase_functions_admin
-# all have a password set. (4) is the one that actually answers "was
-# this volume initialized by a real deploy of THIS stack, not a bogus
-# mount" -- (1)-(3) only prove "something is currently running and
-# answering", which a poisoned-but-since-patched-around volume could
-# also produce. ALL FOUR must pass; any single failure means "not
-# confirmed healthy" and the caller refuses exactly as before.
+# EXACTLY FOUR role rows (authenticator/pgbouncer/supabase_auth_admin/
+# supabase_functions_admin, cardinality itself checked -- Sec C-1, PR
+# #852 AMBER review: a single matching row used to pass this check
+# silently, since a non-empty one-line result is still non-empty) all
+# have a password set; (5) `app.settings.jwt_secret` is set (Sec F-2, PR
+# #852 AMBER review -- the "Verification battery" step below already
+# treats (4) and (5) together as ONE two-part tell that init scripts
+# genuinely ran; this function only carried the first half until now).
+# (4) and (5) are the ones that actually answer "was this volume
+# initialized by a real deploy of THIS stack, not a bogus mount" -- (1)-
+# (3) only prove "something is currently running and answering", which a
+# poisoned-but-since-patched-around volume could also produce. ALL FIVE
+# must pass; any single failure means "not confirmed healthy" and the
+# caller refuses exactly as before.
 check_stack_already_healthy() {
   local containers=0
   for _ in $(seq 1 5); do
@@ -313,36 +320,63 @@ check_stack_already_healthy() {
     [[ "$containers" == "7" ]] && break
     sleep 2
   done
-  info "healthy-check (1/4): $containers/7 containers healthy"
-  if [[ "$containers" != "7" ]]; then info "healthy-check FAILED at (1/4): expected 7 healthy containers, got $containers"; return 1; fi
+  info "healthy-check (1/5): $containers/7 containers healthy"
+  if [[ "$containers" != "7" ]]; then info "healthy-check FAILED at (1/5): expected 7 healthy containers, got $containers"; return 1; fi
 
   local gw_status
   gw_status="$(sshx "docker compose --project-name $APP_UUID exec -T supavisor curl -s -o /dev/null -w '%{http_code}' http://api-gw:8000/auth/v1/health </dev/null" 2>/dev/null || true)"
-  info "healthy-check (2/4): api-gw GET /auth/v1/health -> HTTP ${gw_status:-<none>}"
-  if [[ "$gw_status" != "200" ]]; then info "healthy-check FAILED at (2/4): api-gw did not answer 200"; return 1; fi
+  info "healthy-check (2/5): api-gw GET /auth/v1/health -> HTTP ${gw_status:-<none>}"
+  if [[ "$gw_status" != "200" ]]; then info "healthy-check FAILED at (2/5): api-gw did not answer 200"; return 1; fi
 
   local pgver
   pgver="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc 'show server_version;'" 2>/dev/null | cut -d. -f1)"
-  info "healthy-check (3/4): Postgres server_version starts '${pgver:-<none>}'"
-  if [[ "$pgver" != "17" ]]; then info "healthy-check FAILED at (3/4): db not reachable, or not major version 17"; return 1; fi
+  info "healthy-check (3/5): Postgres server_version starts '${pgver:-<none>}'"
+  if [[ "$pgver" != "17" ]]; then info "healthy-check FAILED at (3/5): db not reachable, or not major version 17"; return 1; fi
 
-  local init_state all_pw_set=1 role has_pw
+  local init_state all_pw_set=1 role has_pw init_row_count
   init_state="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc \"select rolname||':'||(rolpassword is not null) from pg_authid where rolname in ('authenticator','pgbouncer','supabase_auth_admin','supabase_functions_admin') order by rolname;\"" 2>/dev/null || true)"
-  if [[ -z "$init_state" ]]; then
-    info "healthy-check FAILED at (4/4): role-password query returned nothing"
+  # Sec C-1 (PR #852 AMBER review): the OLD guard only checked "is
+  # init_state non-empty" -- a SINGLE matching role row (e.g. a partial or
+  # foreign-volume init that only happens to define 'authenticator')
+  # passed this check silently, since a non-empty string with one line is
+  # still non-empty. Count rows explicitly and require exactly 4 -- the
+  # cardinality itself is part of the proof, not just presence.
+  init_row_count="$(printf '%s\n' "$init_state" | grep -c ':' || true)"
+  if [[ "$init_row_count" != "4" ]]; then
+    info "healthy-check FAILED at (4/5): expected 4 role rows, got $init_row_count -- pg_authid does not carry all four init-marker roles (a partial or foreign-volume init)"
     return 1
   fi
   while IFS=: read -r role has_pw; do
     [[ -z "$role" ]] && continue
-    info "healthy-check (4/4): role $role password set: $has_pw"
+    info "healthy-check (4/5): role $role password set: $has_pw"
     [[ "$has_pw" == "true" ]] || all_pw_set=0
   done < <(printf '%s\n' "$init_state")
   if [[ "$all_pw_set" != "1" ]]; then
-    info "healthy-check FAILED at (4/4): not all four roles have a password set -- init scripts did not run against this volume (or it is from a different/bogus mount)"
+    info "healthy-check FAILED at (4/5): not all four roles have a password set -- init scripts did not run against this volume (or it is from a different/bogus mount)"
     return 1
   fi
 
-  ok "healthy-check: all four probes pass -- this db-data volume was genuinely initialized by a real deploy of this stack"
+  # Sec F-2 (PR #852 AMBER review): the "Verification battery" step
+  # further down (run after a FRESH deploy) treats the role-password
+  # state AND app.settings.jwt_secret's presence as ONE two-part tell
+  # that init scripts genuinely ran -- "ok all four role passwords set +
+  # app.settings.jwt_secret present" is that step's own closing line.
+  # check_stack_already_healthy() only carried the first half; this adds
+  # the second so --check-healthy's own live done-predicate proves the
+  # SAME two-part tell the archive's own procedure relies on, not a
+  # narrower one. Value never printed -- only whether the GUC is set at
+  # all (an unset custom GUC makes `show` itself ERROR with "unrecognized
+  # configuration parameter", the same detection shape that step already
+  # uses).
+  local jwt_setting
+  jwt_setting="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc 'show app.settings.jwt_secret;'" 2>&1 || true)"
+  if [[ "$jwt_setting" == *"unrecognized configuration parameter"* ]]; then
+    info "healthy-check FAILED at (5/5): app.settings.jwt_secret is unset -- init scripts did not run against this volume"
+    return 1
+  fi
+  info "healthy-check (5/5): app.settings.jwt_secret is set (value never read or printed)"
+
+  ok "healthy-check: all five probes pass -- this db-data volume was genuinely initialized by a real deploy of this stack"
   return 0
 }
 # FENCE-EXTRACT-FUNC-END: check-stack-already-healthy-func

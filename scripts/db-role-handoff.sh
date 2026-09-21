@@ -135,6 +135,24 @@
 #     - ALL THREE true (LOGIN, password set, store carries
 #       PFIN_DB_PASSWORD) — already handed off, `VERIFIED`, exit 0,
 #       no-op, even with `--apply` and without `--rotate`.
+#       ⚠ EXISTENCE-ONLY (Sec F-1, PR #852 AMBER review, option (a)+(c) —
+#       option (b), hash-binding this no-op path the way leg E binds a
+#       FRESH push, was considered and rejected as not cheap: leg E's own
+#       hash proof only works because that run's own plaintext $PW is
+#       still in scope; on a LATER no-op run there is no live plaintext to
+#       hash against (Postgres exposes no reversible form of its live
+#       password), and a hash persisted box-side from a past run would
+#       only prove the store is unchanged since we last pushed it, never
+#       that Postgres's LIVE password still equals it — that would need an
+#       actual authentication attempt, materially more machinery). This
+#       branch does NOT re-verify the store's current value still matches
+#       Postgres's actual live password — a stale value left over from a
+#       half-completed `--rotate` (Postgres and the store fell out of
+#       sync mid-run) reads t|t|t and is reported VERIFIED here exactly
+#       the same as a genuinely consistent state. Printed loudly on every
+#       no-op run (not just here); the repair for suspected drift is
+#       `--apply --rotate`, which regenerates and re-pushes a coherent
+#       value from scratch rather than trusting the existing one.
 #     - Any OTHER combination — a genuine mismatch (e.g. LOGIN with no
 #       store value, or a store value with the role still NOLOGIN) —
 #       refuses, naming the specific state, same as before. This is a
@@ -394,6 +412,27 @@ else
   # only the two CONSISTENT states are treated as non-refusals now.
   if [[ "$ROLCANLOGIN" == "t" && "$HAS_PASSWORD" == "t" && "$STORE_HAS_PW" == "t" ]]; then
     ok "role '$ROLE' already has LOGIN + a password set, and '$RESOURCE_NAME' already carries a production PFIN_DB_PASSWORD -- already handed off, nothing to do."
+    # Sec F-1 (PR #852 AMBER review), option (a)+(c): this no-op path is
+    # EXISTENCE-only -- it does not prove the store's CURRENT value is the
+    # SAME credential Postgres is actually authenticating with right now.
+    # Option (b) (bind it, e.g. via a persisted hash) was considered and
+    # rejected as not cheap: leg E's own hash-bound proof (further below)
+    # only exists because $PW -- the plaintext this run just generated --
+    # is still in scope at that moment; on a LATER no-op run there is no
+    # live plaintext to hash against (Postgres never stores or exposes
+    # the reversible plaintext, only its own opaque auth verifier), and a
+    # hash persisted box-side from a past run would only prove "the
+    # store's value has not changed since we last pushed it", never
+    # "Postgres's live password still equals it" -- a REAL two-sided proof
+    # would need an actual live authentication attempt using the stored
+    # plaintext, materially more machinery than this preflight check
+    # otherwise needs. Given that, the residual (a stale value from a
+    # half-completed --rotate, where Postgres and the store fell out of
+    # sync mid-run, would still read t|t|t and report VERIFIED here) is
+    # documented, not silently accepted -- see this file's own IDEMPOTENCY
+    # header -- and surfaced loudly on every no-op run, not just in a
+    # comment nobody re-reads.
+    echo "⚠ existence-only check: this confirms the role has LOGIN+password AND the store carries SOME PFIN_DB_PASSWORD row -- it does NOT re-verify that value still matches Postgres's live password (e.g. after a half-completed --rotate). If you suspect drift, run --apply --rotate to re-establish a coherent value from scratch." >&2
     printf '\n\033[32mVERIFIED\033[0m  already handed off -- no-op, whether or not --apply was passed. Pass --apply --rotate to rotate the established credential.\n'
     exit 0
   elif [[ "$ROLCANLOGIN" == "f" && "$HAS_PASSWORD" == "f" && "$STORE_HAS_PW" == "f" ]]; then

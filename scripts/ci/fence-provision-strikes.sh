@@ -587,6 +587,26 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
     cat "$CASE_LAST_DIR/calls.log" >&2
     FAIL=1
   fi
+  # Sec C-2 (PR #852 AMBER review): the OLD assertions above only proved
+  # standup.sh was never called -- they did NOT pin that
+  # live_done_standup() actually invokes provision-supabase-stack.sh with
+  # the literal --check-healthy flag. Dropping that flag silently (e.g. a
+  # future edit typos it, or calls the script bare) would make
+  # provision-supabase-stack.sh's OWN bare preflight run instead -- which
+  # exits 0 unconditionally, at line 205-ish, before even reaching
+  # check_stack_already_healthy() -- turning standup into a PERMANENT
+  # silent no-op regardless of real stack health. Pin both halves: the
+  # flag is present, and --apply is never paired with it on the same call.
+  CALL_LINE="$(grep '^provision-supabase-stack ' "$CASE_LAST_DIR/calls.log" 2>/dev/null || true)"
+  if [[ -z "$CALL_LINE" ]] || ! grep -qE '^provision-supabase-stack .*--check-healthy' <<<"$CALL_LINE"; then
+    echo "FAIL: [standup-live-done] provision-supabase-stack.sh was not called with --check-healthy -- live_done_standup()'s own argv is unpinned" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  elif grep -qE -- '--apply' <<<"$CALL_LINE"; then
+    echo "FAIL: [standup-live-done] provision-supabase-stack.sh's --check-healthy call also carried --apply -- a read-only probe must never be paired with a mutating flag" >&2
+    cat "$CASE_LAST_DIR/calls.log" >&2
+    FAIL=1
+  fi
 fi
 
 # 18. STANDUP-NOT-DONE-CALLS-STANDUP -- live_done_standup reports NOT
@@ -599,6 +619,74 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   grep -q "^standup " "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [standup-not-done] standup.sh was never called" >&2; cat "$CASE_LAST_DIR/calls.log" >&2; FAIL=1; }
 fi
 CASE_ENV=()
+
+# 19. LIVE-DONE-PROVISION-RESOURCES-UNKNOWN-RC (Sec F-3(i), PR #852 AMBER
+#     review) -- provision-resources itself never runs this invocation
+#     (--only etl-role, --skip-dependency-check so the jump-target's own
+#     prerequisite preflight isn't run either), so
+#     live_done_provision_resources() is consulted with NO recorded
+#     status to fall back on. record-coolify-uuids.sh's fake is forced to
+#     exit non-zero WITHOUT printing any "no application named ... found"
+#     line (models it dying on a missing MIGRATOR_APP_NAME/
+#     SUPABASE_STACK_APP_NAME app instead -- record-coolify-uuids.sh
+#     strictly `die`s on those two, never `info`s -- see its own header).
+#     etl-role's OWN preflight also fails independently (db-role-
+#     handoff.sh forced to rc=1). The OLD version defaulted an unmatched
+#     grep to PROVISION_RESOURCES_LIVE_DONE=1 ("done") regardless of rc --
+#     which, mechanically, also reads as "not blocking" to
+#     step_live_blocker, so this scenario cannot distinguish old from new
+#     behavior by BLOCKED-BY-vs-would-likely-fail alone. What it DOES pin
+#     is the new, explicit "UNKNOWN" log line -- proving the code took the
+#     unknown-rc branch at all rather than silently falling into the
+#     matched-or-done binary the old version had.
+CASE_ENV=(FAKE_RC_record_coolify_uuids=1 FAKE_STDOUT_record_coolify_uuids="no application named 'pfin-migrator' found -- run scripts/provision-migrator-app.sh --apply first, or override MIGRATOR_APP_NAME" FAKE_RC_db_role_handoff=1)
+run_case "live_done_provision_resources: unmatched non-zero rc is UNKNOWN, not done" 3 --only etl-role --skip-dependency-check --dry-run || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "record-coolify-uuids.sh exited non-zero (rc=1) without naming a missing resource -- provision-resources live state is UNKNOWN" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [live-done-unknown-rc] did not print the UNKNOWN-state line -- unmatched non-zero rc is being silently treated as done" >&2; cat "$CASE_LAST_DIR/out.txt" >&2; FAIL=1; }
+  grep -q "^  etl-role .*would likely fail" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [live-done-unknown-rc] etl-role not reported as its own 'would likely fail'" >&2; FAIL=1; }
+fi
+CASE_ENV=()
+
+# 20. LIVE-DONE-PROVISION-RESOURCES-SKIPS-ON-BOX-IP-UNSET (Sec F-3(ii),
+#     PR #852 AMBER review) -- BOX_IP is absent from .env entirely (a
+#     custom case dir, not the standard run_case harness's FULL_ENV, which
+#     always bakes in BOX_IP=127.0.0.1). etl-role's own require_box_ip
+#     gate fails on its own merits (rc=2) -- genuinely independent of
+#     provision-resources. --only etl-role --skip-dependency-check so the
+#     jump-target's own prerequisite preflight (which would ALSO fail
+#     require_box_ip and abort the whole run at the dependency-check gate,
+#     exit 3, before ever reaching live_done_provision_resources() at all)
+#     is not run. The OLD version's require_box_ip failure inside the live
+#     check itself set PROVISION_RESOURCES_LIVE_DONE=0 ("blocking") --
+#     which WOULD have misattributed etl-role's own BOX_IP-unset failure
+#     to "BLOCKED-BY provision-resources" instead of showing its own
+#     genuine cause. Pin BOTH: the new skip-log line fires, AND etl-role
+#     reads its own "would likely fail", never BLOCKED-BY.
+BOXIP_UNSET_DIR="$WORK/boxip-unset-case"
+mkdir -p "$BOXIP_UNSET_DIR"
+printf '%s' "$FULL_ENV" | grep -v '^BOX_IP=' > "$BOXIP_UNSET_DIR/.env"
+printf 'CI_MIGRATE_SSH_PUBKEY=%s/ci_migrate.pub\n' "$BOXIP_UNSET_DIR" >> "$BOXIP_UNSET_DIR/.env"
+: > "$BOXIP_UNSET_DIR/calls.log"
+: > "$BOXIP_UNSET_DIR/keygen.log"
+set +e
+env REPO_ROOT="$BOXIP_UNSET_DIR" SCRIPTS="$FAKE_SCRIPTS_DIR" PATH="$FAKE_BIN:$PATH" \
+  FAKE_CALL_LOG="$BOXIP_UNSET_DIR/calls.log" FAKE_COUNTER_DIR="$BOXIP_UNSET_DIR" FAKE_SSH_KEYGEN_LOG="$BOXIP_UNSET_DIR/keygen.log" \
+  bash "$PROVISION_SH" --only etl-role --skip-dependency-check --dry-run > "$BOXIP_UNSET_DIR/out.txt" 2>&1
+BOXIP_UNSET_RC=$?
+set -e
+if [[ "$BOXIP_UNSET_RC" != "3" ]]; then
+  echo "FAIL: [live-done-boxip-unset] expected exit 3, got $BOXIP_UNSET_RC" >&2
+  cat "$BOXIP_UNSET_DIR/out.txt" >&2
+  FAIL=1
+else
+  echo "OK: [live-done-boxip-unset] exit 3 as expected." >&2
+  grep -q "BOX_IP unset -- skipping the live provision-resources check entirely" "$BOXIP_UNSET_DIR/out.txt" || { echo "FAIL: [live-done-boxip-unset] did not print the skip-live-check line" >&2; cat "$BOXIP_UNSET_DIR/out.txt" >&2; FAIL=1; }
+  grep -q "^  etl-role .*would likely fail" "$BOXIP_UNSET_DIR/out.txt" || { echo "FAIL: [live-done-boxip-unset] etl-role not reported as its own 'would likely fail'" >&2; cat "$BOXIP_UNSET_DIR/out.txt" >&2; FAIL=1; }
+  if grep -q "^  etl-role .*BLOCKED-BY provision-resources" "$BOXIP_UNSET_DIR/out.txt"; then
+    echo "FAIL: [live-done-boxip-unset] etl-role was misattributed as BLOCKED-BY provision-resources instead of its own genuine BOX_IP-unset cause" >&2
+    FAIL=1
+  fi
+fi
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2

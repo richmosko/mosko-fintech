@@ -45,18 +45,25 @@
 # Scenarios:
 #   1. NO-VOLUME-DEPLOYS -- no db-data volume at all -> NEED_DEPLOY=1, no
 #      die -- the ordinary first-deploy path, unaffected by this change.
-#   2. HEALTHY-VOLUME-SKIPS-DEPLOY -- volume exists, all four probes pass
+#   2. HEALTHY-VOLUME-SKIPS-DEPLOY -- volume exists, all five probes pass
 #      -> NEED_DEPLOY=0, no die -- "already provisioned and healthy,
 #      nothing to deploy". The live defect this fixes.
 #   3. UNHEALTHY-VOLUME-REFUSES (team-lead's own named strike) -- volume
-#      exists, the init-marker probe (4/4) reports the four roles have NO
+#      exists, the init-marker probe (4/5) reports the four roles have NO
 #      password set (the exact "bogus mount" signature) -> die, naming
 #      "NOT confirmed healthy". The guard must still fire -- this branch
 #      is not a loosening.
-#   4. CONTAINERS-NOT-ALL-HEALTHY -- probe (1/4) alone fails (5/7) -> die,
-#      isolated from the other three probes (all of which would pass).
-#   5. GATEWAY-NOT-200 -- probe (2/4) alone fails -> die, isolated.
-#   6. WRONG-PG-VERSION -- probe (3/4) alone fails -> die, isolated.
+#   4. CONTAINERS-NOT-ALL-HEALTHY -- probe (1/5) alone fails (5/7) -> die,
+#      isolated from the other four probes (all of which would pass).
+#   5. GATEWAY-NOT-200 -- probe (2/5) alone fails -> die, isolated.
+#   6. WRONG-PG-VERSION -- probe (3/5) alone fails -> die, isolated.
+#   7. PARTIAL-INIT-STATE-ONE-ROLE (Sec C-1, PR #852 AMBER review) -- a
+#      SINGLE matching role row -> die, naming "FAILED at (4/5)" and the
+#      actual row count -- cardinality itself is part of the proof, not
+#      just non-empty presence.
+#   8. JWT-SECRET-UNSET (Sec F-2, PR #852 AMBER review) -- probe (5/5)
+#      alone fails (app.settings.jwt_secret unset) -> die, isolated from
+#      the other four probes (all of which would pass).
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -88,14 +95,21 @@ if [[ ! -s "$EXTRACT" || "$LINES" -lt 30 ]]; then
 fi
 bash -n "$EXTRACT" || { echo "FATAL: extracted block does not parse as valid bash" >&2; exit 2; }
 
-# Structural pin: --check-healthy must actually call the extracted
-# function, not a divergent re-implementation (not exercised end to end
-# above -- that flag's own early-exit path would need the full BOX_IP/
-# SSH-reachability/project-environment-application preflight faked too,
-# out of scope for this narrow fence; this pin at least proves the wiring
-# exists).
-if ! grep -qE 'CHECK_HEALTHY -eq 1.*check_stack_already_healthy|check_stack_already_healthy' "$TARGET_SH"; then
-  echo "FATAL: --check-healthy's own block no longer appears to call check_stack_already_healthy() -- structural pin failed" >&2
+# Structural pin (Sec C-3, PR #852 AMBER review): the OLD pin matched
+# `grep -qE 'check_stack_already_healthy'` against the WHOLE FILE, which
+# is vacuous -- the function's own DEFINITION always matches that pattern,
+# so the pin could never go red even if the --check-healthy dispatch
+# block stopped calling it. Replaced with Sec's two pins: (a) a
+# zero-byte-separated, multi-line-spanning regex proving the dispatch
+# block's OWN `if` actually calls the function (not just that the
+# function exists somewhere in the file), and (b) a pin on the literal
+# mutual-exclusion message, independent of (a).
+if ! grep -qzoE 'if \[\[ \$CHECK_HEALTHY -eq 1 \]\]; then(.|\n)*?check_stack_already_healthy' "$TARGET_SH"; then
+  echo "FATAL: --check-healthy's own dispatch block no longer appears to call check_stack_already_healthy() -- structural pin failed" >&2
+  exit 2
+fi
+if ! grep -q -- '--apply and --check-healthy are mutually exclusive' "$TARGET_SH"; then
+  echo "FATAL: the --apply/--check-healthy mutual-exclusion message is gone or reworded -- structural pin failed" >&2
   exit 2
 fi
 if ! grep -q -- '--check-healthy) CHECK_HEALTHY=1' "$TARGET_SH"; then
@@ -105,7 +119,12 @@ fi
 
 FAIL=0
 
-# run_case <desc> <expect_rc> <expect_need_deploy-or-empty> <containers> <gw_status> <pgver> <init_state> <volume_exists>
+# run_case <desc> <expect_rc> <expect_need_deploy-or-empty> <containers> <gw_status> <pgver> <init_state> <volume_exists> [jwt_setting]
+#
+# [jwt_setting] (Sec F-2, PR #852 AMBER review) defaults to a healthy,
+# non-error value when omitted, so scenarios 1-7 (none of which need probe
+# (5/5) to fail) are unaffected by its addition -- only scenario 8 passes
+# it explicitly.
 #
 # ⚠ The fake `sshx()` below reads FAKE_-prefixed variable names, never
 # bare names like `containers`/`gw_status`/`pgver`/`init_state` --
@@ -158,6 +177,13 @@ sshx() {
     *"pg_authid"*)
       printf '%s\n' "$FAKE_INIT_STATE"
       ;;
+    *"show app.settings.jwt_secret;"*)
+      # Sec F-2 (PR #852 AMBER review): probe (5/5). Default (see run_case)
+      # is a healthy, non-error value; scenario 8 overrides it to the
+      # literal "unrecognized configuration parameter" substring the real
+      # script's own detection matches on.
+      printf '%s' "$FAKE_JWT_SETTING"
+      ;;
     *)
       echo "FAKE sshx: unrecognised command in this fence's own harness: $cmd" >&2
       return 1
@@ -168,18 +194,24 @@ export -f ok info die step sshx
 
 run_case() {
   local desc="$1" expect_rc="$2" expect_need_deploy="$3" FAKE_CONTAINERS="$4" FAKE_GW_STATUS="$5" FAKE_PGVER="$6" FAKE_INIT_STATE="$7" FAKE_VOLUME_EXISTS="$8"
+  local FAKE_JWT_SETTING="${9:-healthy-jwt-secret-value}"
   local out="$WORK/out.$$.$RANDOM"
   local combined="$WORK/combined.$$.$RANDOM.sh"
   # The extracted block is APPENDED to, never sourced from -- this file is
   # executed directly as `bash "$combined"`, a genuinely separate process,
   # with a driver line of THIS fence's own appended after it so
   # NEED_DEPLOY (set inside the extracted code) is still visible to print
-  # from the SAME process before it exits.
-  { cat "$EXTRACT"; printf 'echo "RESULT_NEED_DEPLOY=$NEED_DEPLOY"\n'; } > "$combined"
+  # from the SAME process before it exits. Sec F-4 (PR #852 AMBER review):
+  # `set -euo pipefail` is prepended so $combined runs under the SAME
+  # shell options as the real script (whose own top-of-file `set -euo
+  # pipefail` this extraction otherwise loses) -- an earlier draft ran
+  # extracted code more permissively than production ever does.
+  { printf 'set -euo pipefail\n'; cat "$EXTRACT"; printf 'echo "RESULT_NEED_DEPLOY=$NEED_DEPLOY"\n'; } > "$combined"
   set +e
   APP_UUID="test-stack-uuid-1234" \
     FAKE_CONTAINERS="$FAKE_CONTAINERS" FAKE_GW_STATUS="$FAKE_GW_STATUS" FAKE_PGVER="$FAKE_PGVER" \
     FAKE_INIT_STATE="$FAKE_INIT_STATE" FAKE_VOLUME_EXISTS="$FAKE_VOLUME_EXISTS" \
+    FAKE_JWT_SETTING="$FAKE_JWT_SETTING" \
     bash "$combined" > "$out" 2>&1
   local rc=$?
   set -e
@@ -226,25 +258,49 @@ fi
 OUT3="$(run_case "unhealthy-volume-refuses" 1 "" 7 200 17 "$UNHEALTHY_ROLES" 1)" || FAIL=1
 if [[ -n "${OUT3:-}" ]]; then
   echo "$OUT3" | grep -q "NOT confirmed healthy" || { echo "FAIL: [unhealthy-volume-refuses] die() message did not name 'NOT confirmed healthy'" >&2; FAIL=1; }
-  echo "$OUT3" | grep -q "FAILED at (4/4)" || { echo "FAIL: [unhealthy-volume-refuses] did not isolate the failure to probe (4/4)" >&2; FAIL=1; }
+  echo "$OUT3" | grep -q "FAILED at (4/5)" || { echo "FAIL: [unhealthy-volume-refuses] did not isolate the failure to probe (4/5)" >&2; FAIL=1; }
 fi
 
-# 4. CONTAINERS-NOT-ALL-HEALTHY -- probe (1/4) alone fails.
+# 4. CONTAINERS-NOT-ALL-HEALTHY -- probe (1/5) alone fails.
 OUT4="$(run_case "containers-not-all-healthy" 1 "" 5 200 17 "$HEALTHY_ROLES" 1)" || FAIL=1
 if [[ -n "${OUT4:-}" ]]; then
-  echo "$OUT4" | grep -q "FAILED at (1/4)" || { echo "FAIL: [containers-not-all-healthy] did not isolate the failure to probe (1/4)" >&2; FAIL=1; }
+  echo "$OUT4" | grep -q "FAILED at (1/5)" || { echo "FAIL: [containers-not-all-healthy] did not isolate the failure to probe (1/5)" >&2; FAIL=1; }
 fi
 
-# 5. GATEWAY-NOT-200 -- probe (2/4) alone fails.
+# 5. GATEWAY-NOT-200 -- probe (2/5) alone fails.
 OUT5="$(run_case "gateway-not-200" 1 "" 7 503 17 "$HEALTHY_ROLES" 1)" || FAIL=1
 if [[ -n "${OUT5:-}" ]]; then
-  echo "$OUT5" | grep -q "FAILED at (2/4)" || { echo "FAIL: [gateway-not-200] did not isolate the failure to probe (2/4)" >&2; FAIL=1; }
+  echo "$OUT5" | grep -q "FAILED at (2/5)" || { echo "FAIL: [gateway-not-200] did not isolate the failure to probe (2/5)" >&2; FAIL=1; }
 fi
 
-# 6. WRONG-PG-VERSION -- probe (3/4) alone fails.
+# 6. WRONG-PG-VERSION -- probe (3/5) alone fails.
 OUT6="$(run_case "wrong-pg-version" 1 "" 7 200 15 "$HEALTHY_ROLES" 1)" || FAIL=1
 if [[ -n "${OUT6:-}" ]]; then
-  echo "$OUT6" | grep -q "FAILED at (3/4)" || { echo "FAIL: [wrong-pg-version] did not isolate the failure to probe (3/4)" >&2; FAIL=1; }
+  echo "$OUT6" | grep -q "FAILED at (3/5)" || { echo "FAIL: [wrong-pg-version] did not isolate the failure to probe (3/5)" >&2; FAIL=1; }
+fi
+
+# 7. PARTIAL-INIT-STATE-ONE-ROLE (Sec C-1, PR #852 AMBER review) -- the
+#    OLD guard only checked "is init_state non-empty" -- a SINGLE
+#    matching role row passed silently (Sec struck it: a partial or
+#    foreign-volume init that only happens to define 'authenticator'
+#    would read as healthy). Now the row COUNT itself is part of the
+#    proof: exactly one role line present -> refuses, naming "FAILED at
+#    (4/5)" and the actual count (1, not the expected 4).
+OUT7="$(run_case "partial-init-state-one-role" 1 "" 7 200 17 "authenticator:true" 1)" || FAIL=1
+if [[ -n "${OUT7:-}" ]]; then
+  echo "$OUT7" | grep -q "FAILED at (4/5)" || { echo "FAIL: [partial-init-state-one-role] did not isolate the failure to probe (4/5)" >&2; FAIL=1; }
+  echo "$OUT7" | grep -q "expected 4 role rows, got 1" || { echo "FAIL: [partial-init-state-one-role] did not name the actual row count" >&2; FAIL=1; }
+fi
+
+# 8. JWT-SECRET-UNSET (Sec F-2, PR #852 AMBER review) -- probe (5/5) alone
+#    fails: all four role passwords set, but app.settings.jwt_secret is
+#    unset (the "unrecognized configuration parameter" error `show`
+#    itself raises for an unset custom GUC) -> refuses, isolated from the
+#    other four probes (all of which would pass).
+OUT8="$(run_case "jwt-secret-unset" 1 "" 7 200 17 "$HEALTHY_ROLES" 1 "unrecognized configuration parameter \"app.settings.jwt_secret\"")" || FAIL=1
+if [[ -n "${OUT8:-}" ]]; then
+  echo "$OUT8" | grep -q "FAILED at (5/5)" || { echo "FAIL: [jwt-secret-unset] did not isolate the failure to probe (5/5)" >&2; FAIL=1; }
+  echo "$OUT8" | grep -q "app.settings.jwt_secret is unset" || { echo "FAIL: [jwt-secret-unset] did not name jwt_secret as the cause" >&2; FAIL=1; }
 fi
 
 if [[ $FAIL -ne 0 ]]; then

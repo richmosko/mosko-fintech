@@ -28,6 +28,9 @@
 #       -- the guard still fires on a genuinely broken state.
 #   2c. MISMATCH-STORE-VALUE-NO-LOGIN -- store carries PFIN_DB_PASSWORD
 #       but the role is not yet LOGIN -> refuses, "INCONSISTENT".
+#   2d. AMBIGUOUS-STORE-STATE (Sec F-5, PR #852 AMBER review) -- the store
+#       readback itself finds MORE than one matching row (store_count=2)
+#       -> refuses, "refusing to trust an ambiguous store state".
 #   3. ROTATE-BUT-NOT-YET-LOGIN -- preflight reads 'f|f' and --rotate IS
 #      passed -> refuses, naming "not yet LOGIN".
 #   4. RESOURCE-ABSENT  -- the target Coolify resource does not exist ->
@@ -409,6 +412,20 @@ assert_output_contains "role-missing" "${OUT1:-}" "does not exist" || FAIL=1
 OUT2="$(run_scenario "already-handed-off: VERIFIED no-op" 0 pfin_etl --apply clean "t|t" "t|t" 0 0 0 0 "" 0 0 "" 0 1)" || FAIL=1
 assert_output_contains "already-handed-off" "${OUT2:-}" "already handed off" || FAIL=1
 assert_output_contains "already-handed-off" "${OUT2:-}" "VERIFIED" || FAIL=1
+# Sec F-1 (PR #852 AMBER review), option (a)+(c) -- this no-op path is
+# existence-only (does not re-verify the store's value still matches
+# Postgres's LIVE password); pin that the loud caveat actually prints on
+# every no-op run, not just in the header comment.
+assert_output_contains "already-handed-off" "${OUT2:-}" "existence-only check" || FAIL=1
+
+# 2d. AMBIGUOUS-STORE-STATE (Sec F-5, PR #852 AMBER review) -- the store
+#     readback itself finds MORE than one matching row (store_count=2), a
+#     state the script already refuses to trust rather than guessing
+#     which row is authoritative -- pins the message this repurposed
+#     scenario 2 (and the OLD version's die() at line ~386) has always
+#     had, but which no fence scenario exercised until now.
+OUT2D="$(run_scenario "ambiguous-store-state: refuses" 1 pfin_etl --apply clean "f|f" "t|t" 0 0 0 0 "" 0 0 "" 0 2)" || FAIL=1
+assert_output_contains "ambiguous-store-state" "${OUT2D:-}" "refusing to trust an ambiguous store state" || FAIL=1
 
 # 2b. MISMATCH-LOGIN-NO-STORE-VALUE (team-lead's own named strike --
 #     "LOGIN but no store value") -- role already LOGIN + password set,

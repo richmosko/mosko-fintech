@@ -417,19 +417,78 @@ is_satisfied_status() {
 # etl-role, provider-sync-role, deploy-workers all transitively depend on
 # provision-resources) -- one live re-check per dry run, not one per
 # dependent step.
+# Sec F-3 (PR #852 AMBER review), three fixes to the original version:
+#
+# (i) The old version discarded record-coolify-uuids.sh's own exit code
+#     entirely (`|| true`) and defaulted to PROVISION_RESOURCES_LIVE_DONE=1
+#     ("done") whenever the "no application named ... found" grep simply
+#     didn't match -- including when that script DIED for an unrelated
+#     reason (it strictly `die`s, not `info`s, on a missing migrator/
+#     stack app -- see its own MIGRATOR_APP_NAME/SUPABASE_STACK_APP_NAME
+#     lookups) and never printed anything resembling that line. A crash
+#     is not evidence of health. Now a non-zero rc without a matching
+#     "absent" line is a THIRD state, "unknown" -- distinct from both "0"
+#     (confirmed absent) and "1" (confirmed present) in the memo, logged
+#     as such, and treated as not-blocking (same as "1") for
+#     step_live_blocker's purposes -- never silently reported as "done".
+#
+# (ii) The old version treated require_box_ip failing (BOX_IP unset) the
+#      SAME as "confirmed absent" (PROVISION_RESOURCES_LIVE_DONE=0,
+#      blocking). BOX_IP is a single global value -- if it's unset here,
+#      it's unset for every OTHER step's own require_box_ip gate too, so
+#      forcing this live check to report "blocked by provision-resources"
+#      would misattribute EVERY dependent step's independent BOX_IP-unset
+#      failure to this one specific cause instead of letting each step's
+#      own genuine "would likely fail" reason show. Now BOX_IP-unset
+#      skips the live check entirely (same "unknown", not-blocking
+#      outcome as (i) -- this function has no way to know provision-
+#      resources' real state without it).
+#
+# (iii) The old version hardcoded the four literal app-name strings in
+#       its grep pattern. record-coolify-uuids.sh's own default names are
+#       the SAME four *_APP_NAME variables (WEB_APP_NAME/ETL_APP_NAME/
+#       PDF_RENDER_APP_NAME/PROVIDER_SYNC_APP_NAME) that script itself
+#       resolves from the environment with the identical defaults -- an
+#       operator override of one of those env vars would silently break
+#       the hardcoded match. Resolve the same way instead, so an override
+#       here tracks whatever that script would actually print.
 PROVISION_RESOURCES_LIVE_DONE=""
 live_done_provision_resources() {
   if [[ -z "$PROVISION_RESOURCES_LIVE_DONE" ]]; then
-    require_box_ip || { PROVISION_RESOURCES_LIVE_DONE=0; return 1; }
-    local out
-    out="$(bash "$SCRIPTS/record-coolify-uuids.sh" 2>&1)" || true
-    if printf '%s' "$out" | grep -qE "no application named '(pfin-app|pfin-back-etl|pfin-pdf-render|pfin-provider-sync)' found"; then
-      PROVISION_RESOURCES_LIVE_DONE=0
+    if ! require_box_ip; then
+      # >&2, not the bare info() convention used elsewhere in this file --
+      # this function's stdout is captured via $(...) by step_live_blocker
+      # (both directly and through its own recursive call), which is
+      # itself captured via $(...) by every caller that computes
+      # "culprit". Any stdout text emitted here becomes PART OF that
+      # captured value, silently corrupting the BLOCKED-BY step name with
+      # this entire message -- caught by a strike against this fence
+      # ITSELF (scenario 19/20 first failed with the whole info() line
+      # printed as the "BLOCKED-BY" target instead of "provision-
+      # resources").
+      info "BOX_IP unset -- skipping the live provision-resources check entirely (state UNKNOWN, not blocking; each step's own preflight already fails at its own require_box_ip gate for the same reason, so its genuine cause shows instead of being misattributed here)" >&2
+      PROVISION_RESOURCES_LIVE_DONE="unknown"
     else
-      PROVISION_RESOURCES_LIVE_DONE=1
+      local out rc web_name etl_name pdf_name provider_name
+      web_name="${WEB_APP_NAME:-pfin-app}"
+      etl_name="${ETL_APP_NAME:-pfin-back-etl}"
+      pdf_name="${PDF_RENDER_APP_NAME:-pfin-pdf-render}"
+      provider_name="${PROVIDER_SYNC_APP_NAME:-pfin-provider-sync}"
+      set +e
+      out="$(bash "$SCRIPTS/record-coolify-uuids.sh" 2>&1)"
+      rc=$?
+      set -e
+      if printf '%s' "$out" | grep -qE "no application named '($web_name|$etl_name|$pdf_name|$provider_name)' found"; then
+        PROVISION_RESOURCES_LIVE_DONE=0
+      elif [[ "$rc" != "0" ]]; then
+        info "record-coolify-uuids.sh exited non-zero (rc=$rc) without naming a missing resource -- provision-resources live state is UNKNOWN, not blocking (never treated as confirmed done)" >&2
+        PROVISION_RESOURCES_LIVE_DONE="unknown"
+      else
+        PROVISION_RESOURCES_LIVE_DONE=1
+      fi
     fi
   fi
-  [[ "$PROVISION_RESOURCES_LIVE_DONE" == "1" ]]
+  [[ "$PROVISION_RESOURCES_LIVE_DONE" == "1" || "$PROVISION_RESOURCES_LIVE_DONE" == "unknown" ]]
 }
 
 # step_live_blocker <key> -- prints the step key whose live done-
