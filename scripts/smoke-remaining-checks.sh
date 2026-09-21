@@ -70,8 +70,7 @@
 #   LEG 3 -- RLS isolation (ADR-011 surface; archive §10's "a seeded user
 #     sees only their own rows" stub, restated as a PRODUCTION-SAFE,
 #     READ-ONLY check). Production may hold zero real tenant rows, or it
-#     may already hold real financial data -- this leg's assertions hold
-#     either way, because none of them depend on how many rows exist:
+#     may already hold real financial data:
 #       - Every `pfin.*` table carrying a `users_id` column is discovered
 #         LIVE from information_schema.columns (never a hand-maintained
 #         list -- the B-1 dynamic-enumeration convention
@@ -82,39 +81,52 @@
 #         SELECT grant on it (re-derived independently of
 #         pgrst-exposure-gates.sh's own B-1 -- this step does not assume
 #         B-1 already ran successfully earlier in the SAME provision.sh
-#         invocation; verify live, never assume).
-#       - THE BEHAVIORAL PROOF, and the one that answers "zero rows is
-#         still assertable via the row-count/permission shape": connect
-#         as `authenticated` (`SET ROLE authenticated` from the
-#         `supabase_admin` superuser session -- current_user becomes
-#         `authenticated`, which is neither the table owner nor a
-#         superuser, so RLS enforces normally per ordinary Postgres
-#         semantics) WITHOUT ever setting `request.jwt.claims` -- i.e. no
-#         tenant identity is established for this session, exactly the
-#         shape a stolen/absent JWT would produce. Every migration in this
-#         repo scopes its policies `users_id = auth.uid()`
-#         (001_pfin_foundation.sql's own stated convention), and
-#         `auth.uid()` returns NULL with no JWT claims set, so
-#         `users_id = NULL` can never be true. `select count(*) from
-#         pfin.<table>` under this role/context MUST return 0 for every
-#         discovered table -- REGARDLESS of how many real rows the table
-#         actually holds, and regardless of whether they belong to one
-#         tenant or a thousand. A non-zero count here is a live RLS
-#         bypass, not a fixture artifact.
+#         invocation; verify live, never assume). These three hold
+#         regardless of row count.
+#       - THE BEHAVIORAL PROOF -- Sec F-1 correction (PR #869 review): a
+#         bare "authenticated sees 0 rows" read is VACUOUS on a table that
+#         holds zero rows to begin with -- it cannot distinguish
+#         "correctly isolated" from "RLS switched off entirely on an
+#         empty table", and a freshly-provisioned, pre-cutover box is
+#         overwhelmingly likely to BE that empty-table state. Fixed by
+#         pairing the zero-context read with a PRIVILEGED baseline count
+#         (as `supabase_admin`, no `SET ROLE`) for the SAME tables, in the
+#         SAME psql invocation (one SSH round trip, still entirely
+#         read-only). Per table: connect as `authenticated` (`SET ROLE
+#         authenticated` from the `supabase_admin` superuser session --
+#         current_user becomes `authenticated`, which is neither the
+#         table owner nor a superuser, so RLS enforces normally per
+#         ordinary Postgres semantics) WITHOUT ever setting
+#         `request.jwt.claims` -- exactly the shape a stolen/absent JWT
+#         would produce. Every migration in this repo scopes its policies
+#         `users_id = auth.uid()` (001_pfin_foundation.sql's own stated
+#         convention), and `auth.uid()` returns NULL with no JWT claims
+#         set, so `users_id = NULL` can never be true -- a table with
+#         real rows and 0 visible under `authenticated` is PROVEN
+#         isolated; a table with 0 real rows to begin with is
+#         INCONCLUSIVE (nothing to isolate, says nothing either way); any
+#         table where `authenticated` sees >0 rows is a live RLS bypass,
+#         FAILED regardless of the others. If NO discovered table is ever
+#         PROVEN (i.e. the whole set is empty), this leg reports SKIPPED,
+#         not VERIFIED -- isolation is unproven, not proven absent; `reset
+#         role` (Sec F-2) at the tail keeps the session's role-scope
+#         explicit rather than incidental-because-the-connection-closes-
+#         next.
 #       - `service_role`'s own BYPASSRLS attribute is confirmed
 #         structurally (`pg_roles.rolbypassrls`), matching the by-design
 #         contrast every migration comment in this repo already states
 #         (008_pfin_service_role_grants.sql: "service_role is BYPASSRLS,
-#         ACL is checked independently").
+#         ACL is checked independently"). Sec: the absence of a separate
+#         `authenticated.rolbypassrls = false` assertion is not a gap --
+#         if `authenticated` ever held BYPASSRLS the behavioral read above
+#         would already FAIL loudly (it would see every row).
 #     A pgTAP two-tenant INSERT-then-rollback battery (this repo's own
 #     CI/local pattern) was considered and rejected here: even a rolled-
 #     back write against PRODUCTION carries a different risk posture
 #     (WAL, lock contention, connection-pool pressure under supavisor)
 #     than an ephemeral CI/local database, and the team-lead brief this
 #     script implements is explicit that this leg must be READ-ONLY.
-#     DESIGN NOTE FOR SEC REVIEW: this is the one leg this script's own
-#     dispatch named as needing Sec's design input (ADR-011 surface) --
-#     flagged, not silently shipped.
+#     Sec-reviewed and confirmed correct on this point (PR #869 review).
 #
 #   LEG 4 -- auth login (archive §10 stub). The app carries no public
 #     domain until the `dns`/`cutover` steps run -- this leg detects that
@@ -535,34 +547,77 @@ else
   info "discovered ${#TABLES[@]} users_id-bearing pfin table(s): ${TABLES[*]}"
 
   if [[ "$RLS_STATUS" == "VERIFIED" ]]; then
-    UNION_SQL=""
+    # Sec F-1 (PR #869 review): a bare "authenticated sees 0 rows" read is
+    # VACUOUS on a table that holds zero rows to begin with -- it cannot
+    # distinguish "correctly isolated" from "RLS switched off entirely on
+    # an empty table", and a freshly-provisioned, pre-cutover box is
+    # overwhelmingly likely to BE that empty-table state, not an edge
+    # case. Fixed by pairing the zero-context read with a PRIVILEGED
+    # baseline count (as supabase_admin, no SET ROLE) for the SAME
+    # tables, in the SAME psql invocation -- one SSH round trip, still
+    # entirely read-only. Per table: priv>0 and auth=0 -> PROVEN
+    # (isolation actually demonstrated); priv=0 -> INCONCLUSIVE (nothing
+    # to isolate, this table says nothing either way); auth>0 -> FAILED
+    # regardless of priv (unchanged -- a live bypass is a live bypass).
+    # If NO table is ever PROVEN, this leg refuses to report VERIFIED --
+    # SKIPPED, naming why, same shape smoke-etl-poll.sh already uses for
+    # "zero active tenants, nothing to check yet".
+    #
+    # Sec F-2: `reset role` at the tail -- the statements between the SET
+    # ROLE and the end of THIS session are the thing to control; explicit,
+    # not incidental-because-the-connection-happens-to-close-next.
+    PRIV_SQL=""
     first=1
     for t in "${TABLES[@]}"; do
-      if [[ $first -eq 1 ]]; then
-        UNION_SQL="select '$t' as t, count(*) as n from pfin.\"$t\""
-        first=0
-      else
-        UNION_SQL="$UNION_SQL union all select '$t', count(*) from pfin.\"$t\""
-      fi
+      if [[ $first -eq 1 ]]; then PRIV_SQL="select 'PRIV' as ctx, '$t' as t, count(*) as n from pfin.\"$t\""; first=0
+      else PRIV_SQL="$PRIV_SQL union all select 'PRIV', '$t', count(*) from pfin.\"$t\""; fi
     done
-    ZERO_CTX_QUERY="set role authenticated; $UNION_SQL;"
+    AUTH_SQL=""
+    first=1
+    for t in "${TABLES[@]}"; do
+      if [[ $first -eq 1 ]]; then AUTH_SQL="select 'AUTH' as ctx, '$t' as t, count(*) as n from pfin.\"$t\""; first=0
+      else AUTH_SQL="$AUTH_SQL union all select 'AUTH', '$t', count(*) from pfin.\"$t\""; fi
+    done
+    ZERO_CTX_QUERY="$PRIV_SQL; set role authenticated; $AUTH_SQL; reset role;"
     set +e
     ZERO_CTX_OUT="$(psql_admin "$ZERO_CTX_QUERY")"
     ZERO_CTX_RC=$?
     set -e
     if [[ $ZERO_CTX_RC -ne 0 ]]; then
       RLS_STATUS="FAILED"
-      RLS_MSGS+=("the zero-JWT-context 'authenticated' row-count read failed (rc=$ZERO_CTX_RC) -- precondition (e.g. supabase_admin cannot SET ROLE authenticated), not an isolation finding.")
+      RLS_MSGS+=("the privileged-baseline / zero-JWT-context 'authenticated' row-count read failed (rc=$ZERO_CTX_RC) -- precondition (e.g. supabase_admin cannot SET ROLE authenticated), not an isolation finding.")
     else
-      while IFS='|' read -r t n; do
-        [[ -z "$t" ]] && continue
-        if [[ "$n" != "0" ]]; then
+      # bash 3.2 (macOS operator shell): no associative arrays (`declare
+      # -A` is a bash 4+ builtin option this repo's own provision.sh
+      # header already states as off-limits -- "parallel arrays, no
+      # assoc arrays"). Per-table lookup via a plain string match on the
+      # "CTX|table|count" output instead of a hash map.
+      PROVEN_COUNT=0
+      INCONCLUSIVE_COUNT=0
+      for t in "${TABLES[@]}"; do
+        p="$(printf '%s\n' "$ZERO_CTX_OUT" | awk -F'|' -v t="$t" '$1=="PRIV" && $2==t {print $3; exit}')"
+        a="$(printf '%s\n' "$ZERO_CTX_OUT" | awk -F'|' -v t="$t" '$1=="AUTH" && $2==t {print $3; exit}')"
+        if [[ -z "$p" || -z "$a" ]]; then
           RLS_STATUS="FAILED"
-          RLS_MSGS+=("pfin.$t: $n row(s) visible to a session with NO tenant identity established (SET ROLE authenticated, no request.jwt.claims) -- expected 0. This is a live RLS bypass, not a fixture artifact.")
+          RLS_MSGS+=("pfin.$t: missing a privileged or authenticated row-count reading in the combined query output -- precondition, treat as unverified.")
+          continue
         fi
-      done <<<"$ZERO_CTX_OUT"
+        if [[ "$a" != "0" ]]; then
+          RLS_STATUS="FAILED"
+          RLS_MSGS+=("pfin.$t: $a row(s) visible to a session with NO tenant identity established (SET ROLE authenticated, no request.jwt.claims) -- expected 0. This is a live RLS bypass, not a fixture artifact.")
+        elif [[ "$p" -gt 0 ]]; then
+          PROVEN_COUNT=$((PROVEN_COUNT + 1))
+        else
+          INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+        fi
+      done
       if [[ "$RLS_STATUS" == "VERIFIED" ]]; then
-        ok "RLS: every discovered table -- RLS on, >=1 policy, anon zero-grant, and ZERO rows visible with no tenant identity established"
+        if [[ "$PROVEN_COUNT" -eq 0 ]]; then
+          RLS_STATUS="SKIPPED"
+          RLS_MSGS+=("every discovered table holds zero rows -- no rows exist to be isolated, so isolation is UNPROVEN, not proven absent. RLS-enabled/policy-present/anon-zero-grant all checked structurally and hold; the behavioral zero-context read has nothing to demonstrate on an empty table. Re-run once at least one table holds real (or synthetic-but-real) tenant data.")
+        else
+          ok "RLS: every discovered table -- RLS on, >=1 policy, anon zero-grant; $PROVEN_COUNT table(s) PROVEN isolated (privileged count >0, authenticated sees 0), $INCONCLUSIVE_COUNT table(s) INCONCLUSIVE (empty, nothing to isolate)"
+        fi
       fi
     fi
   fi

@@ -114,18 +114,27 @@ ln -s "$FIXTURE_DIR/fake-nc" "$FAKE_BIN/nc"
 
 # The happy-path RLS fixture set -- shared as the baseline every scenario
 # starts from, overridden per-scenario below. Two tables, RLS on, one
-# policy each, anon holds no grant, zero visible rows with no JWT
-# context, service_role BYPASSRLS.
+# policy each, anon holds no grant, service_role BYPASSRLS. FAKE_ZERO_CTX
+# is the combined privileged-baseline + zero-context format Sec's F-1
+# correction (PR #869 review) requires: "PRIV|table|count" /
+# "AUTH|table|count" pairs per table -- privileged count >0 with
+# authenticated count 0 is what PROVES isolation (an all-empty set would
+# only be INCONCLUSIVE, see scenario 18).
 HAPPY_RLS_ENUM='account|true|1|false
 account_users|true|1|false'
-HAPPY_ZERO_CTX='account|0
-account_users|0'
+HAPPY_ZERO_CTX='PRIV|account|5
+AUTH|account|0
+PRIV|account_users|3
+AUTH|account_users|0'
+
+LAST_OUT="$WORK/last_out"
 
 run_scenario() {
   # run_scenario <desc> <expect_exit> [FAKE_VAR=value ...]
+  # Leaves the captured output at $LAST_OUT for scenarios that need a
+  # content assertion beyond the exit code (see scenario 18).
   local desc="$1" expect_exit="$2"
   shift 2
-  local out="$WORK/out.$$.$RANDOM"
   set +e
   env REPO_ROOT="$REPO_ROOT" FAKE_ROOT_PFIN="$FAKE_ROOT_PFIN" FAKE_BIN="$FAKE_BIN" \
     BOX_IP=127.0.0.1 AUTOMATION_KEY=/dev/null \
@@ -136,14 +145,14 @@ run_scenario() {
     FAKE_CA7_GW="200" FAKE_CA7_P1="OPEN" FAKE_CA7_P2="OPEN" \
     FAKE_LOGIN_STATUS="200" FAKE_SIGNUP_STATUS="400" FAKE_RESEND_OUT="RESEND_STATUS_200" \
     "$@" \
-    PATH="$FAKE_BIN:$PATH" bash "$SMOKE_SH" < /dev/null > "$out" 2>&1
+    PATH="$FAKE_BIN:$PATH" bash "$SMOKE_SH" < /dev/null > "$LAST_OUT" 2>&1
   local rc=$?
   set -e
 
   if [[ "$rc" != "$expect_exit" ]]; then
     echo "FAIL: [$desc] expected exit $expect_exit, got $rc" >&2
     echo "----- captured output -----" >&2
-    cat "$out" >&2
+    cat "$LAST_OUT" >&2
     return 1
   fi
   echo "OK: [$desc] exit $rc as expected." >&2
@@ -195,7 +204,10 @@ run_scenario "anon holds SELECT on a discovered table: refuses" 1 \
 
 # 11. RLS-ZERO-CONTEXT-NONZERO
 run_scenario "zero-JWT-context session sees >0 rows: refuses" 1 \
-  FAKE_ZERO_CTX="account|3" || FAIL=1
+  FAKE_ZERO_CTX="PRIV|account|5
+AUTH|account|3
+PRIV|account_users|3
+AUTH|account_users|0" || FAIL=1
 
 # 12. RLS-BYPASSRLS-FALSE
 run_scenario "service_role.rolbypassrls=false: refuses" 1 \
@@ -220,6 +232,31 @@ run_scenario "Resend key absent: informational only, still MANUAL" 4 \
 # 17. AUTH-LOGIN-CURL-EMPTY
 run_scenario "GET /login produces no output at all: precondition, refuses (never a status-code comparison)" 1 \
   FAKE_LOGIN_STATUS="EMPTY" || FAIL=1
+
+# 18. RLS-ALL-TABLES-EMPTY -- Sec F-1 (PR #869 review), the fix itself:
+# every discovered table's PRIVILEGED count is 0 too (not just the
+# authenticated one) -- nothing exists to be isolated, so this must NOT
+# report VERIFIED (that would be the exact vacuous-pass Sec's finding
+# named: indistinguishable from RLS being switched off entirely on an
+# empty table). Combined with no domain assigned (auth-login SKIPPED,
+# not MANUAL) so the overall exit code is driven by RLS's own SKIPPED,
+# not masked by auth-login's MANUAL ceiling -- and the RLS summary line
+# itself is asserted via $LAST_OUT, not inferred from the aggregate exit
+# code alone (exit 3 alone cannot distinguish "RLS SKIPPED" from
+# "auth-login SKIPPED with RLS VERIFIED" -- both would read exit 3).
+run_scenario "RLS: every discovered table has zero real rows -- SKIPPED (isolation unproven, not proven absent), not VERIFIED" 3 \
+  FAKE_SIBLING_FQDN="" \
+  FAKE_ZERO_CTX="PRIV|account|0
+AUTH|account|0
+PRIV|account_users|0
+AUTH|account_users|0" || FAIL=1
+if grep -qE '^  RLS:[[:space:]]+SKIPPED' "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-ALL-TABLES-EMPTY] RLS leg itself reports SKIPPED in the summary table." >&2
+else
+  echo "FAIL: [RLS-ALL-TABLES-EMPTY] RLS leg did not report SKIPPED in the summary table -- exit code alone does not prove this scenario struck the intended guard." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
