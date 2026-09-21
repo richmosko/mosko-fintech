@@ -244,98 +244,118 @@ if [[ "$ARGS" == *"rolcanlogin::text ||"* ]]; then
 fi
 
 if [[ "$ARGS" == *"-h db"* ]]; then
-  # Connect-as-the-role step. SCRIPT_IN's first line is the password (or,
-  # under FAKE_NO_PASSWORD_PROMPT, what a trust-path connection would
-  # instead consume as a SQL statement); second line is the query.
+  # Connect-as-the-role step. team-lead's own live measurement, run-5
+  # (realrun5.clean.log), 2026-09-21, MEASURED on the production target:
+  # psql 17.6 over -h db, non-tty, inside `docker compose exec -T`, prints
+  # NO password-prompt text at all without `-W` -- it silently consumes
+  # the piped first stdin line as the password and attempts auth with it.
+  # `-W` forces a `Password: ` prompt regardless of tty/pipe state. This
+  # fixture now models a REAL auth check (compare the piped line against
+  # the known-correct value) rather than the old flag-only shape, because
+  # the real script now runs a POSITIVE CONTROL (a deliberately WRONG
+  # password) before the real connect, and a fixture that always
+  # "succeeds" regardless of the piped password could never distinguish
+  # the two calls or prove the control is load-bearing.
   SCRIPT_IN="$(cat)"
   FIRST_LINE="$(printf '%s\n' "$SCRIPT_IN" | head -1)"
-  if [[ "${FAKE_CONNECT_FAIL:-0}" == "1" ]]; then
-    # Models a genuine password-authenticated connection that fails for an
-    # UNRELATED reason (wrong password, DB unreachable after the prompt,
-    # etc) -- distinct from scenario 13's trust-path bypass: the prompt
-    # DOES appear here, so this exercises the exit-code guard specifically,
-    # not the missing-prompt guard.
-    echo "Password for user ${FAKE_ROLE_NAME:-pfin_etl}: "
-    echo "psql: error: connection failed" >&2
+  HAS_W=0
+  [[ "$ARGS" == *"-W"* ]] && HAS_W=1
+  if [[ -n "${FAKE_CONNECT_CALL_LOG:-}" ]]; then
+    printf '%s\n' "$ARGS" >> "$FAKE_CONNECT_CALL_LOG"
+  fi
+  PROMPT_LINE=""
+  [[ "$HAS_W" -eq 1 ]] && PROMPT_LINE="Password: "
+  # The real credential comes from ONE of two sources depending on which
+  # site called this: the fresh-handoff leg C generates $PW locally and
+  # delivers it via SEED_FILE (readable here -- the leg-E readback hash
+  # check already reads it the same way); the already-handed-off
+  # bind-check reads it box-side via tinker, modeled by FAKE_BIND_CHECK_PW.
+  if [[ -n "${SEED_FILE:-}" && -f "$SEED_FILE" ]]; then
+    REAL_PW="$(cat "$SEED_FILE")"
+  else
+    REAL_PW="${FAKE_BIND_CHECK_PW:-}"
+  fi
+
+  if [[ -n "$REAL_PW" && "$FIRST_LINE" == "$REAL_PW" ]]; then
+    # The REAL credential was piped -- this is the real connect attempt
+    # (whether or not a control call happened first).
+    if [[ "${FAKE_NO_PASSWORD_PROMPT:-0}" == "1" ]]; then
+      # Sec VETO V-1 (PR #846 review) -- trust-path bypass: NO prompt text
+      # at all EVEN WITH -W (the actual hazard: something suppresses the
+      # prompt regardless), the cleartext first-stdin-line consumed as a
+      # bogus SQL statement instead. Realistically leaks $PW into the
+      # syntax-error echo -- with scrub-before-prompt-check ordering, the
+      # cleartext scrub now correctly fires FIRST on this exact shape (a
+      # STRONGER outcome). FAKE_NO_PASSWORD_PROMPT_CLEAN below isolates
+      # the missing-prompt guard with a non-leaking variant.
+      echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$FIRST_LINE\""
+      echo "LINE 1: $FIRST_LINE"
+      echo " current_user "
+      echo "--------------"
+      echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+      exit 0
+    fi
+    if [[ "${FAKE_NO_PASSWORD_PROMPT_CLEAN:-0}" == "1" ]]; then
+      echo "psql:<stdin>:1: ERROR:  syntax error at or near a piped credential (redacted by this fake, not by db-role-handoff.sh)"
+      echo " current_user "
+      echo "--------------"
+      echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+      exit 0
+    fi
+    if [[ "${FAKE_WRONG_CURRENT_USER:-0}" == "1" ]]; then
+      # Sec C-1 (PR #856 round 1) -- everything else about this connection
+      # is normal (prompt prints, no cleartext leak, exit 0), but the row
+      # psql prints back for `select current_user;` names a DIFFERENT
+      # role. Proves the exact-row current_user match fires on its own.
+      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      echo " current_user "
+      echo "--------------"
+      echo " postgres"
+      exit 0
+    fi
+    if [[ "${FAKE_ECHO_PW_IN_CONNECT:-0}" == "1" ]]; then
+      # Sec F-6 (PR #846 review) -- the prompt DOES print, but the
+      # credential ALSO leaks into the output elsewhere.
+      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      echo "DEBUG (simulated transport bug): last line was $FIRST_LINE"
+      echo " current_user "
+      echo "--------------"
+      echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+      exit 0
+    fi
+    if [[ "${FAKE_CONNECT_FAIL:-0}" == "1" ]]; then
+      # A genuine password-authenticated connection failing for an
+      # UNRELATED reason (DB unreachable after the prompt, etc).
+      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      echo "psql: error: connection failed" >&2
+      exit 2
+    fi
+    [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+    echo " current_user "
+    echo "--------------"
+    echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+    exit 0
+  else
+    # Wrong/unknown password (the trust-path CONTROL's own deliberately-
+    # wrong value, or REAL_PW unset). Real psql behavior: auth failure,
+    # unless a dedicated override models the actual hazards the control
+    # exists to catch.
+    if [[ "${FAKE_CONTROL_SUCCEEDS:-0}" == "1" ]]; then
+      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      echo " current_user "
+      echo "--------------"
+      echo " ${FAKE_ROLE_NAME:-pfin_etl}"
+      exit 0
+    fi
+    if [[ "${FAKE_CONTROL_WRONG_ERROR:-0}" == "1" ]]; then
+      [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+      echo "psql: error: could not translate host name \"db\" to address: Name or service not known" >&2
+      exit 2
+    fi
+    [[ -n "$PROMPT_LINE" ]] && echo "$PROMPT_LINE"
+    echo "psql: error: connection to server at \"db\" (10.0.0.5), port 5432 failed: FATAL:  password authentication failed for user \"${FAKE_ROLE_NAME:-pfin_etl}\"" >&2
     exit 2
   fi
-  if [[ "${FAKE_NO_PASSWORD_PROMPT:-0}" == "1" ]]; then
-    # Sec VETO V-1 (PR #846 review) -- simulates the measured `trust`-path
-    # hazard: no password prompt at all, so the first stdin line (the
-    # cleartext credential) is consumed as a SQL statement and echoed back
-    # inside psql's own syntax-error text (the same shape a real
-    # server-log capture via log_min_error_statement would carry). NO
-    # "Password for user" line is printed. Historically (pre-fix) the
-    # script still saw a current_user block and exited 0; this fake still
-    # PRINTS that block, so the strike proves a guard catches this, not a
-    # change in what psql itself reports.
-    #
-    # Sec C-1 (PR #856 round 1) -- ORDERING CHANGED, comment corrected:
-    # db-role-handoff.sh's leg C now scrubs cleartext BEFORE checking for
-    # the missing prompt (Sec F-2b's actual requirement, backported from
-    # the already-handed-off bind-check). Since THIS fake's own trust-path
-    # output realistically leaks the credential in the syntax-error echo
-    # (a real Postgres error message does include the offending token),
-    # the cleartext scrub now correctly fires FIRST on this exact shape --
-    # a STRONGER outcome (refused before the missing-prompt check is even
-    # reached), not a regression. This scenario now asserts THAT refusal;
-    # scenario 13b (FAKE_NO_PASSWORD_PROMPT_CLEAN) below proves the
-    # missing-prompt guard still independently catches a trust-path bypass
-    # whose error text happens not to leak the credential.
-    echo "psql:<stdin>:1: ERROR:  syntax error at or near \"$FIRST_LINE\""
-    echo "LINE 1: $FIRST_LINE"
-    echo " current_user "
-    echo "--------------"
-    echo " ${FAKE_ROLE_NAME:-pfin_etl}"
-    exit 0
-  fi
-  if [[ "${FAKE_NO_PASSWORD_PROMPT_CLEAN:-0}" == "1" ]]; then
-    # Sec C-1 (PR #856 round 1) -- the SAME trust-path bypass as above, but
-    # with a generic (non-leaking) syntax-error message, isolating the
-    # missing-prompt guard from the cleartext scrub so it still has its
-    # OWN independent strike now that the realistic shape above is caught
-    # by the scrub first.
-    echo "psql:<stdin>:1: ERROR:  syntax error at or near a piped credential (redacted by this fake, not by db-role-handoff.sh)"
-    echo " current_user "
-    echo "--------------"
-    echo " ${FAKE_ROLE_NAME:-pfin_etl}"
-    exit 0
-  fi
-  if [[ "${FAKE_WRONG_CURRENT_USER:-0}" == "1" ]]; then
-    # Sec C-1 (PR #856 round 1) -- everything else about this connection is
-    # normal (prompt prints, no cleartext leak, exit 0), but the row psql
-    # prints back for `select current_user;` names a DIFFERENT role. This
-    # is db-bootstrap.sh's own FAKE_WRONG_CURRENT_USER shape, mirrored here
-    # -- proves the exact-row current_user match (the fix for the
-    # vacuous-substring defect C-1 found) fires on its own, not merely
-    # because the prompt/exit-code checks also would have.
-    echo "Password for user ${FAKE_ROLE_NAME:-pfin_etl}: "
-    echo " current_user "
-    echo "--------------"
-    echo " postgres"
-    exit 0
-  fi
-  if [[ "${FAKE_ECHO_PW_IN_CONNECT:-0}" == "1" ]]; then
-    # Sec F-6 (PR #846 review) -- the dedicated cleartext-guard scenario the
-    # comment above now correctly says NO OTHER scenario provides: the
-    # prompt DOES print (a normal, password-authenticated connection), but
-    # the credential ALSO leaks into the output elsewhere -- a plausible
-    # transport/echo bug on an otherwise-unremarkable connection, not a
-    # trust-path bypass. With the prompt present, the missing-prompt guard
-    # passes and cannot absorb this strike; only the CONNECT_OUT cleartext
-    # grep can catch it.
-    echo "Password for user ${FAKE_ROLE_NAME:-pfin_etl}: "
-    echo "DEBUG (simulated transport bug): last line was $FIRST_LINE"
-    echo " current_user "
-    echo "--------------"
-    echo " ${FAKE_ROLE_NAME:-pfin_etl}"
-    exit 0
-  fi
-  echo "Password for user ${FAKE_ROLE_NAME:-pfin_etl}: "
-  echo " current_user "
-  echo "--------------"
-  echo " ${FAKE_ROLE_NAME:-pfin_etl}"
-  exit 0
 fi
 
 if [[ "$ARGS" == *"exec -T db psql"* && "$ARGS" != *"-tAc"* ]]; then
@@ -405,6 +425,8 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_READBACK_USER="\$FAKE_READBACK_USER" FAKE_ECHO_PW_IN_CONNECT="\$FAKE_ECHO_PW_IN_CONNECT" \\
     FAKE_STORE_COUNT="\$FAKE_STORE_COUNT" FAKE_BIND_CHECK_PW="\$FAKE_BIND_CHECK_PW" \\
     FAKE_NO_PASSWORD_PROMPT_CLEAN="\$FAKE_NO_PASSWORD_PROMPT_CLEAN" FAKE_WRONG_CURRENT_USER="\$FAKE_WRONG_CURRENT_USER" \\
+    FAKE_CONTROL_SUCCEEDS="\$FAKE_CONTROL_SUCCEEDS" FAKE_CONTROL_WRONG_ERROR="\$FAKE_CONTROL_WRONG_ERROR" \\
+    FAKE_CONNECT_CALL_LOG="\$FAKE_CONNECT_CALL_LOG" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -442,11 +464,20 @@ run_scenario() {
   # scenario's bind-check (including connect-fail strikes via
   # <connect_fail>) passes through this read undisturbed.
   local desc="$1" expect_exit="$2" role="$3" apply_flag="$4" curl_mode="$5" \
-        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" no_prompt_clean="${19:-0}" wrong_current_user="${20:-0}"
+        role_state="$6" verify_state="$7" connect_fail="$8" mismatch="$9" handoff_fail="${10}" echo_pw="${11}" readback_count="${12}" no_prompt="${13:-0}" hash_mismatch="${14:-0}" readback_user="${15:-}" echo_pw_in_connect="${16:-0}" store_count="${17-0}" bind_check_pw="${18-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" no_prompt_clean="${19:-0}" wrong_current_user="${20:-0}" control_succeeds="${21:-0}" control_wrong_error="${22:-0}"
   local log="$WORK/curl.log.$$.$RANDOM"
   : > "$log"
   local resource_name="pfin-back-etl"
   [[ "$role" == "pfin_provider_sync" ]] && resource_name="pfin-provider-sync"
+  # Sec/self-found bug (this file's own sibling, fence-db-bootstrap-
+  # strikes.sh, hit the identical trap this round): `OUT="$(run_scenario
+  # ...)"` forks a SUBSHELL -- an assignment made INSIDE this function
+  # never survives back to the caller. Callers that need to inspect this
+  # log after the call must pre-set CONNECT_CALL_LOG themselves before
+  # invoking run_scenario (inherited INTO the subshell); this line only
+  # supplies a default when they have not.
+  CONNECT_CALL_LOG="${CONNECT_CALL_LOG:-$WORK/connect.log.$$.$RANDOM}"
+  : > "$CONNECT_CALL_LOG"
   set +e
   BOX_IP=127.0.0.1 AUTOMATION_KEY=/dev/null REPO_ROOT="$REPO_ROOT" \
     PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$log" FAKE_CURL_MODE="$curl_mode" FAKE_RESOURCE_NAME="$resource_name" \
@@ -457,6 +488,8 @@ run_scenario() {
     FAKE_READBACK_USER="$readback_user" FAKE_ECHO_PW_IN_CONNECT="$echo_pw_in_connect" \
     FAKE_STORE_COUNT="$store_count" FAKE_BIND_CHECK_PW="$bind_check_pw" \
     FAKE_NO_PASSWORD_PROMPT_CLEAN="$no_prompt_clean" FAKE_WRONG_CURRENT_USER="$wrong_current_user" \
+    FAKE_CONTROL_SUCCEEDS="$control_succeeds" FAKE_CONTROL_WRONG_ERROR="$control_wrong_error" \
+    FAKE_CONNECT_CALL_LOG="$CONNECT_CALL_LOG" \
     bash "$DB_ROLE_HANDOFF_SH" "$role" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -510,6 +543,8 @@ assert_output_contains "role-missing" "${OUT1:-}" "does not exist" || FAIL=1
 #    pass over an already-successfully-handed-off role, the exact same
 #    class of defect provision-supabase-stack.sh's db-data-volume guard
 #    had.
+CONNECT_CALL_LOG="$WORK/connect-pin.2.$$"
+: > "$CONNECT_CALL_LOG"
 OUT2="$(run_scenario "already-handed-off: VERIFIED no-op" 0 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1)" || FAIL=1
 assert_output_contains "already-handed-off" "${OUT2:-}" "already handed off" || FAIL=1
 assert_output_contains "already-handed-off" "${OUT2:-}" "VERIFIED" || FAIL=1
@@ -519,6 +554,18 @@ assert_output_contains "already-handed-off" "${OUT2:-}" "VERIFIED" || FAIL=1
 # with it) before reporting VERIFIED. Pin the bind-check's own success
 # line, not the old existence-only caveat text (removed).
 assert_output_contains "already-handed-off" "${OUT2:-}" "bind-check confirmed" || FAIL=1
+# team-lead's run-5 fix (2026-09-21) -- -W PINNED FROM THE LOGGED ARGV,
+# not just inferred from behavior: every -h db call this scenario made
+# (the trust-path control AND the real connect) must carry -W.
+if [[ ! -s "$CONNECT_CALL_LOG" ]]; then
+  echo "FAIL: [already-handed-off] no -h db connect calls were logged at all -- the -W pin has nothing to check." >&2
+  FAIL=1
+elif grep -qv -- '-W' "$CONNECT_CALL_LOG"; then
+  echo "FAIL: [already-handed-off] at least one -h db connect call did not carry -W:" >&2
+  grep -v -- '-W' "$CONNECT_CALL_LOG" >&2
+  FAIL=1
+fi
+unset CONNECT_CALL_LOG
 
 # 2f. ALREADY-HANDED-OFF-BIND-CHECK-STORE-EMPTY -- count-only preflight
 #     says the store carries a row (store_count=1), but the bind-check's
@@ -603,8 +650,20 @@ OUT9="$(run_scenario "readback-count-mismatch: refuses" 1 pfin_etl --apply clean
 assert_output_contains "readback-count-mismatch" "${OUT9:-}" "expected exactly 1" || FAIL=1
 
 # 10. HAPPY-PATH-INITIAL
+CONNECT_CALL_LOG="$WORK/connect-pin.10.$$"
+: > "$CONNECT_CALL_LOG"
 OUT10="$(run_scenario "happy-path-initial: succeeds" 0 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "")" || FAIL=1
 assert_output_contains "happy-path-initial" "${OUT10:-}" "hash-bound to the generated credential confirmed" || FAIL=1
+# -W PINNED FROM THE LOGGED ARGV (fresh-handoff leg C's own connect calls).
+if [[ ! -s "$CONNECT_CALL_LOG" ]]; then
+  echo "FAIL: [happy-path-initial] no -h db connect calls were logged at all -- the -W pin has nothing to check." >&2
+  FAIL=1
+elif grep -qv -- '-W' "$CONNECT_CALL_LOG"; then
+  echo "FAIL: [happy-path-initial] at least one -h db connect call did not carry -W:" >&2
+  grep -v -- '-W' "$CONNECT_CALL_LOG" >&2
+  FAIL=1
+fi
+unset CONNECT_CALL_LOG
 
 # 11. HAPPY-PATH-ROTATE
 OUT11="$(run_scenario "happy-path-rotate: succeeds" 0 pfin_etl "--apply --rotate" clean "true|true" "true|true" 0 0 0 0 "")" || FAIL=1
@@ -637,7 +696,7 @@ assert_output_contains "trust-path-no-prompt" "${OUT13:-}" "cleartext value appe
 #      independent strike now that #13's realistic shape is caught by the
 #      scrub first.
 OUT13B="$(run_scenario "trust-path-no-prompt-clean: refuses via missing-prompt guard" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 1)" || FAIL=1
-assert_output_contains "trust-path-no-prompt-clean" "${OUT13B:-}" "no password prompt was observed" || FAIL=1
+assert_output_contains "trust-path-no-prompt-clean" "${OUT13B:-}" 'no password prompt ("Password:") was observed' || FAIL=1
 
 # 13c. WRONG-CURRENT-USER-FRESH-HANDOFF (Sec C-1, PR #856 round 1) -- leg
 #      C's own connect (the fresh-handoff path): prompt prints normally,
@@ -706,6 +765,28 @@ if ! grep -qE 'psql[^"'"'"']*-v ON_ERROR_STOP=1[^"'"'"']*-h db' "$DB_ROLE_HANDOF
 else
   echo "OK: [step-c-structural-pin] $DB_ROLE_HANDOFF_SH's connect-as-role invocation carries both '-v ON_ERROR_STOP=1' and '-h db'." >&2
 fi
+
+# 18a. ALREADY-HANDED-OFF-CONTROL-SUCCEEDS (team-lead, run-5, 2026-09-21)
+#      -- the trust-path control (a deliberately WRONG password) succeeds
+#      instead of failing -- the exact hazard the control exists to
+#      catch (a trust rule authenticating ANY password) -- refuses,
+#      never proceeding to try the real credential.
+OUT18A="$(run_scenario "already-handed-off-control-succeeds: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 0 0 1)" || FAIL=1
+assert_output_contains "already-handed-off-control-succeeds" "${OUT18A:-}" "did not fail with 'password authentication failed'" || FAIL=1
+
+# 18b. ALREADY-HANDED-OFF-CONTROL-WRONG-ERROR -- the control fails, but
+#      not with "password authentication failed" -- refuses.
+OUT18B="$(run_scenario "already-handed-off-control-wrong-error: refuses" 1 pfin_etl --apply clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 0 0 0 1)" || FAIL=1
+assert_output_contains "already-handed-off-control-wrong-error" "${OUT18B:-}" "did not fail with 'password authentication failed'" || FAIL=1
+
+# 18c. LEG-C-CONTROL-SUCCEEDS -- same strike against the fresh-handoff
+#      leg C.
+OUT18C="$(run_scenario "leg-c-control-succeeds: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 1)" || FAIL=1
+assert_output_contains "leg-c-control-succeeds" "${OUT18C:-}" "did not fail with 'password authentication failed'" || FAIL=1
+
+# 18d. LEG-C-CONTROL-WRONG-ERROR -- same, non-auth-failure error shape.
+OUT18D="$(run_scenario "leg-c-control-wrong-error: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 0 1)" || FAIL=1
+assert_output_contains "leg-c-control-wrong-error" "${OUT18D:-}" "did not fail with 'password authentication failed'" || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
