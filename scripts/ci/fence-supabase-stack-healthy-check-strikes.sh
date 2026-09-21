@@ -55,7 +55,12 @@
 #      is not a loosening.
 #   4. CONTAINERS-NOT-ALL-HEALTHY -- probe (1/5) alone fails (5/7) -> die,
 #      isolated from the other four probes (all of which would pass).
-#   5. GATEWAY-NOT-200 -- probe (2/5) alone fails -> die, isolated.
+#   5a-5d. GATEWAY-TWO-PART-PROBE (team-lead's 2026-09-21 live
+#      measurement) -- probe (2/5) is now two calls (no-key expect 401,
+#      anon-key expect 200); 5a = no-key wrongly 200 (key-auth not
+#      enforced), 5b = with-key wrongly 401 (key doesn't authenticate),
+#      5c = both calls 000 (connection failure), 5d = ANON_KEY
+#      unreadable from the store. Scenario 2 covers the PASS case.
 #   6. WRONG-PG-VERSION -- probe (3/5) alone fails -> die, isolated.
 #   7. PARTIAL-INIT-STATE-ONE-ROLE (Sec C-1, PR #852 AMBER review) -- a
 #      SINGLE matching role row -> die, naming "FAILED at (4/5)" and the
@@ -190,8 +195,22 @@ sshx() {
       local fi=0
       while [[ $fi -lt $FAKE_CONTAINERS ]]; do echo "container$fi"; fi=$((fi + 1)); done
       ;;
-    *"exec -T supavisor curl"*)
-      printf '%s' "$FAKE_GW_STATUS"
+    *"bash -s"*)
+      # team-lead's live measurement, 2026-09-21: probe (2/5) is now a
+      # two-part TINKER-KEY-READ-then-TWO-CURLS remote script (same
+      # heredoc + `env APP_UUID=... bash -s` shape this file's own
+      # NEED_MINT/`db-role-handoff.sh` idiom uses elsewhere -- see this
+      # fake's own header note on why a genuinely separate `bash
+      # "$combined"` process, never `source`, matters here too). The
+      # heredoc BODY arrives on this function's own stdin (bash's normal
+      # behavior for a function called with a `<<` redirect) -- drained,
+      # not parsed: this fake's answer is entirely FAKE_GW_*-driven, the
+      # same "canned answer, not a reimplementation" contract every other
+      # arm here already follows.
+      cat >/dev/null
+      local anon_present=1
+      [[ "${FAKE_GW_ANON_PRESENT:-1}" == "0" ]] && anon_present=0
+      printf 'ANON_KEY_PRESENT=%s NOKEY=%s WITHKEY=%s\n' "$anon_present" "${FAKE_GW_NOKEY:-401}" "${FAKE_GW_WITHKEY:-200}"
       ;;
     *"show server_version;"*)
       printf '%s' "$FAKE_PGVER"
@@ -218,7 +237,14 @@ sshx() {
 export -f ok info die step sshx
 
 run_case() {
-  local desc="$1" expect_rc="$2" expect_need_deploy="$3" FAKE_CONTAINERS="$4" FAKE_GW_STATUS="$5" FAKE_PGVER="$6" FAKE_INIT_STATE="$7" FAKE_VOLUME_EXISTS="$8"
+  # $5 is FAKE_GW_NOKEY (team-lead's 2026-09-21 fix: probe 2 is now
+  # two-part; $5 keeps its historical slot but now means the NO-KEY
+  # call's expected status, default healthy value flipped 200 -> 401).
+  # $10/$11 (new): FAKE_GW_WITHKEY (default 200), FAKE_GW_ANON_PRESENT
+  # (default 1) -- both no-colon defaults (see the $9/jwt_setting comment
+  # above for why: an explicit empty-string override must survive, not
+  # get silently defaulted back).
+  local desc="$1" expect_rc="$2" expect_need_deploy="$3" FAKE_CONTAINERS="$4" FAKE_GW_NOKEY="$5" FAKE_PGVER="$6" FAKE_INIT_STATE="$7" FAKE_VOLUME_EXISTS="$8"
   # `${9-t}`, no colon -- scenario 9 (probe5-empty-output) passes an
   # EXPLICIT empty string as the 9th positional arg to model psql dying /
   # the container being gone, which must be distinguished from the arg
@@ -230,6 +256,7 @@ run_case() {
   # with the captured output showing "present: 't'" instead of
   # "present: '<none>'").
   local FAKE_JWT_SETTING="${9-t}"
+  local FAKE_GW_WITHKEY="${10-200}" FAKE_GW_ANON_PRESENT="${11-1}"
   local out="$WORK/out.$$.$RANDOM"
   local combined="$WORK/combined.$$.$RANDOM.sh"
   # The extracted block is APPENDED to, never sourced from -- this file is
@@ -244,9 +271,10 @@ run_case() {
   { printf 'set -euo pipefail\n'; cat "$EXTRACT"; printf 'echo "RESULT_NEED_DEPLOY=$NEED_DEPLOY"\n'; } > "$combined"
   set +e
   APP_UUID="test-stack-uuid-1234" \
-    FAKE_CONTAINERS="$FAKE_CONTAINERS" FAKE_GW_STATUS="$FAKE_GW_STATUS" FAKE_PGVER="$FAKE_PGVER" \
+    FAKE_CONTAINERS="$FAKE_CONTAINERS" FAKE_GW_NOKEY="$FAKE_GW_NOKEY" FAKE_PGVER="$FAKE_PGVER" \
     FAKE_INIT_STATE="$FAKE_INIT_STATE" FAKE_VOLUME_EXISTS="$FAKE_VOLUME_EXISTS" \
     FAKE_JWT_SETTING="$FAKE_JWT_SETTING" \
+    FAKE_GW_WITHKEY="$FAKE_GW_WITHKEY" FAKE_GW_ANON_PRESENT="$FAKE_GW_ANON_PRESENT" \
     bash "$combined" > "$out" 2>&1
   local rc=$?
   set -e
@@ -277,39 +305,68 @@ supabase_auth_admin:false
 supabase_functions_admin:false"
 
 # 1. NO-VOLUME-DEPLOYS
-OUT1="$(run_case "no-volume-deploys" 0 1 7 200 17 "$HEALTHY_ROLES" 0)" || FAIL=1
+OUT1="$(run_case "no-volume-deploys" 0 1 7 401 17 "$HEALTHY_ROLES" 0)" || FAIL=1
 if [[ -n "${OUT1:-}" ]]; then
   echo "$OUT1" | grep -q "no pre-existing db-data volume -- safe to deploy" || { echo "FAIL: [no-volume-deploys] did not print the safe-to-deploy line" >&2; FAIL=1; }
 fi
 
 # 2. HEALTHY-VOLUME-SKIPS-DEPLOY -- the live defect this fixes
-OUT2="$(run_case "healthy-volume-skips-deploy" 0 0 7 200 17 "$HEALTHY_ROLES" 1)" || FAIL=1
+OUT2="$(run_case "healthy-volume-skips-deploy" 0 0 7 401 17 "$HEALTHY_ROLES" 1)" || FAIL=1
 if [[ -n "${OUT2:-}" ]]; then
   echo "$OUT2" | grep -q "stack already provisioned and healthy -- nothing to deploy" || { echo "FAIL: [healthy-volume-skips-deploy] did not print the already-healthy line" >&2; FAIL=1; }
 fi
 
 # 3. UNHEALTHY-VOLUME-REFUSES (team-lead's own named strike) -- the four
 #    role-password markers absent, the exact "bogus mount" signature.
-OUT3="$(run_case "unhealthy-volume-refuses" 1 "" 7 200 17 "$UNHEALTHY_ROLES" 1)" || FAIL=1
+OUT3="$(run_case "unhealthy-volume-refuses" 1 "" 7 401 17 "$UNHEALTHY_ROLES" 1)" || FAIL=1
 if [[ -n "${OUT3:-}" ]]; then
   echo "$OUT3" | grep -q "NOT confirmed healthy" || { echo "FAIL: [unhealthy-volume-refuses] die() message did not name 'NOT confirmed healthy'" >&2; FAIL=1; }
   echo "$OUT3" | grep -q "FAILED at (4/5)" || { echo "FAIL: [unhealthy-volume-refuses] did not isolate the failure to probe (4/5)" >&2; FAIL=1; }
 fi
 
 # 4. CONTAINERS-NOT-ALL-HEALTHY -- probe (1/5) alone fails.
-OUT4="$(run_case "containers-not-all-healthy" 1 "" 5 200 17 "$HEALTHY_ROLES" 1)" || FAIL=1
+OUT4="$(run_case "containers-not-all-healthy" 1 "" 5 401 17 "$HEALTHY_ROLES" 1)" || FAIL=1
 if [[ -n "${OUT4:-}" ]]; then
   echo "$OUT4" | grep -q "FAILED at (1/5)" || { echo "FAIL: [containers-not-all-healthy] did not isolate the failure to probe (1/5)" >&2; FAIL=1; }
 fi
 
-# 5. GATEWAY-NOT-200 -- probe (2/5) alone fails.
-OUT5="$(run_case "gateway-not-200" 1 "" 7 503 17 "$HEALTHY_ROLES" 1)" || FAIL=1
-if [[ -n "${OUT5:-}" ]]; then
-  echo "$OUT5" | grep -q "FAILED at (2/5)" || { echo "FAIL: [gateway-not-200] did not isolate the failure to probe (2/5)" >&2; FAIL=1; }
+# 5a/5b/5c. GATEWAY-TWO-PART-PROBE (team-lead's own 2026-09-21 live
+#    measurement -- see provision-supabase-stack.sh's own comment) --
+#    probe (2/5) is now two calls, and either call answering the WRONG
+#    status must refuse, isolated from the other four probes. Scenario 2
+#    (healthy-volume-skips-deploy) already covers the PASS case
+#    (401, 200); these three cover the three ways it can fail:
+#      5a. no-key answers 200 instead of 401 -- key-auth is NOT enforced
+#          on this route (the exact live-box measurement's inverse).
+#      5b. no-key correctly 401, but the anon apikey ALSO answers 401 --
+#          the key itself does not authenticate.
+#      5c. both calls answer 000 -- a connection failure (curl's own
+#          %{http_code} for "never connected"), not a key-auth question
+#          at all, but must refuse identically to the other two.
+OUT5A="$(run_case "gateway-nokey-not-401" 1 "" 7 200 17 "$HEALTHY_ROLES" 1 "t" 200 1)" || FAIL=1
+if [[ -n "${OUT5A:-}" ]]; then
+  echo "$OUT5A" | grep -q "FAILED at (2/5, no-key half)" || { echo "FAIL: [gateway-nokey-not-401] did not isolate the failure to probe (2/5, no-key half)" >&2; FAIL=1; }
+fi
+OUT5B="$(run_case "gateway-withkey-not-200" 1 "" 7 401 17 "$HEALTHY_ROLES" 1 "t" 401 1)" || FAIL=1
+if [[ -n "${OUT5B:-}" ]]; then
+  echo "$OUT5B" | grep -q "FAILED at (2/5, with-key half)" || { echo "FAIL: [gateway-withkey-not-200] did not isolate the failure to probe (2/5, with-key half)" >&2; FAIL=1; }
+fi
+OUT5C="$(run_case "gateway-connection-failure" 1 "" 7 000 17 "$HEALTHY_ROLES" 1 "t" 000 1)" || FAIL=1
+if [[ -n "${OUT5C:-}" ]]; then
+  echo "$OUT5C" | grep -q "FAILED at (2/5, no-key half)" || { echo "FAIL: [gateway-connection-failure] did not refuse on the (2/5) probe" >&2; FAIL=1; }
+fi
+# 5d. GATEWAY-ANON-KEY-UNREADABLE -- no-key correctly 401, but ANON_KEY
+#     could not be read back from the Coolify store at all (tinker
+#     crashed, or the store genuinely has no ANON_KEY row) -- refuses,
+#     naming the with-key half specifically, distinct from 5b's "wrong
+#     status" refusal.
+OUT5D="$(run_case "gateway-anon-key-unreadable" 1 "" 7 401 17 "$HEALTHY_ROLES" 1 "t" 200 0)" || FAIL=1
+if [[ -n "${OUT5D:-}" ]]; then
+  echo "$OUT5D" | grep -q "FAILED at (2/5, with-key half): could not read ANON_KEY" || { echo "FAIL: [gateway-anon-key-unreadable] did not isolate the failure to the missing ANON_KEY" >&2; FAIL=1; }
 fi
 
 # 6. WRONG-PG-VERSION -- probe (3/5) alone fails.
-OUT6="$(run_case "wrong-pg-version" 1 "" 7 200 15 "$HEALTHY_ROLES" 1)" || FAIL=1
+OUT6="$(run_case "wrong-pg-version" 1 "" 7 401 15 "$HEALTHY_ROLES" 1)" || FAIL=1
 if [[ -n "${OUT6:-}" ]]; then
   echo "$OUT6" | grep -q "FAILED at (3/5)" || { echo "FAIL: [wrong-pg-version] did not isolate the failure to probe (3/5)" >&2; FAIL=1; }
 fi
@@ -321,7 +378,7 @@ fi
 #    would read as healthy). Now the row COUNT itself is part of the
 #    proof: exactly one role line present -> refuses, naming "FAILED at
 #    (4/5)" and the actual count (1, not the expected 4).
-OUT7="$(run_case "partial-init-state-one-role" 1 "" 7 200 17 "authenticator:true" 1)" || FAIL=1
+OUT7="$(run_case "partial-init-state-one-role" 1 "" 7 401 17 "authenticator:true" 1)" || FAIL=1
 if [[ -n "${OUT7:-}" ]]; then
   echo "$OUT7" | grep -q "FAILED at (4/5)" || { echo "FAIL: [partial-init-state-one-role] did not isolate the failure to probe (4/5)" >&2; FAIL=1; }
   echo "$OUT7" | grep -q "expected 4 role rows, got 1" || { echo "FAIL: [partial-init-state-one-role] did not name the actual row count" >&2; FAIL=1; }
@@ -333,7 +390,7 @@ fi
 #    NULL for a genuinely unset GUC -> the fake's positive-token check
 #    ('t'/anything-else) refuses, isolated from the other four probes
 #    (all of which would pass).
-OUT8="$(run_case "jwt-secret-unset" 1 "" 7 200 17 "$HEALTHY_ROLES" 1 "f")" || FAIL=1
+OUT8="$(run_case "jwt-secret-unset" 1 "" 7 401 17 "$HEALTHY_ROLES" 1 "f")" || FAIL=1
 if [[ -n "${OUT8:-}" ]]; then
   echo "$OUT8" | grep -q "FAILED at (5/5)" || { echo "FAIL: [jwt-secret-unset] did not isolate the failure to probe (5/5)" >&2; FAIL=1; }
   echo "$OUT8" | grep -q "app.settings.jwt_secret is unset" || { echo "FAIL: [jwt-secret-unset] did not name jwt_secret as the cause" >&2; FAIL=1; }
@@ -348,9 +405,9 @@ fi
 #    gone), a DIFFERENT error string (db unreachable), and the GUC
 #    explicitly set to the empty string. The new positive-token check
 #    ('t'/anything-else) must refuse identically on all three.
-OUT9="$(run_case  "probe5-empty-output"      1 "" 7 200 17 "$HEALTHY_ROLES" 1 "")" || FAIL=1
-OUT10="$(run_case "probe5-psql-error"        1 "" 7 200 17 "$HEALTHY_ROLES" 1 "psql: error: connection to server on socket failed")" || FAIL=1
-OUT11="$(run_case "probe5-guc-empty-string"  1 "" 7 200 17 "$HEALTHY_ROLES" 1 "f")" || FAIL=1
+OUT9="$(run_case  "probe5-empty-output"      1 "" 7 401 17 "$HEALTHY_ROLES" 1 "")" || FAIL=1
+OUT10="$(run_case "probe5-psql-error"        1 "" 7 401 17 "$HEALTHY_ROLES" 1 "psql: error: connection to server on socket failed")" || FAIL=1
+OUT11="$(run_case "probe5-guc-empty-string"  1 "" 7 401 17 "$HEALTHY_ROLES" 1 "f")" || FAIL=1
 for O in "${OUT9:-}" "${OUT10:-}" "${OUT11:-}"; do
   [[ -n "$O" ]] && { echo "$O" | grep -q "FAILED at (5/5)" || { echo "FAIL: [probe5-fail-open] a non-canonical probe-5 answer did not refuse at (5/5)" >&2; FAIL=1; }; }
 done
