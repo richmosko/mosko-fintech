@@ -76,7 +76,19 @@ trap 'rm -f "$PY_TMP"' EXIT
 cat > "$PY_TMP" <<'PYEOF'
 import re, sys, os
 
-REMOTE_BLOCK_OPEN = re.compile(r'\b(bash|sh)\s+-s\b.*<<-?\s*([\'"]?)([A-Za-z_][A-Za-z0-9_]*)\2')
+# Sec F-1 (PR #854 review): widened from `bash -s`/`sh -s` alone --
+# `sshx_in() { ssh ... bash -s; }` (this repo's own second SSH-wrapper
+# convention, defined identically in ~15 sibling scripts) opens the exact
+# same "fed to bash -s over ssh" remote block via `sshx_in <<REMOTE`,
+# with neither literal "bash" nor "-s" anywhere on that line -- a genuine
+# blind spot Sec's own independent review caught first. Also matches a
+# bare `sshx <<DELIM` or a raw nested `ssh ... <<DELIM` for the same
+# reason, even though neither appears in this codebase today.
+REMOTE_BLOCK_OPEN = re.compile(
+    r'\b(bash|sh)\s+-s\b.*<<-?\s*([\'"]?)([A-Za-z_][A-Za-z0-9_]*)\2'
+    r'|\bsshx_in\b[^\n]*<<-?\s*([\'"]?)([A-Za-z_][A-Za-z0-9_]*)\4'
+    r'|(?<![\w.-])(sshx|ssh)\b[^\n]*<<-?\s*([\'"]?)([A-Za-z_][A-Za-z0-9_]*)\7'
+)
 HEREDOC_OPEN_ANY = re.compile(r'<<-?\s*([\'"]?)([A-Za-z_][A-Za-z0-9_]*)\1')
 # `docker compose ... exec` in ANY form (with or without -T -- compose's
 # own default, sans -T, still attaches stdin, -T only suppresses pty
@@ -111,7 +123,8 @@ def scan_file(path):
             continue
         in_remote = bool(remote_stack) and generic_stack and generic_stack[-1] == remote_stack[-1]
         if in_remote and len(generic_stack) == len(remote_stack) and not COMMENT_LINE.match(raw):
-            if DOCKER_RISK.search(raw) or NESTED_SSH.search(raw):
+            m_risk = DOCKER_RISK.search(raw) or NESTED_SSH.search(raw)
+            if m_risk:
                 # Lookahead window widened to 6 lines (found while
                 # building this fence: mint-supabase-jwt-keys.sh's own
                 # supavisor probe call carries its redirect 3 lines below
@@ -123,6 +136,16 @@ def scan_file(path):
                 safe = any(any(m in w for m in SAFE_MARKERS) for w in window)
                 if not safe and HEREDOC_OPEN_ANY.search(raw):
                     safe = True  # opens its own nested heredoc -- explicit stdin source
+                # A `|` on THIS line, before the risky invocation's own
+                # start, is an explicit piped stdin source (found while
+                # widening this fence: migrator-cutover-verify.sh's leg
+                # 11 does `printf '%s' "$OLDPW" | docker exec -i "$CID"
+                # sh -c '...'` -- the exec's stdin is the printf's own
+                # output, not the surrounding heredoc's remaining bytes).
+                # Same exclusion Sec's own independent awk classifier
+                # applied (`cmd ~ /\|[[:space:]]*docker/`).
+                if not safe and '|' in raw[:m_risk.start()]:
+                    safe = True
                 if not safe:
                     findings.append((i + 1, raw.strip()))
         # A comment line mentioning `<<EOF`-shaped text as PROSE (this
@@ -140,7 +163,12 @@ def scan_file(path):
             if m_any:
                 generic_stack.append(m_any.group(2))
                 if m_remote:
-                    remote_stack.append(m_remote.group(3))
+                    # Use m_any's own delimiter capture, not one of
+                    # REMOTE_BLOCK_OPEN's several alternation branches
+                    # (each has its delimiter in a different numbered
+                    # group) -- it is the SAME heredoc-open on the SAME
+                    # line either way, so m_any.group(2) is always right.
+                    remote_stack.append(m_any.group(2))
         i += 1
     return findings
 

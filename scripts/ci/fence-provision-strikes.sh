@@ -110,6 +110,12 @@
 #      probe's own coolify-env.sh call exits non-zero -> UNKNOWN, never
 #      silently treated as done; falls through to the real call, which
 #      fails for the same genuine reason.
+#  24. PGRST-FLIP-STORE-MATCHES-CONTAINER-DOESNT (Sec C-1) -- the store
+#      matches but the RUNNING container (pgrst-schemas-live-check.sh)
+#      does not -> not done, falls through to a real --apply --deploy.
+#  25. PGRST-FLIP-CONTAINER-CHECK-UNREACHABLE (Sec C-1) -- the store
+#      matches but the container check itself cannot be attempted (rc=2)
+#      -> UNKNOWN, not done, falls through to a real call.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -763,12 +769,12 @@ fi
 #     from 2026-09-19 work, with no worker-resource store value for
 #     either yet) -- db-role-handoff.sh's own preflight reports EXACTLY
 #     the adoptable INCONSISTENT shape (rolcanlogin=true has_password=true
-#     store_has_PFIN_DB_PASSWORD=f) on BOTH the preflight-phase probe and
+#     store_has_PFIN_DB_PASSWORD=false) on BOTH the preflight-phase probe and
 #     the apply-phase's own re-probe (the live state does not change
 #     between them -- nothing mutates during a probe) -> the THIRD call
 #     is the real one, and it carries --apply --rotate, never a plain
 #     --apply handoff.
-CASE_ENV=(FAKE_RC_db_role_handoff=1,1,0 FAKE_STDOUT_db_role_handoff="FAIL  role 'pfin_etl' / 'pfin-back-etl' state is INCONSISTENT -- rolcanlogin=true has_password=true store_has_PFIN_DB_PASSWORD=f. Expected either ALL THREE false (fresh) or ALL THREE true (already handed off).")
+CASE_ENV=(FAKE_RC_db_role_handoff=1,1,0 FAKE_STDOUT_db_role_handoff="FAIL  role 'pfin_etl' / 'pfin-back-etl' state is INCONSISTENT -- rolcanlogin=true has_password=true store_has_PFIN_DB_PASSWORD=false. Expected either ALL THREE false (fresh) or ALL THREE true (already handed off).")
 run_case "etl-role: adopt-by-rotation shape re-invokes --apply --rotate" 0 --only etl-role || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   grep -q "adopting by rotation: prior credential unrecoverable" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [etl-role-adopt] did not print the adopting-by-rotation line" >&2; FAIL=1; }
@@ -793,7 +799,7 @@ fi
 #     path -- this scenario pins the NEGATIVE case explicitly (a
 #     mismatch shape that is NOT the one adoptable shape must still
 #     refuse as INCONSISTENT via the plain call, not be silently adopted).
-CASE_ENV=(FAKE_RC_db_role_handoff=1 FAKE_STDOUT_db_role_handoff="FAIL  role 'pfin_etl' / 'pfin-back-etl' state is INCONSISTENT -- rolcanlogin=false has_password=false store_has_PFIN_DB_PASSWORD=t. Expected either ALL THREE false (fresh) or ALL THREE true (already handed off).")
+CASE_ENV=(FAKE_RC_db_role_handoff=1 FAKE_STDOUT_db_role_handoff="FAIL  role 'pfin_etl' / 'pfin-back-etl' state is INCONSISTENT -- rolcanlogin=false has_password=false store_has_PFIN_DB_PASSWORD=true. Expected either ALL THREE false (fresh) or ALL THREE true (already handed off).")
 run_case "etl-role: a different mismatch shape is never adopted" 2 --only etl-role || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   if grep -q "adopting by rotation" "$CASE_LAST_DIR/out.txt" 2>/dev/null; then
@@ -818,6 +824,30 @@ run_case "pgrst-flip: a failed live-done probe is UNKNOWN, not done" 2 --only pg
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   grep -q "pgrst-flip live state is UNKNOWN, not blocking" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [pgrst-flip-probe-fails] did not print the UNKNOWN-state line" >&2; cat "$CASE_LAST_DIR/out.txt" >&2; FAIL=1; }
   grep -q "already = public,graphql_public,pfin" "$CASE_LAST_DIR/out.txt" 2>/dev/null && { echo "FAIL: [pgrst-flip-probe-fails] falsely reported VERIFIED-without-PATCH despite a failed probe read" >&2; FAIL=1; }
+fi
+
+# 24. PGRST-FLIP-STORE-MATCHES-CONTAINER-DOESNT (Sec C-1, PR #854 review)
+#     -- the store's own preflight read matches the desired value, but
+#     pgrst-schemas-live-check.sh (the RUNNING container's own reported
+#     value) does not -> NOT done (a store-correct-but-not-yet-
+#     redeployed box must never report VERIFIED) -> falls through to the
+#     real --apply --deploy call once the apply phase runs.
+CASE_ENV=(FAKE_STDOUT_coolify_env="      PGRST_DB_SCHEMAS=public,graphql_public,pfin" FAKE_RC_pgrst_schemas_live_check=1)
+run_case "pgrst-flip: store matches but running container does not -- not done" 0 --only pgrst-flip || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "store's PGRST_DB_SCHEMAS matches, but the RUNNING rest container serves a different value" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [pgrst-flip-container-mismatch] did not print the store-vs-container mismatch line" >&2; cat "$CASE_LAST_DIR/out.txt" >&2; FAIL=1; }
+  grep -q "^coolify-env .*--apply --deploy" "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [pgrst-flip-container-mismatch] no coolify-env call carried --apply --deploy despite the container not yet matching" >&2; cat "$CASE_LAST_DIR/calls.log" >&2; FAIL=1; }
+fi
+
+# 25. PGRST-FLIP-CONTAINER-CHECK-UNREACHABLE (Sec C-1, PR #854 review) --
+#     the store matches, but pgrst-schemas-live-check.sh itself cannot
+#     even attempt the read (rc=2, e.g. box unreachable) -> UNKNOWN, never
+#     silently treated as done -> falls through to the real call.
+CASE_ENV=(FAKE_STDOUT_coolify_env="      PGRST_DB_SCHEMAS=public,graphql_public,pfin" FAKE_RC_pgrst_schemas_live_check=2)
+run_case "pgrst-flip: container check unreachable -- UNKNOWN, not done" 0 --only pgrst-flip || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -q "pgrst-schemas-live-check.sh could not even attempt the container read" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [pgrst-flip-container-unreachable] did not print the UNKNOWN-state line for the container check" >&2; cat "$CASE_LAST_DIR/out.txt" >&2; FAIL=1; }
+  grep -q "^coolify-env .*--apply --deploy" "$CASE_LAST_DIR/calls.log" 2>/dev/null || { echo "FAIL: [pgrst-flip-container-unreachable] no coolify-env call carried --apply --deploy despite the container check being unreachable" >&2; cat "$CASE_LAST_DIR/calls.log" >&2; FAIL=1; }
 fi
 
 if [[ $FAIL -ne 0 ]]; then

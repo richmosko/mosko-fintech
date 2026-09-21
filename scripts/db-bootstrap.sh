@@ -309,13 +309,34 @@ REMOTE
 # not just the one team-lead's brief named -- a fail-open here is the
 # SAME defect class regardless of which read it sits on.
 read_gate() {
-  local desc="$1" sql="$2" out rc
-  set +e
-  out="$(psql_admin "$sql" 2>&1)"
-  rc=$?
-  set -e
+  # Sec N-1 (PR #854 review), two fixes:
+  # (a) stderr is captured SEPARATELY from stdout via a temp file, not
+  #     folded into $out with `2>&1` -- benign stderr on a SUCCESSFUL
+  #     read (ssh's own "Warning: Permanently added ... to the list of
+  #     known hosts" on a first connect under
+  #     StrictHostKeyChecking=accept-new, or a docker compose WARN line)
+  #     would otherwise become part of the parsed VALUE and trip this
+  #     function's own caller-side parse guards -- a new refusal path on
+  #     the success case the fix did not require. Diagnostic text stays
+  #     available for the die2 message on the failure path either way.
+  # (b) `if out=$(cmd); then rc=0; else rc=$?; fi`, never `set +e; ...;
+  #     set -e` -- the exact pattern flagged as this PR's own defect #4
+  #     in provision.sh (an unconditional `set -e` at a helper's end
+  #     flips errexit back ON if the CALLER had it off). No live call
+  #     site of read_gate is currently inside such a bracket, so this was
+  #     latent, not exploitable -- fixed anyway since the cost is zero
+  #     and it is the exact trap already found and fixed once this PR.
+  local desc="$1" sql="$2" out err_file err rc
+  err_file="$(mktemp)"
+  if out="$(psql_admin "$sql" 2>"$err_file")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  err="$(cat "$err_file")"
+  rm -f "$err_file"
   if [[ "$rc" -ne 0 ]]; then
-    die2 "could not read $desc (rc=$rc): $out -- refusing to guess; this state is UNKNOWN, never treated as a specific value."
+    die2 "could not read $desc (rc=$rc): $err -- refusing to guess; this state is UNKNOWN, never treated as a specific value."
   fi
   printf '%s' "$out" | tr -d ' \n'
 }

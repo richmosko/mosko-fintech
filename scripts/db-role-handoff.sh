@@ -421,9 +421,19 @@ echo \$app->environment_variables()->where('key', 'PFIN_DB_PASSWORD')->where('is
 REMOTE
 )"
 info "store: PFIN_DB_PASSWORD (is_preview=false) row count on '$RESOURCE_NAME' = ${STORE_COUNT:-<none>}"
+# Sec F-2 (PR #854 review): STORE_HAS_PW normalized to "true"/"false" --
+# same vocabulary as ROLCANLOGIN/HAS_PASSWORD below, even though this
+# value is bash-assigned by this `case`, never psql-cast, so it was
+# never subject to the t/true predicate bug itself. One die() message
+# mixing two boolean vocabularies (this one still "t"/"f" while the
+# other two read "true"/"false") is exactly the shape a FUTURE t->true
+# sweep "fixes" by editing the die() text alone, silently breaking
+# provision.sh's own handoff_adopt_check() byte-match against it (that
+# grep, and the ONE OTHER site below, are this value's only two
+# consumers -- normalizing here is safe).
 case "$STORE_COUNT" in
-  0) STORE_HAS_PW=f ;;
-  1) STORE_HAS_PW=t ;;
+  0) STORE_HAS_PW=false ;;
+  1) STORE_HAS_PW=true ;;
   *) die "PFIN_DB_PASSWORD (is_preview=false) readback on '$RESOURCE_NAME' found '$STORE_COUNT' matching row(s), expected 0 or 1 -- refusing to trust an ambiguous store state." ;;
 esac
 
@@ -433,7 +443,7 @@ else
   # Sec-reviewed CONTROL, not a loosening: the refusal below still fires
   # on any state that is neither "fully fresh" nor "fully handed off" --
   # only the two CONSISTENT states are treated as non-refusals now.
-  if [[ "$ROLCANLOGIN" == "true" && "$HAS_PASSWORD" == "true" && "$STORE_HAS_PW" == "t" ]]; then
+  if [[ "$ROLCANLOGIN" == "true" && "$HAS_PASSWORD" == "true" && "$STORE_HAS_PW" == "true" ]]; then
     ok "role '$ROLE' already has LOGIN + a password set, and '$RESOURCE_NAME' already carries a production PFIN_DB_PASSWORD -- already handed off, nothing to do."
     # Sec F-1 (PR #852 AMBER review), option (a)+(c): this no-op path is
     # EXISTENCE-only -- it does not prove the store's CURRENT value is the
@@ -458,7 +468,7 @@ else
     echo "⚠ existence-only check: this confirms the role has LOGIN+password AND the store carries SOME PFIN_DB_PASSWORD row -- it does NOT re-verify that value still matches Postgres's live password (e.g. after a half-completed --rotate). If you suspect drift, run --apply --rotate to re-establish a coherent value from scratch." >&2
     printf '\n\033[32mVERIFIED\033[0m  already handed off -- no-op, whether or not --apply was passed. Pass --apply --rotate to rotate the established credential.\n'
     exit 0
-  elif [[ "$ROLCANLOGIN" == "false" && "$HAS_PASSWORD" == "false" && "$STORE_HAS_PW" == "f" ]]; then
+  elif [[ "$ROLCANLOGIN" == "false" && "$HAS_PASSWORD" == "false" && "$STORE_HAS_PW" == "false" ]]; then
     : # genuinely fresh -- fall through to the existing Plan/Apply flow, unchanged.
   else
     die "role '$ROLE' / '$RESOURCE_NAME' state is INCONSISTENT -- rolcanlogin=$ROLCANLOGIN has_password=$HAS_PASSWORD store_has_PFIN_DB_PASSWORD=$STORE_HAS_PW. Expected either ALL THREE false (fresh -- safe to run --apply) or ALL THREE true (already handed off -- nothing to do); a partial/mismatched combination needs investigation by hand before this script can safely proceed either way. This is NOT the --rotate case -- pass --apply --rotate only when you are intentionally rotating an already-established credential (rolcanlogin=true, has_password=true)."

@@ -633,6 +633,24 @@ run_pgrst_gates() { bash "$SCRIPTS/pgrst-exposure-gates.sh"; }
 # an unparseable read is "unknown", never treated as done (falls through
 # to the real call, safe either way -- PATCHing an already-correct value
 # is a no-op on the store side, just not a free one).
+#
+# Sec C-1 (PR #854 review) -- the STORE read alone is not sufficient and
+# was a real gap, not a style nit: PostgREST reads PGRST_DB_SCHEMAS from
+# its OWN environment at CONTAINER START, so a store-correct-but-not-
+# redeployed box would report VERIFIED here while the RUNNING container
+# still served the previous schema set -- backwards on the direction
+# that matters (a NARROWED exposure that never actually took effect
+# would read as "already flipped", the opposite of fail-closed). Fixed
+# by requiring BOTH the store AND the running container to match before
+# reporting done -- scripts/pgrst-schemas-live-check.sh does the
+# container-side half (reusing scripts/ci/fence-pgrst-schemas-live.sh's
+# own exact-string, order-sensitive comparison, the same shape
+# coolify-env.sh's own header already documents as the correct
+# `--post-check` probe for this exact value, extracted so this done-
+# predicate can call it BEFORE deciding whether to apply, not only
+# after). The container check only runs once the store already looks
+# correct -- if the store itself doesn't match, we already know we're
+# not done and the container's state is moot.
 PGRST_SCHEMAS_DESIRED="public,graphql_public,pfin"
 PGRST_FLIP_LIVE_DONE=""
 live_done_pgrst_flip() {
@@ -640,7 +658,7 @@ live_done_pgrst_flip() {
     if ! require_box_ip; then
       PGRST_FLIP_LIVE_DONE="unknown"
     else
-      local out rc current
+      local out rc current container_rc
       # `if out=$(cmd); then rc=0; else rc=$?; fi` deliberately, NOT
       # `set +e; out=$(cmd); rc=$?; set -e` -- this helper is called from
       # run_pgrst_flip while INSIDE the main loop's own `set +e; run_step
@@ -665,10 +683,29 @@ live_done_pgrst_flip() {
         PGRST_FLIP_LIVE_DONE="unknown"
       else
         current="$(printf '%s\n' "$out" | grep -E '^[[:space:]]*PGRST_DB_SCHEMAS=' | tail -1 | cut -d= -f2-)"
-        if [[ "$current" == "$PGRST_SCHEMAS_DESIRED" ]]; then
-          PGRST_FLIP_LIVE_DONE=1
-        else
+        if [[ "$current" != "$PGRST_SCHEMAS_DESIRED" ]]; then
           PGRST_FLIP_LIVE_DONE=0
+        else
+          # Store matches -- Sec C-1: that alone does not prove the
+          # RUNNING container serves this value (PostgREST reads it at
+          # container start, not live from the store). Same `if cmd;
+          # then rc=0; else rc=$?; fi` discipline as the store read above
+          # -- this is also called from inside the caller's own set+e
+          # bracket.
+          if bash "$SCRIPTS/pgrst-schemas-live-check.sh"; then
+            container_rc=0
+          else
+            container_rc=$?
+          fi
+          if [[ "$container_rc" -eq 0 ]]; then
+            PGRST_FLIP_LIVE_DONE=1
+          elif [[ "$container_rc" -eq 1 ]]; then
+            info "store's PGRST_DB_SCHEMAS matches, but the RUNNING rest container serves a different value -- not done until a redeploy actually takes effect." >&2
+            PGRST_FLIP_LIVE_DONE=0
+          else
+            info "pgrst-schemas-live-check.sh could not even attempt the container read (rc=$container_rc) -- pgrst-flip live state is UNKNOWN, not blocking (never treated as confirmed done)" >&2
+            PGRST_FLIP_LIVE_DONE="unknown"
+          fi
         fi
       fi
     fi
@@ -746,7 +783,7 @@ handoff_adopt_check() {
     rc=$?
   fi
   [[ "$rc" -ne 0 ]] || return 1
-  printf '%s' "$out" | grep -qF "rolcanlogin=true has_password=true store_has_PFIN_DB_PASSWORD=f"
+  printf '%s' "$out" | grep -qF "rolcanlogin=true has_password=true store_has_PFIN_DB_PASSWORD=false"
 }
 
 # handoff_role_run <role> <mode: "" or "--apply"> -- wraps db-role-
