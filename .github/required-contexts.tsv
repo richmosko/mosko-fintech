@@ -203,6 +203,12 @@ etl-ci.yml	pgtest	Staging-update regression (pgtest; real Postgres, zero secrets
 security-scan.yml	fence-db-bootstrap-strikes	db-bootstrap.sh — database bootstrap strike-proofs
 security-scan.yml	fence-db-role-handoff-strikes	db-role-handoff.sh — two-statement handoff + credential-transport strike-proofs
 security-scan.yml	fence-provision-strikes	provision.sh — orchestrator control-flow strike-proofs
+# security-scan.yml	fence-coolify-discord-notify-strikes	coolify-discord-notify.sh — Discord notification-settings write + test-send strike-proofs
+# ^ BACKLOG.md §7.36 item 74, added 2026-09-22 -- runs unconditionally in CI (not
+# advisory) but NOT promoted to a required context in this same PR; promotion is a
+# separate F/CTO decision, same posture as scheduled-audit-liveness below. Uncomment
+# the row above (matching this fence's own job `name:` byte-for-byte) if/when F/CTO
+# promotes it.
 security-scan.yml	fence-heredoc-stdin-drain	heredoc-fed remote blocks — docker exec stdin-drain fence (tree-wide)
 security-scan.yml	fence-boolean-cast-pairing	psql boolean reads — cast/comparison vocabulary pairing fence (tree-wide)
 

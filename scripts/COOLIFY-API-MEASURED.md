@@ -184,3 +184,16 @@ referenced.
 - **Result:** returns nothing — no event stream observed, even across an action expected to emit one (a container start/stop).
 - **First recorded in-tree here** — this fact previously existed only in cross-session agent memory (not a tracked file); this entry is its first landing in the repo. Consequence: no script in this repo relies on `docker events` for state observation; every liveness/state check here polls a REST endpoint or reads `docker ps`/`docker inspect` directly instead.
 - **NOT measured:** the root cause (daemon config, cgroup driver, a Coolify-managed proxy in front of the Docker socket) — reported as an operational fact to route around, not diagnosed.
+
+---
+
+## COOLIFY-FACT-12 — no notification-config REST surface at all; the queued Discord test-send job cannot observe acceptance
+
+- **Date:** 2026-09-21 22:35Z (team-lead)
+- **Coolify version:** 4.3.18
+- **Box:** production (cax21)
+- **Build pack:** N/A (application source measurement, not resource-specific)
+- **Exact measurement:** `php artisan route:list --path=api` grepped for `notif`/`team` — zero hits. `discord_notification_settings` has exactly ONE row (`team_id=0`, "Root Team"); the Eloquent model `App\Models\DiscordNotificationSettings` casts `discord_webhook_url` `encrypted`. The test-send path (`app/Livewire/Notifications/Discord.php:208`) dispatches a queued `App\Notifications\Test` job; `app/Jobs/SendMessageToDiscordJob.php::handle()` (read live, `temp/discord-measurements/SendMessageToDiscordJob.php.txt`) ends in `Http::withOptions(...)->post($url, $message->toPayload());` with **no `->throw()` and no status check** — a 4xx from Discord is swallowed and the job still reports success.
+- **Result:** unlike every other Coolify-config script in this repo (which go through the documented `ApplicationsController`/`InstanceSettings` REST surface), notification config has NO API path — it must go through the box-side Eloquent model directly. And neither `dispatchSync`-ing the queued job nor watching `failed_jobs` can prove Discord actually accepted a test notification — the job's own swallowed-status bug makes it structurally silent on failure.
+- **Fix landed:** `scripts/coolify-discord-notify.sh` (BACKLOG.md §7.36 item 74) writes the settings row directly via the Eloquent model (new `TINKER-WRITE-ALLOW-08` marker) and, for the test-send, builds the SAME payload the queued job would (`(new \App\Notifications\Test(channel: 'discord'))->toDiscord()->toPayload()`) and POSTs it itself inside the same tinker call, asserting the raw HTTP status directly — never going through the queued job at all.
+- **NOT measured:** whether `SendMessageToDiscordJob`'s own retries (`$tries = 5`) could ever race this script's direct POST on a run where both fire — not a safety issue (idempotent notification), just an honest gap. See `scripts/coolify-discord-notify.sh`'s own header for the full measurement writeup this fact summarizes.

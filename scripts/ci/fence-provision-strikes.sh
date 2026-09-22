@@ -21,11 +21,14 @@
 #      multi-step run can ever exit 0 against this registry).
 #   2. SKIPPED-CONTINUES -- the smokes step's apply returns 3 -> recorded
 #      SKIPPED, run continues to completion, exit 0.
-#   3. MANUAL-STOPS -- discord (a genuine MANUAL step, no fake needed --
-#      db-bootstrap became a real scripted step this round, so the
-#      MANUAL-step proxy moved to discord/remaining-checks/cutover) is
-#      reached -> provision.sh stops there, resume hint names discord,
-#      exit 1.
+#   3. MANUAL-STOPS -- discord's own fake reports 4 this run (BACKLOG item
+#      74: scripts/coolify-discord-notify.sh is now a real scripted step,
+#      so nothing in this registry hardcodes an unconditional 4 anymore
+#      except the terminal `cutover` gate covered by scenario 1 -- this
+#      scenario instead proves provision.sh's OWN exit-code-4-is-MANUAL
+#      classification, independent of which real step ever produces it,
+#      the same way scenario 2 injects a 3 to prove SKIPPED-continues) ->
+#      provision.sh stops there, resume hint names discord, exit 1.
 #   4. FAILED-STOPS -- a step's apply returns 1 -> provision.sh stops
 #      there, resume hint names that step, exit 2; steps AFTER it never
 #      run (their call-log entries absent).
@@ -388,8 +391,10 @@ if [[ -n "${CASE_LAST_DIR:-}" ]] && ! grep -q "SKIPPED" "$CASE_LAST_DIR/out.txt"
   FAIL=1
 fi
 
-# 3. MANUAL-STOPS -- discord is reached
-CASE_ENV=()
+# 3. MANUAL-STOPS -- discord's fake reports 4 this run (see the header
+# comment above for why this is now an INJECTED code, not a hardcoded
+# stub -- BACKLOG item 74, scripts/coolify-discord-notify.sh).
+CASE_ENV=(FAKE_RC_coolify_discord_notify=4)
 run_case "manual step (discord) stops the run, exit 1" 1 --only discord || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]] && ! grep -q -- "--from discord" "$CASE_LAST_DIR/out.txt"; then
   echo "FAIL: [manual step] resume hint does not name discord" >&2
@@ -547,8 +552,13 @@ fi
 CASE_ENV=()
 run_case "unknown --from key refuses, exit 3" 3 --from bogus-step-name || FAIL=1
 
-# 11. KEYGEN-ABSENT-GENERATES
-CASE_ENV=()
+# 11. KEYGEN-ABSENT-GENERATES -- --only discord chosen as a convenient
+# no-real-side-effect step to observe the keygen behavior in isolation;
+# BACKLOG item 74 turned discord into a real scripted step, so its fake
+# must be told to report MANUAL (4) here the same way scenario 3 does,
+# or this scenario's own exit-1 expectation (below) would silently stop
+# testing what it claims to.
+CASE_ENV=(FAKE_RC_coolify_discord_notify=4)
 run_case "keygen absent -> generated" 1 --only discord || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   if [[ ! -s "$CASE_LAST_DIR/keygen.log" ]]; then
@@ -574,6 +584,7 @@ printf 'existing-pub\n' > "$PRESENT_DIR/ci_migrate.pub"
 set +e
 REPO_ROOT="$PRESENT_DIR" SCRIPTS="$FAKE_SCRIPTS_DIR" PATH="$FAKE_BIN:$PATH" \
   FAKE_CALL_LOG="$PRESENT_DIR/calls.log" FAKE_COUNTER_DIR="$PRESENT_DIR" FAKE_SSH_KEYGEN_LOG="$PRESENT_DIR/keygen.log" \
+  FAKE_RC_coolify_discord_notify=4 \
   bash "$PROVISION_SH" --only discord > "$PRESENT_DIR/out.txt" 2>&1
 PRESENT_RC=$?
 set -e

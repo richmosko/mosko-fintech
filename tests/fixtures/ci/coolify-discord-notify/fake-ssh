@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+#
+# fake-ssh -- stands in for the real `ssh` binary for
+# scripts/ci/fence-coolify-discord-notify-strikes.sh. Never makes a
+# network call. scripts/coolify-discord-notify.sh's own `sshx()` always
+# invokes `ssh <fixed SSH_OPTS> root@$BOX_IP <one-remote-command-string>`
+# -- the remote-command string is this script's LAST argv element
+# (`${!#}`), and for the `bash -s`-shaped calls the real remote SCRIPT
+# BODY arrives on ssh's own stdin (real ssh forwards local stdin to a
+# remote `bash -s` verbatim) -- this fake reads its OWN stdin the same
+# way for that one shape.
+#
+# Every scenario controls this fake purely via env vars (FAKE_*, listed
+# inline below at each dispatch arm) -- never via argv, so a real
+# scripts/coolify-discord-notify.sh invocation reaching this fake behaves
+# identically to a real ssh from the CALLER's point of view; only what
+# THIS fake echoes back differs per scenario.
+set -euo pipefail
+
+[[ -n "${FAKE_SSH_LOG:-}" ]] && printf '%s\n' "$*" >> "$FAKE_SSH_LOG"
+
+if [[ "${FAKE_SSH_UNREACHABLE:-0}" == "1" ]]; then
+  echo "ssh: connect to host fake-box port 22: Connection refused" >&2
+  exit 255
+fi
+
+CMD="${!#}"
+
+case "$CMD" in
+  true)
+    exit 0
+    ;;
+  "mkdir -p /root/.pfin && chmod 700 /root/.pfin")
+    exit 0
+    ;;
+  "umask 077; cat > "*)
+    # Seed-file delivery -- the webhook URL arrives on OUR stdin (piped
+    # by the caller). Consumed and discarded; NEVER echoed, NEVER
+    # written to $FAKE_SSH_LOG (which only ever receives argv, and this
+    # command's own argv never contains the value either -- the value is
+    # piped stdin, never a `cat > file <<< value` shape).
+    cat > /dev/null
+    exit 0
+    ;;
+  *"probe:discord-notification-settings-state"*)
+    printf '%s' "${FAKE_STATE_RAW:-ABSENT}"
+    exit 0
+    ;;
+  *"probe:discord-webhook-hash-postwrite"*)
+    printf '%s' "${FAKE_STORED_HASH_AFTER:-ABSENT}"
+    exit 0
+    ;;
+  *"probe:discord-webhook-hash"*)
+    printf '%s' "${FAKE_STORED_HASH:-ABSENT}"
+    exit 0
+    ;;
+  *"probe:discord-test-send"*)
+    if [[ "${FAKE_TEST_NO_URL:-0}" == "1" ]]; then
+      printf 'FATAL_NO_URL'
+    else
+      printf 'HTTP_STATUS_%s' "${FAKE_TEST_STATUS:-204}"
+    fi
+    exit 0
+    ;;
+  "env SEED_ENV_FILE="*"bash -s")
+    # The write remote script's own BODY (the TINKER-WRITE-ALLOW-08 block
+    # + its trap) arrives on stdin -- consumed and discarded; this fake
+    # never actually parses/executes it (it is not a real docker/PHP
+    # environment), it only echoes what that body WOULD have printed,
+    # per the scenario's own FAKE_* controls.
+    cat > /dev/null
+    if [[ "${FAKE_SSH_UNREACHABLE_MIDWAY:-0}" == "1" ]]; then
+      echo "ssh_exchange_identification: read: Connection reset by peer" >&2
+      exit 255
+    fi
+    if [[ "${FAKE_ROW_ABSENT:-0}" == "1" ]]; then
+      echo "FATAL_ROW_ABSENT"
+      exit 0
+    fi
+    if [[ "${FAKE_SIMULATE_LEAK:-0}" == "1" ]]; then
+      # Models a DEFECTIVE remote (never what the real script does) --
+      # printed here ONLY to prove the caller's own cleartext-scrub guard
+      # catches it when it happens.
+      printf '%s\n' "${FAKE_LEAK_VALUE:-https://discord.com/api/webhooks/1111111111111111111/leaked-token-abcdefgh}"
+    fi
+    if [[ "${FAKE_WRITE_EXIT_NONZERO:-0}" == "1" ]]; then
+      echo "some remote PHP fatal"
+      exit 1
+    fi
+    if [[ "${FAKE_WRITE_NO_SENTINEL:-0}" == "1" ]]; then
+      # Models an exit-0 remote script that never actually reached the
+      # tinker echo (a truncated/hung write) -- proves the caller checks
+      # for the WRITE_OK sentinel itself, not merely a clean exit code.
+      echo REMOTE_DONE
+      exit 0
+    fi
+    echo "WRITE_OK"
+    echo REMOTE_DONE
+    exit 0
+    ;;
+  *)
+    echo "fake-ssh: unrecognized remote command: $CMD" >&2
+    exit 97
+    ;;
+esac
