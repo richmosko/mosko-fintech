@@ -791,7 +791,33 @@ umask 077
 # python's own tempfile.mkstemp() + a `finally: os.unlink()`, a
 # redundant, weaker-cleanup mechanism next to this trap's shred -u).
 box_body="$box_seed.body.json"
-trap 'shred -u "$box_seed" "$box_body" 2>/dev/null || rm -f "$box_seed" "$box_body"' EXIT
+# Execution-record fix (Sec finding, run 7; ratified 2026-09-21): the
+# old trap destroyed silently -- no line confirmed the outcome, or which
+# of its two non-equivalent mechanisms (a real overwrite-then-unlink via
+# `shred -u`, vs a bare `rm -f` fallback if `shred` is absent/fails) ran.
+# This version enumerates BOTH artifacts, names the mechanism, verifies
+# each is actually gone, and FATALs (nonzero exit from the trap itself,
+# which is this remote shell's own exit code) if either survives --
+# never reports success on an unverified destruction.
+report_destroy() {
+  local mech
+  if shred -u "$box_seed" "$box_body" 2>/dev/null; then
+    mech="shred"
+  elif rm -f "$box_seed" "$box_body" 2>/dev/null; then
+    mech="rm-fallback (shred unavailable or failed)"
+  else
+    mech="NEITHER (both shred and rm failed)"
+  fi
+  local remaining=""
+  [ -e "$box_seed" ] && remaining="$remaining $box_seed"
+  [ -e "$box_body" ] && remaining="$remaining $box_body"
+  if [ -n "$remaining" ]; then
+    echo "FATAL:$remaining STILL EXISTS after destruction attempt (mechanism: $mech) -- refusing to report success." >&2
+    exit 1
+  fi
+  echo "DESTROYED: $box_seed $box_body (mechanism: $mech)"
+}
+trap report_destroy EXIT
 TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
 python3 - "$TOKEN" "$uuid" "$box_seed" "$box_body" <<'PYEOF'
 import json, os, subprocess, sys

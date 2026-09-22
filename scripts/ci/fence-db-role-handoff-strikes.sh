@@ -160,6 +160,31 @@ FAKE_BIN="$WORK/bin"
 mkdir -p "$FAKE_BIN"
 ln -s "$FIXTURE_DIR/fake-curl" "$FAKE_BIN/curl"
 
+# Fake `shred` -- execution-record fix (Sec finding, run 7; ratified
+# 2026-09-21). This host has no real `shred` (macOS), so without this
+# fixture every scenario would exercise only the `rm -f` fallback branch
+# of the destroy-and-report logic, never the primary `shred` mechanism a
+# real (Debian-based) production box actually has. Normally ACTUALLY
+# removes its target(s) and exits 0, so every scenario now exercises the
+# real "shred" mechanism. $FAKE_SHRED_LIES=1 strikes the exact defect the
+# destroy-and-report logic exists to catch: shred reports success (exit
+# 0) WITHOUT actually removing anything -- the script must still detect
+# the surviving artifact and FATAL, never trust the exit code alone.
+cat > "$FAKE_BIN/shred" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+files=()
+for a in "$@"; do
+  [[ "$a" == -* ]] && continue
+  files+=("$a")
+done
+if [[ "${FAKE_SHRED_LIES:-0}" != "1" ]]; then
+  rm -f "${files[@]}"
+fi
+exit 0
+EOF
+chmod +x "$FAKE_BIN/shred"
+
 # Fake `docker` -- stands in for every `docker compose --project-name X
 # exec -T db psql ...` call and the `docker exec coolify php artisan
 # tinker --execute` readback. Distinguishes the FOUR distinct psql call
@@ -501,7 +526,7 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_CONTROL_SUCCEEDS="\$FAKE_CONTROL_SUCCEEDS" FAKE_CONTROL_WRONG_ERROR="\$FAKE_CONTROL_WRONG_ERROR" \\
     FAKE_CONTROL_WRONG_ROLE_ERROR="\$FAKE_CONTROL_WRONG_ROLE_ERROR" FAKE_ECHO_PW_IN_CONTROL="\$FAKE_ECHO_PW_IN_CONTROL" \\
     FAKE_SUPPRESS_REAL_PROMPT="\$FAKE_SUPPRESS_REAL_PROMPT" \\
-    FAKE_CONNECT_CALL_LOG="\$FAKE_CONNECT_CALL_LOG" \\
+    FAKE_CONNECT_CALL_LOG="\$FAKE_CONNECT_CALL_LOG" FAKE_SHRED_LIES="\$FAKE_SHRED_LIES" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -575,7 +600,7 @@ run_scenario() {
     FAKE_CONTROL_SUCCEEDS="$control_succeeds" FAKE_CONTROL_WRONG_ERROR="$control_wrong_error" \
     FAKE_CONTROL_WRONG_ROLE_ERROR="$control_wrong_role_error" FAKE_ECHO_PW_IN_CONTROL="$echo_pw_in_control" \
     FAKE_SUPPRESS_REAL_PROMPT="$suppress_real_prompt" \
-    FAKE_CONNECT_CALL_LOG="$CONNECT_CALL_LOG" \
+    FAKE_CONNECT_CALL_LOG="$CONNECT_CALL_LOG" FAKE_SHRED_LIES="${FAKE_SHRED_LIES:-0}" \
     bash "$DB_ROLE_HANDOFF_SH" "$role" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -701,6 +726,27 @@ assert_output_lacks "placeholder-row" "${OUT2H:-}" "does NOT authenticate" || FA
 #     UPDATED to exactly one real row, never duplicated.
 OUT2I="$(run_scenario "placeholder-row-rotate: succeeds via plain rotate path" 0 pfin_etl "--apply --rotate" clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "" 0 0 0 0 0)" || FAIL=1
 assert_output_contains "placeholder-row-rotate" "${OUT2I:-}" "hash-bound to the generated credential confirmed" || FAIL=1
+
+# 2j. SHRED-LIES-FATALS (execution-record fix, Sec finding run 7; ratified
+#     2026-09-21) -- same otherwise-happy path as 2i, but EVERY `shred`
+#     call (the PATCH-body tempfile's, inside step D's python, and
+#     SEED_FILE's own bash EXIT trap) reports success (exit 0) WITHOUT
+#     actually removing its target. Neither destroy-and-report site may
+#     trust the exit code alone -- both re-check existence and FATAL; the
+#     PATCH-body site's die() fires first (step D runs before the
+#     SEED_FILE trap), so this scenario also proves `set -e` propagates
+#     that failure into the remote shell's own exit and still fires the
+#     SEED_FILE trap during unwind -- both destruction attempts run and
+#     both are expected to report the same failure shape.
+FAKE_SHRED_LIES=1
+OUT2J="$(run_scenario "shred lies about destroying SEED_FILE: FATALs" 1 pfin_etl "--apply --rotate" clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "" 0 0 0 0 0)" || FAIL=1
+unset FAKE_SHRED_LIES
+assert_output_contains "shred-lies" "${OUT2J:-}" "STILL EXISTS after destruction attempt" || FAIL=1
+assert_output_contains "shred-lies" "${OUT2J:-}" "mechanism: shred" || FAIL=1
+if grep -qF "DESTROYED:" <<<"${OUT2J:-}"; then
+  echo "FAIL: [shred-lies] reported a DESTROYED line despite the artifact still existing -- must never report success on an unverified destruction." >&2
+  FAIL=1
+fi
 
 # 2g. ALREADY-HANDED-OFF-BIND-CHECK-CONNECT-FAILS -- the store carries a
 #     real-looking value, but connecting AS the role with it fails --

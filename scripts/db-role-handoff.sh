@@ -90,10 +90,14 @@
 #     shape as every other provision-*.sh / push-production-secrets.sh /
 #     coolify-env.sh in this repo.
 #   - The PATCH body carrying `PFIN_DB_PASSWORD`'s new value: a 0600
-#     tempfile under /root/.pfin/, `--data-binary @<path>`, unlinked in a
-#     `finally` immediately after the call — same shape provision-app.sh /
-#     provision-worker.sh already use for their own (non-secret) env-var
-#     PATCH bodies, extended here to a secret body.
+#     tempfile under /root/.pfin/, `--data-binary @<path>`, destroyed in a
+#     `finally` immediately after the call (execution-record fix, Sec
+#     finding run 7, ratified 2026-09-21: `shred -u` attempted first,
+#     falling back to `os.unlink` only if `shred` is absent/fails,
+#     existence re-checked and the outcome printed by name — die() if it
+#     survives) — same base shape provision-app.sh / provision-worker.sh
+#     already use for their own (non-secret) env-var PATCH bodies,
+#     extended here to a secret body with the added destruction-report.
 #   - The readback: Coolify's public `GET .../envs` never returns a
 #     secret's real VALUE (confirmed by mint-supabase-jwt-keys.sh's own
 #     header — "v1 /envs listing never carries a value field" for a
@@ -653,7 +657,35 @@ umask 077
 # Registered FIRST, fires on ANY exit -- success, a set -e abort, or a
 # signal. Same discipline as provision-supabase-stack.sh's own
 # SMTP_SEED_FILE trap.
-trap 'shred -u "$SEED_FILE" 2>/dev/null || rm -f "$SEED_FILE"' EXIT
+#
+# Execution-record fix (Sec finding, run 7; ratified 2026-09-21): the
+# old trap destroyed silently and the script's own final line ("Seed
+# file will be shredded now by this script's own EXIT trap.") claimed
+# the outcome in FUTURE tense with nothing to confirm it actually
+# happened, or by which of the two non-equivalent mechanisms (a real
+# overwrite-then-unlink via `shred -u`, vs a bare `rm -f` fallback if
+# `shred` is absent/fails). This version names the mechanism, verifies
+# the file is actually gone, and FATALs (nonzero exit from the trap
+# itself, which is this remote shell's own exit code) if it survives --
+# never reports success on an unverified destruction. This is the
+# script's ONLY confirmation of SEED_FILE's fate; no other line claims
+# it (see the removed line at this script's own end).
+report_shred_seed() {
+  local mech
+  if shred -u "$SEED_FILE" 2>/dev/null; then
+    mech="shred"
+  elif rm -f "$SEED_FILE" 2>/dev/null; then
+    mech="rm-fallback (shred unavailable or failed)"
+  else
+    mech="NEITHER (both shred and rm failed)"
+  fi
+  if [ -e "$SEED_FILE" ]; then
+    echo "FATAL: $SEED_FILE STILL EXISTS after destruction attempt (mechanism: $mech) -- refusing to report success." >&2
+    exit 1
+  fi
+  echo "DESTROYED: $SEED_FILE (mechanism: $mech)"
+}
+trap report_shred_seed EXIT
 
 PW="$(cat "$SEED_FILE")"
 [ -n "$PW" ] || { echo "FATAL: seed file read as empty -- refusing to proceed." >&2; exit 1; }
@@ -846,7 +878,30 @@ def api(method, path, body=None):
         result = subprocess.run(cmd, input=config.encode(), capture_output=True)
     finally:
         if tmppath:
-            os.unlink(tmppath)
+            # Execution-record fix (Sec finding, run 7; ratified
+            # 2026-09-21): this file carries PFIN_DB_PASSWORD's new value
+            # in cleartext (the same class of secret SEED_FILE's own
+            # bash-level shred trap protects) -- a bare os.unlink() here
+            # was a weaker mechanism next to that trap's `shred -u`, and
+            # neither confirmed the outcome. Same discipline now: attempt
+            # shred first, fall back to unlink, verify gone, name which
+            # mechanism ran, die() if it survives.
+            mech = None
+            try:
+                r = subprocess.run(["shred", "-u", tmppath], capture_output=True)
+                if r.returncode == 0:
+                    mech = "shred"
+            except FileNotFoundError:
+                pass
+            if mech is None:
+                try:
+                    os.unlink(tmppath)
+                    mech = "rm-fallback (shred unavailable or failed)"
+                except FileNotFoundError:
+                    mech = "already absent"
+            if os.path.exists(tmppath):
+                die(f"{tmppath} STILL EXISTS after destruction attempt (mechanism: {mech}) -- refusing to report success.")
+            print(f"DESTROYED: {tmppath} (mechanism: {mech})")
     if result.returncode != 0:
         die(f"Coolify API {method} {path} failed: curl exit {result.returncode} ({result.stderr.decode(errors='replace').strip()[:200]})")
     raw = result.stdout.decode()
@@ -948,7 +1003,6 @@ else
 fi
 
 step_r "Done (remote)"
-echo "Seed file will be shredded now by this script's own EXIT trap."
 REMOTE
 
 step "Done"

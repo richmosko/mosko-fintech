@@ -78,6 +78,28 @@ FAKE_BIN="$WORK/bin"
 mkdir -p "$FAKE_BIN"
 ln -s "$FIXTURE_DIR/fake-curl" "$FAKE_BIN/curl"
 
+# Fake `shred` -- execution-record fix (Sec finding, run 7; ratified
+# 2026-09-21). This host has no real `shred` (macOS); normally ACTUALLY
+# removes its target(s) and exits 0, so every scenario exercises the real
+# "shred" mechanism a production (Debian-based) box has, not just the
+# `rm -f` fallback. $FAKE_SHRED_LIES=1 strikes the exact defect the
+# destroy-and-report logic exists to catch: shred reports success (exit
+# 0) without actually removing anything.
+cat > "$FAKE_BIN/shred" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+files=()
+for a in "$@"; do
+  [[ "$a" == -* ]] && continue
+  files+=("$a")
+done
+if [[ "${FAKE_SHRED_LIES:-0}" != "1" ]]; then
+  rm -f "${files[@]}"
+fi
+exit 0
+EOF
+chmod +x "$FAKE_BIN/shred"
+
 # Same fake `ssh` shape as the fence-provision-app-strikes.sh /
 # fence-deploy-app-strikes.sh siblings -- see either file's own header
 # for the call-shape rationale. push-production-secrets.sh uses THREE of
@@ -115,13 +137,13 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
   # full environment dump into this exact generated file).
   CMDLINE="\$(printf '%s' "\$CMDLINE" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
   REWRITTEN="\$(sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
-  PATH="$FAKE_BIN:\$PATH" FAKE_CURL_LOG="\$FAKE_CURL_LOG" FAKE_CURL_MODE="\$FAKE_CURL_MODE" \\
+  PATH="$FAKE_BIN:\$PATH" FAKE_CURL_LOG="\$FAKE_CURL_LOG" FAKE_CURL_MODE="\$FAKE_CURL_MODE" FAKE_SHRED_LIES="\$FAKE_SHRED_LIES" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
 CMD="\${@: -1}"
 CMD_REWRITTEN="\$(printf '%s' "\$CMD" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
-PATH="$FAKE_BIN:\$PATH" FAKE_CURL_LOG="\$FAKE_CURL_LOG" FAKE_CURL_MODE="\$FAKE_CURL_MODE" \\
+PATH="$FAKE_BIN:\$PATH" FAKE_CURL_LOG="\$FAKE_CURL_LOG" FAKE_CURL_MODE="\$FAKE_CURL_MODE" FAKE_SHRED_LIES="\$FAKE_SHRED_LIES" \\
   bash -c "\$CMD_REWRITTEN"
 EOF
 chmod +x "$FAKE_BIN/ssh"
@@ -135,7 +157,7 @@ run_scenario() {
   : > "$log"
   set +e
   BOX_IP=127.0.0.1 AUTOMATION_KEY=/dev/null REPO_ROOT="$repo_root" \
-    PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$log" FAKE_CURL_MODE="$mode" \
+    PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$log" FAKE_CURL_MODE="$mode" FAKE_SHRED_LIES="${FAKE_SHRED_LIES:-0}" \
     bash "$PUSH_SECRETS_SH" "$@" < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -240,6 +262,23 @@ fi
 LOG_VI="$WORK/log-vi"
 OUT_VI="$(run_scenario "cross-resource-uniqueness" 1 collision "$CLEAN_ROOT" "$LOG_VI" --skip-missing-resource)" || FAIL=1
 assert_output_contains "cross-resource-uniqueness" "${OUT_VI:-}" "resource keys 'pfin-app' 'pfin-back-etl' all resolved to the SAME Coolify application (1111aaaa2222bbbb3333cccc)" || FAIL=1
+
+# (vii) SHRED-LIES-FATALS (execution-record fix, Sec finding run 7;
+#      ratified 2026-09-21) -- same apply push as (v), but `shred`
+#      reports success (exit 0) WITHOUT actually removing $box_seed/
+#      $box_body. The destroy-and-report trap must not trust the exit
+#      code alone -- it re-checks existence and FATALs, naming both
+#      artifacts.
+LOG_VII="$WORK/log-vii"
+FAKE_SHRED_LIES=1
+OUT_VII="$(run_scenario "shred lies about destroying box_seed/box_body: FATALs" 1 clean "$CLEAN_ROOT" "$LOG_VII" --apply --skip-missing-resource)" || FAIL=1
+unset FAKE_SHRED_LIES
+assert_output_contains "shred-lies" "${OUT_VII:-}" "STILL EXISTS after destruction attempt" || FAIL=1
+assert_output_contains "shred-lies" "${OUT_VII:-}" "mechanism: shred" || FAIL=1
+if grep -qF "DESTROYED:" <<<"${OUT_VII:-}"; then
+  echo "FAIL: [shred-lies] reported a DESTROYED line despite the artifacts still existing -- must never report success on an unverified destruction." >&2
+  FAIL=1
+fi
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
