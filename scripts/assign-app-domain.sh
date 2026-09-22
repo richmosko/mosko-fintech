@@ -1265,24 +1265,88 @@ else
   fi
 fi
 
-step "Polling for the Let's Encrypt cert on https://$ROOT_DOMAIN (bounded: $CERT_POLL_ATTEMPTS x ${CERT_POLL_INTERVAL_SECONDS}s)"
-CERT_OK=0
-for ((i = 1; i <= CERT_POLL_ATTEMPTS; i++)); do
-  CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$ROOT_DOMAIN/" 2>/dev/null || true)"
-  if [[ "$CODE" == "200" ]]; then
-    CERT_OK=1
-    ok "https://$ROOT_DOMAIN/ -> 200 (attempt $i/$CERT_POLL_ATTEMPTS)"
-    break
+# domain_serves_result <host> -- one HTTPS probe; prints one line:
+#   "<TOKEN> <http_code> <ssl_verify_result> <redirect_url-or-empty>"
+# TOKEN is one of OK / OFF_DOMAIN_REDIRECT / BAD_TLS / BAD_STATUS.
+# Run-22 fix (team-lead, live cutover): the OLD check was a bare
+# `== "200"`, which can NEVER pass once the app starts redirecting an
+# unauthenticated '/' to '/login' -- measured live 2026-09-22:
+# https://pfindash.com/ -> 303 -> /login (200), ssl_verify_result=0,
+# real Let's Encrypt cert (CN=pfindash.com) -- a live, correctly
+# routed, TLS-verified app, not a poll failure. The actual "cert
+# issued and trusted" fact is ssl_verify_result=0, not a bare 200; a
+# 3xx counts as served ONLY when its own redirect target is on this
+# app's own domain family ($ROOT_DOMAIN / www.$ROOT_DOMAIN) -- an
+# OFF-DOMAIN redirect (a misconfigured proxy sending traffic
+# elsewhere) is never treated as "serving".
+domain_serves_result() {
+  local host="$1" out code ssl_verify redirect_url redirect_host
+  out="$(curl -s -o /dev/null -w '%{http_code} %{ssl_verify_result} %{redirect_url}' --max-time 10 "https://$host/" 2>/dev/null || true)"
+  read -r code ssl_verify redirect_url <<<"$out"
+  if [[ ! "${code:-000}" =~ ^[23][0-9][0-9]$ ]]; then
+    printf 'BAD_STATUS %s %s %s' "${code:-000}" "${ssl_verify:-}" "${redirect_url:-}"
+    return
   fi
-  info "attempt $i/$CERT_POLL_ATTEMPTS: https://$ROOT_DOMAIN/ -> ${CODE:-(no response)} -- waiting for DNS propagation + LE issuance"
-  sleep "$CERT_POLL_INTERVAL_SECONDS"
-done
-[[ "$CERT_OK" -eq 1 ]] || die "https://$ROOT_DOMAIN/ never returned 200 within $((CERT_POLL_ATTEMPTS * CERT_POLL_INTERVAL_SECONDS))s -- DNS may not have propagated yet, or Coolify/Traefik has not issued the cert. Re-run this script (idempotent) once you've confirmed DNS has propagated (\`dig A $ROOT_DOMAIN\`)."
+  if [[ "${ssl_verify:-1}" != "0" ]]; then
+    printf 'BAD_TLS %s %s %s' "$code" "${ssl_verify:-<empty>}" "${redirect_url:-}"
+    return
+  fi
+  if [[ "$code" == 3* ]]; then
+    if [[ -z "${redirect_url:-}" ]]; then
+      printf 'BAD_STATUS %s %s %s' "$code" "$ssl_verify" ""
+      return
+    fi
+    redirect_host="${redirect_url#*://}"
+    redirect_host="${redirect_host%%/*}"
+    redirect_host="${redirect_host%%\?*}"
+    redirect_host="${redirect_host%%\#*}"
+    redirect_host="${redirect_host%%:*}"
+    if [[ "$redirect_host" != "$ROOT_DOMAIN" && "$redirect_host" != "www.$ROOT_DOMAIN" ]]; then
+      printf 'OFF_DOMAIN_REDIRECT %s %s %s' "$code" "$ssl_verify" "$redirect_url"
+      return
+    fi
+  fi
+  printf 'OK %s %s %s' "$code" "$ssl_verify" "${redirect_url:-}"
+}
+
+# poll_domain_serves <host> <label> -- polls up to CERT_POLL_ATTEMPTS x
+# CERT_POLL_INTERVAL_SECONDS for an OK result from domain_serves_result
+# above; dies naming the LAST observed result on exhaustion, never a
+# bare "expected 200".
+poll_domain_serves() {
+  local host="$1" label="$2" i result token code ssl_verify redirect_url
+  for ((i = 1; i <= CERT_POLL_ATTEMPTS; i++)); do
+    result="$(domain_serves_result "$host")"
+    read -r token code ssl_verify redirect_url <<<"$result"
+    case "$token" in
+      OK)
+        if [[ -n "$redirect_url" ]]; then
+          ok "https://$host/ answers over a verified TLS cert (http $code, redirect -> $redirect_url)"
+        else
+          ok "https://$host/ answers over a verified TLS cert (http $code, no redirect)"
+        fi
+        return 0
+        ;;
+      OFF_DOMAIN_REDIRECT)
+        info "attempt $i/$CERT_POLL_ATTEMPTS: https://$host/ -> $code redirects OFF-DOMAIN to $redirect_url -- not treating as served"
+        ;;
+      BAD_TLS)
+        info "attempt $i/$CERT_POLL_ATTEMPTS: https://$host/ -> http $code but ssl_verify_result=$ssl_verify (cert not yet verified) -- waiting for LE issuance"
+        ;;
+      *)
+        info "attempt $i/$CERT_POLL_ATTEMPTS: https://$host/ -> ${code:-(no response)} -- waiting for DNS propagation + LE issuance"
+        ;;
+    esac
+    sleep "$CERT_POLL_INTERVAL_SECONDS"
+  done
+  die "https://$host/ ($label) never answered over a verified TLS cert within $((CERT_POLL_ATTEMPTS * CERT_POLL_INTERVAL_SECONDS))s -- last result: token=$token code=${code:-<empty>} ssl_verify=${ssl_verify:-<empty>} redirect=${redirect_url:-<none>}. DNS may not have propagated yet, Coolify/Traefik may not have issued the cert, or the app may be redirecting off-domain. Re-run this script (idempotent) once you've confirmed DNS has propagated (\`dig A $ROOT_DOMAIN\`)."
+}
+
+step "Polling for the Let's Encrypt cert on https://$ROOT_DOMAIN (bounded: $CERT_POLL_ATTEMPTS x ${CERT_POLL_INTERVAL_SECONDS}s)"
+poll_domain_serves "$ROOT_DOMAIN" "apex"
 
 step "Confirming www.$ROOT_DOMAIN also serves"
-WWW_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://www.$ROOT_DOMAIN/" 2>/dev/null || true)"
-[[ "$WWW_CODE" == "200" ]] || die "https://www.$ROOT_DOMAIN/ -> ${WWW_CODE:-(no response)}, expected 200 -- both domains are in the PATCHed docker_compose_domains entry's comma-separated 'domain' value, so www should serve directly (no HTTP redirect is configured); investigate before treating step 9 as done."
-ok "https://www.$ROOT_DOMAIN/ -> 200"
+poll_domain_serves "www.$ROOT_DOMAIN" "www"
 
 step "Done"
 info "DNS + Coolify domain assignment + LE cert all verified for $ROOT_DOMAIN and www.$ROOT_DOMAIN."

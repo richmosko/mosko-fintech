@@ -380,13 +380,22 @@ if [[ "$ARGS" == *".sslip.io"* ]]; then
   exit 0
 fi
 
-# --- Public HTTPS poll -----------------------------------------------------
+# --- Public HTTPS poll (domain_serves_result(), run-22 fix) ---------------
+# The real script's -w format now asks for THREE space-separated values
+# -- '%{http_code} %{ssl_verify_result} %{redirect_url}' -- matching
+# what curl actually prints for that exact format string. Default
+# ssl_verify=0 (a verified cert) and empty redirect_url (no redirect)
+# so an EXISTING scenario that only sets FAKE_APEX_CODE/FAKE_WWW_CODE
+# (a plain 200) still passes unchanged. FAKE_APEX_SSL_VERIFY/
+# FAKE_WWW_SSL_VERIFY and FAKE_APEX_REDIRECT_URL/FAKE_WWW_REDIRECT_URL
+# model the run-22 live shape: a 303 to an on-domain '/login' over a
+# verified cert.
 if [[ "$ARGS" == *"https://www."* ]]; then
-  printf '%s' "${FAKE_WWW_CODE:-200}"
+  printf '%s %s %s' "${FAKE_WWW_CODE:-200}" "${FAKE_WWW_SSL_VERIFY:-0}" "${FAKE_WWW_REDIRECT_URL:-}"
   exit 0
 fi
 if [[ "$ARGS" == *"https://"* ]]; then
-  printf '%s' "${FAKE_APEX_CODE:-200}"
+  printf '%s %s %s' "${FAKE_APEX_CODE:-200}" "${FAKE_APEX_SSL_VERIFY:-0}" "${FAKE_APEX_REDIRECT_URL:-}"
   exit 0
 fi
 

@@ -450,6 +450,8 @@ run_case() {
     FAKE_DOCKER_INSPECT_RUNNING="${FAKE_DOCKER_INSPECT_RUNNING:-true}" FAKE_DOCKER_INSPECT_FAILS="${FAKE_DOCKER_INSPECT_FAILS:-0}" \
     FAKE_APP_CID_POST="${FAKE_APP_CID_POST-deadbeef0001}" \
     FAKE_DEPLOY_TRIGGERED_MARKER="$deploy_triggered_marker" FAKE_DEPLOY_STATUS="${FAKE_DEPLOY_STATUS:-finished}" \
+    FAKE_APEX_SSL_VERIFY="${FAKE_APEX_SSL_VERIFY:-0}" FAKE_WWW_SSL_VERIFY="${FAKE_WWW_SSL_VERIFY:-0}" \
+    FAKE_APEX_REDIRECT_URL="${FAKE_APEX_REDIRECT_URL:-}" FAKE_WWW_REDIRECT_URL="${FAKE_WWW_REDIRECT_URL:-}" \
     FAKE_SSLIP_HTTP_CODE="${FAKE_SSLIP_HTTP_CODE:-}" FAKE_SSLIP_HTTPS_CODE="${FAKE_SSLIP_HTTPS_CODE:-}" \
     FAKE_CONTROL_HTTP_CODE="${FAKE_CONTROL_HTTP_CODE:-}" FAKE_CONTROL_HTTPS_CODE="${FAKE_CONTROL_HTTPS_CODE:-}" \
     FAKE_CONTROL_UNREACHABLE="${FAKE_CONTROL_UNREACHABLE:-0}" FAKE_CONTROL_EMPTY="${FAKE_CONTROL_EMPTY:-0}" \
@@ -1216,6 +1218,77 @@ if [[ -n "${CASE_OUTPUT:-}" ]]; then
     echo "FAIL: [FACT-15 exact bytes] the reported extra-domains set was not the correctly-parsed pfindash.com set from FACT-15's own bytes -- captured output: $CASE_OUTPUT" >&2
     FAIL=1
   fi
+fi
+
+# --- cert-poll / www-serves correctness (run-22 live cutover fix,
+# team-lead) ------------------------------------------------------------
+# domain_serves_result()/poll_domain_serves() replace the old bare
+# `== "200"` check, which could never pass once the app started
+# redirecting an unauthenticated '/' to '/login' -- a live, correctly
+# routed, TLS-verified app is not a poll failure. FAKE_APEX_SSL_VERIFY/
+# FAKE_WWW_SSL_VERIFY and FAKE_APEX_REDIRECT_URL/FAKE_WWW_REDIRECT_URL
+# default to "0" (verified) and empty (no redirect), so every EXISTING
+# apply-success scenario above (a plain FAKE_APEX_CODE=200) is
+# unaffected -- confirmed by the unchanged 52/52 baseline before these
+# scenarios were added.
+#   40. CERT-POLL-303-ON-DOMAIN-REDIRECT-SUCCEEDS -- the exact run-22
+#       live shape: apex answers 303 to its own '/login', ssl_verify=0
+#       -- must succeed, printing the redirect target.
+#   41. CERT-POLL-303-OFF-DOMAIN-REDIRECT-REFUSES -- a 303 whose
+#       Location points somewhere other than this app's own domain
+#       family -- never treated as "serving"; the bound exhausts and
+#       the script refuses.
+#   42. CERT-POLL-SSL-VERIFY-NONZERO-REFUSES -- a 200 (or any status)
+#       whose TLS verification did NOT succeed -- a bare status code is
+#       not "cert issued and trusted"; the bound exhausts and refuses.
+#   43. WWW-SERVES-303-ON-DOMAIN-REDIRECT-SUCCEEDS -- symmetry check:
+#       the SAME domain_serves_result()/poll_domain_serves() logic
+#       governs the www leg, not a separate bare-200 check.
+
+# 40. CERT-POLL-303-ON-DOMAIN-REDIRECT-SUCCEEDS -- apex_code/www_code
+#     are run_case's OWN positional args 5/6 (NOT overridable via an
+#     outer FAKE_APEX_CODE/FAKE_WWW_CODE var -- run_case's env-prefix
+#     unconditionally sets them FROM those positionals), so the new
+#     status is passed positionally; only the NEW fields
+#     (FAKE_APEX_SSL_VERIFY/FAKE_APEX_REDIRECT_URL) are set as outer
+#     vars, since those are NOT part of the original 9-positional shape.
+FAKE_APEX_SSL_VERIFY=0
+FAKE_APEX_REDIRECT_URL="https://fake-domain.test/login"
+run_case "cert poll: 303 to an on-domain /login over a verified cert succeeds" 0 --apply "$ALREADY_CORRECT" 303 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APEX_SSL_VERIFY FAKE_APEX_REDIRECT_URL
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "https://fake-domain.test/ answers over a verified TLS cert (http 303, redirect -> https://fake-domain.test/login)" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [cert poll 303 on-domain] did not print the expected success line -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 41. CERT-POLL-303-OFF-DOMAIN-REDIRECT-REFUSES
+FAKE_APEX_SSL_VERIFY=0
+FAKE_APEX_REDIRECT_URL="https://evil.example.com/steal"
+run_case "cert poll: 303 to an OFF-DOMAIN target never counts as served" 1 --apply "$ALREADY_CORRECT" 303 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APEX_SSL_VERIFY FAKE_APEX_REDIRECT_URL
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "redirects OFF-DOMAIN to https://evil.example.com/steal" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [cert poll 303 off-domain] did not name the off-domain redirect -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 42. CERT-POLL-SSL-VERIFY-NONZERO-REFUSES
+FAKE_APEX_SSL_VERIFY=5
+run_case "cert poll: a 200 with ssl_verify_result != 0 never counts as served" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APEX_SSL_VERIFY
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "ssl_verify_result=5" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [cert poll ssl_verify nonzero] did not name the unverified TLS state -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 43. WWW-SERVES-303-ON-DOMAIN-REDIRECT-SUCCEEDS -- symmetry: the SAME
+#     logic governs the www leg (apex left at its plain-200 default).
+FAKE_WWW_SSL_VERIFY=0
+FAKE_WWW_REDIRECT_URL="https://fake-domain.test/"
+run_case "www serves: 303 to the on-domain apex over a verified cert succeeds" 0 --apply "$ALREADY_CORRECT" 200 303 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_WWW_SSL_VERIFY FAKE_WWW_REDIRECT_URL
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "https://www.fake-domain.test/ answers over a verified TLS cert (http 303, redirect -> https://fake-domain.test/)" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [www serves 303 on-domain] did not print the expected success line -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
 fi
 
 if [[ $FAIL -ne 0 ]]; then
