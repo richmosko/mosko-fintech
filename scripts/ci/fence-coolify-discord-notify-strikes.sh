@@ -204,6 +204,22 @@ WRONG_HASH="0000000000000000"
 # shrinks this extraction; the count guard below catches it, and the
 # derived string genuinely reflects what the script emits, not what a
 # comment here still claims it emits.
+#
+# ⚠ Sec (PR #874 review): this generation is safe ONLY because it does
+# not stand alone. On its own, deriving the fence's expected answer from
+# the very array the script under test defines is "the test derives
+# from the thing under test" -- self-referential, no independent
+# constraint on EVENT_FLAGS' actual CONTENTS (only its shape/count).
+# What keeps this real: FACT-13 in scripts/COOLIFY-API-MEASURED.md
+# remains an EXTERNALLY measured anchor (information_schema.columns on
+# the live box, not derived from this script at all), and scenarios 26/
+# 27 below assert every one of FACT-13's 16 column names against BOTH
+# the script's own source and the runtime-generated write payload. If
+# either the FACT-13 extraction or those two per-column loops is ever
+# "simplified" away, this file quietly becomes a mirror of whatever
+# EVENT_FLAGS currently says and stops catching this defect class (a
+# wrong/dropped column or flag) at all -- do not remove them to reduce
+# scenario count.
 EVENT_FLAG_DISPLAYS=()
 EVENT_FLAG_TARGETS=()
 while IFS= read -r __entry; do
