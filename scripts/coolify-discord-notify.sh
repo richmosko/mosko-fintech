@@ -39,13 +39,17 @@
 #     accepted) -- read + one outbound POST, not an Eloquent write, so it
 #     needs no TINKER-WRITE marker and runs in a SEPARATE tinker
 #     invocation from the ALLOW-08 write below.
-#   - `.env`'s `DISCORD_WEBHOOK_URL` today is present but a 21-character
-#     value that does NOT match a real Discord webhook URL's shape
-#     (`^https://(discord|discordapp)\.com/api/webhooks/[0-9]+/
-#     [A-Za-z0-9_-]+$`, ~120 chars) -- team-lead measured a GET against it
-#     returns nothing. F/CTO is being asked for the real value. This
-#     script refuses (shape-check, before ANY box contact) rather than
-#     push a malformed value -- see WEBHOOK_URL_RE below.
+#   - Team-lead measured, 2026-09-21, that `.env`'s `DISCORD_WEBHOOK_URL`
+#     at that moment held a 21-character placeholder that did NOT match a
+#     real Discord webhook URL's shape (`^https://(discord|discordapp)
+#     \.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+$`, ~120 chars) -- a GET
+#     against it returned nothing. F/CTO supplied the real value shortly
+#     after (team-lead re-verified, 2026-09-22: 121 chars, matches the
+#     shape, GET 200, already live in every consumer). This script does
+#     NOT trust either fact as current state, though -- `--apply` always
+#     shape-checks whatever `.env` holds AT RUN TIME (before ANY box
+#     contact) rather than a claim about what it held on any one date --
+#     see WEBHOOK_URL_RE below.
 #   - UNMEASURED, stated rather than assumed: whether Coolify's own
 #     `SendMessageToDiscordJob` retries (`$tries = 5`) ever race this
 #     script's own direct POST (they would send two structurally-
@@ -189,11 +193,13 @@ if [[ "$MODE" == "apply" ]]; then
   WEBHOOK_URL="$(read_env_var DISCORD_WEBHOOK_URL)"
   [[ -n "$WEBHOOK_URL" ]] || die "DISCORD_WEBHOOK_URL is missing or empty in $REPO_ROOT/.env -- add it (target channel -> Settings -> Integrations -> Webhooks, per docs/deployment-runbook.md Part 1) and re-run."
   # Real Discord webhook URLs: https://discord.com/api/webhooks/<id>/<token>
-  # (discordapp.com is the legacy/still-accepted host). Team-lead measured
-  # 2026-09-21: today's .env value is a 21-char placeholder that does NOT
-  # match this shape. Refusing here, before any SSH call, is the load-
-  # bearing property -- the box is never contacted with a value this check
-  # has already rejected.
+  # (discordapp.com is the legacy/still-accepted host). This check runs
+  # against WHATEVER $REPO_ROOT/.env holds AT RUN TIME -- it never trusts
+  # a claim about a past value (team-lead measured a malformed placeholder
+  # here on 2026-09-21, then a corrected real value the next day; this
+  # code cares about neither snapshot, only the live read). Refusing here,
+  # before any SSH call, is the load-bearing property -- the box is never
+  # contacted with a value this check has already rejected.
   WEBHOOK_URL_RE='^https://(discord|discordapp)\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+$'
   if ! [[ "$WEBHOOK_URL" =~ $WEBHOOK_URL_RE ]]; then
     die "DISCORD_WEBHOOK_URL in .env is not a Discord webhook URL (shape check; value not shown)"
