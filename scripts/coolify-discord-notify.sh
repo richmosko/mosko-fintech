@@ -141,9 +141,12 @@
 # gate output-bearing builders (`Output` / `S3 Error` respectively) --
 # enabling EITHER one requires a fresh Sec ruling, not just a flip of
 # the literal in the update() call below. Sec's own bound on this
-# ruling: verified against THIS repo's own measurement of the two
-# builders (Coolify is not vendored here) -- if a re-measurement finds
-# the builders differ, re-run the ruling rather than inheriting it.
+# ruling: Sec did NOT verify the two builders -- Coolify is not
+# vendored in this repo, so the citations above rest on the
+# implementer's measurement of Coolify's source on the box,
+# corroborated by the 20-builder field-name dump but not
+# independently checked. If a re-measurement finds the builders
+# differ, re-run the ruling rather than inheriting it.
 #
 # USAGE
 #   BOX_IP=<box-ip> scripts/coolify-discord-notify.sh              # same as --state
