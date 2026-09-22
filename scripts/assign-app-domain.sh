@@ -1238,8 +1238,20 @@ else
   CONTROL_HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$CONTROL_HOST/" 2>/dev/null || true)"
   CONTROL_HTTPS_CODE="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$CONTROL_HOST/" 2>/dev/null || true)"
   info "sslip host $SSLIP_HOST: http=${SSLIP_HTTP_CODE:-(no response)} https=${SSLIP_HTTPS_CODE:-(no response)}  |  nonexistent-host control $CONTROL_HOST: http=${CONTROL_HTTP_CODE:-(no response)} https=${CONTROL_HTTPS_CODE:-(no response)}"
-  if [[ "$SSLIP_HTTP_CODE" != "$CONTROL_HTTP_CODE" || "$SSLIP_HTTPS_CODE" != "$CONTROL_HTTPS_CODE" ]]; then
+  # Sec F-1 (PR #878 review): the control is a nonexistent host on the
+  # SAME box behind the SAME proxy -- on a working path it always
+  # returns SOMETHING, so both its codes coming back empty is a clean
+  # signal the probe itself never ran (network/DNS/curl failure from
+  # THIS machine), not that the sslip route is clear. Without this
+  # branch, "matches control" and "instrument never fired" produce the
+  # identical (silent) output -- a false all-clear on the one
+  # measurement that exists to catch an unintended second route.
+  if [[ -z "$CONTROL_HTTP_CODE" && -z "$CONTROL_HTTPS_CODE" ]]; then
+    info "sslip reachability probe NOT MEASURED -- the nonexistent-host control returned no response on either scheme, so the probe itself did not run (network/DNS/curl failure from this machine). 'Matches control' would be meaningless here. Re-run from a host that can reach $BOX_IP before treating the sslip route as clear."
+  elif [[ "$SSLIP_HTTP_CODE" != "$CONTROL_HTTP_CODE" || "$SSLIP_HTTPS_CODE" != "$CONTROL_HTTPS_CODE" ]]; then
     info "FINDING: the sslip host answered DIFFERENTLY from the nonexistent-host control (http $SSLIP_HTTP_CODE vs $CONTROL_HTTP_CODE; https $SSLIP_HTTPS_CODE vs $CONTROL_HTTPS_CODE) -- this app may be reachable via an UNINTENDED second route (its own Coolify-assigned sslip default), not just the domain this script assigned. Not a failure -- investigate before DNS cutover completes."
+  else
+    info "sslip reachability probe MEASURED: the sslip host answered identically to the nonexistent-host control (http $SSLIP_HTTP_CODE, https $SSLIP_HTTPS_CODE) -- no evidence of a second live route."
   fi
 fi
 

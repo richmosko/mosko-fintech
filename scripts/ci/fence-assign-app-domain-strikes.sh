@@ -120,7 +120,16 @@
 #             nonexistent-host control -- printed as a FINDING, never a
 #             failure or a refusal.
 #        25m. inversion of 25l -- sslip host matches the control -- no
-#             FINDING line.
+#             FINDING line, and an explicit MEASURED-clean line instead
+#             (Sec F-1: the positive result must be as greppable as the
+#             FINDING, never silent).
+#        25n. SSLIP-PROBE-CONTROL-UNREACHABLE-NOT-MEASURED (Sec F-1,
+#             PR #878 review) -- the nonexistent-host control itself
+#             returns no response on either scheme (this machine cannot
+#             reach the box at all) -- must print NOT MEASURED, never a
+#             FINDING or a MEASURED-clean line: an unperformed probe is
+#             not the same as a clean one, and "empty equals empty"
+#             would otherwise be a false all-clear.
 #   29/30. WWW-AS-A (live dns fix, 2026-09-22 -- www.pfindash.com already
 #      existed as an A record, not a CNAME, and this script only ever
 #      looked for a CNAME) -- a mismatched www A edits in place to box_ip
@@ -433,6 +442,7 @@ run_case() {
     FAKE_DEPLOY_TRIGGERED_MARKER="$deploy_triggered_marker" FAKE_DEPLOY_STATUS="${FAKE_DEPLOY_STATUS:-finished}" \
     FAKE_SSLIP_HTTP_CODE="${FAKE_SSLIP_HTTP_CODE:-}" FAKE_SSLIP_HTTPS_CODE="${FAKE_SSLIP_HTTPS_CODE:-}" \
     FAKE_CONTROL_HTTP_CODE="${FAKE_CONTROL_HTTP_CODE:-}" FAKE_CONTROL_HTTPS_CODE="${FAKE_CONTROL_HTTPS_CODE:-}" \
+    FAKE_CONTROL_UNREACHABLE="${FAKE_CONTROL_UNREACHABLE:-0}" \
     bash "$SMOKE_SH" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -899,11 +909,37 @@ fi
 
 # 25m. SSLIP-PROBE-NO-FINDING-WHEN-MATCHING -- inversion of 25l: the
 #     sslip host and the control agree (both default to 404) -- no
-#     FINDING line.
+#     FINDING line, and an explicit MEASURED-clean line instead (Sec
+#     F-1: the positive result must be as greppable as the FINDING).
 run_case "sslip probe: matching the control prints no FINDING" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
-if [[ -n "${CASE_OUTPUT:-}" ]] && grep -qF "FINDING:" <<<"$CASE_OUTPUT"; then
-  echo "FAIL: [sslip probe no divergence] printed a FINDING despite the sslip host matching the control -- captured output: $CASE_OUTPUT" >&2
-  FAIL=1
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if grep -qF "FINDING:" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [sslip probe no divergence] printed a FINDING despite the sslip host matching the control -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "sslip reachability probe MEASURED: the sslip host answered identically" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [sslip probe no divergence] did not print an explicit MEASURED-clean line -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 25n. SSLIP-PROBE-CONTROL-UNREACHABLE-NOT-MEASURED (Sec F-1, PR #878
+#     review) -- the nonexistent-host control itself returns no
+#     response on either scheme -- must print NOT MEASURED, never a
+#     FINDING or a MEASURED-clean line -- "empty equals empty" is a
+#     false all-clear, not a clean result.
+FAKE_CONTROL_UNREACHABLE=1
+run_case "sslip probe: unreachable control prints NOT MEASURED, never a false all-clear" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_CONTROL_UNREACHABLE
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "sslip reachability probe NOT MEASURED" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [sslip probe control unreachable] did not print the NOT MEASURED refusal -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qF "FINDING:" <<<"$CASE_OUTPUT" || grep -qF "sslip reachability probe MEASURED:" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [sslip probe control unreachable] printed a FINDING or a MEASURED-clean line despite the control never having responded -- an unperformed probe is not a clean one." >&2
+    FAIL=1
+  fi
 fi
 
 # --- www-as-A / Porkbun status-preserving / wildcard-WARN scenarios

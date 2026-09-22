@@ -331,7 +331,15 @@ fi
 # nonexistent-host control. The control host is matched first (its own
 # name starts with "nonexistent-", a substring the real app sslip host
 # never contains) so the two never collide.
+# FAKE_CONTROL_UNREACHABLE=1 (Sec F-1, PR #878 review) models the
+# real script's own failure mode -- this machine cannot reach the box at
+# all -- by printing NOTHING for the control host on either scheme,
+# matching what `2>/dev/null || true` leaves in the real script's
+# CONTROL_HTTP_CODE/CONTROL_HTTPS_CODE when curl itself never completes.
 if [[ "$ARGS" == *"nonexistent-"*".sslip.io"* ]]; then
+  if [[ "${FAKE_CONTROL_UNREACHABLE:-0}" == "1" ]]; then
+    exit 0
+  fi
   if [[ "$ARGS" == *"https://"* ]]; then
     printf '%s' "${FAKE_CONTROL_HTTPS_CODE:-404}"
   else
