@@ -118,19 +118,32 @@
 # set.
 #
 # ⚠ Sec F1 gate (ARCH §4 Observability -- "default Discord payloads must
-# be audited for log/PII excerpts before V1 ships with Discord active"):
-# two of the 20 `toDiscord()` builders under app/Notifications/** carry
-# COMMAND OUTPUT as a field value, not just names/links --
-# `app/Notifications/Database/BackupFailed.php:54`
+# be audited for log/PII excerpts before V1 ships with Discord active"),
+# RULED (Sec, PR #871 review): two of the 20 `toDiscord()` builders under
+# app/Notifications/** carry COMMAND OUTPUT as a field value, not just
+# names/links -- `app/Notifications/Database/BackupFailed.php:54`
 # (`addField('Output', $this->output)`) and
 # `app/Notifications/Database/BackupSuccessWithS3Warning.php:61`
-# (`addField('S3 Error', $this->s3_error)`) -- both fire only under the
-# `backup_failure`/`backup_success` flags this script does NOT change
-# (measured defaults: backup_failure=true, backup_success=false, both
-# left as-is). This repo does not run Coolify-managed DB backups on this
-# stack today, but Sec must rule whether `backup_failure=true` is
-# acceptable to ship enabled regardless -- flagged in this PR's body for
-# that ruling, not decided here.
+# (`addField('S3 Error', $this->s3_error)`), gated by `backup_failure`
+# and `backup_success` respectively. Sec's ruling: `backup_failure` is
+# WRITTEN `false` by this script (corrected from an earlier draft that
+# would have re-asserted the box's measured `true` default on every
+# apply) -- both `Output` and `S3 Error` are unbounded command output
+# (pg_dump/restore errors routinely carry connection strings, role/
+# schema/table names, and row fragments on constraint/encoding errors)
+# reaching a third party (Discord) that retains messages indefinitely;
+# no Coolify-managed backup runs on this stack today, so disabling it
+# costs nothing, while leaving it enabled would arm a real financial-
+# data disclosure channel silently the moment a backup is configured,
+# with no further review. `backup_success` was already `false` in the
+# original write, consistent with this ruling.
+# ⚠ TREAT THE PAIR TOGETHER: both `backup_failure` AND `backup_success`
+# gate output-bearing builders (`Output` / `S3 Error` respectively) --
+# enabling EITHER one requires a fresh Sec ruling, not just a flip of
+# the literal in the update() call below. Sec's own bound on this
+# ruling: verified against THIS repo's own measurement of the two
+# builders (Coolify is not vendored here) -- if a re-measurement finds
+# the builders differ, re-run the ruling rather than inheriting it.
 #
 # USAGE
 #   BOX_IP=<box-ip> scripts/coolify-discord-notify.sh              # same as --state
@@ -310,14 +323,21 @@ if [[ "$STATE" == "ENABLED" ]]; then
 echo \$s ? substr(hash(\"sha256\", (string) \$s->discord_webhook_url), 0, 16) : \"ABSENT\";
 ' </dev/null" 2>/dev/null | tail -1 | tr -d '\r\n')"
   if [[ "$STORED_HASH" == "$EXPECTED_HASH" ]]; then
+    # Every flag this script's own update() call below sets to something
+    # OTHER than the box's measured default must be checked here, or the
+    # idempotency skip could report "already correct" while a real flag
+    # (e.g. backup_failure, Sec's PR #871 ruling) still needs writing.
+    # deployment_success/status_change/scheduled_task_success/
+    # server_reachable target "true"; backup_failure targets "false".
     FLAGS_MATCH=1
     for f in deployment_success status_change scheduled_task_success server_reachable; do
       var="FLAG_${f}"
       [[ "${!var:-}" == "true" ]] || FLAGS_MATCH=0
     done
+    [[ "${FLAG_backup_failure:-}" == "false" ]] || FLAGS_MATCH=0
     if [[ "$FLAGS_MATCH" -eq 1 ]]; then
       NEED_WRITE=0
-      ok "already ENABLED, hash-bound URL match, all four target flags already true -- write skipped (idempotent no-op)"
+      ok "already ENABLED, hash-bound URL match, every target flag already correct -- write skipped (idempotent no-op)"
     fi
   fi
 fi
@@ -350,7 +370,7 @@ docker exec --env-file "$SEED_ENV_FILE" coolify php artisan tinker --execute='
     "deployment_failure" => true,
     "status_change" => true,
     "backup_success" => false,
-    "backup_failure" => true,
+    "backup_failure" => false,
     "scheduled_task_success" => true,
     "scheduled_task_failure" => true,
     "docker_cleanup_success" => false,

@@ -41,6 +41,13 @@
 #      four target flags are NOT yet all true -> the write call DOES
 #      happen despite the hash matching (idempotency is flags-AND-hash,
 #      not hash alone).
+#  12b. APPLY-BACKUP-FAILURE-STALE-STILL-WRITES (Sec ruling, PR #871
+#      review) -- every OTHER target flag + the hash already match, but
+#      backup_failure is still the box's measured `true` default (this
+#      script now writes it `false` -- BackupFailed.php's own `Output`
+#      field is unbounded command output) -> the write call DOES happen
+#      on this ONE flag alone, proving the idempotency check's
+#      backup_failure comparison is independently load-bearing.
 #  13. APPLY-HASH-MISMATCH-STILL-WRITES -- ENABLED + target flags already
 #      true, but the STORED value's hash does not match .env's -> the
 #      write call DOES happen (a stale/different URL forces a rewrite).
@@ -131,15 +138,25 @@ WRONG_HASH="0000000000000000"
 # own header cites the same measurement): every flag at its CURRENT
 # default except discord_enabled=false.
 MEASURED_FLAGS="discord_ping_enabled=true|deployment_success=false|deployment_failure=true|status_change=false|backup_success=false|backup_failure=true|scheduled_task_success=false|scheduled_task_failure=true|docker_cleanup_success=false|docker_cleanup_failure=true|server_disk_usage=true|server_reachable=false|server_unreachable=true|server_patch=true|traefik_outdated=true|restart_limit_reached=true"
-# TARGET_FLAGS -- MEASURED_FLAGS with the four flags this script turns on
+# TARGET_FLAGS -- MEASURED_FLAGS with the four flags this script turns ON
 # (deployment_success, status_change, scheduled_task_success,
-# server_reachable) flipped to true, everything else unchanged.
-TARGET_FLAGS="discord_ping_enabled=true|deployment_success=true|deployment_failure=true|status_change=true|backup_success=false|backup_failure=true|scheduled_task_success=true|scheduled_task_failure=true|docker_cleanup_success=false|docker_cleanup_failure=true|server_disk_usage=true|server_reachable=true|server_unreachable=true|server_patch=true|traefik_outdated=true|restart_limit_reached=true"
+# server_reachable) flipped to true, PLUS backup_failure flipped to
+# false (Sec ruling, PR #871 review: BackupFailed.php's own `Output`
+# field is unbounded command output reaching a third party -- written
+# `false` regardless of the box's measured `true` default), everything
+# else unchanged.
+TARGET_FLAGS="discord_ping_enabled=true|deployment_success=true|deployment_failure=true|status_change=true|backup_success=false|backup_failure=false|scheduled_task_success=true|scheduled_task_failure=true|docker_cleanup_success=false|docker_cleanup_failure=true|server_disk_usage=true|server_reachable=true|server_unreachable=true|server_patch=true|traefik_outdated=true|restart_limit_reached=true"
 
 RAW_DISABLED="false|true|${MEASURED_FLAGS}"
 RAW_ENABLED_URL_EMPTY="true|true|${MEASURED_FLAGS}"
 RAW_ENABLED_FRESH_FLAGS="true|false|${MEASURED_FLAGS}"
 RAW_ENABLED_TARGET_FLAGS="true|false|${TARGET_FLAGS}"
+# TARGET_FLAGS with backup_failure left at the box's measured `true`
+# default (not yet corrected by a write) -- isolates that this ONE flag
+# alone still forces a write even when every other target flag + the
+# hash already match (scenario 12b below).
+TARGET_FLAGS_BACKUP_STALE="${TARGET_FLAGS/backup_failure=false/backup_failure=true}"
+RAW_ENABLED_TARGET_FLAGS_BACKUP_STALE="true|false|${TARGET_FLAGS_BACKUP_STALE}"
 
 FAIL=0
 CASE_LAST_DIR=""
@@ -254,6 +271,17 @@ fi
 FAKE_STATE_RAW="$RAW_ENABLED_FRESH_FLAGS" FAKE_STORED_HASH="$VALID_HASH" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
   run_case "apply: hash matches but target flags don't -- writes anyway" 0 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
 [[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/ssh.log" "env SEED_ENV_FILE=" "apply-flags-mismatch-writes"
+
+# 12b. APPLY-BACKUP-FAILURE-STALE-STILL-WRITES (Sec ruling, PR #871
+# review) -- every OTHER target flag + the hash already match, but
+# backup_failure is still the box's measured `true` default (not yet
+# corrected to `false`) -- isolates that this ONE flag alone still
+# forces a write, proving the idempotency check's backup_failure=false
+# comparison is load-bearing on its own, not merely riding along with
+# the other four.
+FAKE_STATE_RAW="$RAW_ENABLED_TARGET_FLAGS_BACKUP_STALE" FAKE_STORED_HASH="$VALID_HASH" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
+  run_case "apply: hash + four target flags match, but backup_failure still true -- writes anyway" 0 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
+[[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/ssh.log" "env SEED_ENV_FILE=" "apply-backup-failure-stale-writes"
 
 # 13. APPLY-HASH-MISMATCH-STILL-WRITES
 FAKE_STATE_RAW="$RAW_ENABLED_TARGET_FLAGS" FAKE_STORED_HASH="$WRONG_HASH" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
