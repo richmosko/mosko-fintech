@@ -6,8 +6,15 @@
 # scripts/smoke-remaining-checks.sh invokes curl (three top-level, one
 # inside a remote python subprocess call):
 #   1. Coolify API (localhost:8000/api/v1/...) -- canned application list
-#      naming the stack + sibling apps and their fqdn per FAKE_STACK_FQDN
-#      / FAKE_SIBLING_FQDN.
+#      naming the stack + sibling apps, their fqdn per FAKE_STACK_FQDN /
+#      FAKE_SIBLING_FQDN, and their docker_compose_domains per
+#      FAKE_STACK_COMPOSE_DOMAINS / FAKE_SIBLING_COMPOSE_DOMAINS (real
+#      Coolify shape, COOLIFY-FACT-15: this field's own VALUE is a JSON
+#      string, not a nested object -- built via python/json.dumps below,
+#      reading through os.environ rather than shell-interpolating the raw
+#      value into python source, since a real docker_compose_domains
+#      sample is itself full of quotes/braces/colons that would break a
+#      naive string substitution).
 #   2. GET .../login -- prints $FAKE_LOGIN_STATUS (the %{http_code} shape
 #      the real -w '%{http_code}' -o /dev/null invocation produces).
 #   3. POST .../signup -- prints $FAKE_SIGNUP_STATUS, same shape.
@@ -21,12 +28,24 @@ LOG="${FAKE_CURL_LOG:-/dev/null}"
 printf '%s\n' "$ARGS" >> "$LOG"
 
 if [[ "$ARGS" == *"localhost:8000/api/v1"* ]]; then
-  cat <<JSON
-[
-  {"uuid": "stackuuid000000000001", "name": "${FAKE_STACK_NAME:-pfin-supabase-stack}", "fqdn": "${FAKE_STACK_FQDN:-}"},
-  {"uuid": "siblinguuid000000001", "name": "${FAKE_SIBLING_NAME:-pfin-app}", "fqdn": "${FAKE_SIBLING_FQDN:-}"}
+  python3 <<'PYEOF'
+import json, os
+apps = [
+    {
+        "uuid": "stackuuid000000000001",
+        "name": os.environ.get("FAKE_STACK_NAME", "pfin-supabase-stack"),
+        "fqdn": os.environ.get("FAKE_STACK_FQDN", ""),
+        "docker_compose_domains": os.environ.get("FAKE_STACK_COMPOSE_DOMAINS") or None,
+    },
+    {
+        "uuid": "siblinguuid000000001",
+        "name": os.environ.get("FAKE_SIBLING_NAME", "pfin-app"),
+        "fqdn": os.environ.get("FAKE_SIBLING_FQDN", ""),
+        "docker_compose_domains": os.environ.get("FAKE_SIBLING_COMPOSE_DOMAINS") or None,
+    },
 ]
-JSON
+print(json.dumps(apps))
+PYEOF
   exit 0
 fi
 

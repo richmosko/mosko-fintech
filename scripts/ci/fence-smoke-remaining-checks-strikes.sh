@@ -73,6 +73,40 @@
 #       source files -- see this item's own self-strike note in the
 #       handoff for the exact throwaway-tree reproduction).
 #
+#   -- real-run 23 (2026-09-22) additions: auth-login host-derivation
+#      (docker_compose_domains vs fqdn, COOLIFY-FACT-05/06/15 shape) and
+#      RLS's DENY-ALL classification (RLS_DENY_ALL_EXPECTED) --
+#
+#   19. AUTH-HOST-FROM-COMPOSE-DOMAINS -- the happy-path default now
+#       sources the auth host from docker_compose_domains (the FACT-15
+#       measured object-string shape, byte-pinned below via grep -F, not
+#       hand-retyped) rather than the Coolify-assigned sslip.io fqdn --
+#       content-asserted (host + source both named in the output), not
+#       just exit-code-asserted.
+#   20. AUTH-HOST-FQDN-FALLBACK -- docker_compose_domains absent/empty ->
+#       falls back to fqdn, source printed as "fqdn", and the (deliberately
+#       SCHEMED, sslip.io-shaped) fqdn fixture value is stripped down to a
+#       bare host -- proving the fallback path strips a scheme too, not
+#       only the docker_compose_domains path (real-run 23's actual defect
+#       was building "https://" + an ALREADY-schemed fqdn verbatim).
+#   21. AUTH-HOST-SCHEME-PREFIX -- the derived host still carries a scheme
+#       after stripping one (a doubly-schemed domain value) -- refuses
+#       (FAILED), never silently builds a malformed doubly-schemed URL.
+#   14-content. AUTH-LOGIN-WRONG-STATUS is extended with a content
+#       assertion: the FAILED leg's own message must reach $LAST_OUT, not
+#       only the Summary table -- this is the exact real-run-23 regression
+#       (a FAILED leg printed nothing before Summary).
+#   22. RLS-DENY-ALL-ALLOWLISTED -- a discovered table with RLS on, 0
+#       policies, anon zero-grant, privileged count >0, authenticated
+#       count 0, and its name IN RLS_DENY_ALL_EXPECTED -- reported as a
+#       distinct DENY-ALL/ALLOWLISTED line, NOT a failure.
+#   23. RLS-DENY-ALL-UNLISTED -- same shape, but the table's name is NOT
+#       in RLS_DENY_ALL_EXPECTED -- RLS FAILED, naming the table and the
+#       allowlist gap explicitly.
+#   24. RLS-ALLOWLISTED-WITH-POLICIES -- a table IN RLS_DENY_ALL_EXPECTED
+#       that now carries >=1 real policy -- POLICY-SCOPED (not DENY-ALL
+#       any more), reported as an INFO line, not a failure.
+#
 # Exit 0 only if every scenario behaves exactly as specified above.
 #
 # LIVE-ONLY LEGS -- this fence proves the script's own control-flow
@@ -127,6 +161,15 @@ AUTH|account|0
 PRIV|account_users|3
 AUTH|account_users|0'
 
+# COOLIFY-FACT-15's own measured docker_compose_domains read-back sample,
+# pinned by grep -F against scripts/COOLIFY-API-MEASURED.md's recorded
+# bytes -- never hand-retyped as a second, driftable copy (the fact this
+# repo's own COOLIFY-API-MEASURED.md header exists to prevent). Fails
+# closed if that fact ever moves or is reworded.
+FACT15_LITERAL='{"app":{"domain":"https://pfindash.com,https://www.pfindash.com"}}'
+grep -qF "$FACT15_LITERAL" "$REPO_ROOT/scripts/COOLIFY-API-MEASURED.md" \
+  || { echo "FATAL: COOLIFY-FACT-15's measured docker_compose_domains sample is no longer present verbatim in scripts/COOLIFY-API-MEASURED.md -- has that fact moved, been reworded, or the domain changed? Update this fence's fixture pin to match." >&2; exit 2; }
+
 LAST_OUT="$WORK/last_out"
 
 run_scenario() {
@@ -138,7 +181,9 @@ run_scenario() {
   set +e
   env REPO_ROOT="$REPO_ROOT" FAKE_ROOT_PFIN="$FAKE_ROOT_PFIN" FAKE_BIN="$FAKE_BIN" \
     BOX_IP=127.0.0.1 AUTOMATION_KEY=/dev/null \
-    FAKE_STACK_FQDN="" FAKE_SIBLING_FQDN="app.example.com" \
+    FAKE_STACK_FQDN="" \
+    FAKE_SIBLING_FQDN="http://siblinguuid0000001.203.0.113.5.sslip.io" \
+    FAKE_SIBLING_COMPOSE_DOMAINS="$FACT15_LITERAL" \
     FAKE_NC_OPEN="" FAKE_CONTAINERS="1" \
     FAKE_TZ1_ROWS="" \
     FAKE_RLS_ENUM="$HAPPY_RLS_ENUM" FAKE_ZERO_CTX="$HAPPY_ZERO_CTX" FAKE_BYPASSRLS="true" \
@@ -166,9 +211,53 @@ FAIL=0
 #    failure -- see this file's own header.
 run_scenario "happy-path (domain assigned -> MANUAL ceiling)" 4 || FAIL=1
 
-# 2. NO-DOMAIN
+# 19. AUTH-HOST-FROM-COMPOSE-DOMAINS -- same happy-path run above: the
+#     auth host must come from docker_compose_domains ('pfindash.com',
+#     the FACT-15 sample's first sorted domain for the 'app' service),
+#     never the Coolify-assigned sslip.io fqdn -- content-asserted, exit
+#     code alone cannot distinguish "used the right source" from
+#     "happened to pass anyway".
+if grep -qF "using host 'pfindash.com' (source: docker_compose_domains)" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [AUTH-HOST-FROM-COMPOSE-DOMAINS] host+source line present." >&2
+else
+  echo "FAIL: [AUTH-HOST-FROM-COMPOSE-DOMAINS] expected host/source line not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 20. AUTH-HOST-FQDN-FALLBACK -- docker_compose_domains absent/empty ->
+#     falls back to fqdn, source printed as "fqdn"; the fqdn fixture
+#     value is deliberately SCHEMED (sslip.io-shaped, like a real
+#     Coolify-assigned default) -- proving the fallback path strips a
+#     scheme too, not only the docker_compose_domains path (real-run
+#     23's actual defect: building "https://" + an ALREADY-schemed fqdn
+#     verbatim).
+run_scenario "no compose-domains: falls back to fqdn (scheme stripped), source printed" 4 \
+  FAKE_SIBLING_COMPOSE_DOMAINS="" || FAIL=1
+if grep -qF "using host 'siblinguuid0000001.203.0.113.5.sslip.io' (source: fqdn)" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [AUTH-HOST-FQDN-FALLBACK] host+source line present, scheme stripped." >&2
+else
+  echo "FAIL: [AUTH-HOST-FQDN-FALLBACK] expected host/source line not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 21. AUTH-HOST-SCHEME-PREFIX -- the derived host still carries a scheme
+#     after stripping one (a doubly-schemed domain value) -- refuses
+#     (FAILED), never silently builds a malformed doubly-schemed URL.
+run_scenario "derived host still schemed after stripping: refuses" 1 \
+  FAKE_SIBLING_COMPOSE_DOMAINS='{"app":{"domain":"https://https://pfindash.com"}}' || FAIL=1
+if grep -qF "host derivation refused" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [AUTH-HOST-SCHEME-PREFIX] refusal message present." >&2
+else
+  echo "FAIL: [AUTH-HOST-SCHEME-PREFIX] refusal message not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 2. NO-DOMAIN -- neither source yields a host.
 run_scenario "no domain assigned: auth-login SKIPPED, overall SKIPPED" 3 \
-  FAKE_SIBLING_FQDN="" || FAIL=1
+  FAKE_SIBLING_FQDN="" FAKE_SIBLING_COMPOSE_DOMAINS="" || FAIL=1
 
 # 3. CA7-N1-OPEN
 run_scenario "CA-7 N1 port 5432 open: refuses" 1 \
@@ -217,9 +306,20 @@ run_scenario "service_role.rolbypassrls=false: refuses" 1 \
 run_scenario "empty users_id-table enumeration: refuses (invariance-is-blindness guard)" 1 \
   FAKE_RLS_ENUM="" || FAIL=1
 
-# 14. AUTH-LOGIN-WRONG-STATUS
-run_scenario "GET /login wrong status: refuses" 1 \
+# 14. AUTH-LOGIN-WRONG-STATUS -- also the FAILED-message-prints
+#     regression check: real-run 23 hit a FAILED leg that printed
+#     NOTHING before the Summary table -- content-asserted, not just
+#     exit-code-asserted (exit 1 alone cannot distinguish "message
+#     reached output" from "silently swallowed").
+run_scenario "GET /login wrong status: refuses, and prints its own message" 1 \
   FAKE_LOGIN_STATUS="500" || FAIL=1
+if grep -qF "auth login:" "$LAST_OUT" 2>/dev/null && grep -qF "HTTP 500" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [AUTH-LOGIN-WRONG-STATUS] FAILED leg printed its own message (not just the Summary table)." >&2
+else
+  echo "FAIL: [AUTH-LOGIN-WRONG-STATUS] FAILED leg's own message did not reach output -- this is the exact real-run-23 regression." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
 
 # 15. AUTH-SIGNUP-WRONG-STATUS
 run_scenario "POST /signup (missing password) wrong status: refuses" 1 \
@@ -245,7 +345,7 @@ run_scenario "GET /login produces no output at all: precondition, refuses (never
 # code alone (exit 3 alone cannot distinguish "RLS SKIPPED" from
 # "auth-login SKIPPED with RLS VERIFIED" -- both would read exit 3).
 run_scenario "RLS: every discovered table has zero real rows -- SKIPPED (isolation unproven, not proven absent), not VERIFIED" 3 \
-  FAKE_SIBLING_FQDN="" \
+  FAKE_SIBLING_FQDN="" FAKE_SIBLING_COMPOSE_DOMAINS="" \
   FAKE_ZERO_CTX="PRIV|account|0
 AUTH|account|0
 PRIV|account_users|0
@@ -254,6 +354,76 @@ if grep -qE '^  RLS:[[:space:]]+SKIPPED' "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-ALL-TABLES-EMPTY] RLS leg itself reports SKIPPED in the summary table." >&2
 else
   echo "FAIL: [RLS-ALL-TABLES-EMPTY] RLS leg did not report SKIPPED in the summary table -- exit code alone does not prove this scenario struck the intended guard." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 22. RLS-DENY-ALL-ALLOWLISTED -- a discovered table with RLS on, 0
+#     policies, anon zero-grant, privileged count >0, authenticated
+#     count 0, name IN RLS_DENY_ALL_EXPECTED -- reported as a distinct
+#     DENY-ALL/ALLOWLISTED line, NOT a failure (overall stays MANUAL,
+#     same ceiling as the happy path -- this table contributes to
+#     PROVEN_COUNT via the default-deny mechanism, not a policy).
+DENY_ALL_RLS_ENUM='account|true|1|false
+account_users|true|1|false
+audit_log|true|0|false'
+DENY_ALL_ZERO_CTX='PRIV|account|5
+AUTH|account|0
+PRIV|account_users|3
+AUTH|account_users|0
+PRIV|audit_log|7
+AUTH|audit_log|0'
+run_scenario "RLS DENY-ALL table on the allowlist: not a failure" 4 \
+  FAKE_RLS_ENUM="$DENY_ALL_RLS_ENUM" FAKE_ZERO_CTX="$DENY_ALL_ZERO_CTX" || FAIL=1
+if grep -qF "DENY-ALL: pfin.audit_log" "$LAST_OUT" 2>/dev/null && grep -qF "ALLOWLISTED" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-DENY-ALL-ALLOWLISTED] DENY-ALL line present, not a failure." >&2
+else
+  echo "FAIL: [RLS-DENY-ALL-ALLOWLISTED] expected DENY-ALL/ALLOWLISTED line not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 23. RLS-DENY-ALL-UNLISTED -- same shape, but the table's name is NOT
+#     in RLS_DENY_ALL_EXPECTED -- RLS FAILED, naming the table and the
+#     allowlist gap explicitly (never silently passed as if it were the
+#     ratified posture).
+DENY_ALL_UNLISTED_RLS_ENUM='account|true|1|false
+account_users|true|1|false
+planning_target|true|0|false'
+DENY_ALL_UNLISTED_ZERO_CTX='PRIV|account|5
+AUTH|account|0
+PRIV|account_users|3
+AUTH|account_users|0
+PRIV|planning_target|2
+AUTH|planning_target|0'
+run_scenario "RLS DENY-ALL table NOT on the allowlist: refuses" 1 \
+  FAKE_RLS_ENUM="$DENY_ALL_UNLISTED_RLS_ENUM" FAKE_ZERO_CTX="$DENY_ALL_UNLISTED_ZERO_CTX" || FAIL=1
+if grep -qF "pfin.planning_target: DENY-ALL" "$LAST_OUT" 2>/dev/null && grep -qF "NOT in RLS_DENY_ALL_EXPECTED" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-DENY-ALL-UNLISTED] refusal names the table and the allowlist gap." >&2
+else
+  echo "FAIL: [RLS-DENY-ALL-UNLISTED] expected refusal message not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 24. RLS-ALLOWLISTED-WITH-POLICIES -- a table IN RLS_DENY_ALL_EXPECTED
+#     that now carries >=1 real policy -- POLICY-SCOPED (not DENY-ALL any
+#     more), reported as an INFO line, not a failure.
+ALLOWLISTED_WITH_POLICY_RLS_ENUM='account|true|1|false
+account_users|true|1|false
+audit_log|true|1|false'
+ALLOWLISTED_WITH_POLICY_ZERO_CTX='PRIV|account|5
+AUTH|account|0
+PRIV|account_users|3
+AUTH|account_users|0
+PRIV|audit_log|4
+AUTH|audit_log|0'
+run_scenario "RLS: allowlisted table now has a policy: INFO, not a failure" 4 \
+  FAKE_RLS_ENUM="$ALLOWLISTED_WITH_POLICY_RLS_ENUM" FAKE_ZERO_CTX="$ALLOWLISTED_WITH_POLICY_ZERO_CTX" || FAIL=1
+if grep -qF "in RLS_DENY_ALL_EXPECTED but carries 1 polic" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-ALLOWLISTED-WITH-POLICIES] INFO line present, no failure." >&2
+else
+  echo "FAIL: [RLS-ALLOWLISTED-WITH-POLICIES] expected INFO line not found." >&2
   cat "$LAST_OUT" >&2
   FAIL=1
 fi
