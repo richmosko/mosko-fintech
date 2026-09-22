@@ -451,6 +451,7 @@ run_case() {
     FAKE_APP_CID_POST="${FAKE_APP_CID_POST-deadbeef0001}" \
     FAKE_DEPLOY_TRIGGERED_MARKER="$deploy_triggered_marker" FAKE_DEPLOY_STATUS="${FAKE_DEPLOY_STATUS:-finished}" \
     FAKE_APEX_SSL_VERIFY="${FAKE_APEX_SSL_VERIFY:-0}" FAKE_WWW_SSL_VERIFY="${FAKE_WWW_SSL_VERIFY:-0}" \
+    FAKE_APEX_EFFECTIVE_URL="${FAKE_APEX_EFFECTIVE_URL:-}" FAKE_WWW_EFFECTIVE_URL="${FAKE_WWW_EFFECTIVE_URL:-}" \
     FAKE_SSLIP_HTTP_CODE="${FAKE_SSLIP_HTTP_CODE:-}" FAKE_SSLIP_HTTPS_CODE="${FAKE_SSLIP_HTTPS_CODE:-}" \
     FAKE_CONTROL_HTTP_CODE="${FAKE_CONTROL_HTTP_CODE:-}" FAKE_CONTROL_HTTPS_CODE="${FAKE_CONTROL_HTTPS_CODE:-}" \
     FAKE_CONTROL_UNREACHABLE="${FAKE_CONTROL_UNREACHABLE:-0}" FAKE_CONTROL_EMPTY="${FAKE_CONTROL_EMPTY:-0}" \
@@ -1255,7 +1256,7 @@ fi
 
 # 40. CERT-POLL-VERIFIED-2XX-SUCCEEDS
 run_case "cert poll: a final 2xx over a verified cert succeeds" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
-if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "https://fake-domain.test/ answers over a verified TLS cert after following redirects (final http 200)" <<<"$CASE_OUTPUT"; then
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "https://fake-domain.test/ answers over a verified TLS cert after following redirects (final http 200, effective https://fake-domain.test/)" <<<"$CASE_OUTPUT"; then
   echo "FAIL: [cert poll verified 2xx] did not print the expected success line -- captured output: $CASE_OUTPUT" >&2
   FAIL=1
 fi
@@ -1292,9 +1293,76 @@ fi
 # 43. WWW-SERVES-VERIFIED-2XX-SUCCEEDS -- symmetry: the SAME logic
 #     governs the www leg (apex left at its plain-200 default).
 run_case "www serves: a final 2xx over a verified cert succeeds" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
-if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "https://www.fake-domain.test/ answers over a verified TLS cert after following redirects (final http 200)" <<<"$CASE_OUTPUT"; then
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "https://www.fake-domain.test/ answers over a verified TLS cert after following redirects (final http 200, effective https://www.fake-domain.test/)" <<<"$CASE_OUTPUT"; then
   echo "FAIL: [www serves verified 2xx] did not print the expected success line -- captured output: $CASE_OUTPUT" >&2
   FAIL=1
+fi
+
+# --- Round 2 (Sec, catching a hole round 1 opened): -L alone only
+# describes the LAST hop, and ssl_verify_result==0 is meaningless
+# without a scheme check (MEASURED live: http://example.com/ -> "200
+# 0", IDENTICAL to the https case). %{url_effective} closes both: its
+# scheme must be https://, and its host (hardened parse -- userinfo
+# stripped via ##*@ BEFORE the port strip, case-folded, trailing dot
+# stripped) must equal ROOT_DOMAIN or www.ROOT_DOMAIN. ---------------
+#   44. CERT-POLL-EFFECTIVE-OFF-DOMAIN-REFUSES -- the chain's final URL
+#       resolves to a host outside this app's own domain family, even
+#       with a 2xx and a verified cert -- refuses.
+#   45. CERT-POLL-EFFECTIVE-SCHEME-DOWNGRADE-REFUSES -- the chain's
+#       final URL is plain http://, even with ssl_verify_result==0
+#       (curl's real behavior on a downgraded chain, MEASURED) --
+#       refuses.
+#   46. CERT-POLL-EFFECTIVE-USERINFO-BYPASS-REFUSES -- the chain's
+#       final URL carries a same-looking-but-fake userinfo component
+#       (ROOT_DOMAIN as the USERNAME, evil.com as the actual host) --
+#       a naive `%%:*` host parse would accept this; the hardened parse
+#       (`##*@` before the port strip) refuses it.
+
+# 44. CERT-POLL-EFFECTIVE-OFF-DOMAIN-REFUSES
+FAKE_APEX_EFFECTIVE_URL="https://evil.com/"
+run_case "cert poll: effective URL resolving off-domain refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APEX_EFFECTIVE_URL
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if grep -qF "answers over a verified TLS cert" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [cert poll off-domain effective] printed a success line despite the chain resolving off-domain." >&2
+    FAIL=1
+  fi
+  if ! grep -qF "effective=https://evil.com/ (OFF_DOMAIN)" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [cert poll off-domain effective] did not name the off-domain refusal -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 45. CERT-POLL-EFFECTIVE-SCHEME-DOWNGRADE-REFUSES
+FAKE_APEX_EFFECTIVE_URL="http://fake-domain.test/"
+run_case "cert poll: effective URL downgraded to plain HTTP refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APEX_EFFECTIVE_URL
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if grep -qF "answers over a verified TLS cert" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [cert poll scheme downgrade] printed a success line despite the chain downgrading to plain HTTP." >&2
+    FAIL=1
+  fi
+  if ! grep -qF "effective=http://fake-domain.test/ (SCHEME_DOWNGRADE)" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [cert poll scheme downgrade] did not name the scheme-downgrade refusal -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 46. CERT-POLL-EFFECTIVE-USERINFO-BYPASS-REFUSES -- ROOT_DOMAIN as the
+#     userinfo USERNAME, evil.com as the real host; a naive `%%:*` host
+#     parse would read back "fake-domain.test" and wrongly accept this.
+FAKE_APEX_EFFECTIVE_URL="https://fake-domain.test:x@evil.com/"
+run_case "cert poll: userinfo bearing an on-domain lookalike still refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APEX_EFFECTIVE_URL
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if grep -qF "answers over a verified TLS cert" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [cert poll userinfo bypass] printed a success line despite the effective host actually being evil.com -- the naive %%:* parse this exists to catch would have accepted it." >&2
+    FAIL=1
+  fi
+  if ! grep -qF "effective=https://fake-domain.test:x@evil.com/ (OFF_DOMAIN)" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [cert poll userinfo bypass] did not name the off-domain refusal -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
 fi
 
 if [[ $FAIL -ne 0 ]]; then

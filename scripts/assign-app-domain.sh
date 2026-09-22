@@ -1266,53 +1266,84 @@ else
 fi
 
 # domain_serves_result <host> -- one HTTPS probe; prints one line:
-#   "<TOKEN> <http_code> <ssl_verify_result>"
-# TOKEN is OK or NOT_SERVED. Run-22 fix (team-lead, live cutover),
-# predicate CORRECTED per Sec's own review (this is the script's ONLY
-# TLS assertion): the app 303s an unauthenticated '/' to '/login' --
-# measured live 2026-09-22: https://pfindash.com/ -> 303 -> /login
-# (200), ssl_verify_result=0, real Let's Encrypt cert (CN=pfindash.com)
-# -- a live, correctly routed, TLS-verified app, not a poll failure.
-# Sec's ruling: a bare "2xx/3xx" accept is looser than it needs to be
-# (a redirect chain could point off-host and a single-request 3xx
-# accept only verifies the FIRST hop's cert). Correct shape: `-L
-# --max-redirs 5` follows the redirect chain to its real final state
-# and verifies TLS at EVERY hop; require BOTH a final 2xx AND
-# ssl_verify_result==0 -- ssl_verify_result reads 0 on a TRANSPORT
-# FAILURE too (no verification was even attempted), so it is only
-# meaningful paired with a real 2xx, never as proof of a valid cert by
-# itself. NEVER add `-k` here (unlike the sslip reachability probe
-# above, which asks a reachability question, not a trust question) --
-# `-k` would make ssl_verify_result stop gating anything.
+#   "<TOKEN> <http_code> <ssl_verify_result> <url_effective>"
+# TOKEN is OK / NOT_SERVED / SCHEME_DOWNGRADE / OFF_DOMAIN. Run-22 fix
+# (team-lead, live cutover), predicate CORRECTED TWICE per Sec's own
+# review (this is the script's ONLY TLS assertion) -- the app 303s an
+# unauthenticated '/' to '/login' -- measured live 2026-09-22:
+# https://pfindash.com/ -> 303 -> /login (200), ssl_verify_result=0,
+# real Let's Encrypt cert (CN=pfindash.com) -- a live, correctly
+# routed, TLS-verified app, not a poll failure.
+#
+# Round 1 (Sec): `-L --max-redirs 5` follows the redirect chain to its
+# real final state rather than gating the FIRST hop's cert only, and
+# requires a final 2xx AND ssl_verify_result==0.
+#
+# Round 2 (Sec, catching a hole ROUND 1 OPENED): `-L` alone only
+# describes the LAST hop -- a chain to `https://evil.com/` (valid cert,
+# 200) or a scheme-downgrade to plain `http://` (curl reports
+# ssl_verify_result=0 there too -- MEASURED live: `http://example.com/`
+# -> "200 0", IDENTICAL to the https case; 0 means "no verification
+# FAILURE", which includes "no verification ATTEMPTED", never proof one
+# succeeded) would both pass rounds-1's predicate while landing traffic
+# somewhere this poll has no business calling "served". Added
+# `%{url_effective}` as a THIRD required term: the effective URL's
+# scheme must be `https://` (closes the downgrade hole) AND its host
+# must equal $ROOT_DOMAIN or www.$ROOT_DOMAIN (closes the off-domain
+# hole) -- reusing the SAME hardened host-parse Sec's round-1 review
+# already drove against `pfindash.com:x@evil.com`-style userinfo
+# (`##*@` BEFORE the port strip, so a second `@` in the userinfo can't
+# shift the answer), case-folded and trailing-dot-stripped since a
+# hostname comparison is case-insensitive and a legal root dot is not a
+# different host. NEVER add `-k` here (unlike the sslip reachability
+# probe above, which asks a reachability question, not a trust
+# question) -- `-k` would make ssl_verify_result stop gating anything.
 domain_serves_result() {
-  local host="$1" out code verify
-  out="$(curl -sS -o /dev/null -L --max-redirs 5 --max-time 10 -w '%{http_code} %{ssl_verify_result}' "https://$host/" 2>/dev/null || true)"
-  code="${out%% *}"
-  verify="${out##* }"
-  if [[ "${verify:-1}" == "0" && "${code:-000}" =~ ^2[0-9][0-9]$ ]]; then
-    printf 'OK %s %s' "${code:-000}" "${verify:-<empty>}"
-  else
-    printf 'NOT_SERVED %s %s' "${code:-000}" "${verify:-<empty>}"
+  local host="$1" out code verify effective eff_host root_lc www_lc
+  out="$(curl -sS -o /dev/null -L --max-redirs 5 --max-time 10 -w '%{http_code} %{ssl_verify_result} %{url_effective}' "https://$host/" 2>/dev/null || true)"
+  read -r code verify effective <<<"$out"
+  if [[ "${verify:-1}" != "0" || ! "${code:-000}" =~ ^2[0-9][0-9]$ ]]; then
+    printf 'NOT_SERVED %s %s %s' "${code:-000}" "${verify:-<empty>}" "${effective:-<empty>}"
+    return
   fi
+  if [[ "${effective:-}" != https://* ]]; then
+    printf 'SCHEME_DOWNGRADE %s %s %s' "$code" "$verify" "${effective:-<empty>}"
+    return
+  fi
+  eff_host="${effective#*://}"
+  eff_host="${eff_host%%/*}"
+  eff_host="${eff_host%%\?*}"
+  eff_host="${eff_host%%\#*}"
+  eff_host="${eff_host##*@}"
+  eff_host="${eff_host%%:*}"
+  eff_host="$(printf '%s' "$eff_host" | tr 'A-Z' 'a-z')"
+  eff_host="${eff_host%.}"
+  root_lc="$(printf '%s' "$ROOT_DOMAIN" | tr 'A-Z' 'a-z')"
+  www_lc="www.$root_lc"
+  if [[ "$eff_host" != "$root_lc" && "$eff_host" != "$www_lc" ]]; then
+    printf 'OFF_DOMAIN %s %s %s' "$code" "$verify" "$effective"
+    return
+  fi
+  printf 'OK %s %s %s' "$code" "$verify" "$effective"
 }
 
 # poll_domain_serves <host> <label> -- polls up to CERT_POLL_ATTEMPTS x
 # CERT_POLL_INTERVAL_SECONDS for an OK result from domain_serves_result
-# above; dies naming the LAST observed (code, ssl_verify_result) pair
-# on exhaustion, never a bare "expected 200".
+# above; dies naming the LAST observed (token, code, ssl_verify_result,
+# effective-url) tuple on exhaustion, never a bare "expected 200".
 poll_domain_serves() {
-  local host="$1" label="$2" i result token code verify
+  local host="$1" label="$2" i result token code verify effective
   for ((i = 1; i <= CERT_POLL_ATTEMPTS; i++)); do
     result="$(domain_serves_result "$host")"
-    read -r token code verify <<<"$result"
+    read -r token code verify effective <<<"$result"
     if [[ "$token" == "OK" ]]; then
-      ok "https://$host/ answers over a verified TLS cert after following redirects (final http $code)"
+      ok "https://$host/ answers over a verified TLS cert after following redirects (final http $code, effective $effective)"
       return 0
     fi
-    info "attempt $i/$CERT_POLL_ATTEMPTS: https://$host/ -> http ${code:-(no response)}, ssl_verify_result=${verify:-<empty>} -- waiting for DNS propagation + LE issuance"
+    info "attempt $i/$CERT_POLL_ATTEMPTS: https://$host/ -> http ${code:-(no response)}, ssl_verify_result=${verify:-<empty>}, effective=${effective:-<empty>} ($token) -- waiting for DNS propagation + LE issuance"
     sleep "$CERT_POLL_INTERVAL_SECONDS"
   done
-  die "https://$host/ ($label) never answered a final 2xx over a verified TLS cert within $((CERT_POLL_ATTEMPTS * CERT_POLL_INTERVAL_SECONDS))s -- last result: http ${code:-<empty>}, ssl_verify_result=${verify:-<empty>}. DNS may not have propagated yet, or Coolify/Traefik has not issued the cert. Re-run this script (idempotent) once you've confirmed DNS has propagated (\`dig A $ROOT_DOMAIN\`)."
+  die "https://$host/ ($label) never answered a final 2xx, on-domain, TLS-verified response within $((CERT_POLL_ATTEMPTS * CERT_POLL_INTERVAL_SECONDS))s -- last result: token=$token http=${code:-<empty>} ssl_verify_result=${verify:-<empty>} effective=${effective:-<empty>}. DNS may not have propagated yet, Coolify/Traefik has not issued the cert, or the redirect chain lands off-domain or downgrades to plain HTTP. Re-run this script (idempotent) once you've confirmed DNS has propagated (\`dig A $ROOT_DOMAIN\`)."
 }
 
 step "Polling for the Let's Encrypt cert on https://$ROOT_DOMAIN (bounded: $CERT_POLL_ATTEMPTS x ${CERT_POLL_INTERVAL_SECONDS}s)"
