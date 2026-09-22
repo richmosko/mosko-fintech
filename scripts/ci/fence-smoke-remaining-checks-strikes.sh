@@ -156,20 +156,31 @@
 #       reaches its usual MANUAL ceiling -- content-asserted, since exit
 #       code alone can't distinguish "one table inconclusive, leg still
 #       verified" from "leg failed".
-#   29. RLS-REFUSED-SECOND-LOOK -- an ALLOWLISTED (DENY-ALL) table's
-#       authenticated read SUCCEEDS and returns 0 (not refused) -- per
-#       Sec's ruling this is still valid isolation evidence (still counts
-#       toward PROVEN when the privileged baseline is non-zero) but is
-#       ALSO worth a second look: a WARN fires naming that a grant may
-#       exist which the structural check missed, since a truly
-#       zero-grant table should have refused the read outright.
+#   29. RLS-DENY-ALL-CONTRADICTION -- an ALLOWLISTED (DENY-ALL) table's
+#       authenticated read SUCCEEDS and returns 0 (not refused). Sec
+#       ruling (PR #881 review, round 2, 2026-09-22 -- corrects this
+#       scenario's OWN first draft, which had credited this as PROVEN):
+#       Postgres checks table ACL BEFORE RLS, so a genuinely zero-grant
+#       table CANNOT return a row count -- a success there means one of
+#       the two measurements (the structural grant check, or this row
+#       read) is WRONG, and we don't know which. CONTRADICTION,
+#       INCONCLUSIVE regardless of the privileged baseline, NEVER
+#       PROVEN, with its own WARN naming the contradiction explicitly.
 #   30. RLS-REFUSED-POLICY-SCOPED -- a POLICY-SCOPED table (>=1 real
 #       policy, NOT in RLS_DENY_ALL_EXPECTED) hits a SQLSTATE-42501
 #       refusal on its authenticated read -- unlike the DENY-ALL
 #       allowlist, this table's grant absence was never independently
 #       verified structurally, so the refusal has no structural fallback
 #       to rest on: INCONCLUSIVE, never PROVEN, never FAILED from the
-#       permission error alone.
+#       permission error alone (this was Sec's F-1 finding).
+#
+#   -- Sec's PR #881 review, round 2 (2026-09-22), also required: the
+#      summary line's INCONCLUSIVE count now breaks down its four
+#      distinct causes by name (empty / refused-at-grant-on-a-policy-
+#      table / unreadable / contradiction) rather than asserting "empty,
+#      nothing to isolate" for all of them -- scenarios 25/29/30 above
+#      and 22's own sibling-not-aborted assertion all content-assert the
+#      exact breakdown line, not just the PROVEN/INCONCLUSIVE totals.
 #   26. AUTH-SIGNUP-ENVELOPE-SUCCESS -- POST /signup (missing password)
 #       returns HTTP 200 with a SvelteKit action-SUCCESS envelope
 #       (type=success) -- auth-login FAILED (this would mean an account
@@ -535,13 +546,13 @@ else
   cat "$LAST_OUT" >&2
   FAIL=1
 fi
-# Sibling-not-aborted proof: audit_log's DENIED read must not abort
+# Sibling-not-aborted proof: audit_log's REFUSED read must not abort
 # account/account_users' own reads in the SAME run ("a batched read
 # that aborts the whole batch on the first refusal must not exist") --
 # content-asserted against the summary line's own counts, not just the
 # aggregate exit code (3 PROVEN: 1 via DENY-ALL, 2 via >=1 policy; 0
-# INCONCLUSIVE).
-if grep -qF "3 table(s) PROVEN isolated (1 via allowlisted DENY-ALL, 2 via >=1 policy), 0 table(s) INCONCLUSIVE" "$LAST_OUT" 2>/dev/null; then
+# INCONCLUSIVE, all four breakdown buckets at 0).
+if grep -qF "3 table(s) PROVEN isolated (1 via allowlisted DENY-ALL, 2 via >=1 policy), 0 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 0 refused-at-grant on a policy-scoped table -- policy never exercised, 0 unreadable -- an unexpected error, 0 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-DENY-ALL-ALLOWLISTED] sibling tables' reads were NOT aborted by audit_log's denial." >&2
 else
   echo "FAIL: [RLS-DENY-ALL-ALLOWLISTED] sibling-not-aborted proof failed -- expected PROVEN-count summary line not found (a batch-wide abort would have surfaced as a precondition FAILED instead)." >&2
@@ -563,29 +574,34 @@ account_users|OK|0" || FAIL=1
 if grep -qF "the authenticated row-count read failed with an unexpected error" "$LAST_OUT" 2>/dev/null \
   && grep -qF "INCONCLUSIVE for this table only" "$LAST_OUT" 2>/dev/null \
   && ! grep -qF "row read: REFUSED at grant level" "$LAST_OUT" 2>/dev/null \
-  && grep -qE '^  RLS:[[:space:]]+VERIFIED' "$LAST_OUT" 2>/dev/null; then
-  echo "OK: [RLS-AUTH-OTHER-ERROR] unexpected-error precondition message present, scoped to that table, never misclassified as a grant-level refusal, leg still VERIFIED." >&2
+  && grep -qE '^  RLS:[[:space:]]+VERIFIED' "$LAST_OUT" 2>/dev/null \
+  && grep -qF "1 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 1 via >=1 policy), 1 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 0 refused-at-grant on a policy-scoped table -- policy never exercised, 1 unreadable -- an unexpected error, 0 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-AUTH-OTHER-ERROR] unexpected-error precondition message present, scoped to that table, never misclassified as a grant-level refusal, leg still VERIFIED, breakdown attributes it to 'unreadable' specifically (Sec: the summary must name what actually happened)." >&2
 else
-  echo "FAIL: [RLS-AUTH-OTHER-ERROR] expected unexpected-error precondition message not found, or leg was not VERIFIED, or it was wrongly classified as a grant-level refusal." >&2
+  echo "FAIL: [RLS-AUTH-OTHER-ERROR] expected unexpected-error precondition message not found, or leg was not VERIFIED, or it was wrongly classified as a grant-level refusal, or the breakdown line is wrong." >&2
   cat "$LAST_OUT" >&2
   FAIL=1
 fi
 
-# 29. RLS-REFUSED-SECOND-LOOK -- an ALLOWLISTED table's read SUCCEEDS
-#     (not refused) and returns 0 -- still valid isolation evidence
-#     (still PROVEN when the privileged baseline is non-zero), but a WARN
-#     fires naming that a grant may exist the structural check missed.
-run_scenario "RLS: allowlisted table's read SUCCEEDS with 0 (not refused): still PROVEN, but WARNs" 4 \
+# 29. RLS-DENY-ALL-CONTRADICTION -- an ALLOWLISTED table's read SUCCEEDS
+#     (not refused) and returns 0 -- Sec ruling (PR #881 review, round 2):
+#     Postgres checks table ACL before RLS, so a genuinely zero-grant
+#     table CANNOT return a row count -- a success there means one of
+#     the two measurements (the structural grant check, or this row
+#     read) is wrong, and crediting PROVEN would rest a proof on
+#     self-inconsistent evidence. CONTRADICTION, INCONCLUSIVE regardless
+#     of the privileged baseline, NEVER PROVEN, with its own WARN.
+run_scenario "RLS: allowlisted table's read SUCCEEDS with 0 (not refused): CONTRADICTION, INCONCLUSIVE, WARNs" 4 \
   FAKE_RLS_ENUM="$DENY_ALL_RLS_ENUM" FAKE_PRIV="$DENY_ALL_PRIV" \
   FAKE_AUTH_TABLE_RESULTS="account|OK|0
 account_users|OK|0
 audit_log|OK|0" || FAIL=1
-if grep -qF "worth a second look" "$LAST_OUT" 2>/dev/null \
-  && grep -qF "a grant may exist" "$LAST_OUT" 2>/dev/null \
-  && grep -qF "3 table(s) PROVEN isolated (1 via allowlisted DENY-ALL, 2 via >=1 policy), 0 table(s) INCONCLUSIVE" "$LAST_OUT" 2>/dev/null; then
-  echo "OK: [RLS-REFUSED-SECOND-LOOK] second-look WARN present, still PROVEN via the structural+privileged-baseline path." >&2
+if grep -qF "CONTRADICTION" "$LAST_OUT" 2>/dev/null \
+  && grep -qF "is NOT counted as proven until that is resolved" "$LAST_OUT" 2>/dev/null \
+  && grep -qF "2 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 2 via >=1 policy), 1 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 0 refused-at-grant on a policy-scoped table -- policy never exercised, 0 unreadable -- an unexpected error, 1 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-DENY-ALL-CONTRADICTION] CONTRADICTION WARN present, correctly INCONCLUSIVE and NOT counted as PROVEN (nor as via-DENY-ALL)." >&2
 else
-  echo "FAIL: [RLS-REFUSED-SECOND-LOOK] expected second-look WARN and/or PROVEN-count line not found." >&2
+  echo "FAIL: [RLS-DENY-ALL-CONTRADICTION] expected CONTRADICTION WARN and/or correct PROVEN/INCONCLUSIVE breakdown line not found." >&2
   cat "$LAST_OUT" >&2
   FAIL=1
 fi
@@ -597,7 +613,7 @@ run_scenario "RLS: policy-scoped table's read is REFUSED at grant level: INCONCL
   FAKE_AUTH_TABLE_RESULTS="account|DENIED|
 account_users|OK|0" || FAIL=1
 if grep -qF "row read: REFUSED at grant level on a POLICY-SCOPED table" "$LAST_OUT" 2>/dev/null \
-  && grep -qF "1 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 1 via >=1 policy), 1 table(s) INCONCLUSIVE" "$LAST_OUT" 2>/dev/null; then
+  && grep -qF "1 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 1 via >=1 policy), 1 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 1 refused-at-grant on a policy-scoped table -- policy never exercised, 0 unreadable -- an unexpected error, 0 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-REFUSED-POLICY-SCOPED] POLICY-SCOPED refusal correctly INCONCLUSIVE, never PROVEN/FAILED from the permission error alone." >&2
 else
   echo "FAIL: [RLS-REFUSED-POLICY-SCOPED] expected POLICY-SCOPED-refusal INCONCLUSIVE line and/or PROVEN-count line not found." >&2

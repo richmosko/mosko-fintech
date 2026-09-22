@@ -798,6 +798,17 @@ else
       PROVEN_COUNT=0
       INCONCLUSIVE_COUNT=0
       DENY_ALL_COUNT=0
+      # Sec ruling 2026-09-22 (PR #881 review, round 2): INCONCLUSIVE has
+      # four distinct causes now, and a summary that folds them into one
+      # undifferentiated bucket asserts something false ("empty, nothing
+      # to isolate" on a table that was actually unreadable, or whose
+      # policy was never exercised). Tracked separately so the summary
+      # line can name the real breakdown -- "the sentence must say what
+      # actually happened, because it outlives the reasoning behind it."
+      INCONCLUSIVE_EMPTY_COUNT=0
+      INCONCLUSIVE_REFUSED_POLICY_COUNT=0
+      INCONCLUSIVE_UNREADABLE_COUNT=0
+      INCONCLUSIVE_CONTRADICTION_COUNT=0
       for t in "${TABLES[@]}"; do
         p="$(printf '%s\n' "$PRIV_OUT" | awk -F'|' -v t="$t" '$1=="PRIV" && $2==t {print $3; exit}')"
         if [[ -z "$p" ]]; then
@@ -830,10 +841,13 @@ else
           REFUSED_AT_GRANT=1
         else
           # Any OTHER error is a precondition failure scoped to THIS
-          # table alone -- INCONCLUSIVE (folded into the same counter an
-          # empty table uses: "no evidence either way"), never FAILED,
-          # never aborting the leg or a sibling table's read.
+          # table alone -- INCONCLUSIVE ("unreadable", its own breakdown
+          # bucket -- Sec: this is NOT "empty, nothing to isolate", the
+          # table may hold real data this leg simply couldn't read),
+          # never FAILED, never aborting the leg or a sibling table's
+          # read.
           INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+          INCONCLUSIVE_UNREADABLE_COUNT=$((INCONCLUSIVE_UNREADABLE_COUNT + 1))
           info "pfin.$t: the authenticated row-count read failed with an unexpected error (rc=$AUTH_RC, not SQLSTATE 42501) -- precondition, INCONCLUSIVE for this table only, not an isolation finding. $AUTH_OUT"
           continue
         fi
@@ -856,10 +870,12 @@ else
             # FAILED from a permission error alone.
             info "pfin.$t: row read: REFUSED at grant level on a POLICY-SCOPED table ($polcount polic(ies)) -- not an RLS observation; INCONCLUSIVE (this table's grant absence was never independently verified structurally, unlike the DENY-ALL allowlist)."
             INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+            INCONCLUSIVE_REFUSED_POLICY_COUNT=$((INCONCLUSIVE_REFUSED_POLICY_COUNT + 1))
           elif [[ "$p" -gt 0 ]]; then
             PROVEN_COUNT=$((PROVEN_COUNT + 1))
           else
             INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+            INCONCLUSIVE_EMPTY_COUNT=$((INCONCLUSIVE_EMPTY_COUNT + 1))
           fi
         else
           # 0-policy table -- the enumeration loop above already FAILED
@@ -877,29 +893,42 @@ else
           # already asserted in the enumeration loop above, against this
           # same table's row from RLS_ENUM -- reaching here with
           # RLS_STATUS still VERIFIED means it held. Sec ruling
-          # 2026-09-22: for THIS allowlist, the verdict rests on that
-          # STRUCTURAL conjunction ALONE -- the row read's own outcome
-          # does NOT change the verdict up or down. A REFUSED-at-grant
-          # read is the EXPECTED, stronger result for a zero-grant table
-          # (the grant layer refuses before RLS is even consulted); a
-          # real 0-row read (the SELECT actually SUCCEEDED) is WORTH A
-          # SECOND LOOK -- a grant the structural check missed may exist
-          # -- flagged with its own WARN, but still not what decides the
-          # verdict. Only the PRIVILEGED baseline (p>0 vs p==0) decides
-          # PROVEN vs INCONCLUSIVE, same as every other table.
-          DENY_ALL_COUNT=$((DENY_ALL_COUNT + 1))
+          # 2026-09-22 (round 2, PR #881 review): a REFUSED-at-grant read
+          # is the EXPECTED, stronger result for a zero-grant table (the
+          # grant layer refuses before RLS is even consulted) and the
+          # verdict then rests on the STRUCTURAL conjunction alone. But a
+          # SUCCESSFUL read on that SAME table is not merely surprising --
+          # Postgres checks table ACL BEFORE RLS, so a genuinely
+          # zero-grant table CANNOT return a row count. A success there
+          # means one of the two measurements (the structural grant check,
+          # or this row read) is WRONG, and we don't know which --
+          # crediting PROVEN would rest a proof on evidence just shown to
+          # be self-inconsistent. So: REFUSED -> PROVEN/INCONCLUSIVE
+          # decided by the privileged baseline (p>0 vs p==0), same as
+          # every other table; SUCCEEDED -> CONTRADICTION, INCONCLUSIVE
+          # regardless of p, never PROVEN, until the discrepancy is
+          # resolved by hand.
+          # DENY_ALL_COUNT is a SUBSET of PROVEN_COUNT (the summary line
+          # computes "via >=1 policy" as PROVEN_COUNT - DENY_ALL_COUNT),
+          # so it increments ONLY on the branch that actually credits
+          # PROVEN via this path -- never unconditionally for every
+          # allowlisted table reached here, or the arithmetic would lie.
           CONJUNCTION_TERMS="RLS on, 0 policies, and all four privilege terms false (anon table-level, authenticated table-level, anon column-level, authenticated column-level)"
           if [[ "$REFUSED_AT_GRANT" -eq 1 ]]; then
             info "pfin.$t: row read: REFUSED at grant level (expected for a zero-grant table; stronger than a 0-row read; not itself what proves isolation -- the structural conjunction does)."
+            if [[ "$p" -gt 0 ]]; then
+              info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS) -- ALLOWLISTED, isolation demonstrated."
+              PROVEN_COUNT=$((PROVEN_COUNT + 1))
+              DENY_ALL_COUNT=$((DENY_ALL_COUNT + 1))
+            else
+              info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS); row observation INCONCLUSIVE (privileged count is 0 too -- nothing to isolate, never reported as DENY-ALL fully demonstrated on an empty table)."
+              INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+              INCONCLUSIVE_EMPTY_COUNT=$((INCONCLUSIVE_EMPTY_COUNT + 1))
+            fi
           else
-            warn "RLS: pfin.$t: authenticated's read SUCCEEDED (returned 0 rows) on a table in RLS_DENY_ALL_EXPECTED -- worth a second look: a grant may exist that the structural check missed (a truly zero-grant table should have refused the read outright, not returned a row count)."
-          fi
-          if [[ "$p" -gt 0 ]]; then
-            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS) -- ALLOWLISTED, isolation demonstrated."
-            PROVEN_COUNT=$((PROVEN_COUNT + 1))
-          else
-            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS); row observation INCONCLUSIVE (privileged count is 0 too -- nothing to isolate, never reported as DENY-ALL fully demonstrated on an empty table)."
+            warn "RLS: pfin.$t: CONTRADICTION -- the structural conjunction says authenticated holds no SELECT at table or column level, yet authenticated's read SUCCEEDED (returned 0 rows). Postgres checks table ACL BEFORE RLS, so a zero-grant table cannot return a row count. One of these two measurements is wrong; this table is INCONCLUSIVE and is NOT counted as proven until that is resolved."
             INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+            INCONCLUSIVE_CONTRADICTION_COUNT=$((INCONCLUSIVE_CONTRADICTION_COUNT + 1))
           fi
         fi
       done
@@ -908,7 +937,7 @@ else
           RLS_STATUS="SKIPPED"
           RLS_MSGS+=("every discovered table holds zero rows -- no rows exist to be isolated, so isolation is UNPROVEN, not proven absent. RLS-enabled/anon-zero-grant all checked structurally and hold; the behavioral zero-context read has nothing to demonstrate on an empty table. Re-run once at least one table holds real (or synthetic-but-real) tenant data.")
         else
-          ok "RLS: every discovered table -- RLS on, anon zero-grant; $PROVEN_COUNT table(s) PROVEN isolated ($DENY_ALL_COUNT via allowlisted DENY-ALL, $((PROVEN_COUNT - DENY_ALL_COUNT)) via >=1 policy), $INCONCLUSIVE_COUNT table(s) INCONCLUSIVE (empty, nothing to isolate)"
+          ok "RLS: every discovered table -- RLS on, anon zero-grant; $PROVEN_COUNT table(s) PROVEN isolated ($DENY_ALL_COUNT via allowlisted DENY-ALL, $((PROVEN_COUNT - DENY_ALL_COUNT)) via >=1 policy), $INCONCLUSIVE_COUNT table(s) INCONCLUSIVE ($INCONCLUSIVE_EMPTY_COUNT empty -- nothing to isolate, $INCONCLUSIVE_REFUSED_POLICY_COUNT refused-at-grant on a policy-scoped table -- policy never exercised, $INCONCLUSIVE_UNREADABLE_COUNT unreadable -- an unexpected error, $INCONCLUSIVE_CONTRADICTION_COUNT contradiction -- a zero-grant table's read unexpectedly succeeded)"
         fi
       fi
     fi
