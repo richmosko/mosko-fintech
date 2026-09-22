@@ -24,28 +24,36 @@
 #                                   never errors) -> $FAKE_PRIV, format
 #                                   "PRIV|table|count" per discovered
 #                                   table.
-#        set role authenticated -> real-run 25 fix (2026-09-22): the
+#        set role authenticated -> real-run 25 fix (2026-09-22), amended
+#                                   by Sec's 2026-09-22 ruling: the
 #                                   `authenticated` count is now ONE
-#                                   psql invocation PER TABLE (a batched
-#                                   UNION ALL aborts every table's read
-#                                   the instant one hits a grant-level
-#                                   refusal -- see the real script's own
-#                                   header for the measured defect).
-#                                   Table name is extracted from the
-#                                   query text (`pfin."<table>"`) and
-#                                   looked up in $FAKE_AUTH_TABLE_RESULTS,
-#                                   one line per table, format
+#                                   psql invocation PER TABLE, via
+#                                   `psql_admin_auth_read()`'s three
+#                                   separate `-c` flags (`\set VERBOSITY
+#                                   verbose`, `set role authenticated`,
+#                                   `select count(*) from pfin.<table>`
+#                                   -- no semicolons, no double-quoted
+#                                   identifier). Table name is extracted
+#                                   from the END of the query text
+#                                   (`pfin.<table>` is the last thing on
+#                                   the line -- nothing else follows it
+#                                   in the reconstructed "$*" once the
+#                                   `</dev/null` redirection is stripped
+#                                   by the shell before argv) and looked
+#                                   up in $FAKE_AUTH_TABLE_RESULTS, one
+#                                   line per table, format
 #                                   "table|MODE|value" where MODE is one
 #                                   of OK (prints <value>, exit 0),
-#                                   DENIED (prints the real psql
-#                                   'permission denied for table <t>'
-#                                   wording to stderr, exit 1 -- proves
-#                                   the DENIED-AT-GRANT classification
-#                                   against the real error text, not a
-#                                   paraphrase), or ERROR (prints
-#                                   "ERROR:  <value>" to stderr, exit 1
-#                                   -- an unrecognised error, must stay a
-#                                   precondition failure, never a pass).
+#                                   DENIED (prints the real psql VERBOSE
+#                                   error -- SQLSTATE 42501 on the ERROR
+#                                   line, plus HINT/LOCATION -- to
+#                                   stderr, exit 1; byte-matches the
+#                                   real script's own MEASURED pin, see
+#                                   below), or ERROR (prints a
+#                                   NON-42501-shaped error to stderr,
+#                                   exit 1 -- an unrecognised error, must
+#                                   stay a precondition failure scoped to
+#                                   that one table, never a pass).
 #        rolbypassrls         -> service_role BYPASSRLS -> $FAKE_BYPASSRLS
 #   4. `docker compose --project-name <uuid> exec -T auth node -e '...'`
 #      -- the Resend send-acceptance probe -- prints $FAKE_RESEND_OUT.
@@ -85,16 +93,14 @@ if [[ "$ARGS" == *"exec -T db psql"* ]]; then
     exit 0
   fi
   if [[ "$ARGS" == *"set role authenticated"* ]]; then
-    # NOTE: the multi-layer heredoc/ssh re-parse this query text passes
-    # through (psql_admin's own heredoc, then fake-ssh's re-exec of that
-    # heredoc body as a second bash script) treats the query's own
-    # double-quoted SQL identifier (`pfin."account"`) as BASH quoting
-    # syntax, not data -- the quote CHARACTERS are consumed as
-    # delimiters and do not survive into the final argv (harmless for
-    # Postgres here, since every discovered table name is already a
-    # simple lowercase identifier, quoted or not). Match the UNQUOTED
-    # form that actually reaches this fixture.
-    TBL="$(printf '%s' "$ARGS" | sed -n 's/.*pfin\.\([a-z_][a-z0-9_]*\);.*/\1/p')"
+    # `pfin.<table>` is the LAST thing on the reconstructed "$*" line --
+    # no trailing semicolon (a bare `-c` argument, not a semicolon-joined
+    # statement), no surrounding quotes (the identifier is never
+    # double-quoted any more -- see psql_admin_auth_read()'s own header),
+    # nothing follows it (`</dev/null` is a redirection, stripped from
+    # argv by the shell before this fixture ever sees it). Anchor on end
+    # of string.
+    TBL="$(printf '%s' "$ARGS" | sed -n 's/.*pfin\.\([a-z_][a-z0-9_]*\)$/\1/p')"
     if [[ -z "$TBL" ]]; then
       echo "FAKE DOCKER: could not extract table name from authenticated-read query: $ARGS" >&2
       exit 1
@@ -112,15 +118,20 @@ if [[ "$ARGS" == *"exec -T db psql"* ]]; then
         exit 0
         ;;
       DENIED)
-        # Byte-matches real psql's own wording (real-run 25, 2026-09-22 --
-        # pinned verbatim in the real script's own header) so the
-        # classification is proven against the real error text, not a
-        # paraphrase.
-        printf 'ERROR:  permission denied for table %s\nHINT:  Grant the required privileges to the current role with: GRANT SELECT ON pfin.%s TO authenticated;\n' "$TBL" "$TBL" >&2
+        # Byte-matches the real script's own MEASURED pin (real dev
+        # stack, 2026-09-22 -- see psql_admin_auth_read()'s own header)
+        # so the SQLSTATE-42501 classification is proven against the
+        # real verbose-error shape, not a paraphrase. `%s` substitutes
+        # only the table name, matching the pinned audit_log example
+        # byte-for-byte when $TBL is audit_log.
+        printf 'ERROR:  42501: permission denied for table %s\nHINT:  Grant the required privileges to the current role with: GRANT SELECT ON pfin.%s TO authenticated;\nLOCATION:  aclcheck_error, aclchk.c:2843\n' "$TBL" "$TBL" >&2
         exit 1
         ;;
       ERROR)
-        printf 'ERROR:  %s\n' "${VAL:-simulated unexpected error}" >&2
+        # Deliberately NOT SQLSTATE 42501 -- proves the "any other
+        # error" precondition path is reached on its own merits, not by
+        # accidentally also matching the 42501 classification.
+        printf 'ERROR:  58P01: %s\n' "${VAL:-simulated unexpected error}" >&2
         exit 1
         ;;
       *)

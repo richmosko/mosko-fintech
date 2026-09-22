@@ -102,19 +102,22 @@
 #       (a FAILED leg printed nothing before Summary).
 #   22. RLS-DENY-ALL-ALLOWLISTED -- a discovered table with RLS on, 0
 #       policies, anon zero-grant, authenticated zero table-grant, zero
-#       column-level grants, privileged count >0, authenticated count 0,
-#       and its name IN RLS_DENY_ALL_EXPECTED -- reported as a distinct
-#       DENY-ALL/ALLOWLISTED line, NOT a failure. real-run 25 fix
-#       (2026-09-22): this scenario's audit_log fixture now simulates a
-#       REAL grant-level DENIED-AT-GRANT refusal (not a policy-based
-#       "0 rows" read -- see this file's own header for the measured
-#       defect this replaced), alongside two ordinary policy-scoped
-#       tables (account/account_users) in the SAME run -- content-
-#       asserted to prove the per-table read mechanism does NOT abort a
-#       sibling table's read when one table is denied ("a batched read
-#       that aborts the whole batch on the first refusal must not
-#       exist"): the summary line's own PROVEN/DENY-ALL/policy counts are
-#       checked, not just the aggregate exit code.
+#       column-level grants, privileged count >0, and its name IN
+#       RLS_DENY_ALL_EXPECTED -- reported as a distinct DENY-ALL/
+#       ALLOWLISTED line, NOT a failure. real-run 25 fix (2026-09-22),
+#       amended by Sec's own 2026-09-22 ruling: this scenario's audit_log
+#       fixture simulates the REAL grant-level refusal (SQLSTATE 42501 --
+#       see this file's own header for the measured defect this
+#       replaced) alongside two ordinary policy-scoped tables (account/
+#       account_users) in the SAME run -- content-asserted to prove the
+#       per-table read mechanism does NOT abort a sibling table's read
+#       when one table is refused ("a batched read that aborts the whole
+#       batch on the first refusal must not exist"): the summary line's
+#       own PROVEN/DENY-ALL/policy counts are checked, not just the
+#       aggregate exit code. Per Sec's ruling, the refusal itself is
+#       reported as `row read: REFUSED at grant level`, NEVER "proven" or
+#       "DENIED" -- the verdict rests on the STRUCTURAL conjunction
+#       alone, which the refused read does not change up or down.
 #   22b/22c/22d. RLS-DENY-ALL-ALLOWLISTED-{COLGRANT,AUTHTBL,ANONCOL}-LEAK
 #       -- Sec's four privilege columns (F-1, round-2 review, PR #880):
 #       the SAME allowlisted table with an otherwise-clean row
@@ -138,13 +141,35 @@
 #      refusal -- MEASURED live: `permission denied for table audit_log`
 #      on a table with no grant to `authenticated` at all), and the
 #      auth-login signup check now recognises SvelteKit's real HTTP-200
-#      action-failure envelope instead of only a plain HTTP 400 --
+#      action-failure envelope instead of only a plain HTTP 400. Sec's
+#      own 2026-09-22 ruling then amended the RLS classification further
+#      (detect the refusal by SQLSTATE 42501, not message text; a
+#      refusal is NEVER isolation proven by itself) --
 #
 #   25. RLS-AUTH-OTHER-ERROR -- a table's per-table authenticated read
-#       fails with an error OTHER than 'permission denied for table <t>'
-#       -- RLS FAILED, a precondition failure scoped to that one table
-#       (never silently classified DENIED-AT-GRANT, and never aborting
-#       any other table's read).
+#       fails with an error OTHER than SQLSTATE 42501 -- a precondition
+#       failure scoped to THAT ONE table (INCONCLUSIVE for it, per Sec's
+#       ruling -- never FAILED, never aborting any other table's read,
+#       never misclassified as a grant-level refusal). The OTHER
+#       discovered table in this scenario still proves isolation
+#       normally, so the LEG itself stays VERIFIED and the overall run
+#       reaches its usual MANUAL ceiling -- content-asserted, since exit
+#       code alone can't distinguish "one table inconclusive, leg still
+#       verified" from "leg failed".
+#   29. RLS-REFUSED-SECOND-LOOK -- an ALLOWLISTED (DENY-ALL) table's
+#       authenticated read SUCCEEDS and returns 0 (not refused) -- per
+#       Sec's ruling this is still valid isolation evidence (still counts
+#       toward PROVEN when the privileged baseline is non-zero) but is
+#       ALSO worth a second look: a WARN fires naming that a grant may
+#       exist which the structural check missed, since a truly
+#       zero-grant table should have refused the read outright.
+#   30. RLS-REFUSED-POLICY-SCOPED -- a POLICY-SCOPED table (>=1 real
+#       policy, NOT in RLS_DENY_ALL_EXPECTED) hits a SQLSTATE-42501
+#       refusal on its authenticated read -- unlike the DENY-ALL
+#       allowlist, this table's grant absence was never independently
+#       verified structurally, so the refusal has no structural fallback
+#       to rest on: INCONCLUSIVE, never PROVEN, never FAILED from the
+#       permission error alone.
 #   26. AUTH-SIGNUP-ENVELOPE-SUCCESS -- POST /signup (missing password)
 #       returns HTTP 200 with a SvelteKit action-SUCCESS envelope
 #       (type=success) -- auth-login FAILED (this would mean an account
@@ -239,6 +264,16 @@ grep -qF "$FACT15_LITERAL" "$REPO_ROOT/scripts/COOLIFY-API-MEASURED.md" \
 ENVELOPE_LITERAL='{"type":"failure","status":400,"data":"[{\"errors\":1,\"email\":5},{\"password\":2,...},\"Invalid input: expected string, received undefined\",...]"}'
 grep -qF "$ENVELOPE_LITERAL" "$SMOKE_SH" \
   || { echo "FATAL: the measured SvelteKit signup-action-failure envelope is no longer present verbatim in scripts/smoke-remaining-checks.sh's own header -- has the app's validation response shape changed? Update this fence's fixture pin to match." >&2; exit 2; }
+
+# The measured psql VERBOSE grant-level refusal (local dev stack,
+# 2026-09-22, table audit_log), pinned by grep -F against
+# scripts/smoke-remaining-checks.sh's own header (psql_admin_auth_read()'s
+# own docstring) -- never hand-retyped as a second, driftable copy. Sec's
+# own 2026-09-22 ruling: detect the refusal by SQLSTATE 42501, not message
+# text -- this is the exact line that carries it.
+REFUSAL_LITERAL='ERROR:  42501: permission denied for table audit_log'
+grep -qF "$REFUSAL_LITERAL" "$SMOKE_SH" \
+  || { echo "FATAL: the measured psql VERBOSE grant-level-refusal line is no longer present verbatim in scripts/smoke-remaining-checks.sh's own header -- has the SQLSTATE or error wording changed? Update this fence's fixture pin to match." >&2; exit 2; }
 
 LAST_OUT="$WORK/last_out"
 
@@ -491,10 +526,12 @@ run_scenario "RLS DENY-ALL table on the allowlist: not a failure" 4 \
   FAKE_RLS_ENUM="$DENY_ALL_RLS_ENUM" FAKE_PRIV="$DENY_ALL_PRIV" FAKE_AUTH_TABLE_RESULTS="$DENY_ALL_AUTH" || FAIL=1
 if grep -qF "DENY-ALL: pfin.audit_log" "$LAST_OUT" 2>/dev/null \
   && grep -qF "ALLOWLISTED" "$LAST_OUT" 2>/dev/null \
-  && grep -qF "DENIED-AT-GRANT" "$LAST_OUT" 2>/dev/null; then
-  echo "OK: [RLS-DENY-ALL-ALLOWLISTED] DENY-ALL/DENIED-AT-GRANT line present, not a failure." >&2
+  && grep -qF "row read: REFUSED at grant level" "$LAST_OUT" 2>/dev/null \
+  && ! grep -qF "proven" "$LAST_OUT" 2>/dev/null \
+  && ! grep -qi "DENIED" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-DENY-ALL-ALLOWLISTED] DENY-ALL/ALLOWLISTED/REFUSED-at-grant-level line present, never 'proven'/'DENIED'." >&2
 else
-  echo "FAIL: [RLS-DENY-ALL-ALLOWLISTED] expected DENY-ALL/ALLOWLISTED/DENIED-AT-GRANT line not found." >&2
+  echo "FAIL: [RLS-DENY-ALL-ALLOWLISTED] expected DENY-ALL/ALLOWLISTED/REFUSED-at-grant-level line not found (or 'proven'/'DENIED' leaked into output -- Sec's word-choice ruling)." >&2
   cat "$LAST_OUT" >&2
   FAIL=1
 fi
@@ -513,17 +550,57 @@ else
 fi
 
 # 25. RLS-AUTH-OTHER-ERROR -- a table's authenticated read fails with an
-#     error OTHER than 'permission denied for table <t>' -- FAILED, a
-#     precondition failure scoped to that one table, never silently
-#     classified DENIED-AT-GRANT.
-run_scenario "RLS: authenticated read hits an unexpected (non-permission-denied) error: refuses" 1 \
+#     error OTHER than SQLSTATE 42501 -- Sec ruling: INCONCLUSIVE for
+#     THAT table alone, never FAILED, never a grant-level refusal. The
+#     OTHER discovered table (account_users) still proves isolation
+#     normally, so the LEG stays VERIFIED and the run reaches its usual
+#     MANUAL ceiling -- exit 4, not 1 (content-asserted: exit code alone
+#     can't tell "one table inconclusive, leg still verified" from "leg
+#     failed").
+run_scenario "RLS: authenticated read hits an unexpected (non-42501) error: leg still verified, that table INCONCLUSIVE" 4 \
   FAKE_AUTH_TABLE_RESULTS="account|ERROR|relation \"pfin.account\" does not exist
 account_users|OK|0" || FAIL=1
 if grep -qF "the authenticated row-count read failed with an unexpected error" "$LAST_OUT" 2>/dev/null \
-  && ! grep -qF "DENIED-AT-GRANT" "$LAST_OUT" 2>/dev/null; then
-  echo "OK: [RLS-AUTH-OTHER-ERROR] unexpected-error precondition message present, never misclassified DENIED-AT-GRANT." >&2
+  && grep -qF "INCONCLUSIVE for this table only" "$LAST_OUT" 2>/dev/null \
+  && ! grep -qF "row read: REFUSED at grant level" "$LAST_OUT" 2>/dev/null \
+  && grep -qE '^  RLS:[[:space:]]+VERIFIED' "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-AUTH-OTHER-ERROR] unexpected-error precondition message present, scoped to that table, never misclassified as a grant-level refusal, leg still VERIFIED." >&2
 else
-  echo "FAIL: [RLS-AUTH-OTHER-ERROR] expected unexpected-error precondition message not found (or was wrongly classified DENIED-AT-GRANT)." >&2
+  echo "FAIL: [RLS-AUTH-OTHER-ERROR] expected unexpected-error precondition message not found, or leg was not VERIFIED, or it was wrongly classified as a grant-level refusal." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 29. RLS-REFUSED-SECOND-LOOK -- an ALLOWLISTED table's read SUCCEEDS
+#     (not refused) and returns 0 -- still valid isolation evidence
+#     (still PROVEN when the privileged baseline is non-zero), but a WARN
+#     fires naming that a grant may exist the structural check missed.
+run_scenario "RLS: allowlisted table's read SUCCEEDS with 0 (not refused): still PROVEN, but WARNs" 4 \
+  FAKE_RLS_ENUM="$DENY_ALL_RLS_ENUM" FAKE_PRIV="$DENY_ALL_PRIV" \
+  FAKE_AUTH_TABLE_RESULTS="account|OK|0
+account_users|OK|0
+audit_log|OK|0" || FAIL=1
+if grep -qF "worth a second look" "$LAST_OUT" 2>/dev/null \
+  && grep -qF "a grant may exist" "$LAST_OUT" 2>/dev/null \
+  && grep -qF "3 table(s) PROVEN isolated (1 via allowlisted DENY-ALL, 2 via >=1 policy), 0 table(s) INCONCLUSIVE" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-REFUSED-SECOND-LOOK] second-look WARN present, still PROVEN via the structural+privileged-baseline path." >&2
+else
+  echo "FAIL: [RLS-REFUSED-SECOND-LOOK] expected second-look WARN and/or PROVEN-count line not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 30. RLS-REFUSED-POLICY-SCOPED -- a POLICY-SCOPED table (NOT in
+#     RLS_DENY_ALL_EXPECTED) hits a 42501 refusal -- no structural
+#     fallback to rest on: INCONCLUSIVE, never PROVEN, never FAILED.
+run_scenario "RLS: policy-scoped table's read is REFUSED at grant level: INCONCLUSIVE, not proven, not failed" 4 \
+  FAKE_AUTH_TABLE_RESULTS="account|DENIED|
+account_users|OK|0" || FAIL=1
+if grep -qF "row read: REFUSED at grant level on a POLICY-SCOPED table" "$LAST_OUT" 2>/dev/null \
+  && grep -qF "1 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 1 via >=1 policy), 1 table(s) INCONCLUSIVE" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-REFUSED-POLICY-SCOPED] POLICY-SCOPED refusal correctly INCONCLUSIVE, never PROVEN/FAILED from the permission error alone." >&2
+else
+  echo "FAIL: [RLS-REFUSED-POLICY-SCOPED] expected POLICY-SCOPED-refusal INCONCLUSIVE line and/or PROVEN-count line not found." >&2
   cat "$LAST_OUT" >&2
   FAIL=1
 fi

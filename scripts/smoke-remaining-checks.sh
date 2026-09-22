@@ -114,20 +114,34 @@
 #         0 real rows to begin with is INCONCLUSIVE (nothing to isolate,
 #         says nothing either way); any table where `authenticated` sees
 #         >0 rows is a live RLS bypass, FAILED regardless of the others.
-#         A `permission denied for table <t>` refusal (the four
-#         RLS_DENY_ALL_EXPECTED tables carry NO grant to `authenticated`
-#         at all, by design -- the strongest possible deny) is classified
-#         DENIED-AT-GRANT and counted as an authenticated-count of 0 --
-#         a grant-level refusal is STRONGER proof of "nothing visible"
-#         than a policy-based 0-row read, so it satisfies the same
-#         observation a real 0 would. Any OTHER error on a table's read
-#         is a precondition failure SCOPED TO THAT TABLE, never the whole
-#         leg. If NO discovered table is ever PROVEN (i.e. the whole set
-#         is empty), this leg reports SKIPPED, not VERIFIED -- isolation
-#         is unproven, not proven absent. Sec F-2's original `reset role`
-#         concern no longer applies -- each table's `authenticated` read
-#         is its own fresh docker-exec/psql connection now, so there is
-#         no shared session for a stray SET ROLE to leak across.
+#         Sec ruling 2026-09-22 (amends the original real-run-25 fix): a
+#         psql `permission denied for table <t>` (SQLSTATE 42501) must
+#         NEVER be classified as isolation PROVEN by itself -- an error
+#         that PREVENTS observation is not an observation of denial, and
+#         this leg never prints "proven" or "DENIED" from a permission
+#         error; REFUSED is the word. For the four RLS_DENY_ALL_EXPECTED
+#         tables (which carry NO grant to `authenticated` at all, by
+#         design), the verdict rests on the STRUCTURAL conjunction alone
+#         (RLS on, 0 policies, zero anon+authenticated grant at table AND
+#         column level, already asserted in the enumeration step below)
+#         -- a REFUSED-at-grant read is the EXPECTED, stronger result for
+#         a zero-grant table and does NOT itself decide the verdict; a
+#         real 0-row read (the SELECT actually succeeded) is WORTH A
+#         SECOND LOOK instead, flagged with its own WARN, since a truly
+#         zero-grant table should have refused the read outright. On a
+#         POLICY-SCOPED table (not in the allowlist), a REFUSED-at-grant
+#         read has no such structural fallback to rest on -- INCONCLUSIVE,
+#         never PROVEN, never FAILED from a permission error alone. Any
+#         OTHER error (not SQLSTATE 42501) on a table's read is a
+#         precondition failure scoped to THAT TABLE alone -- INCONCLUSIVE,
+#         never FAILED, never aborting the leg or a sibling's read. If NO
+#         discovered table is ever PROVEN (i.e. the whole set is empty or
+#         every table lands in one of these no-observation buckets), this
+#         leg reports SKIPPED, not VERIFIED -- isolation is unproven, not
+#         proven absent. Sec F-2's original `reset role` concern no longer
+#         applies -- each table's `authenticated` read is its own fresh
+#         docker-exec/psql connection now, so there is no shared session
+#         for a stray SET ROLE to leak across.
 #       - `service_role`'s own BYPASSRLS attribute is confirmed
 #         structurally (`pg_roles.rolbypassrls`), matching the by-design
 #         contrast every migration comment in this repo already states
@@ -405,6 +419,38 @@ psql_admin() {
   sshx "env STACK_UUID=\"$STACK_UUID\" bash -s" <<REMOTE
 set -e
 docker compose --project-name "\$STACK_UUID" exec -T db psql -U supabase_admin -d postgres -tAc "$1" </dev/null
+REMOTE
+}
+
+psql_admin_auth_read() {
+  # psql_admin_auth_read <table> -- the RLS leg's per-table `authenticated`
+  # row-count read (real-run 25 fix, Sec-ruled 2026-09-22). THREE separate
+  # `-c` flags in ONE psql session/connection (not one semicolon-joined
+  # -tAc string) -- a `\set` meta-command and SQL statements never mix
+  # cleanly inside a single -c string, and this shape sidesteps that
+  # entirely: `-c '\set VERBOSITY verbose'` (so a failing SELECT's error
+  # line carries its SQLSTATE, e.g. `ERROR:  42501: permission denied for
+  # table <t>` -- MEASURED against the local dev stack, 2026-09-22, and
+  # locale-independent, unlike matching the message text), `-c 'set role
+  # authenticated'`, `-c 'select count(*) from pfin.<t>'`. `-q` suppresses
+  # the `SET` command-completion tag that otherwise lands on stdout ahead
+  # of the count (MEASURED: without -q, a successful read prints
+  # "SET\n0", not "0"). `<table>` is interpolated ONLY after the caller
+  # has validated it against `^[a-z_][a-z0-9_]*$` (the enumeration loop,
+  # before any table name reaches here) -- never trust an unvalidated
+  # identifier into a remote command line.
+  #
+  # MEASURED verbatim (local dev stack, 2026-09-22), table audit_log --
+  # the exact byte shape scripts/ci/fence-smoke-remaining-checks-strikes.sh
+  # pins its DENIED fixture output against, never hand-retyped a second
+  # time:
+  #   ERROR:  42501: permission denied for table audit_log
+  #   HINT:  Grant the required privileges to the current role with: GRANT SELECT ON pfin.audit_log TO authenticated;
+  #   LOCATION:  aclcheck_error, aclchk.c:2843
+  local t="$1"
+  sshx "env STACK_UUID=\"$STACK_UUID\" bash -s" <<REMOTE
+set -e
+docker compose --project-name "\$STACK_UUID" exec -T db psql -q -t -A -U supabase_admin -d postgres -c '\set VERBOSITY verbose' -c 'set role authenticated' -c 'select count(*) from pfin.$t' </dev/null
 REMOTE
 }
 
@@ -716,19 +762,25 @@ else
       #   for table audit_log -- the SET itself succeeds.
       #
       # Fixed by reading `authenticated`'s count ONE TABLE PER psql
-      # invocation -- a fresh docker-exec/psql session each time, so a
-      # denied table can never abort a sibling table's read. A batched
-      # read that aborts the whole batch on the first refusal must not
-      # exist, and does not any more. `permission denied for table <t>`
-      # (captured via `2>&1`, since psql sends it to stderr) is
-      # classified DENIED-AT-GRANT and treated as an authenticated-count
-      # of 0 -- a grant-level refusal is a STRONGER proof of "nothing
-      # visible" than a policy-based 0-row read, so it satisfies the row
-      # observation exactly like a real 0 would. Any OTHER error stays a
-      # precondition failure, scoped to that one table, not the whole
-      # leg. `reset role` (Sec F-2's original concern) is no longer
-      # needed -- each table's read is its own fresh connection; there
-      # is no shared session for a stray SET ROLE to leak across.
+      # invocation (`psql_admin_auth_read`, above) -- a fresh docker-exec/
+      # psql session each time, so a denied table can never abort a
+      # sibling table's read. A batched read that aborts the whole batch
+      # on the first refusal must not exist, and does not any more.
+      #
+      # Sec ruling 2026-09-22 (amends the fix above): a
+      # `permission denied for table <t>` refusal (SQLSTATE 42501,
+      # detected off the verbose error line `psql_admin_auth_read`
+      # requests -- locale-independent, unlike matching the message
+      # text) is NEVER classified as isolation proven by itself -- see
+      # this file's own LEG 3 header for the full ruling (structural
+      # conjunction carries the DENY-ALL verdict; REFUSED is the word,
+      # never "proven"/"DENIED"; a POLICY-SCOPED table's refusal has no
+      # structural fallback and stays INCONCLUSIVE). Any OTHER error
+      # (not 42501) stays a precondition failure, scoped to that one
+      # table -- INCONCLUSIVE, never FAILED, not the whole leg. `reset
+      # role` (Sec F-2's original concern) is no longer needed -- each
+      # table's read is its own fresh connection; there is no shared
+      # session for a stray SET ROLE to leak across.
       #
       # bash 3.2 (macOS operator shell): no associative arrays (`declare
       # -A` is a bash 4+ builtin option this repo's own provision.sh
@@ -748,23 +800,37 @@ else
         polcount="$(printf '%s\n' "$RLS_ENUM" | awk -F'|' -v t="$t" '$1==t {print $3; exit}')"
 
         set +e
-        AUTH_OUT="$(psql_admin "set role authenticated; select count(*) from pfin.\"$t\";" 2>&1)"
+        AUTH_OUT="$(psql_admin_auth_read "$t" 2>&1)"
         AUTH_RC=$?
         set -e
 
-        auth_note=""
+        # Sec ruling 2026-09-22 (amends the original brief): a psql
+        # `permission denied for table <t>` must NEVER be classified as
+        # isolation PROVEN by itself -- an error that prevents
+        # observation is not an observation of denial. Detected by
+        # SQLSTATE 42501 (insufficient_privilege) on the ERROR line,
+        # printed because `psql_admin_auth_read` sets `\set VERBOSITY
+        # verbose` first -- locale-independent, unlike matching the
+        # message text. Word choice matters here too: never print
+        # "proven" or "DENIED" from a permission error -- REFUSED is the
+        # word Sec ruled on.
+        a=""
+        REFUSED_AT_GRANT=0
         if [[ $AUTH_RC -eq 0 ]]; then
           a="$AUTH_OUT"
-        elif [[ "$AUTH_OUT" == *"permission denied for table $t"* ]]; then
-          a=0
-          auth_note=" (authenticated DENIED-AT-GRANT: 'permission denied for table $t' -- a stronger proof of isolation than a policy-based 0-row read)"
+        elif [[ "$AUTH_OUT" == *"42501"* ]]; then
+          REFUSED_AT_GRANT=1
         else
-          RLS_STATUS="FAILED"
-          RLS_MSGS+=("pfin.$t: the authenticated row-count read failed with an unexpected error (rc=$AUTH_RC) -- precondition, not an isolation finding. $AUTH_OUT")
+          # Any OTHER error is a precondition failure scoped to THIS
+          # table alone -- INCONCLUSIVE (folded into the same counter an
+          # empty table uses: "no evidence either way"), never FAILED,
+          # never aborting the leg or a sibling table's read.
+          INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+          info "pfin.$t: the authenticated row-count read failed with an unexpected error (rc=$AUTH_RC, not SQLSTATE 42501) -- precondition, INCONCLUSIVE for this table only, not an isolation finding. $AUTH_OUT"
           continue
         fi
 
-        if [[ "$a" != "0" ]]; then
+        if [[ "$REFUSED_AT_GRANT" -eq 0 && "$a" != "0" ]]; then
           RLS_STATUS="FAILED"
           RLS_MSGS+=("pfin.$t: $a row(s) visible to a session with NO tenant identity established (SET ROLE authenticated, no request.jwt.claims) -- expected 0. This is a live RLS bypass, not a fixture artifact.")
           continue
@@ -772,11 +838,17 @@ else
         if [[ "$polcount" -ge 1 ]]; then
           # POLICY-SCOPED -- at least one real pg_policies row.
           if is_deny_all_expected "$t"; then
-            info "pfin.$t: in RLS_DENY_ALL_EXPECTED but carries $polcount polic(ies) now -- POLICY-SCOPED, not DENY-ALL any more (INFO, not a failure; consider removing it from the allowlist once Sec confirms).$auth_note"
-          elif [[ -n "$auth_note" ]]; then
-            info "pfin.$t: POLICY-SCOPED ($polcount polic(ies))$auth_note"
+            info "pfin.$t: in RLS_DENY_ALL_EXPECTED but carries $polcount polic(ies) now -- POLICY-SCOPED, not DENY-ALL any more (INFO, not a failure; consider removing it from the allowlist once Sec confirms)."
           fi
-          if [[ "$p" -gt 0 ]]; then
+          if [[ "$REFUSED_AT_GRANT" -eq 1 ]]; then
+            # Unlike the DENY-ALL allowlist below, a POLICY-SCOPED
+            # table's grant absence was never independently verified
+            # structurally -- a refusal here has no structural fallback
+            # to rest on, so it stays INCONCLUSIVE, never PROVEN, never
+            # FAILED from a permission error alone.
+            info "pfin.$t: row read: REFUSED at grant level on a POLICY-SCOPED table ($polcount polic(ies)) -- not an RLS observation; INCONCLUSIVE (this table's grant absence was never independently verified structurally, unlike the DENY-ALL allowlist)."
+            INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+          elif [[ "$p" -gt 0 ]]; then
             PROVEN_COUNT=$((PROVEN_COUNT + 1))
           else
             INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
@@ -796,20 +868,29 @@ else
           # authenticated zero grant at table AND column level) was
           # already asserted in the enumeration loop above, against this
           # same table's row from RLS_ENUM -- reaching here with
-          # RLS_STATUS still VERIFIED means it held. The behavioral half
-          # (authenticated sees 0 of >0 real rows, whether via a real
-          # 0-row read or a DENIED-AT-GRANT refusal) only PROVES anything
-          # when the privileged baseline is non-zero (Sec requirement
-          # 4) -- on an empty table the structural conjunction is
-          # VERIFIED but the row observation is INCONCLUSIVE, never
-          # reported as DENY-ALL fully demonstrated.
+          # RLS_STATUS still VERIFIED means it held. Sec ruling
+          # 2026-09-22: for THIS allowlist, the verdict rests on that
+          # STRUCTURAL conjunction ALONE -- the row read's own outcome
+          # does NOT change the verdict up or down. A REFUSED-at-grant
+          # read is the EXPECTED, stronger result for a zero-grant table
+          # (the grant layer refuses before RLS is even consulted); a
+          # real 0-row read (the SELECT actually SUCCEEDED) is WORTH A
+          # SECOND LOOK -- a grant the structural check missed may exist
+          # -- flagged with its own WARN, but still not what decides the
+          # verdict. Only the PRIVILEGED baseline (p>0 vs p==0) decides
+          # PROVEN vs INCONCLUSIVE, same as every other table.
           DENY_ALL_COUNT=$((DENY_ALL_COUNT + 1))
           CONJUNCTION_TERMS="RLS on, 0 policies, and all four privilege terms false (anon table-level, authenticated table-level, anon column-level, authenticated column-level)"
+          if [[ "$REFUSED_AT_GRANT" -eq 1 ]]; then
+            info "pfin.$t: row read: REFUSED at grant level (expected for a zero-grant table; stronger than a 0-row read; not itself what proves isolation -- the structural conjunction does)."
+          else
+            warn "RLS: pfin.$t: authenticated's read SUCCEEDED (returned 0 rows) on a table in RLS_DENY_ALL_EXPECTED -- worth a second look: a grant may exist that the structural check missed (a truly zero-grant table should have refused the read outright, not returned a row count)."
+          fi
           if [[ "$p" -gt 0 ]]; then
-            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS) AND authenticated sees 0 of $p row(s) visible to supabase_admin -- ALLOWLISTED, isolation demonstrated.$auth_note"
+            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS) -- ALLOWLISTED, isolation demonstrated."
             PROVEN_COUNT=$((PROVEN_COUNT + 1))
           else
-            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS); row observation INCONCLUSIVE (privileged count is 0 too -- nothing to isolate, never reported as DENY-ALL fully demonstrated on an empty table).$auth_note"
+            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS); row observation INCONCLUSIVE (privileged count is 0 too -- nothing to isolate, never reported as DENY-ALL fully demonstrated on an empty table)."
             INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
           fi
         fi
