@@ -819,9 +819,24 @@ report_destroy() {
 }
 # Sec F-2 (PR #870 review): EXIT alone does not fire reliably if the ssh
 # connection itself drops (SIGHUP) -- an interrupted run is exactly when
-# destruction matters most, so the same handler is armed on HUP/INT/TERM
-# too, not just a clean exit.
-trap report_destroy EXIT HUP INT TERM
+# destruction matters most, so the same handler is also armed on
+# HUP/INT/TERM. Sec's own follow-up on that fix (same review): a bash
+# SIGNAL trap runs the handler and then EXECUTION CONTINUES -- so an
+# EXIT/HUP/INT/TERM trap on the SAME set would let the script keep
+# running post-destruction, then fire the EXIT trap a SECOND time on its
+# way out (an `exit` from inside a signal handler ALSO triggers EXIT --
+# not just plain fall-through), finding both files already gone and
+# printing a false "mechanism: rm-fallback" (rm -f succeeds on an absent
+# path) instead of the true "shred" that actually ran. Split instead:
+# EXIT keeps the original handler (fires once, normally). HUP/INT/TERM
+# get their own handler that DISARMS the EXIT trap FIRST (`trap - EXIT`
+# -- so the `exit 130` two statements later cannot re-trigger
+# report_destroy), then destroys, then stops the script (`exit 130`, the
+# conventional 128+SIGINT-shape code for "interrupted") rather than
+# limping on in a half-torn-down state -- so the handler fires exactly
+# once per run, on every path.
+trap report_destroy EXIT
+trap 'trap - EXIT; report_destroy; exit 130' HUP INT TERM
 TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
 python3 - "$TOKEN" "$uuid" "$box_seed" "$box_body" <<'PYEOF'
 import json, os, subprocess, sys
