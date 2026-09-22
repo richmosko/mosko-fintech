@@ -206,7 +206,7 @@ STEP_LABELS=(
   "Create the etl monthly-report and provider-sync daily-poll Scheduled Tasks"
   "Smoke: admission endpoint (CA-2), ETL poll, PDF round-trip, pfin exposure"
   "CA-1 deploy-gate: provider-sync's injected env names vs PUBLIC_ROUTE_ENV_MATCHERS"
-  "Re-establish Coolify -> Discord notifications (§8) -- unavoidable manual, no API surface measured"
+  "Re-establish Coolify -> Discord notifications (§8) via scripts/coolify-discord-notify.sh (BACKLOG item 74)"
   "DNS + Coolify domain assignment + LE cert (§2)"
   "CI-trigger keypair + box-side wiring (§6.4)"
   "GitHub-side CI setup: Actions secret/variable, production-migrator Environment (§6.4)"
@@ -1166,10 +1166,23 @@ run_ca1_gate() { require_box_ip || return 2; bash "$SCRIPTS/smoke-ca1-env-patter
 # directly.
 run_remaining_checks() { require_box_ip || return 2; bash "$SCRIPTS/smoke-remaining-checks.sh"; }
 
+# BACKLOG §7.36 item 74: scripts/coolify-discord-notify.sh replaces the old
+# BY-HAND stub. That script's own header names why there is no api()/curl
+# helper here (measured live: Coolify 4.3.18 exposes no notification-config
+# REST surface -- everything goes through the box-side Eloquent model over
+# `docker exec ... tinker --execute`). preflight = --state (read-only,
+# never touches .env, always reports the live ABSENT/DISABLED/ENABLED-URL-
+# EMPTY/ENABLED state) so this step's own exit code -- 0 VERIFIED / else
+# FAILED, already this file's own vocabulary, not translated -- decides
+# whether provision.sh proceeds to --apply, exactly like every other
+# scripted step in this registry.
 run_discord() {
-  step "discord: BY-HAND (BACKLOG §7.36 item 74). Measured-as-absent by omission, not confirmed by a live 404: every api() call in every script in this repo targets /applications, /applications/<uuid>, /environments -- grepped across scripts/*.sh for a notification-channel or webhook-config endpoint, zero hits. No live Coolify 4.3.18 install was reachable to confirm this offline -- if a notification-config surface DOES exist and this measurement is wrong, correct this step, don't just work around it by hand indefinitely."
-  info "Coolify dashboard -> Notifications -> add/confirm the Discord webhook. Verify: a test event is received."
-  return 4
+  require_box_ip || return 2
+  if [[ -z "${1:-}" ]]; then
+    bash "$SCRIPTS/coolify-discord-notify.sh" --state
+  else
+    bash "$SCRIPTS/coolify-discord-notify.sh" --apply
+  fi
 }
 
 # Sec F-6 (PR #849 review): gated behind --confirm-cutover, the SAME

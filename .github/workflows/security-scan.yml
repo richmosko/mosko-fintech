@@ -4070,10 +4070,15 @@ jobs:
     # behaves as its own fixture claims -- each of those ships its own
     # separate fence. scripts/ci/fence-provision-strikes.sh proves: a
     # SKIPPED (3) step continues the run rather than stopping it; a
-    # MANUAL (4) step (the four genuinely BY-HAND rows -- db-bootstrap,
-    # pre-cutover-gates, the CA-1 gate, Discord) stops the run with a
-    # resume hint naming that step; a real failure stops the run the same
-    # way; --dry-run never invokes any script's --apply path; --from
+    # MANUAL (4) step -- by construction only `cutover` (and `dns` before
+    # `--confirm-cutover`) still hardcode an unconditional 4; BACKLOG item
+    # 74 replaced discord's own BY-HAND stub with
+    # scripts/coolify-discord-notify.sh, so this fence's own MANUAL-STOPS
+    # scenario now proves provision.sh's exit-code-4-classification by
+    # INJECTING a 4 into discord's fake, not by relying on a hardcoded
+    # stub -- stops the run with a resume hint naming that step; a real
+    # failure stops the run the same way; --dry-run never invokes any
+    # script's --apply path; --from
     # skips every step before the named one; --only runs exactly one
     # step; an unknown --from/--only step name refuses; the ci-migrate
     # keypair is generated only when absent, never when already present;
@@ -4083,6 +4088,47 @@ jobs:
       - uses: actions/checkout@v4
       - name: offline strike-proofs (happy-path / skipped-continues / manual-stops / failed-stops / dry-run / from / only / list / env-missing / unknown-key / keygen / compound-propagation)
         run: bash scripts/ci/fence-provision-strikes.sh
+
+  fence-coolify-discord-notify-strikes:
+    name: coolify-discord-notify.sh — Discord notification-settings write + test-send strike-proofs
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 74 (docs/deployment-runbook.md §8 / ARCH §4
+    # Observability). DevOps-owned. Sec joint-review mandatory (new
+    # TINKER-WRITE-ALLOW-08 marker + the ARCH §4 F1 PII-gate ruling on
+    # backup_failure/backup_success's own addField command-output
+    # payloads, left unchanged at their measured defaults by this PR).
+    # ⚠ tests/fixtures/ci/coolify-discord-notify/fake-ssh PATH-shadows
+    # `ssh` and dispatches on the remote-command text (plus, for the
+    # write call, its own forwarded stdin) -- this fence proves
+    # scripts/coolify-discord-notify.sh's OWN control flow and guards,
+    # never that a real Coolify box's Eloquent model or Discord's real
+    # webhook endpoint behave the way the fixture's canned responses
+    # claim. scripts/ci/fence-coolify-discord-notify-strikes.sh proves:
+    # all four --state values print correctly; a settings-row
+    # cardinality anomaly or a missing team refuses; an SSH-unreachable
+    # box refuses; a malformed .env DISCORD_WEBHOOK_URL refuses BEFORE
+    # any SSH call at all (checked via an empty argv log, not just the
+    # exit code); a missing .env value refuses the same way; a fresh
+    # apply writes + hash-binds + asserts the live test-send's HTTP
+    # status; an already-correct state (hash-bound URL match AND all
+    # four target flags already true) skips the write while the live
+    # test-send still runs; a flags-only or hash-only mismatch still
+    # forces a write; a row disappearing mid-write, a non-zero remote
+    # exit, a missing WRITE_OK sentinel (checked as a positive token, not
+    # merely a clean exit code), a cleartext-leak in the write's own
+    # captured output, a post-write hash mismatch, and a test-send race/
+    # unparseable-output/non-2xx status each independently refuse; the
+    # webhook URL literal never appears in any fake-ssh argv log across
+    # every scenario; the real script parses cleanly under `/bin/bash -n`
+    # with no `declare -A`; and the seed file's EXIT trap still contains
+    # `shred -u`. Two of these guards (the cleartext-leak check and the
+    # idempotent-skip check) were inversion-tested by hand during
+    # development -- striking each turned this fence RED, confirming
+    # they are load-bearing, not decorative.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (state x4 / cardinality / team-absent / unreachable / shape-check-before-ssh / missing-url / fresh-write / idempotent-skip / flags-mismatch / hash-mismatch / row-absent / nonzero-exit / no-sentinel / cleartext-leak / postwrite-hash-mismatch / testsend-no-url / testsend-unparseable / testsend-4xx / ssh-dies-midway / argv-never-carries-url / bash-3.2-syntax / shred-trap-present)
+        run: bash scripts/ci/fence-coolify-discord-notify-strikes.sh
 
   fence-assign-app-domain-strikes:
     name: assign-app-domain.sh — DNS/TLS strike-proofs
