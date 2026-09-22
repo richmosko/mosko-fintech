@@ -1234,6 +1234,42 @@ run_deploy_on_success() {
   run_provision_vps "$1"
 }
 
+# run_cutover -- F/CTO measured live (Hetzner API, 2026-09-2x) that the
+# incumbent pfindash.com box was already torn down days earlier -- this
+# step now RECONFIRMS that fact live on every run (never trusting a
+# point-in-time measurement forever) instead of stopping MANUAL
+# unconditionally. The tear-down ITSELF stays a human act -- this
+# script never deletes a Hetzner server, on any branch -- it only
+# verifies the project's current server list matches the single ruled
+# survivor ($ruled_name). Token handling mirrors provision-vps.sh's own
+# HETZNER_API_TOKEN read (.env, never `source`d; 64-char shape check)
+# but the curl call itself uses this repo's established --config-file
+# stdin pattern (Sec FLAG 2, PR #814 review: an argv-visible
+# `-H "Authorization: Bearer ..."` is readable via `ps` by any local
+# user for the call's duration) -- a mode-600 temp file, removed
+# synchronously right after use, same shape as
+# scripts/migrator-orchestrate.sh's own Coolify-token handling.
+#
+# ⚠ Self-caught running this fence: `set -e`/`set +e` are GLOBAL,
+# PROCESS-WIDE shell options, not scoped to a function or call frame.
+# An earlier draft toggled `set +e`/`set -e` locally around each of
+# this function's own external calls (curl, then the python parse) --
+# but this function is called from run_step()'s case dispatch, which
+# is itself called from the main loop's OWN `set +e; run_step ...;
+# PREFLIGHT_RC=$?; set -e` bracket. This function's SECOND internal
+# `set -e` (after the python parse) re-armed errexit globally WHILE
+# still logically inside the caller's `set +e` window -- so a
+# subsequent `return 4` (MANUAL, 2+ servers) was treated as an
+# unprotected failing command and aborted the ENTIRE script immediately
+# with exit 4, never reaching PREFLIGHT_RC=$? or the MANUAL->exit-1
+# classification in the main loop at all (measured: `bash -x` showed
+# execution stop dead at the `return 4` line, no further trace). Fixed
+# by never touching global errexit state here -- capture each
+# command's exit status via the `VAR=$(cmd) || rc=$?` idiom instead
+# (already this repo's own established pattern elsewhere, e.g.
+# `sshx true >/dev/null 2>&1 || die2 ...`), which is `||`-protected and
+# therefore never trips `set -e` regardless of what errexit state the
+# CALLER happens to be in.
 run_cutover() {
   if [[ "$CONFIRM_CUTOVER" -ne 1 ]]; then
     step "cutover: REFUSED without --confirm-cutover"
@@ -1241,9 +1277,82 @@ run_cutover() {
     info "Re-run: scripts/provision.sh --from cutover --confirm-cutover  once every prior step is genuinely green."
     return 4
   fi
-  step "cutover: BY-HAND even with --confirm-cutover (the final row -- no script exists; this flag only lets provision.sh proceed PAST its own gate)"
-  info "Confirm the smokes and remaining-checks steps are both fully green, then tear down the incumbent pfindash.com stack by hand."
-  return 4
+  step "cutover: verifying the Hetzner project holds exactly the ruled server (--confirm-cutover)"
+  local ruled_name="pfin-prod-1"
+
+  local hetzner_token
+  if [[ ! -f "$REPO_ROOT/.env" ]]; then
+    info "no .env at $REPO_ROOT -- HETZNER_API_TOKEN is read from there. Cannot verify the cutover."
+    return 2
+  fi
+  hetzner_token="$(grep -m1 '^HETZNER_API_TOKEN=' "$REPO_ROOT/.env" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' \r\n' || true)"
+  if [[ -z "$hetzner_token" ]]; then
+    info "HETZNER_API_TOKEN missing or empty in .env. Cannot verify the cutover."
+    return 2
+  fi
+  if [[ ${#hetzner_token} -ne 64 ]]; then
+    info "HETZNER_API_TOKEN is ${#hetzner_token} chars; Hetzner tokens are 64 -- wrong value or a stray quote. Cannot verify the cutover."
+    return 2
+  fi
+
+  # Self-caught running this fence: `trap ... RETURN` set INSIDE this
+  # function does not stay scoped to it -- bash re-fires it when the
+  # CALLER (run_step(), which dispatches to this function) also
+  # returns, by which point this function's own `local` has gone out of
+  # scope, and `set -u` turns that into "hetzner_curl_config: unbound
+  # variable", aborting the whole orchestrator on an otherwise-VERIFIED
+  # run. No trap needed at all: the config file's only consumer is the
+  # one curl call immediately below, so it is removed synchronously,
+  # right after use, on every path (including the early-return cases
+  # further down -- rm before each return, not once at the end).
+  local hetzner_curl_config
+  hetzner_curl_config="$(mktemp)"
+  chmod 600 "$hetzner_curl_config"
+  printf 'header = "Authorization: Bearer %s"\n' "$hetzner_token" > "$hetzner_curl_config"
+
+  local servers_json curl_rc=0
+  servers_json="$(curl -fsS --config "$hetzner_curl_config" "https://api.hetzner.cloud/v1/servers" 2>&1)" || curl_rc=$?
+  rm -f "$hetzner_curl_config"
+  if [[ $curl_rc -ne 0 ]]; then
+    info "Hetzner API call failed (curl rc=$curl_rc): $servers_json"
+    return 2
+  fi
+
+  local parsed count names_csv parse_rc=0
+  parsed="$(printf '%s' "$servers_json" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+servers = d.get("servers") or []
+names = [s.get("name", "<unnamed>") for s in servers]
+print(len(names))
+print(",".join(names))
+' 2>&1)" || parse_rc=$?
+  if [[ $parse_rc -ne 0 || -z "$parsed" ]]; then
+    info "could not parse the Hetzner servers response: $parsed"
+    return 2
+  fi
+  count="$(sed -n '1p' <<<"$parsed")"
+  names_csv="$(sed -n '2p' <<<"$parsed")"
+  if [[ -z "$count" || ! "$count" =~ ^[0-9]+$ ]]; then
+    info "could not parse the Hetzner servers response: $parsed"
+    return 2
+  fi
+
+  if [[ "$count" -eq 0 ]]; then
+    info "Hetzner project holds ZERO servers -- expected exactly one ($ruled_name). Investigate before treating cutover as done."
+    return 2
+  fi
+  if [[ "$count" -gt 1 ]]; then
+    info "Hetzner project holds $count servers ($names_csv) -- expected exactly one ($ruled_name). This script NEVER deletes anything -- MANUAL: an operator must confirm which of these are the incumbent's leftovers and remove them by hand, then re-run this step."
+    return 4
+  fi
+  if [[ "$names_csv" != "$ruled_name" ]]; then
+    info "Hetzner project holds exactly one server, but it is named '$names_csv', not the ruled name '$ruled_name'. Investigate before treating cutover as done."
+    return 2
+  fi
+
+  ok "cutover: the Hetzner project holds exactly one server ($ruled_name); the incumbent is gone"
+  return 0
 }
 
 run_step() {
