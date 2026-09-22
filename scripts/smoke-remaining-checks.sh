@@ -236,33 +236,22 @@ STACK_APP_NAME="${STACK_APP_NAME:-pfin-supabase-stack}"
 SIBLING_APP_NAME="${SIBLING_APP_NAME:-pfin-app}"
 COMPOSE_SERVICE="${COMPOSE_SERVICE:-app}"
 
-# RLS_DENY_ALL_EXPECTED -- LEG 3's allowlist for tables where RLS is ON,
-# 0 policies exist in pg_policies, and default-deny (Postgres's own
-# ordinary RLS semantics -- no policy means no row matches, for any
-# non-BYPASSRLS role) is the RATIFIED posture (Sec ruling, real-run 23
-# close-out, 2026-09-22), not a coverage gap -- each is service_role-only
-# by design, and a users_id policy on any of them would WEAKEN posture:
-#   audit_log                 -- 111_audit_log.sql:622/628 (RLS enabled,
-#                                 zero policies, zero grants; the only
-#                                 write path is fn_emit_audit_log,
-#                                 SECURITY DEFINER at :936); adding an
-#                                 authenticated read policy ENDS the aal2
-#                                 step-up exemption stated at :511-514.
-#   mfa_recovery_code          -- 026_mfa_recovery_code.sql:197/204,
-#                                 column-scoped grants at :176-178.
-#   mfa_recovery_attempt       -- 027_mfa_recovery_attempt.sql:169/175.
-#   linked_source_sync_audit   -- 015_linked_source_fold.sql:487/626,
-#                                 025_aal2_step_up_backstop.sql:180-182.
-# GROWS ONLY BY MIGRATION (mirrors 111_audit_log.sql:505's own
-# convention for surface_name) -- a fifth table is never added here
-# without a new migration establishing the same service_role-only
-# design and a fresh Sec review; a table Sec later rules a real gap on
-# is REMOVED so this leg FAILS on it again. A table that later gains a
-# real policy moves out of DENY-ALL on its own (reported INFO, not
-# removed by hand -- see LEG 3 below). Sec requirement (real-run 23
-# close-out): a table with 0 policies NOT on this list is FAILED
-# unconditionally -- never a generic "0 policies + authenticated sees 0
-# rows => DENY-ALL" rule, which would bless a forgotten policy.
+# Sec-RATIFIED 2026-09-22 (all four). RLS on + ZERO policies + zero
+# authenticated/anon grant is the ratified posture for these tables,
+# not a coverage gap: 026:197/204-205, 027:169/175-176,
+# 015:487/626 (named a deliberate exclusion at 025:180-182), and
+# 111:622/628. Default-deny is STRICTER than any users_id policy, and
+# per 111:511 adding an authenticated read policy ENDS that table's
+# aal2-clause exemption. ADDING TO THIS ARRAY IS A JOINT-REVIEW ACT
+# (ADR-011 D1/D2 surface) -- it must not grow without Sec review.
+#
+# A table Sec later rules a real gap on is REMOVED so this leg FAILS on
+# it again. A table that later gains a real policy moves out of
+# DENY-ALL on its own (reported INFO, not removed by hand -- see LEG 3
+# below). A table with 0 policies NOT on this list is FAILED
+# unconditionally, in the enumeration loop itself -- never a generic
+# "0 policies + authenticated sees 0 rows => DENY-ALL" rule, which
+# would bless a forgotten policy.
 RLS_DENY_ALL_EXPECTED=(audit_log linked_source_sync_audit mfa_recovery_attempt mfa_recovery_code)
 
 is_deny_all_expected() {
@@ -543,7 +532,19 @@ step "Leg 3/4 -- RLS isolation: anon/authenticated/service_role visibility shape
 RLS_STATUS="VERIFIED"
 RLS_MSGS=()
 
-RLS_ENUM_QUERY="select c.relname, c.relrowsecurity::text, (select count(*) from pg_policies p where p.schemaname = n.nspname and p.tablename = c.relname)::text, has_table_privilege('anon', c.oid, 'SELECT')::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and c.relkind in ('r','p') and exists (select 1 from information_schema.columns col where col.table_schema = 'pfin' and col.table_name = c.relname and col.column_name = 'users_id') order by c.relname;"
+# Sec F-1 (round-2 review, PR #880): the original enumeration asserted
+# anon's TABLE-level grant only -- authenticated's table-level grant and
+# BOTH roles' COLUMN-level grants (has_any_column_privilege subsumes a
+# table-level grant too, per Sec's own note) were invisible to it. A
+# grant added later (e.g. `grant select on pfin.mfa_recovery_code to
+# authenticated`, or a column-scoped grant per
+# 026_mfa_recovery_code.sql:222's own pattern) would still read 0 rows
+# under RLS with 0 policies -- the behavioral read can't see the grant,
+# only the grant's absence can be asserted directly. Four privilege
+# columns, all fetched here in the one enumeration query (no second
+# round trip): anon/authenticated at table level, then anon/authenticated
+# at column level, in that order.
+RLS_ENUM_QUERY="select c.relname, c.relrowsecurity::text, (select count(*) from pg_policies p where p.schemaname = n.nspname and p.tablename = c.relname)::text, has_table_privilege('anon', c.oid, 'SELECT')::text, has_table_privilege('authenticated', c.oid, 'SELECT')::text, has_any_column_privilege('anon', c.oid, 'SELECT')::text, has_any_column_privilege('authenticated', c.oid, 'SELECT')::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and c.relkind in ('r','p') and exists (select 1 from information_schema.columns col where col.table_schema = 'pfin' and col.table_name = c.relname and col.column_name = 'users_id') order by c.relname;"
 
 set +e
 RLS_ENUM="$(psql_admin "$RLS_ENUM_QUERY")"
@@ -563,7 +564,7 @@ elif [[ -z "$RLS_ENUM" ]]; then
 else
   TABLES=()
   ALLOWLIST_CANDIDATES=()
-  while IFS='|' read -r tbl rls polcount anonsel; do
+  while IFS='|' read -r tbl rls polcount anonsel authsel anoncol authcol; do
     [[ -z "$tbl" ]] && continue
     if [[ ! "$tbl" =~ ^[a-z_][a-z0-9_]*$ ]]; then
       RLS_STATUS="FAILED"
@@ -588,6 +589,25 @@ else
     if [[ "$polcount" -lt 1 ]]; then
       if is_deny_all_expected "$tbl"; then
         ALLOWLIST_CANDIDATES+=("$tbl")
+        # Sec F-1 (round-2 review, PR #880): a DENY-ALL-allowlisted table
+        # must hold ZERO grant to anon or authenticated at BOTH table
+        # AND column level -- has_any_column_privilege() subsumes a
+        # table-level grant too, so all four columns are checked
+        # separately so the failure message can name which shape was
+        # found (a column-scoped grant is a live idiom in this repo,
+        # 026_mfa_recovery_code.sql:222, not a hypothetical).
+        if [[ "$authsel" != "false" ]]; then
+          RLS_STATUS="FAILED"
+          RLS_MSGS+=("pfin.$tbl: DENY-ALL-allowlisted but authenticated holds table-level SELECT (has_table_privilege=$authsel) -- the service_role-only design this table's own migration documents requires zero authenticated grant, not just zero anon grant.")
+        fi
+        if [[ "$anoncol" != "false" ]]; then
+          RLS_STATUS="FAILED"
+          RLS_MSGS+=("pfin.$tbl: DENY-ALL-allowlisted but anon holds a column-level SELECT grant (has_any_column_privilege=$anoncol) -- a column-scoped grant (this table's own migration pattern uses column-scoped grants for service_role) must never extend to anon.")
+        fi
+        if [[ "$authcol" != "false" ]]; then
+          RLS_STATUS="FAILED"
+          RLS_MSGS+=("pfin.$tbl: DENY-ALL-allowlisted but authenticated holds a column-level SELECT grant (has_any_column_privilege=$authcol) -- a column-scoped grant (this table's own migration pattern uses column-scoped grants for service_role) must never extend to authenticated.")
+        fi
       else
         RLS_STATUS="FAILED"
         RLS_MSGS+=("pfin.$tbl: 0 policies in pg_policies and NOT in RLS_DENY_ALL_EXPECTED -- either this is a real policy-coverage gap (add a policy), or it is meant to be service_role-only and Sec needs to rule so it can be added to the allowlist by migration. Treating as FAILED until then.")
@@ -622,40 +642,19 @@ else
       if [[ $first -eq 1 ]]; then PRIV_SQL="select 'PRIV' as ctx, '$t' as t, count(*) as n from pfin.\"$t\""; first=0
       else PRIV_SQL="$PRIV_SQL union all select 'PRIV', '$t', count(*) from pfin.\"$t\""; fi
     done
-    # GRANT_SQL -- Sec requirement (real-run 23 close-out): for every
-    # DENY-ALL allowlist candidate (0-policy, allowlisted -- non-
-    # allowlisted 0-policy tables already FAILED above and never reach
-    # here), assert the FULL conjunction, not just anon's table-level
-    # grant (already checked above): authenticated must hold NO
-    # table-level SELECT either, and NEITHER anon NOR authenticated may
-    # hold ANY column-level grant (information_schema.column_privileges
-    # -- 026_mfa_recovery_code.sql:222 uses column-scoped grants, so a
-    # column-level leak is a real, distinct risk from a table-level one).
-    # Runs as supabase_admin (before the role switch below) -- a
-    # superuser sees every grant in information_schema regardless of who
-    # granted it.
-    GRANT_SQL=""
-    if [[ "${#ALLOWLIST_CANDIDATES[@]}" -gt 0 ]]; then
-      first=1
-      for t in "${ALLOWLIST_CANDIDATES[@]}"; do
-        seg="select 'COLGRANT' as ctx, '$t' as t, (select count(*) from information_schema.column_privileges cp where cp.table_schema = 'pfin' and cp.table_name = '$t' and cp.grantee in ('anon','authenticated'))::text as n
-union all select 'AUTHTBL', '$t', has_table_privilege('authenticated', 'pfin.\"$t\"'::regclass, 'SELECT')::text"
-        if [[ $first -eq 1 ]]; then GRANT_SQL="$seg"; first=0
-        else GRANT_SQL="$GRANT_SQL
-union all $seg"; fi
-      done
-    fi
+    # Grant-conjunction checking (table+column level, both roles) now
+    # happens upstream in the enumeration loop above, against the SAME
+    # RLS_ENUM_QUERY read that already carries all four privilege
+    # columns -- no second round trip needed (Sec F-1, round-2 review,
+    # PR #880: originally a separate GRANT_SQL query here; folded into
+    # the enumeration query instead).
     AUTH_SQL=""
     first=1
     for t in "${TABLES[@]}"; do
       if [[ $first -eq 1 ]]; then AUTH_SQL="select 'AUTH' as ctx, '$t' as t, count(*) as n from pfin.\"$t\""; first=0
       else AUTH_SQL="$AUTH_SQL union all select 'AUTH', '$t', count(*) from pfin.\"$t\""; fi
     done
-    ZERO_CTX_QUERY="$PRIV_SQL"
-    if [[ -n "$GRANT_SQL" ]]; then
-      ZERO_CTX_QUERY="$ZERO_CTX_QUERY; $GRANT_SQL"
-    fi
-    ZERO_CTX_QUERY="$ZERO_CTX_QUERY; set role authenticated; $AUTH_SQL; reset role;"
+    ZERO_CTX_QUERY="$PRIV_SQL; set role authenticated; $AUTH_SQL; reset role;"
     set +e
     ZERO_CTX_OUT="$(psql_admin "$ZERO_CTX_QUERY")"
     ZERO_CTX_RC=$?
@@ -707,35 +706,16 @@ union all $seg"; fi
             RLS_MSGS+=("pfin.$t: INTERNAL: reached DENY-ALL verification with 0 policies but is NOT in RLS_DENY_ALL_EXPECTED -- this should be unreachable (the enumeration loop should have failed it already). Treating as FAILED, not a pass.")
             continue
           fi
-          # Sec requirement (real-run 23 close-out): assert the FULL
-          # conjunction before crediting isolation -- RLS on (checked),
-          # 0 policies (checked), anon zero table-grant (checked), PLUS
-          # authenticated zero table-grant and zero column-level grants
-          # for either role (GRANT_SQL above).
-          colgrant="$(printf '%s\n' "$ZERO_CTX_OUT" | awk -F'|' -v t="$t" '$1=="COLGRANT" && $2==t {print $3; exit}')"
-          authtbl="$(printf '%s\n' "$ZERO_CTX_OUT" | awk -F'|' -v t="$t" '$1=="AUTHTBL" && $2==t {print $3; exit}')"
-          if [[ -z "$colgrant" || -z "$authtbl" ]]; then
-            RLS_STATUS="FAILED"
-            RLS_MSGS+=("pfin.$t: missing a column-grant or authenticated-table-grant reading in the combined query output -- precondition, treat as unverified.")
-            continue
-          fi
-          if [[ "$authtbl" != "false" ]]; then
-            RLS_STATUS="FAILED"
-            RLS_MSGS+=("pfin.$t: DENY-ALL-allowlisted but authenticated holds table-level SELECT (has_table_privilege=$authtbl) -- the service_role-only design this table's own migration documents requires zero authenticated grant, not just zero anon grant.")
-            continue
-          fi
-          if [[ "$colgrant" != "0" ]]; then
-            RLS_STATUS="FAILED"
-            RLS_MSGS+=("pfin.$t: DENY-ALL-allowlisted but $colgrant column-level grant(s) to anon/authenticated exist in information_schema.column_privileges -- a column-scoped grant (this table's own migration uses column-scoped grants for service_role) must never extend to anon/authenticated.")
-            continue
-          fi
-          # Structural conjunction holds (RLS on, 0 policies, anon+
-          # authenticated zero grant at table AND column level). The
-          # behavioral half (authenticated sees 0 of >0 real rows) only
-          # PROVES anything when the privileged baseline is non-zero
-          # (Sec requirement 4) -- on an empty table the structural
-          # conjunction is VERIFIED but the row observation is
-          # INCONCLUSIVE, never reported as DENY-ALL fully demonstrated.
+          # The FULL grant conjunction (RLS on, 0 policies, anon+
+          # authenticated zero grant at table AND column level) was
+          # already asserted in the enumeration loop above, against this
+          # same table's row from RLS_ENUM -- reaching here with
+          # RLS_STATUS still VERIFIED means it held. The behavioral half
+          # (authenticated sees 0 of >0 real rows) only PROVES anything
+          # when the privileged baseline is non-zero (Sec requirement
+          # 4) -- on an empty table the structural conjunction is
+          # VERIFIED but the row observation is INCONCLUSIVE, never
+          # reported as DENY-ALL fully demonstrated.
           DENY_ALL_COUNT=$((DENY_ALL_COUNT + 1))
           if [[ "$p" -gt 0 ]]; then
             info "DENY-ALL: pfin.$t -- structural conjunction verified (RLS on, 0 policies, anon+authenticated zero grant at table+column level) AND authenticated sees 0 of $p row(s) visible to supabase_admin -- ALLOWLISTED, isolation demonstrated."
@@ -800,6 +780,8 @@ import json, re, sys
 
 raw, fqdn, service = sys.argv[1], sys.argv[2], sys.argv[3]
 
+# Verbatim copy of scripts/assign-app-domain.sh's own normalize_domains()
+# -- if that source changes, this copy is silently stale; check both.
 def normalize_domains(raw):
     if raw in (None, ""):
         return {}

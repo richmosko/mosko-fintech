@@ -101,12 +101,15 @@
 #       column-level grants, privileged count >0, authenticated count 0,
 #       and its name IN RLS_DENY_ALL_EXPECTED -- reported as a distinct
 #       DENY-ALL/ALLOWLISTED line, NOT a failure.
-#   22b/22c. RLS-DENY-ALL-ALLOWLISTED-{COLGRANT,AUTHTBL}-LEAK -- Sec's
-#       added conjunction legs (real-run 23 close-out): the SAME
-#       allowlisted table with an otherwise-clean row observation but a
-#       column-level grant leak, or authenticated table-level SELECT --
-#       both must still refuse; the mechanism, not just the row read,
-#       is what's being verified.
+#   22b/22c/22d. RLS-DENY-ALL-ALLOWLISTED-{COLGRANT,AUTHTBL,ANONCOL}-LEAK
+#       -- Sec's four privilege columns (F-1, round-2 review, PR #880):
+#       the SAME allowlisted table with an otherwise-clean row
+#       observation but authenticated column-level SELECT (22b),
+#       authenticated table-level SELECT (22c), or anon column-level
+#       SELECT (22d) -- all three must still refuse; the mechanism, not
+#       just the row read, is what's being verified. Anon's table-level
+#       grant is covered by the pre-existing anon-grant check (scenario
+#       10), unconditional on every table, not only DENY-ALL candidates.
 #   23. RLS-DENY-ALL-UNLISTED -- same shape, but the table's name is NOT
 #       in RLS_DENY_ALL_EXPECTED -- RLS FAILED in the ENUMERATION loop
 #       itself (never rescued by a behavioral read), naming the table
@@ -161,9 +164,13 @@ ln -s "$FIXTURE_DIR/fake-nc" "$FAKE_BIN/nc"
 # correction (PR #869 review) requires: "PRIV|table|count" /
 # "AUTH|table|count" pairs per table -- privileged count >0 with
 # authenticated count 0 is what PROVES isolation (an all-empty set would
-# only be INCONCLUSIVE, see scenario 18).
-HAPPY_RLS_ENUM='account|true|1|false
-account_users|true|1|false'
+# only be INCONCLUSIVE, see scenario 18). FAKE_RLS_ENUM rows are 7 fields
+# (table|rls|polcount|anon-table-sel|authenticated-table-sel|anon-col-sel|
+# authenticated-col-sel) -- Sec F-1, round-2 review, PR #880: the trailing
+# three columns only matter for a 0-policy allowlisted (DENY-ALL) table,
+# but every row carries them for fixture-format consistency.
+HAPPY_RLS_ENUM='account|true|1|false|false|false|false
+account_users|true|1|false|false|false|false'
 HAPPY_ZERO_CTX='PRIV|account|5
 AUTH|account|0
 PRIV|account_users|3
@@ -293,11 +300,11 @@ run_scenario "TZ-1 drift: a role carries a TimeZone override: refuses" 1 \
 
 # 9. RLS-DISABLED
 run_scenario "RLS disabled on a discovered table: refuses" 1 \
-  FAKE_RLS_ENUM="account|false|1|false" || FAIL=1
+  FAKE_RLS_ENUM="account|false|1|false|false|false|false" || FAIL=1
 
 # 10. RLS-ANON-GRANT
 run_scenario "anon holds SELECT on a discovered table: refuses" 1 \
-  FAKE_RLS_ENUM="account|true|1|true" || FAIL=1
+  FAKE_RLS_ENUM="account|true|1|true|false|false|false" || FAIL=1
 
 # 11. RLS-ZERO-CONTEXT-NONZERO
 run_scenario "zero-JWT-context session sees >0 rows: refuses" 1 \
@@ -373,19 +380,17 @@ fi
 #     DENY-ALL/ALLOWLISTED line, NOT a failure (overall stays MANUAL,
 #     same ceiling as the happy path -- this table contributes to
 #     PROVEN_COUNT via the default-deny mechanism, not a policy). Sec's
-#     added conjunction legs (COLGRANT/AUTHTBL) must both read clean or
-#     this scenario itself would wrongly FAIL.
-DENY_ALL_RLS_ENUM='account|true|1|false
-account_users|true|1|false
-audit_log|true|0|false'
+#     four privilege columns (F-1, round-2 review, PR #880) must all
+#     read clean or this scenario itself would wrongly FAIL.
+DENY_ALL_RLS_ENUM='account|true|1|false|false|false|false
+account_users|true|1|false|false|false|false
+audit_log|true|0|false|false|false|false'
 DENY_ALL_ZERO_CTX='PRIV|account|5
 AUTH|account|0
 PRIV|account_users|3
 AUTH|account_users|0
 PRIV|audit_log|7
-AUTH|audit_log|0
-COLGRANT|audit_log|0
-AUTHTBL|audit_log|false'
+AUTH|audit_log|0'
 run_scenario "RLS DENY-ALL table on the allowlist: not a failure" 4 \
   FAKE_RLS_ENUM="$DENY_ALL_RLS_ENUM" FAKE_ZERO_CTX="$DENY_ALL_ZERO_CTX" || FAIL=1
 if grep -qF "DENY-ALL: pfin.audit_log" "$LAST_OUT" 2>/dev/null && grep -qF "ALLOWLISTED" "$LAST_OUT" 2>/dev/null; then
@@ -396,22 +401,30 @@ else
   FAIL=1
 fi
 
-# 22b. RLS-DENY-ALL-ALLOWLISTED-COLGRANT-LEAK -- same allowlisted table,
-#      but a column-level grant to authenticated exists -- Sec's added
-#      conjunction leg must catch this even though the table-level grant
-#      and the row-visibility read are both clean (the exact risk this
-#      leg exists for: 026_mfa_recovery_code.sql:222's own column-scoped
-#      grants pattern, misapplied to the wrong role).
+# 22b/22c/22d all carry FULL zero-context data for audit_log (matching
+# DENY_ALL_ZERO_CTX's own PRIV/AUTH rows), even though the shipped code
+# never reaches the zero-context block once the enumeration loop FAILS a
+# table -- a self-strike against just one of the three grant-check `if`s
+# (disabling it alone) would otherwise let audit_log survive enumeration
+# and reach the zero-context block anyway, where a default (2-table)
+# $FAKE_ZERO_CTX with no audit_log row would fail it for an UNRELATED
+# reason ("missing a privileged or authenticated row-count reading") --
+# a coincidental, wrong-reason red that masks whether the specific grant
+# check under test is the thing actually catching it. Full data here
+# means each scenario's pass/fail is driven ONLY by its own named check.
+
+# 22b. RLS-DENY-ALL-ALLOWLISTED-COLGRANT-LEAK -- a column-level grant to
+#      authenticated exists (has_any_column_privilege) -- Sec's added
+#      conjunction column must catch this even though the table-level
+#      grant and the row-visibility read are both clean (the exact risk
+#      this leg exists for: 026_mfa_recovery_code.sql:222's own
+#      column-scoped grants pattern, misapplied to the wrong role).
 run_scenario "RLS DENY-ALL allowlisted table with a column-level grant leak: refuses" 1 \
-  FAKE_RLS_ENUM="$DENY_ALL_RLS_ENUM" FAKE_ZERO_CTX='PRIV|account|5
-AUTH|account|0
-PRIV|account_users|3
-AUTH|account_users|0
-PRIV|audit_log|7
-AUTH|audit_log|0
-COLGRANT|audit_log|1
-AUTHTBL|audit_log|false' || FAIL=1
-if grep -qF "pfin.audit_log: DENY-ALL-allowlisted but" "$LAST_OUT" 2>/dev/null && grep -qF "column-level grant" "$LAST_OUT" 2>/dev/null; then
+  FAKE_RLS_ENUM='account|true|1|false|false|false|false
+account_users|true|1|false|false|false|false
+audit_log|true|0|false|false|false|true' \
+  FAKE_ZERO_CTX="$DENY_ALL_ZERO_CTX" || FAIL=1
+if grep -qF "pfin.audit_log: DENY-ALL-allowlisted but authenticated holds a column-level SELECT grant" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-DENY-ALL-ALLOWLISTED-COLGRANT-LEAK] column-grant conjunction leg caught it." >&2
 else
   echo "FAIL: [RLS-DENY-ALL-ALLOWLISTED-COLGRANT-LEAK] expected column-grant refusal message not found." >&2
@@ -420,18 +433,14 @@ else
 fi
 
 # 22c. RLS-DENY-ALL-ALLOWLISTED-AUTHTBL-LEAK -- same, but authenticated
-#      holds table-level SELECT -- Sec's added conjunction leg must catch
-#      this even though anon's own table-level grant (checked
-#      separately, unaffected) and column grants are both clean.
+#      holds table-level SELECT -- Sec's added conjunction column must
+#      catch this even though anon's own table-level grant (checked
+#      separately, unaffected) and both column-level grants are clean.
 run_scenario "RLS DENY-ALL allowlisted table with authenticated table-level SELECT: refuses" 1 \
-  FAKE_RLS_ENUM="$DENY_ALL_RLS_ENUM" FAKE_ZERO_CTX='PRIV|account|5
-AUTH|account|0
-PRIV|account_users|3
-AUTH|account_users|0
-PRIV|audit_log|7
-AUTH|audit_log|0
-COLGRANT|audit_log|0
-AUTHTBL|audit_log|true' || FAIL=1
+  FAKE_RLS_ENUM='account|true|1|false|false|false|false
+account_users|true|1|false|false|false|false
+audit_log|true|0|false|true|false|false' \
+  FAKE_ZERO_CTX="$DENY_ALL_ZERO_CTX" || FAIL=1
 if grep -qF "pfin.audit_log: DENY-ALL-allowlisted but authenticated holds table-level SELECT" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-DENY-ALL-ALLOWLISTED-AUTHTBL-LEAK] authenticated-table-grant conjunction leg caught it." >&2
 else
@@ -440,13 +449,30 @@ else
   FAIL=1
 fi
 
+# 22d. RLS-DENY-ALL-ALLOWLISTED-ANONCOL-LEAK -- same, but anon (not
+#      authenticated) holds a column-level SELECT grant -- the fourth of
+#      Sec's four privilege columns; every one gets its own scenario so
+#      no single column's check can be silently absent.
+run_scenario "RLS DENY-ALL allowlisted table with anon column-level SELECT: refuses" 1 \
+  FAKE_RLS_ENUM='account|true|1|false|false|false|false
+account_users|true|1|false|false|false|false
+audit_log|true|0|false|false|true|false' \
+  FAKE_ZERO_CTX="$DENY_ALL_ZERO_CTX" || FAIL=1
+if grep -qF "pfin.audit_log: DENY-ALL-allowlisted but anon holds a column-level SELECT grant" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-DENY-ALL-ALLOWLISTED-ANONCOL-LEAK] anon column-grant conjunction leg caught it." >&2
+else
+  echo "FAIL: [RLS-DENY-ALL-ALLOWLISTED-ANONCOL-LEAK] expected anon column-grant refusal message not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
 # 23. RLS-DENY-ALL-UNLISTED -- same shape, but the table's name is NOT
 #     in RLS_DENY_ALL_EXPECTED -- RLS FAILED in the ENUMERATION loop
 #     itself (Sec requirement 2: never rescued by any behavioral read),
 #     naming the table and the allowlist gap explicitly.
-DENY_ALL_UNLISTED_RLS_ENUM='account|true|1|false
-account_users|true|1|false
-planning_target|true|0|false'
+DENY_ALL_UNLISTED_RLS_ENUM='account|true|1|false|false|false|false
+account_users|true|1|false|false|false|false
+planning_target|true|0|false|false|false|false'
 DENY_ALL_UNLISTED_ZERO_CTX='PRIV|account|5
 AUTH|account|0
 PRIV|account_users|3
@@ -465,10 +491,12 @@ fi
 
 # 24. RLS-ALLOWLISTED-WITH-POLICIES -- a table IN RLS_DENY_ALL_EXPECTED
 #     that now carries >=1 real policy -- POLICY-SCOPED (not DENY-ALL any
-#     more), reported as an INFO line, not a failure.
-ALLOWLISTED_WITH_POLICY_RLS_ENUM='account|true|1|false
-account_users|true|1|false
-audit_log|true|1|false'
+#     more), reported as an INFO line, not a failure. Grant columns are
+#     irrelevant on a policy-scoped table (never checked) -- authtbl=true
+#     here on purpose, proving that.
+ALLOWLISTED_WITH_POLICY_RLS_ENUM='account|true|1|false|false|false|false
+account_users|true|1|false|false|false|false
+audit_log|true|1|false|true|false|false'
 ALLOWLISTED_WITH_POLICY_ZERO_CTX='PRIV|account|5
 AUTH|account|0
 PRIV|account_users|3

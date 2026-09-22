@@ -12,16 +12,18 @@
 #      each of the four psql_admin() call sites in the real script (the
 #      SAME tokens that query's own SQL text carries):
 #        pg_db_role_setting   -> TZ-1                 -> $FAKE_TZ1_ROWS
-#        relrowsecurity       -> RLS enumeration       -> $FAKE_RLS_ENUM
+#        relrowsecurity       -> RLS enumeration (7 fields per row:
+#                                   table|rls|polcount|anon-table-sel|
+#                                   authenticated-table-sel|anon-col-sel|
+#                                   authenticated-col-sel -- Sec F-1,
+#                                   round-2 review, PR #880: all four
+#                                   grant checks live in THIS query now,
+#                                   not a second round trip) -> $FAKE_RLS_ENUM
 #        set role authenticated -> RLS privileged-baseline + zero-context
 #                                   combined query (Sec F-1, PR #869
-#                                   review; DENY-ALL conjunction legs, Sec
-#                                   real-run-23 close-out) -> $FAKE_ZERO_CTX,
-#                                   format "PRIV|table|count\nAUTH|table|
-#                                   count" per discovered table, plus
-#                                   "COLGRANT|table|count" and
-#                                   "AUTHTBL|table|bool" for DENY-ALL
-#                                   allowlist candidates only.
+#                                   review) -> $FAKE_ZERO_CTX, format
+#                                   "PRIV|table|count\nAUTH|table|count"
+#                                   per discovered table.
 #        rolbypassrls         -> service_role BYPASSRLS -> $FAKE_BYPASSRLS
 #   4. `docker compose --project-name <uuid> exec -T auth node -e '...'`
 #      -- the Resend send-acceptance probe -- prints $FAKE_RESEND_OUT.
