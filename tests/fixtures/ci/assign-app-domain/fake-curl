@@ -178,10 +178,88 @@ if [[ "$ARGS" == *"localhost:8000/api/v1"* ]]; then
     exit 0
   }
 
+  # build_compose_domains_field <comma-separated-domains-or-empty> --
+  # COOLIFY-FACT-15 (measured 2026-09-22 ~17:10Z): docker_compose_domains
+  # reads back as a JSON STRING whose own content is a JSON OBJECT keyed
+  # by compose service name (`{"app":{"domain":"https://a,https://b"}}`),
+  # NOT a flat comma-separated list -- the prior version of this fixture
+  # emitted the flat list directly, so the real script's OLD
+  # comma-split read-back parser "passed" against a shape Coolify never
+  # actually returns (fixture-restates-the-lie class, per team-lead --
+  # this is the sixth instance this week). Built via python3 json.dumps
+  # (nested TWICE: once for the inner object, once to turn that whole
+  # object into the outer JSON STRING value) rather than hand-escaped
+  # printf/sed, to avoid the exact malformed-JSON-from-hand-escaping
+  # class this session already hit once (PR #877's key-redaction
+  # inversion-test bug). FAKE_COMPOSE_DOMAINS_READBACK_SHAPE=array
+  # switches to the PATCH-shape array instead (team-lead: "the API
+  # might change" -- tolerance, not a measured fact).
+  # FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE renames the object key
+  # away from "app" (models the target service key being absent).
+  # FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE adds a second key alongside "app"
+  # (models an unexpected extra service in the read-back).
+  # FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE, when set, bypasses all of the
+  # above and is spliced in VERBATIM (already the full outer-field
+  # STRING content, unescaped) -- used to feed COOLIFY-FACT-15's own
+  # exact measured bytes, extracted live from
+  # scripts/COOLIFY-API-MEASURED.md by the fence, straight through the
+  # real script's parser.
+  build_compose_domains_field() {
+    local domains="$1"
+    if [[ -n "${FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE:-}" ]]; then
+      python3 -c '
+import json, sys
+print(json.dumps(sys.argv[1]))
+' "$FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE"
+      return
+    fi
+    if [[ -z "$domains" ]]; then
+      printf '""'
+      return
+    fi
+    if [[ "${FAKE_COMPOSE_DOMAINS_READBACK_SHAPE:-object-string}" == "array" ]]; then
+      python3 -c '
+import json, sys
+svc, domains = sys.argv[1], sys.argv[2]
+print(json.dumps([{"name": svc, "domain": domains}]))
+' "${FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE:-app}" "$domains"
+    else
+      python3 -c '
+import json, sys
+svc, domains, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+obj = {svc: {"domain": domains}}
+if extra:
+    obj[extra] = {"domain": domains}
+print(json.dumps(json.dumps(obj)))
+' "${FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE:-app}" "$domains" "${FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE:-}"
+    fi
+  }
+
   if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
-    emit "$(printf '[{"uuid": "%s", "name": "%s", "fqdn": "%s", "docker_compose_domains": "%s", "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}]' \
-      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "${FAKE_OLD_FQDN:-}" "${FAKE_OLD_COMPOSE_DOMAINS:-}" \
+    emit "$(printf '[{"uuid": "%s", "name": "%s", "fqdn": "%s", "docker_compose_domains": %s, "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}]' \
+      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "${FAKE_OLD_FQDN:-}" "$(build_compose_domains_field "${FAKE_OLD_COMPOSE_DOMAINS:-}")" \
       "${FAKE_APP_BASE_DIR:-/api}" "${FAKE_APP_BUILD_PACK:-dockercompose}" "${FAKE_APP_PORTS:-3000}")"
+  fi
+
+  # POST /deploy?uuid=... + GET /deployments/<uuid> (run-21 fix
+  # follow-up, team-lead: reuse deploy-app.sh's own POST+poll shape).
+  # Touches FAKE_DEPLOY_TRIGGERED_MARKER on the deploy POST so the fake
+  # `docker` binary (same marker-file idiom the PATCH markers above
+  # already use) can switch from FAKE_APP_CID to FAKE_APP_CID_POST once
+  # a redeploy has actually fired -- the real script requires the
+  # post-redeploy container id to DIFFER from the pre-redeploy one, so
+  # this fixture must be able to answer differently across the two
+  # `docker ps` calls that straddle the deploy, across separate,
+  # stateless fake-ssh invocations. Placed BEFORE the generic
+  # GET-readback branch below: "/deployments/<uuid>" does not contain
+  # "/applications" and would otherwise be wrongly matched there.
+  if [[ "$METHOD" == "POST" && "$URL" == *"/deploy?uuid="* ]]; then
+    [[ -n "${FAKE_DEPLOY_TRIGGERED_MARKER:-}" ]] && echo 1 > "$FAKE_DEPLOY_TRIGGERED_MARKER"
+    echo "COOLIFY-DEPLOY-TRIGGERED" >> "$LOG"
+    emit '{"deployments":[{"deployment_uuid":"fakedeployuuid0000000001"}]}' 200
+  fi
+  if [[ "$METHOD" == "GET" && "$URL" == *"/deployments/"* ]]; then
+    emit "$(printf '{"status":"%s","logs":"[]"}' "${FAKE_DEPLOY_STATUS:-finished}")" 200
   fi
 
   if [[ "$METHOD" == "PATCH" ]]; then
@@ -233,12 +311,73 @@ if [[ "$ARGS" == *"localhost:8000/api/v1"* ]]; then
       COMPOSE_DOMAINS_OUT="${FAKE_NEW_COMPOSE_DOMAINS:-}"
     fi
     FQDN_OUT="${FAKE_OLD_FQDN:-}"
-    emit "$(printf '{"uuid": "%s", "name": "%s", "fqdn": "%s", "docker_compose_domains": "%s", "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}' \
-      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "$FQDN_OUT" "$COMPOSE_DOMAINS_OUT" \
+    emit "$(printf '{"uuid": "%s", "name": "%s", "fqdn": "%s", "docker_compose_domains": %s, "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}' \
+      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "$FQDN_OUT" "$(build_compose_domains_field "$COMPOSE_DOMAINS_OUT")" \
       "${FAKE_APP_BASE_DIR:-/api}" "${FAKE_APP_BUILD_PACK:-dockercompose}" "$PORTS_OUT")"
   fi
 
   emit '{}' 200
+fi
+
+# --- sslip reachability probe (run-21 fix follow-up, Sec ask) --------------
+# Checked BEFORE the generic https:// fallback below -- a sslip URL
+# ("*.sslip.io") also contains "https://" for the https leg and would
+# otherwise be wrongly matched there. Both http and https default to
+# 404 for BOTH the app own sslip host and the nonexistent-host control
+# -- "no divergence" is the safe default so a scenario that does not
+# care about this probe never spuriously trips the FINDING line.
+# FAKE_SSLIP_HTTP_CODE/FAKE_SSLIP_HTTPS_CODE control the app own sslip
+# host; FAKE_CONTROL_HTTP_CODE/FAKE_CONTROL_HTTPS_CODE control the
+# nonexistent-host control. The control host is matched first (its own
+# name starts with "nonexistent-", a substring the real app sslip host
+# never contains) so the two never collide.
+# FAKE_CONTROL_UNREACHABLE=1 (Sec F-1, PR #878 review -- CORRECTED after
+# df89cf9f: Sec's own re-measurement showed curl still writes its -w
+# format on a failed transfer, http_code=000 for DNS failure/connection
+# refused/timeout alike -- `|| true` only suppresses the exit STATUS,
+# never the already-written stdout) prints "000" for the control host on
+# BOTH schemes -- the REAL failure shape, and the one 25n asserts on.
+# FAKE_CONTROL_EMPTY=1 keeps a SEPARATE build-independence row (curl
+# itself missing/broken -- NO output at all, not even "000"), never the
+# primary. FAKE_SSLIP_UNREACHABLE=1 mirrors FAKE_CONTROL_UNREACHABLE for
+# the app's OWN sslip host, for the "this machine cannot reach the box
+# at all" scenario where BOTH sides return 000, not just the control.
+# Sec's amended ask (curl-FAITHFUL, not just curl-faithful OUTPUT,
+# copying tests/fixtures/ci/smoke-admission-endpoint/fake-curl's own
+# V-1 pattern, PR #848 review): real curl exits NON-ZERO on the
+# connection-level failure that produces "000" -- an `exit 0` here on
+# either axis (wrong output OR wrong exit status) would fail to strike
+# a future script that starts checking curl's own exit code, the same
+# defect class V-1 named. Both UNREACHABLE (prints "000") and EMPTY
+# (prints nothing) exit 7 here, even though the real script's own
+# `2>/dev/null || true` swallows the distinction today -- fidelity with
+# the sibling fixture's convention, not a behavior change for #878.
+if [[ "$ARGS" == *"nonexistent-"*".sslip.io"* ]]; then
+  if [[ "${FAKE_CONTROL_EMPTY:-0}" == "1" ]]; then
+    exit 7
+  fi
+  if [[ "${FAKE_CONTROL_UNREACHABLE:-0}" == "1" ]]; then
+    printf '000'
+    exit 7
+  fi
+  if [[ "$ARGS" == *"https://"* ]]; then
+    printf '%s' "${FAKE_CONTROL_HTTPS_CODE:-404}"
+  else
+    printf '%s' "${FAKE_CONTROL_HTTP_CODE:-404}"
+  fi
+  exit 0
+fi
+if [[ "$ARGS" == *".sslip.io"* ]]; then
+  if [[ "${FAKE_SSLIP_UNREACHABLE:-0}" == "1" ]]; then
+    printf '000'
+    exit 7
+  fi
+  if [[ "$ARGS" == *"https://"* ]]; then
+    printf '%s' "${FAKE_SSLIP_HTTPS_CODE:-404}"
+  else
+    printf '%s' "${FAKE_SSLIP_HTTP_CODE:-404}"
+  fi
+  exit 0
 fi
 
 # --- Public HTTPS poll -----------------------------------------------------
