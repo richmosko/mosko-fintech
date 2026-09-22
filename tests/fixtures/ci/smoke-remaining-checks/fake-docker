@@ -9,8 +9,8 @@
 #   2. `docker inspect --format '...' <id>` -- RUNNING, real tab.
 #   3. `docker compose --project-name <uuid> exec -T db psql ... -tAc
 #      "<query>"` -- distinguished by a SANITY-TOKEN substring unique to
-#      each of the four psql_admin() call sites in the real script (the
-#      SAME tokens that query's own SQL text carries):
+#      each of the psql_admin() call sites in the real script (the SAME
+#      tokens that query's own SQL text carries):
 #        pg_db_role_setting   -> TZ-1                 -> $FAKE_TZ1_ROWS
 #        relrowsecurity       -> RLS enumeration (7 fields per row:
 #                                   table|rls|polcount|anon-table-sel|
@@ -19,11 +19,33 @@
 #                                   round-2 review, PR #880: all four
 #                                   grant checks live in THIS query now,
 #                                   not a second round trip) -> $FAKE_RLS_ENUM
-#        set role authenticated -> RLS privileged-baseline + zero-context
-#                                   combined query (Sec F-1, PR #869
-#                                   review) -> $FAKE_ZERO_CTX, format
-#                                   "PRIV|table|count\nAUTH|table|count"
-#                                   per discovered table.
+#        'PRIV' as ctx         -> RLS privileged-baseline batched query
+#                                   (ALL tables, one UNION ALL call, admin
+#                                   never errors) -> $FAKE_PRIV, format
+#                                   "PRIV|table|count" per discovered
+#                                   table.
+#        set role authenticated -> real-run 25 fix (2026-09-22): the
+#                                   `authenticated` count is now ONE
+#                                   psql invocation PER TABLE (a batched
+#                                   UNION ALL aborts every table's read
+#                                   the instant one hits a grant-level
+#                                   refusal -- see the real script's own
+#                                   header for the measured defect).
+#                                   Table name is extracted from the
+#                                   query text (`pfin."<table>"`) and
+#                                   looked up in $FAKE_AUTH_TABLE_RESULTS,
+#                                   one line per table, format
+#                                   "table|MODE|value" where MODE is one
+#                                   of OK (prints <value>, exit 0),
+#                                   DENIED (prints the real psql
+#                                   'permission denied for table <t>'
+#                                   wording to stderr, exit 1 -- proves
+#                                   the DENIED-AT-GRANT classification
+#                                   against the real error text, not a
+#                                   paraphrase), or ERROR (prints
+#                                   "ERROR:  <value>" to stderr, exit 1
+#                                   -- an unrecognised error, must stay a
+#                                   precondition failure, never a pass).
 #        rolbypassrls         -> service_role BYPASSRLS -> $FAKE_BYPASSRLS
 #   4. `docker compose --project-name <uuid> exec -T auth node -e '...'`
 #      -- the Resend send-acceptance probe -- prints $FAKE_RESEND_OUT.
@@ -58,9 +80,54 @@ if [[ "$ARGS" == *"exec -T db psql"* ]]; then
     printf '%s' "${FAKE_RLS_ENUM:-}"
     exit 0
   fi
-  if [[ "$ARGS" == *"set role authenticated"* ]]; then
-    printf '%s' "${FAKE_ZERO_CTX:-}"
+  if [[ "$ARGS" == *"'PRIV' as ctx"* ]]; then
+    printf '%s' "${FAKE_PRIV:-}"
     exit 0
+  fi
+  if [[ "$ARGS" == *"set role authenticated"* ]]; then
+    # NOTE: the multi-layer heredoc/ssh re-parse this query text passes
+    # through (psql_admin's own heredoc, then fake-ssh's re-exec of that
+    # heredoc body as a second bash script) treats the query's own
+    # double-quoted SQL identifier (`pfin."account"`) as BASH quoting
+    # syntax, not data -- the quote CHARACTERS are consumed as
+    # delimiters and do not survive into the final argv (harmless for
+    # Postgres here, since every discovered table name is already a
+    # simple lowercase identifier, quoted or not). Match the UNQUOTED
+    # form that actually reaches this fixture.
+    TBL="$(printf '%s' "$ARGS" | sed -n 's/.*pfin\.\([a-z_][a-z0-9_]*\);.*/\1/p')"
+    if [[ -z "$TBL" ]]; then
+      echo "FAKE DOCKER: could not extract table name from authenticated-read query: $ARGS" >&2
+      exit 1
+    fi
+    ROW="$(printf '%s\n' "${FAKE_AUTH_TABLE_RESULTS:-}" | awk -F'|' -v t="$TBL" '$1==t {print; exit}')"
+    if [[ -z "$ROW" ]]; then
+      echo "FAKE DOCKER: no FAKE_AUTH_TABLE_RESULTS row for table '$TBL' -- fixture gap: $ARGS" >&2
+      exit 1
+    fi
+    MODE="$(printf '%s' "$ROW" | awk -F'|' '{print $2}')"
+    VAL="$(printf '%s' "$ROW" | awk -F'|' '{print $3}')"
+    case "$MODE" in
+      OK)
+        printf '%s' "$VAL"
+        exit 0
+        ;;
+      DENIED)
+        # Byte-matches real psql's own wording (real-run 25, 2026-09-22 --
+        # pinned verbatim in the real script's own header) so the
+        # classification is proven against the real error text, not a
+        # paraphrase.
+        printf 'ERROR:  permission denied for table %s\nHINT:  Grant the required privileges to the current role with: GRANT SELECT ON pfin.%s TO authenticated;\n' "$TBL" "$TBL" >&2
+        exit 1
+        ;;
+      ERROR)
+        printf 'ERROR:  %s\n' "${VAL:-simulated unexpected error}" >&2
+        exit 1
+        ;;
+      *)
+        echo "FAKE DOCKER: unrecognised FAKE_AUTH_TABLE_RESULTS mode '$MODE' for table '$TBL'" >&2
+        exit 1
+        ;;
+    esac
   fi
   if [[ "$ARGS" == *"rolbypassrls"* ]]; then
     printf '%s' "${FAKE_BYPASSRLS:-true}"

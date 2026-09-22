@@ -93,28 +93,41 @@
 #         empty table", and a freshly-provisioned, pre-cutover box is
 #         overwhelmingly likely to BE that empty-table state. Fixed by
 #         pairing the zero-context read with a PRIVILEGED baseline count
-#         (as `supabase_admin`, no `SET ROLE`) for the SAME tables, in the
-#         SAME psql invocation (one SSH round trip, still entirely
-#         read-only). Per table: connect as `authenticated` (`SET ROLE
-#         authenticated` from the `supabase_admin` superuser session --
-#         current_user becomes `authenticated`, which is neither the
-#         table owner nor a superuser, so RLS enforces normally per
-#         ordinary Postgres semantics) WITHOUT ever setting
-#         `request.jwt.claims` -- exactly the shape a stolen/absent JWT
-#         would produce. Every migration in this repo scopes its policies
-#         `users_id = auth.uid()` (001_pfin_foundation.sql's own stated
-#         convention), and `auth.uid()` returns NULL with no JWT claims
-#         set, so `users_id = NULL` can never be true -- a table with
-#         real rows and 0 visible under `authenticated` is PROVEN
-#         isolated; a table with 0 real rows to begin with is
-#         INCONCLUSIVE (nothing to isolate, says nothing either way); any
-#         table where `authenticated` sees >0 rows is a live RLS bypass,
-#         FAILED regardless of the others. If NO discovered table is ever
-#         PROVEN (i.e. the whole set is empty), this leg reports SKIPPED,
-#         not VERIFIED -- isolation is unproven, not proven absent; `reset
-#         role` (Sec F-2) at the tail keeps the session's role-scope
-#         explicit rather than incidental-because-the-connection-closes-
-#         next.
+#         (as `supabase_admin`, no `SET ROLE`) for the SAME tables --
+#         the privileged baseline is still one batched UNION ALL psql
+#         invocation (admin always has access, never errors), but the
+#         `authenticated` read is ONE PSQL INVOCATION PER TABLE (real-run
+#         25 fix, 2026-09-22 -- see that fix's own note further down for
+#         why: a single combined UNION ALL statement aborts EVERY table's
+#         read the instant ONE table hits a grant-level refusal). Per
+#         table: connect as `authenticated` (`SET ROLE authenticated`
+#         from the `supabase_admin` superuser session -- current_user
+#         becomes `authenticated`, which is neither the table owner nor a
+#         superuser, so RLS enforces normally per ordinary Postgres
+#         semantics) WITHOUT ever setting `request.jwt.claims` -- exactly
+#         the shape a stolen/absent JWT would produce. Every migration in
+#         this repo scopes its policies `users_id = auth.uid()`
+#         (001_pfin_foundation.sql's own stated convention), and
+#         `auth.uid()` returns NULL with no JWT claims set, so `users_id
+#         = NULL` can never be true -- a table with real rows and 0
+#         visible under `authenticated` is PROVEN isolated; a table with
+#         0 real rows to begin with is INCONCLUSIVE (nothing to isolate,
+#         says nothing either way); any table where `authenticated` sees
+#         >0 rows is a live RLS bypass, FAILED regardless of the others.
+#         A `permission denied for table <t>` refusal (the four
+#         RLS_DENY_ALL_EXPECTED tables carry NO grant to `authenticated`
+#         at all, by design -- the strongest possible deny) is classified
+#         DENIED-AT-GRANT and counted as an authenticated-count of 0 --
+#         a grant-level refusal is STRONGER proof of "nothing visible"
+#         than a policy-based 0-row read, so it satisfies the same
+#         observation a real 0 would. Any OTHER error on a table's read
+#         is a precondition failure SCOPED TO THAT TABLE, never the whole
+#         leg. If NO discovered table is ever PROVEN (i.e. the whole set
+#         is empty), this leg reports SKIPPED, not VERIFIED -- isolation
+#         is unproven, not proven absent. Sec F-2's original `reset role`
+#         concern no longer applies -- each table's `authenticated` read
+#         is its own fresh docker-exec/psql connection now, so there is
+#         no shared session for a stray SET ROLE to leak across.
 #       - `service_role`'s own BYPASSRLS attribute is confirmed
 #         structurally (`pg_roles.rolbypassrls`), matching the by-design
 #         contrast every migration comment in this repo already states
@@ -143,11 +156,28 @@
 #         CSRF guard 403s a cross-origin-looking POST before the route's
 #         own Zod validation ever runs -- setting Origin to the app's own
 #         domain is what lets this probe reach the real fail(400) path
-#         instead of being rejected one layer earlier) -> expect 400. This
-#         proves the endpoint is live and its `.strict()` validation
-#         fires, WITHOUT ever calling `signUp` with a valid credential
-#         pair -- no real auth.users row, no real confirmation email, no
-#         Resend quota spent by this leg.
+#         instead of being rejected one layer earlier). This proves the
+#         endpoint is live and its `.strict()` validation fires, WITHOUT
+#         ever calling `signUp` with a valid credential pair -- no real
+#         auth.users row, no real confirmation email, no Resend quota
+#         spent by this leg.
+#           real-run 25 fix (2026-09-22) -- the naive check compared only
+#         the raw HTTP status against 400 and treated the real box's
+#         actual response as a defect. SvelteKit reports a form-action
+#         `fail(400, ...)` (api/src/routes/signup/+page.server.ts) as
+#         HTTP 200 with a JSON envelope, not a plain HTTP 400. MEASURED
+#         live, real-run 25, 2026-09-22 -- HTTP 200, Content-Type:
+#         application/json, body:
+#           {"type":"failure","status":400,"data":"[{\"errors\":1,\"email\":5},{\"password\":2,...},\"Invalid input: expected string, received undefined\",...]"}
+#         This leg now accepts EITHER shape as proof the request was
+#         rejected and no account was created: a plain HTTP 400, or an
+#         HTTP 200 envelope with `type: "failure"`, `status: 400`, and a
+#         `data` field that mentions "password". An envelope with `type:
+#         "success"`, or any redirect, means an account WAS created --
+#         FAILED. An HTTP 403 means the CSRF guard rejected the request
+#         before validation ever ran (Origin header wrong/missing) --
+#         FAILED, naming CSRF, since this leg then cannot prove Zod
+#         .strict() fired at all.
 #       - A Resend send-acceptance probe, SEPARATELY: reads
 #         `GOTRUE_SMTP_PASS`/`GOTRUE_SMTP_ADMIN_EMAIL` from the Supabase
 #         stack's own `auth` (GoTrue) container env -- filtered ON THE BOX
@@ -662,38 +692,78 @@ else
     # columns -- no second round trip needed (Sec F-1, round-2 review,
     # PR #880: originally a separate GRANT_SQL query here; folded into
     # the enumeration query instead).
-    AUTH_SQL=""
-    first=1
-    for t in "${TABLES[@]}"; do
-      if [[ $first -eq 1 ]]; then AUTH_SQL="select 'AUTH' as ctx, '$t' as t, count(*) as n from pfin.\"$t\""; first=0
-      else AUTH_SQL="$AUTH_SQL union all select 'AUTH', '$t', count(*) from pfin.\"$t\""; fi
-    done
-    ZERO_CTX_QUERY="$PRIV_SQL; set role authenticated; $AUTH_SQL; reset role;"
     set +e
-    ZERO_CTX_OUT="$(psql_admin "$ZERO_CTX_QUERY")"
-    ZERO_CTX_RC=$?
+    PRIV_OUT="$(psql_admin "$PRIV_SQL")"
+    PRIV_RC=$?
     set -e
-    if [[ $ZERO_CTX_RC -ne 0 ]]; then
+    if [[ $PRIV_RC -ne 0 ]]; then
       RLS_STATUS="FAILED"
-      RLS_MSGS+=("the privileged-baseline / zero-JWT-context 'authenticated' row-count read failed (rc=$ZERO_CTX_RC) -- precondition (e.g. supabase_admin cannot SET ROLE authenticated), not an isolation finding.")
+      RLS_MSGS+=("the privileged-baseline row-count read failed (rc=$PRIV_RC) -- precondition, not an isolation finding.")
     else
+      # real-run 25 fix (2026-09-22) -- the ORIGINAL authenticated read
+      # batched every table's count into ONE UNION ALL statement, sent
+      # together with `set role authenticated` as ONE multi-statement -c
+      # string -- ONE implicit server-side transaction. On a table with
+      # NO grant to `authenticated` at all (the RLS_DENY_ALL_EXPECTED
+      # tables -- the strongest possible deny), that UNION ALL statement
+      # itself raises "permission denied for table <t>", which aborts
+      # the WHOLE implicit transaction: every OTHER table's count is
+      # lost too, and the leg reported a blanket precondition failure
+      # even though every single table's read behavior was exactly what
+      # DENY-ALL requires. Measured live (real-run 25, 2026-09-22):
+      #   psql -U supabase_admin -c "set role authenticated; select
+      #   count(*) from pfin.audit_log;" -> ERROR:  permission denied
+      #   for table audit_log -- the SET itself succeeds.
+      #
+      # Fixed by reading `authenticated`'s count ONE TABLE PER psql
+      # invocation -- a fresh docker-exec/psql session each time, so a
+      # denied table can never abort a sibling table's read. A batched
+      # read that aborts the whole batch on the first refusal must not
+      # exist, and does not any more. `permission denied for table <t>`
+      # (captured via `2>&1`, since psql sends it to stderr) is
+      # classified DENIED-AT-GRANT and treated as an authenticated-count
+      # of 0 -- a grant-level refusal is a STRONGER proof of "nothing
+      # visible" than a policy-based 0-row read, so it satisfies the row
+      # observation exactly like a real 0 would. Any OTHER error stays a
+      # precondition failure, scoped to that one table, not the whole
+      # leg. `reset role` (Sec F-2's original concern) is no longer
+      # needed -- each table's read is its own fresh connection; there
+      # is no shared session for a stray SET ROLE to leak across.
+      #
       # bash 3.2 (macOS operator shell): no associative arrays (`declare
       # -A` is a bash 4+ builtin option this repo's own provision.sh
       # header already states as off-limits -- "parallel arrays, no
       # assoc arrays"). Per-table lookup via a plain string match on the
-      # "CTX|table|count" output instead of a hash map.
+      # "PRIV|table|count" output instead of a hash map.
       PROVEN_COUNT=0
       INCONCLUSIVE_COUNT=0
       DENY_ALL_COUNT=0
       for t in "${TABLES[@]}"; do
-        p="$(printf '%s\n' "$ZERO_CTX_OUT" | awk -F'|' -v t="$t" '$1=="PRIV" && $2==t {print $3; exit}')"
-        a="$(printf '%s\n' "$ZERO_CTX_OUT" | awk -F'|' -v t="$t" '$1=="AUTH" && $2==t {print $3; exit}')"
-        polcount="$(printf '%s\n' "$RLS_ENUM" | awk -F'|' -v t="$t" '$1==t {print $3; exit}')"
-        if [[ -z "$p" || -z "$a" ]]; then
+        p="$(printf '%s\n' "$PRIV_OUT" | awk -F'|' -v t="$t" '$1=="PRIV" && $2==t {print $3; exit}')"
+        if [[ -z "$p" ]]; then
           RLS_STATUS="FAILED"
-          RLS_MSGS+=("pfin.$t: missing a privileged or authenticated row-count reading in the combined query output -- precondition, treat as unverified.")
+          RLS_MSGS+=("pfin.$t: missing a privileged row-count reading in the PRIV query output -- precondition, treat as unverified.")
           continue
         fi
+        polcount="$(printf '%s\n' "$RLS_ENUM" | awk -F'|' -v t="$t" '$1==t {print $3; exit}')"
+
+        set +e
+        AUTH_OUT="$(psql_admin "set role authenticated; select count(*) from pfin.\"$t\";" 2>&1)"
+        AUTH_RC=$?
+        set -e
+
+        auth_note=""
+        if [[ $AUTH_RC -eq 0 ]]; then
+          a="$AUTH_OUT"
+        elif [[ "$AUTH_OUT" == *"permission denied for table $t"* ]]; then
+          a=0
+          auth_note=" (authenticated DENIED-AT-GRANT: 'permission denied for table $t' -- a stronger proof of isolation than a policy-based 0-row read)"
+        else
+          RLS_STATUS="FAILED"
+          RLS_MSGS+=("pfin.$t: the authenticated row-count read failed with an unexpected error (rc=$AUTH_RC) -- precondition, not an isolation finding. $AUTH_OUT")
+          continue
+        fi
+
         if [[ "$a" != "0" ]]; then
           RLS_STATUS="FAILED"
           RLS_MSGS+=("pfin.$t: $a row(s) visible to a session with NO tenant identity established (SET ROLE authenticated, no request.jwt.claims) -- expected 0. This is a live RLS bypass, not a fixture artifact.")
@@ -702,7 +772,9 @@ else
         if [[ "$polcount" -ge 1 ]]; then
           # POLICY-SCOPED -- at least one real pg_policies row.
           if is_deny_all_expected "$t"; then
-            info "pfin.$t: in RLS_DENY_ALL_EXPECTED but carries $polcount polic(ies) now -- POLICY-SCOPED, not DENY-ALL any more (INFO, not a failure; consider removing it from the allowlist once Sec confirms)."
+            info "pfin.$t: in RLS_DENY_ALL_EXPECTED but carries $polcount polic(ies) now -- POLICY-SCOPED, not DENY-ALL any more (INFO, not a failure; consider removing it from the allowlist once Sec confirms).$auth_note"
+          elif [[ -n "$auth_note" ]]; then
+            info "pfin.$t: POLICY-SCOPED ($polcount polic(ies))$auth_note"
           fi
           if [[ "$p" -gt 0 ]]; then
             PROVEN_COUNT=$((PROVEN_COUNT + 1))
@@ -725,7 +797,8 @@ else
           # already asserted in the enumeration loop above, against this
           # same table's row from RLS_ENUM -- reaching here with
           # RLS_STATUS still VERIFIED means it held. The behavioral half
-          # (authenticated sees 0 of >0 real rows) only PROVES anything
+          # (authenticated sees 0 of >0 real rows, whether via a real
+          # 0-row read or a DENIED-AT-GRANT refusal) only PROVES anything
           # when the privileged baseline is non-zero (Sec requirement
           # 4) -- on an empty table the structural conjunction is
           # VERIFIED but the row observation is INCONCLUSIVE, never
@@ -733,10 +806,10 @@ else
           DENY_ALL_COUNT=$((DENY_ALL_COUNT + 1))
           CONJUNCTION_TERMS="RLS on, 0 policies, and all four privilege terms false (anon table-level, authenticated table-level, anon column-level, authenticated column-level)"
           if [[ "$p" -gt 0 ]]; then
-            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS) AND authenticated sees 0 of $p row(s) visible to supabase_admin -- ALLOWLISTED, isolation demonstrated."
+            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS) AND authenticated sees 0 of $p row(s) visible to supabase_admin -- ALLOWLISTED, isolation demonstrated.$auth_note"
             PROVEN_COUNT=$((PROVEN_COUNT + 1))
           else
-            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS); row observation INCONCLUSIVE (privileged count is 0 too -- nothing to isolate, never reported as DENY-ALL fully demonstrated on an empty table)."
+            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS); row observation INCONCLUSIVE (privileged count is 0 too -- nothing to isolate, never reported as DENY-ALL fully demonstrated on an empty table).$auth_note"
             INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
           fi
         fi
@@ -910,19 +983,77 @@ else
     # Origin set explicitly to the app's own domain: SvelteKit's built-in
     # CSRF guard 403s a cross-origin-looking POST before the route's own
     # Zod validation ever runs -- see this file's own header for why.
-    SIGNUP_STATUS="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    #
+    # real-run 25 fix (2026-09-22) -- see this file's own LEG 4 header
+    # for the MEASURED envelope shape. A plain HTTP 400 is still
+    # accepted; an HTTP 200 is now inspected as a possible SvelteKit
+    # form-action-failure envelope instead of being treated as a defect
+    # outright.
+    SIGNUP_HDR="$(mktemp)"
+    SIGNUP_BODY="$(mktemp)"
+    SIGNUP_STATUS="$(curl -s -o "$SIGNUP_BODY" -D "$SIGNUP_HDR" -w '%{http_code}' --max-time 10 \
       -H "Origin: https://$AUTH_HOST" \
       --data-urlencode "email=smoke-remaining-checks-invalid@example.invalid" \
       "https://$AUTH_HOST/signup" 2>/dev/null || true)"
+    SIGNUP_CTYPE="$(grep -i '^content-type:' "$SIGNUP_HDR" 2>/dev/null | tail -1 | tr -d '\r\n' | awk -F': ' '{print $2}' || true)"
+
     if [[ -z "$SIGNUP_STATUS" ]]; then
       AUTH_STATUS="FAILED"
       AUTH_MSG="the POST https://$AUTH_HOST/signup probe produced no output at all -- precondition, not a validation finding."
+    elif [[ "$SIGNUP_STATUS" == "403" ]]; then
+      AUTH_STATUS="FAILED"
+      AUTH_MSG="POST https://$AUTH_HOST/signup (missing password) -> HTTP 403 -- the CSRF guard rejected the request (Origin header wrong/missing?) before the route's own validation ever ran; this leg cannot prove Zod .strict() fired."
     elif [[ "$SIGNUP_STATUS" == "400" ]]; then
-      ok "auth login: POST /signup with a missing 'password' field -> 400 (Zod .strict() validation fires; no real account was created)"
+      ok "auth login: POST /signup with a missing 'password' field -> HTTP 400 (validation rejected; no account created)"
+    elif [[ "$SIGNUP_STATUS" == "200" ]]; then
+      if [[ "$SIGNUP_CTYPE" != *"application/json"* ]]; then
+        AUTH_STATUS="FAILED"
+        AUTH_MSG="POST https://$AUTH_HOST/signup (missing password) -> HTTP 200 with Content-Type '$SIGNUP_CTYPE' -- not the application/json SvelteKit action-failure envelope this leg expects; refusing to guess whether an account was created."
+      else
+        SIGNUP_PARSE="$(python3 - "$SIGNUP_BODY" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    raw = f.read()
+try:
+    envelope = json.loads(raw)
+except Exception as e:
+    print("PARSE_ERROR:" + str(e))
+    sys.exit(0)
+if not isinstance(envelope, dict):
+    print("PARSE_ERROR:not a JSON object")
+    sys.exit(0)
+etype = envelope.get("type")
+status = envelope.get("status")
+data = envelope.get("data")
+data_text = data if isinstance(data, str) else json.dumps(data)
+print("TYPE:" + str(etype))
+print("STATUS:" + str(status))
+print("MENTIONS_PASSWORD:" + ("yes" if "password" in data_text else "no"))
+PYEOF
+)"
+        if [[ "$SIGNUP_PARSE" == PARSE_ERROR:* ]]; then
+          AUTH_STATUS="FAILED"
+          AUTH_MSG="POST https://$AUTH_HOST/signup (missing password) -> HTTP 200 but the body did not parse as JSON (${SIGNUP_PARSE#PARSE_ERROR:}) -- not the envelope this leg expects."
+        else
+          SIGNUP_TYPE="$(printf '%s\n' "$SIGNUP_PARSE" | awk -F: '/^TYPE:/{print $2; exit}')"
+          SIGNUP_ENV_STATUS="$(printf '%s\n' "$SIGNUP_PARSE" | awk -F: '/^STATUS:/{print $2; exit}')"
+          SIGNUP_MENTIONS_PW="$(printf '%s\n' "$SIGNUP_PARSE" | awk -F: '/^MENTIONS_PASSWORD:/{print $2; exit}')"
+          if [[ "$SIGNUP_TYPE" == "success" ]]; then
+            AUTH_STATUS="FAILED"
+            AUTH_MSG="POST https://$AUTH_HOST/signup (missing password) -> HTTP 200 with a SvelteKit action-SUCCESS envelope (type=success) -- this would mean an account WAS created from a malformed body."
+          elif [[ "$SIGNUP_TYPE" == "failure" && "$SIGNUP_ENV_STATUS" == "400" && "$SIGNUP_MENTIONS_PW" == "yes" ]]; then
+            ok "auth login: POST /signup with a missing 'password' field -> action failure 400 (SvelteKit envelope over HTTP 200; Zod .strict() fired; no account created)"
+          else
+            AUTH_STATUS="FAILED"
+            AUTH_MSG="POST https://$AUTH_HOST/signup (missing password) -> HTTP 200 envelope type='$SIGNUP_TYPE' status='$SIGNUP_ENV_STATUS' mentions-password='$SIGNUP_MENTIONS_PW' -- expected type=failure, status=400, mentioning 'password'."
+          fi
+        fi
+      fi
     else
       AUTH_STATUS="FAILED"
-      AUTH_MSG="POST https://$AUTH_HOST/signup (missing password) -> HTTP $SIGNUP_STATUS, expected 400."
+      AUTH_MSG="POST https://$AUTH_HOST/signup (missing password) -> HTTP $SIGNUP_STATUS, expected 400 or a 200 SvelteKit action-failure envelope."
     fi
+    rm -f "$SIGNUP_HDR" "$SIGNUP_BODY"
   fi
 
   if [[ "$AUTH_STATUS" != "FAILED" ]]; then
