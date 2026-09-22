@@ -72,7 +72,10 @@
 #     READ-ONLY check). Production may hold zero real tenant rows, or it
 #     may already hold real financial data:
 #       - Every `pfin.*` table carrying a `users_id` column is discovered
-#         LIVE from information_schema.columns (never a hand-maintained
+#         LIVE from pg_attribute (never information_schema.columns --
+#         that view is role-filtered, same premise Sec had removed from
+#         the privilege checks below; pg_attribute is catalog-level and
+#         does not depend on who is asking. Never a hand-maintained
 #         list -- the B-1 dynamic-enumeration convention
 #         scripts/pgrst-exposure-gates.sh already established).
 #       - For each discovered table: `pg_class.relrowsecurity = true`
@@ -544,7 +547,18 @@ RLS_MSGS=()
 # columns, all fetched here in the one enumeration query (no second
 # round trip): anon/authenticated at table level, then anon/authenticated
 # at column level, in that order.
-RLS_ENUM_QUERY="select c.relname, c.relrowsecurity::text, (select count(*) from pg_policies p where p.schemaname = n.nspname and p.tablename = c.relname)::text, has_table_privilege('anon', c.oid, 'SELECT')::text, has_table_privilege('authenticated', c.oid, 'SELECT')::text, has_any_column_privilege('anon', c.oid, 'SELECT')::text, has_any_column_privilege('authenticated', c.oid, 'SELECT')::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and c.relkind in ('r','p') and exists (select 1 from information_schema.columns col where col.table_schema = 'pfin' and col.table_name = c.relname and col.column_name = 'users_id') order by c.relname;"
+# Sec (non-gating flag, PR #880 round-3 GREEN): table DISCOVERY used
+# information_schema.columns, a view that shows only columns the
+# CURRENT ROLE can see -- the same role-visibility premise Sec had
+# already made us remove from the privilege checks (has_table_privilege/
+# has_any_column_privilege don't have it). It returns the complete set
+# only because psql_admin connects as supabase_admin, a superuser; if
+# that ever changes, this view returns FEWER tables, the loop checks
+# fewer tables, and the leg reports OK -- a fail-open on the leg's
+# COVERAGE, not on any single table's verdict (the empty-set guard below
+# catches total loss, not partial). pg_attribute is catalog-level, not
+# role-filtered -- discovery no longer depends on who is asking.
+RLS_ENUM_QUERY="select c.relname, c.relrowsecurity::text, (select count(*) from pg_policies p where p.schemaname = n.nspname and p.tablename = c.relname)::text, has_table_privilege('anon', c.oid, 'SELECT')::text, has_table_privilege('authenticated', c.oid, 'SELECT')::text, has_any_column_privilege('anon', c.oid, 'SELECT')::text, has_any_column_privilege('authenticated', c.oid, 'SELECT')::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and c.relkind in ('r','p') and exists (select 1 from pg_attribute a where a.attrelid = c.oid and a.attname = 'users_id' and a.attnum > 0 and not a.attisdropped) order by c.relname;"
 
 set +e
 RLS_ENUM="$(psql_admin "$RLS_ENUM_QUERY")"
