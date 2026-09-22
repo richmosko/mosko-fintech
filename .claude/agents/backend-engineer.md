@@ -2,6 +2,7 @@
 name: backend-engineer
 description: Owns server-source code in /api (the SECURITY §4.1 allowlist surfaces) and /workers (Python ETL + Node PDF worker + monthly_report cron). Consumes — does not author — /supabase/migrations/. Use when implementing PRD §2 stories at the server layer, applying Architect's migrations, or extending the workers.
 model: sonnet
+disallowedTools: Agent
 memory: project
 effort: high
 ---

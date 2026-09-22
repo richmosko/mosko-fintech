@@ -296,6 +296,8 @@ it unilaterally.
 
 Each execution role has a corresponding `.claude/agents/<role>.md` file containing its system prompt, scoped tools, and behavioral guidelines — every `.md` there becomes a spawnable `subagent_type`. Agent definitions were split across two phases by when they were first needed: roles active in Phases 1–4 were defined in **Phase 0.5**; build-time roles activated in Phase 5+ were defined in **Phase 5** alongside the rest of workshop setup. The "Definition timing" note on each role below records which phase produced its definition file.
 
+**Only the team-lead spawns agents (F/CTO ruling, 2026-09-22).** Every agent definition carries `disallowedTools: Agent` (or an explicit `tools:` list that omits it, as `security-engineer` already did), so no teammate can spawn subagents or fork itself. Delegation therefore stays visible to F/CTO and the team-lead; a teammate that needs a side read does it itself. Origin: on 2026-09-22 a DevOps teammate forked itself twice for a fifteen-minute read; one fork sub-delegated again and never returned, and the 2026-09-05 "research-only fork wrote the deliverable" incident was the same mechanism.
+
 ### Meta role
 
 **Team-lead** (`.claude/roles/team-lead.md` — a role, not a spawnable agent)
