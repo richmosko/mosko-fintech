@@ -71,6 +71,24 @@
 #      CONTROL GAP" fact for a read that never happened. This section
 #      stays informational (exit code unaffected in all four cases); only
 #      the WORDING is asserted.
+#   29/30. WWW-AS-A (live dns fix, 2026-09-22 -- www.pfindash.com already
+#      existed as an A record, not a CNAME, and this script only ever
+#      looked for a CNAME) -- a mismatched www A edits in place to box_ip
+#      (never a CNAME create alongside it, the exact conflict a live
+#      Porkbun 400 measured); an already-correct www A issues no write.
+#   31. WWW-AAAA-NOW-REFUSES -- AAAA at www used to pass through
+#      unexamined (the OLD allowed-set was {A,AAAA,CNAME}); now refuses
+#      by name, since this script writes neither AAAA nor IPv6 anywhere.
+#   32. PORKBUN-WRITE-NON-2XX-SURFACES-MESSAGE (the second live defect,
+#      same measurement pass) -- `curl -fsS` discarded the response body
+#      on a non-2xx, so the operator only ever saw a bare curl transport
+#      error, never Porkbun own `message` field explaining why -> the
+#      status-preserving rewrite must name BOTH the HTTP status and
+#      Porkbun own message text.
+#   33/34. WILDCARD-A WARN -- a `*.{domain}` A record pointing somewhere
+#      other than box_ip prints a READ-ONLY warning (never a refusal,
+#      never a write -- an F/CTO cutover decision); already matching
+#      prints nothing.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -275,6 +293,7 @@ run_case() {
     PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$log" FAKE_LEAK_LOG="$leak_log" \
     FAKE_PORKBUN_API_KEY_VALUE="$PORKBUN_API_KEY_VALUE" FAKE_PORKBUN_SECRET_KEY_VALUE="$PORKBUN_SECRET_KEY_VALUE" \
     FAKE_PORKBUN_RECORDS="$records" FAKE_APEX_CODE="$apex_code" FAKE_WWW_CODE="$www_code" \
+    FAKE_PORKBUN_WRITE_HTTP_STATUS="${FAKE_PORKBUN_WRITE_HTTP_STATUS:-}" FAKE_PORKBUN_WRITE_ERROR_MESSAGE="${FAKE_PORKBUN_WRITE_ERROR_MESSAGE:-}" \
     FAKE_APP_UUID=appuuid0000000000001 FAKE_APP_NAME=pfin-app FAKE_OLD_FQDN="$old_fqdn" FAKE_NEW_FQDN="$new_fqdn" \
     FAKE_APP_BASE_DIR="${FAKE_APP_BASE_DIR:-/api}" FAKE_APP_BUILD_PACK="${FAKE_APP_BUILD_PACK:-dockercompose}" \
     FAKE_APP_PORTS="${FAKE_APP_PORTS:-3000}" FAKE_NEW_PORTS="${FAKE_NEW_PORTS:-3000}" \
@@ -675,6 +694,140 @@ if [[ -n "${CASE_OUTPUT:-}" ]]; then
     echo "FAIL: [non-hex CID] printed an env-injection measurement despite refusing the shape check -- docker exec must never have run." >&2
     FAIL=1
   fi
+fi
+
+# --- www-as-A / Porkbun status-preserving / wildcard-WARN scenarios
+# (2026-09-22 live dns fix -- see this script own header + this file own
+# header for the measurement that found this) -------------------------
+
+# 29. WWW-AS-A-EDITS-IN-PLACE -- apex already correct (isolates the www
+#     leg), www exists as an A record NOT equal to box_ip -- must issue
+#     an editByNameType/A/www call, never a CNAME create (the exact
+#     conflict a live Porkbun 400 measured), and must report the
+#     CNAME-not-created explanation.
+WWW_AS_A_MISMATCH='[{"name":"fake-domain.test","type":"A","content":"127.0.0.1"},{"name":"www.fake-domain.test","type":"A","content":"9.9.9.9"}]'
+run_case "www exists as A record, mismatched -- edits in place to box_ip" 0 --apply "$WWW_AS_A_MISMATCH" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+if [[ -n "${CASE_LOG:-}" ]]; then
+  if ! grep -qF "dns/editByNameType/fake-domain.test/A/www" "$CASE_LOG"; then
+    echo "FAIL: [www-as-A edit] expected an editByNameType/A/www call -- captured log: $(cat "$CASE_LOG")" >&2
+    FAIL=1
+  fi
+  if grep -qF "dns/create/fake-domain.test" "$CASE_LOG"; then
+    echo "FAIL: [www-as-A edit] a CNAME create call was issued despite an A record already existing at www" >&2
+    FAIL=1
+  fi
+fi
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "CNAME not created because an A record exists" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [www-as-A edit] did not report the CNAME-not-created explanation -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 30. WWW-AS-A-ALREADY-CORRECT-NO-WRITE -- the A record already equals
+#     box_ip -- must issue NO write of any kind for www (real idempotency,
+#     the same discipline scenario 4/11 already apply to the CNAME case).
+WWW_AS_A_CORRECT='[{"name":"fake-domain.test","type":"A","content":"127.0.0.1"},{"name":"www.fake-domain.test","type":"A","content":"127.0.0.1"}]'
+run_case "www exists as A record, already = box_ip -- no write" 0 --apply "$WWW_AS_A_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+if [[ -n "${CASE_LOG:-}" ]] && grep -qE "dns/editByNameType/fake-domain\.test/A/www|dns/create/fake-domain\.test" "$CASE_LOG"; then
+  echo "FAIL: [www-as-A already correct] a DNS write call was issued despite www A already matching box_ip" >&2
+  FAIL=1
+fi
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "www A already -> box -- nothing to change" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [www-as-A already correct] did not print the expected already-correct wording -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 31. WWW-AAAA-NOW-REFUSES -- AAAA at www used to pass through
+#     unexamined (the OLD allowed-set was {A,AAAA,CNAME}); now refuses,
+#     by name, same as any other unexpected type (this script writes
+#     neither AAAA nor IPv6 anywhere).
+WWW_AAAA_REFUSES='[{"name":"www.fake-domain.test","type":"AAAA","content":"::1"}]'
+run_case "AAAA at www now refuses (no longer a passed-through type)" 1 "" "$WWW_AAAA_REFUSES" 200 200 "" "" 1 || FAIL=1
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "AAAA" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [www AAAA refuses] did not name AAAA in the refusal -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 32. PORKBUN-WRITE-NON-2XX-SURFACES-MESSAGE -- the live defect measured
+#     2026-09-22: `curl -fsS` discarded the response BODY on a non-2xx,
+#     so the operator only ever saw a bare curl transport error, never
+#     Porkbun own `message` field explaining WHY. Empty records ->
+#     apex create is the first Porkbun write attempted -> forced 400 ->
+#     must name BOTH the HTTP status AND Porkbun own message text.
+FAKE_PORKBUN_WRITE_HTTP_STATUS=400
+FAKE_PORKBUN_WRITE_ERROR_MESSAGE="fake: record with that name and type already exists"
+run_case "Porkbun write non-2xx surfaces the real message, not a bare transport error" 1 --apply '[]' 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_PORKBUN_WRITE_HTTP_STATUS FAKE_PORKBUN_WRITE_ERROR_MESSAGE
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "HTTP 400" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [porkbun non-2xx message] did not name HTTP 400 -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "record with that name and type already exists" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [porkbun non-2xx message] did not surface Porkbun own message field -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 32b. PORKBUN-KEY-ECHOED-IN-ERROR-IS-REDACTED (Sec F-1, PR #877 review)
+#     -- models Porkbun echoing the SUBMITTED request back on a
+#     validation error (an undocumented-but-real shape some APIs use,
+#     exactly the case the raw-text fallbacks exist for) -- the fake key
+#     value must NEVER reach the captured output, but the refusal must
+#     still fire and still be useful (a <redacted> marker in its place).
+FAKE_PORKBUN_WRITE_HTTP_STATUS=400
+# No embedded double-quote characters here, deliberately -- fake-curl
+# splices this straight into a JSON string value via plain printf (no
+# JSON-escaping of its own); a literal `"` here would break the JSON,
+# which would then be caught by json.loads()'s OWN except branch
+# instead of the status>=300 branch this scenario means to exercise --
+# self-caught mid-session: my first draft embedded a fake JSON snippet
+# with literal quotes, which silently exercised the WRONG code path
+# (still scrubbed there too, so the scenario still passed, but not for
+# the reason its own name claimed) and made a subsequent inversion test
+# fail to redden. Plain key=value text both avoids the JSON-breaking
+# characters and is itself a realistic echo shape.
+FAKE_PORKBUN_WRITE_ERROR_MESSAGE="fake: rejected request; submitted apikey=$PORKBUN_API_KEY_VALUE secretapikey=$PORKBUN_SECRET_KEY_VALUE"
+run_case "Porkbun key echoed in an error message is redacted, never printed" 1 --apply '[]' 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_PORKBUN_WRITE_HTTP_STATUS FAKE_PORKBUN_WRITE_ERROR_MESSAGE
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if grep -qF "$PORKBUN_API_KEY_VALUE" <<<"$CASE_OUTPUT" || grep -qF "$PORKBUN_SECRET_KEY_VALUE" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [porkbun key echoed] a Porkbun key value leaked into the captured output via an echoed error message -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "<redacted>" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [porkbun key echoed] scrub() did not leave a <redacted> marker -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 33. WILDCARD-A-MISMATCH-WARNS -- a wildcard A record pointing
+#     somewhere other than box_ip -- READ-ONLY warn (never a refusal,
+#     never a write); preflight mode so a stray write call would be
+#     unambiguous.
+WILDCARD_MISMATCH='[{"name":"fake-domain.test","type":"A","content":"127.0.0.1"},{"name":"www.fake-domain.test","type":"CNAME","content":"fake-domain.test"},{"name":"*.fake-domain.test","type":"A","content":"8.8.8.8"}]'
+run_case "wildcard A pointing elsewhere warns, never refuses or writes" 0 "" "$WILDCARD_MISMATCH" 200 200 "" "" 1 || FAIL=1
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "wildcard A" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [wildcard warn] did not print the wildcard warning -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "8.8.8.8" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [wildcard warn] did not name the mismatched IP -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+if [[ -n "${CASE_LOG:-}" ]] && grep -qE "dns/create|dns/editByNameType" "$CASE_LOG"; then
+  echo "FAIL: [wildcard warn] a DNS write call was issued despite preflight mode and an already-correct apex/www" >&2
+  FAIL=1
+fi
+
+# 34. WILDCARD-A-MATCH-NO-WARN -- inversion of 33: wildcard already
+#     matches box_ip -- no warning printed.
+WILDCARD_MATCH='[{"name":"fake-domain.test","type":"A","content":"127.0.0.1"},{"name":"www.fake-domain.test","type":"CNAME","content":"fake-domain.test"},{"name":"*.fake-domain.test","type":"A","content":"127.0.0.1"}]'
+run_case "wildcard A matching box_ip prints no warning" 0 "" "$WILDCARD_MATCH" 200 200 "" "" 1 || FAIL=1
+if [[ -n "${CASE_OUTPUT:-}" ]] && grep -qF "wildcard A" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [wildcard no-warn] printed a wildcard warning despite it already matching box_ip -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
 fi
 
 if [[ $FAIL -ne 0 ]]; then
