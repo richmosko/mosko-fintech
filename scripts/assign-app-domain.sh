@@ -40,21 +40,31 @@
 #
 # LIVE MEASUREMENT, 2026-09-22 ~15:45Z (F/CTO-run `--from dns
 # --confirm-cutover`, real cutover attempt) -- www.pfindash.com already
-# existed as an A record (ttl 600) pointing at the incumbent host, NOT a
-# CNAME; there was also a `*.pfindash.com` wildcard A record. This
-# script's OWN www-action detection only ever looked for a www CNAME, so
-# it computed "create" regardless -- Porkbun refuses a CNAME create
-# beside an existing A of the same name (dns/create -> HTTP 400; a name
-# cannot hold a CNAME alongside any other record type). A second,
-# independent defect compounded this: porkbun_api() used `curl -fsS`,
-# which discards the response body on any non-2xx, so the actual
-# Porkbun error (its own `message` field explaining WHY) never reached
-# the operator -- only a bare "exit 56" curl transport error. Both fixed
-# in this same pass; see porkbun_api() below for the second fix and the
-# DIFF_JSON python block below for the first. The wildcard A record is
-# left alone (read-only WARN if it does not point at box_ip -- see the
-# DNS-diff step) -- an F/CTO cutover decision, not this script own to
-# make.
+# existed as an A record (ttl 600), NOT a CNAME. A follow-up read-only
+# measurement confirmed its content already MATCHES box_ip (same as the
+# apex A) -- the defect was never about a WRONG value at www, only that
+# this script never checked for an A record there at all, and would
+# have attempted a doomed CNAME create regardless of what the existing
+# A pointed at. Porkbun refuses a CNAME create beside an existing A of
+# the same name (dns/create -> HTTP 400; a name cannot hold a CNAME
+# alongside any other record type). A second, independent defect
+# compounded this: porkbun_api() used `curl -fsS`, which discards the
+# response body on any non-2xx, so the actual Porkbun error (its own
+# `message` field explaining WHY) never reached the operator -- only a
+# bare "exit 56" curl transport error. Both fixed in this same pass;
+# see porkbun_api() below for the second fix and the DIFF_JSON python
+# block below for the first.
+#
+# There was also a `*.pfindash.com` wildcard A record, MEASURED
+# pointing at the incumbent host (not box_ip) -- F/CTO ruled to delete
+# it, and it WAS deleted the same day (id-based, exactly-one guard,
+# re-read confirmed zero wildcard records afterward; apex + www A both
+# confirmed intact and pointing at box_ip). The wildcard check below
+# stays as a GENERAL read-only guard regardless -- it will simply not
+# fire on this box any more, but a future wildcard record (re-added by
+# hand, or on a different domain this script is pointed at via
+# ROOT_DOMAIN) is still worth a WARN, never a silent surprise at
+# cutover.
 #
 # THE COOLIFY DOMAIN-ASSIGNMENT MECHANISM IS docker_compose_domains, NOT
 # fqdn -- corrected 2026-09-21 (Sec merge condition, PR #866 review, on
@@ -397,10 +407,13 @@ else:
     www_target = domain
     www_action = "create"
 
-# Wildcard A -- READ-ONLY, never a refusal and never a write target
-# (this measurement pass): if it points somewhere other than box_ip,
-# cutover leaves it dangling on the incumbent host -- an F/CTO decision
-# this script does not make on its own.
+# Wildcard A -- READ-ONLY, never a refusal and never a write target. A
+# wildcard A pointing at the incumbent was MEASURED PRESENT on this
+# domain 2026-09-22 and DELETED the same day by F/CTO ruling -- this
+# check stays general regardless (it simply will not fire on this box
+# any more): if a future one points somewhere other than box_ip,
+# cutover would leave it dangling on the incumbent host, an F/CTO
+# decision this script does not make on its own.
 wildcard_a = [r for r in wildcard if r["type"] == "A"]
 wildcard_warning = None
 if wildcard_a and wildcard_a[0]["content"] != box_ip:
@@ -637,7 +650,11 @@ PYEOF
 fi
 
 if [[ "$WWW_ACTION" == "none" ]]; then
-  ok "www $([[ "$WWW_TYPE" == "a" ]] && echo A || echo CNAME) already correct -- nothing to change"
+  if [[ "$WWW_TYPE" == "a" ]]; then
+    ok "www A already -> box -- nothing to change"
+  else
+    ok "www CNAME already correct -- nothing to change"
+  fi
 else
   # www_type "a" (MEASURED 2026-09-22 ~15:45Z) edits the EXISTING A
   # record in place to box_ip -- never creates a CNAME alongside it,

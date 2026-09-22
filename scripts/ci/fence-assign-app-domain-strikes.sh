@@ -731,6 +731,10 @@ if [[ -n "${CASE_LOG:-}" ]] && grep -qE "dns/editByNameType/fake-domain\.test/A/
   echo "FAIL: [www-as-A already correct] a DNS write call was issued despite www A already matching box_ip" >&2
   FAIL=1
 fi
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "www A already -> box -- nothing to change" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [www-as-A already correct] did not print the expected already-correct wording -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
 
 # 31. WWW-AAAA-NOW-REFUSES -- AAAA at www used to pass through
 #     unexamined (the OLD allowed-set was {A,AAAA,CNAME}); now refuses,
