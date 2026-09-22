@@ -60,17 +60,67 @@
 #      two, or a SUPERSTRING near-miss ("notfake-domain.test" contains
 #      "fake-domain.test") -> both refuse; a plain CONTAINS($ROOT_DOMAIN)
 #      check would have passed both silently.
-#   25/26/27/28. POST-ASSIGNMENT-ENV-READ FAIL-CLOSED (Sec F-3, PR #866
-#      review) -- 'docker ps' itself failing, 2+ containers matching the
-#      name filter (never the old `head -1` first-of-several guess),
-#      'docker exec ... env' itself failing, and 'docker ps' returning a
-#      non-container-id-shaped value, must each be reported as a READ
-#      FAILURE / ambiguity / shape refusal, never collapsed into the same
-#      wording as a genuinely empty result -- the prior
-#      `2>/dev/null || true` shape printed a false-positive "MEASURED ...
-#      CONTROL GAP" fact for a read that never happened. This section
-#      stays informational (exit code unaffected in all four cases); only
-#      the WORDING is asserted.
+#   25-25n. POST-REDEPLOY CONTAINER-ENV READ + SSLIP PROBE, REQUIRED GATE
+#      (team-lead run-21 fix follow-up + Sec's redeploy-addenda review,
+#      2026-09-22) -- the real script now ALWAYS triggers a Coolify
+#      redeploy (POST /deploy?uuid=, same shape deploy-app.sh already
+#      uses) after a successful docker_compose_domains PATCH, waits on a
+#      NAMED, fail-closed timeout (DEPLOY_POLL_ATTEMPTS x
+#      DEPLOY_POLL_INTERVAL_SECONDS -- refuses, never falls through, on
+#      expiry or an explicit status=failed), then reads the NEW
+#      container's env -- this is now a REQUIRED gate (die()/exit 1),
+#      never the old informational skip: a fresh container must exist,
+#      differ from the id captured BEFORE the redeploy (never identified
+#      by "most recent"/start time -- a plain id inequality, since
+#      AMBIGUOUS below already refuses whenever either side has more
+#      than one candidate), and be INDEPENDENTLY confirmed
+#      State.Running=true via `docker inspect` (never trusting `docker ps
+#      --filter status=running` alone -- Coolify injects env at
+#      container START, not creation). Prints VALUES (not just names)
+#      for exactly COOLIFY_FQDN/COOLIFY_URL/SERVICE_FQDN_* (Sec's narrow,
+#      named relaxation of this repo's names-only env-store discipline --
+#      see this script's own header). Finally re-takes the off-box sslip
+#      reachability probe AFTER the redeploy, with a nonexistent-host
+#      control, reporting a divergence as a FINDING, never a failure.
+#      FAKE_APP_CID models the pre-redeploy container (default empty);
+#      FAKE_APP_CID_POST models the post-redeploy one (run_case's own
+#      default: a valid-hex id distinct from the empty pre-deploy
+#      default, so every EXISTING apply-success scenario above, none of
+#      which know about this gate, passes it cleanly without
+#      per-scenario changes):
+#        25.  no running container post-redeploy refuses.
+#        25b. 2+ containers matching the name filter post-redeploy
+#             refuses (never the old `head -1` first-of-several guess).
+#        25c. 'docker ps' itself failing post-redeploy refuses.
+#        25d. 'docker exec ... env' itself failing refuses.
+#        25e. 'docker ps' returning a non-container-id-shaped value
+#             refuses, before ever reaching docker exec.
+#        25f. the post-redeploy id is IDENTICAL to the pre-redeploy id
+#             (redeploy "finished" but never actually replaced the
+#             container) refuses, naming BOTH ids, never prints MEASURED.
+#        25g. 'docker inspect' reports State.Running=false for an
+#             otherwise-resolved container refuses -- the ps filter
+#             alone is not trusted.
+#        25h. VALUES (not just names) are printed for exactly the three
+#             relaxed families; anything else in the container's env (a
+#             deliberate secret-bearing distractor var) never appears in
+#             the captured output at all.
+#        25i. none of the three watched families are injected --
+#             reported as a CONTROL GAP to investigate, never silently
+#             passed over.
+#        25j. the deployment status poll never reaches "finished" within
+#             its bound -- fails closed, never falls through to the env
+#             read (Sec's explicit ask: this is a NAMED timeout, not an
+#             unbounded wait).
+#        25k. a positive control against the apply-happy-path scenario's
+#             own curl.log -- the deploy POST and the deployments-poll
+#             GET must actually have been issued, not just assumed from
+#             the exit code.
+#        25l. the sslip host answers DIFFERENTLY from the
+#             nonexistent-host control -- printed as a FINDING, never a
+#             failure or a refusal.
+#        25m. inversion of 25l -- sslip host matches the control -- no
+#             FINDING line.
 #   29/30. WWW-AS-A (live dns fix, 2026-09-22 -- www.pfindash.com already
 #      existed as an A record, not a CNAME, and this script only ever
 #      looked for a CNAME) -- a mismatched www A edits in place to box_ip
@@ -203,6 +253,7 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE="\${FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE:-}" \\
     FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE="\${FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE:-}" \\
     FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE="\${FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE:-}" \\
+    FAKE_DEPLOY_TRIGGERED_MARKER="\${FAKE_DEPLOY_TRIGGERED_MARKER:-}" FAKE_DEPLOY_STATUS="\${FAKE_DEPLOY_STATUS:-}" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -210,6 +261,8 @@ CMD="\${@: -1}"
 CMD_REWRITTEN="\$(printf '%s' "\$CMD" | sed 's#/root/\.pfin#$FAKE_ROOT_PFIN#g')"
 PATH="$FAKE_BIN:\$PATH" FAKE_APP_CID="\${FAKE_APP_CID:-}" FAKE_APP_ENV_LINES="\${FAKE_APP_ENV_LINES:-}" \\
   FAKE_DOCKER_PS_FAILS="\${FAKE_DOCKER_PS_FAILS:-}" FAKE_DOCKER_EXEC_FAILS="\${FAKE_DOCKER_EXEC_FAILS:-}" \\
+  FAKE_DEPLOY_TRIGGERED_MARKER="\${FAKE_DEPLOY_TRIGGERED_MARKER:-}" FAKE_APP_CID_POST="\${FAKE_APP_CID_POST:-}" \\
+  FAKE_DOCKER_INSPECT_RUNNING="\${FAKE_DOCKER_INSPECT_RUNNING:-}" FAKE_DOCKER_INSPECT_FAILS="\${FAKE_DOCKER_INSPECT_FAILS:-}" \\
   bash -c "\$CMD_REWRITTEN"
 EOF
 chmod +x "$FAKE_BIN/ssh"
@@ -234,7 +287,18 @@ if [[ "$*" == *"ps --filter"* && "$*" == *"status=running"* ]]; then
     echo "Cannot connect to the Docker daemon (simulated)" >&2
     exit 1
   fi
-  printf '%s' "${FAKE_APP_CID:-}"
+  # FAKE_DEPLOY_TRIGGERED_MARKER (run-21 fix follow-up) -- fake-curl
+  # touches this file when the fake POST /deploy?uuid= fires; once it
+  # exists, this fixture reports FAKE_APP_CID_POST (the post-redeploy
+  # container id) instead of FAKE_APP_CID (pre-redeploy) -- same
+  # marker-file idiom the PATCH-marker checks above already use, so a
+  # scenario can distinguish "docker ps called before the redeploy" from
+  # "called after" across separate, stateless fake-ssh invocations.
+  if [[ -n "${FAKE_DEPLOY_TRIGGERED_MARKER:-}" && -f "$FAKE_DEPLOY_TRIGGERED_MARKER" ]]; then
+    printf '%s' "${FAKE_APP_CID_POST:-${FAKE_APP_CID:-}}"
+  else
+    printf '%s' "${FAKE_APP_CID:-}"
+  fi
   exit 0
 fi
 if [[ "$*" == *"exec"* && "$*" == *" env"* ]]; then
@@ -243,6 +307,20 @@ if [[ "$*" == *"exec"* && "$*" == *" env"* ]]; then
     exit 1
   fi
   printf '%s\n' "${FAKE_APP_ENV_LINES:-}"
+  exit 0
+fi
+# 'docker inspect --format {{.State.Running}} <cid>' -- Sec ask (redeploy
+# addenda requirement 4): a second, independent confirmation the
+# resolved post-redeploy container is genuinely running, not just
+# resolved via 'docker ps --filter status=running'. Defaults to "true"
+# so every EXISTING scenario (none of which know about this check)
+# passes it unchanged.
+if [[ "$*" == *"inspect --format"* && "$*" == *"State.Running"* ]]; then
+  if [[ "${FAKE_DOCKER_INSPECT_FAILS:-0}" == "1" ]]; then
+    echo "Error: No such object (simulated)" >&2
+    exit 1
+  fi
+  printf '%s' "${FAKE_DOCKER_INSPECT_RUNNING:-true}"
   exit 0
 fi
 echo "FAKE DOCKER: unrecognised invocation: $*" >&2
@@ -309,6 +387,7 @@ run_case() {
   local leak_log="$WORK/leak.log.$$.$RANDOM"
   local ports_patch_marker="$WORK/ports-patch.marker.$$.$RANDOM"
   local compose_domains_patch_marker="$WORK/compose-domains-patch.marker.$$.$RANDOM"
+  local deploy_triggered_marker="$WORK/deploy-triggered.marker.$$.$RANDOM"
   : > "$log"
 
   printf 'PORKBUN_API_KEY=%s\nPORKBUN_SECRET_KEY=%s\nBOX_IP=127.0.0.1\n' "$PORKBUN_API_KEY_VALUE" "$PORKBUN_SECRET_KEY_VALUE" > "$WORK/.env"
@@ -330,6 +409,7 @@ run_case() {
   # shellcheck disable=SC2086
   REPO_ROOT="$WORK" ROOT_DOMAIN=fake-domain.test APP_NAME=pfin-app AUTOMATION_KEY=/dev/null \
     CERT_POLL_ATTEMPTS=2 CERT_POLL_INTERVAL_SECONDS=0 \
+    DEPLOY_POLL_ATTEMPTS=2 DEPLOY_POLL_INTERVAL_SECONDS=0 \
     PATH="$FAKE_BIN:$PATH" FAKE_CURL_LOG="$log" FAKE_LEAK_LOG="$leak_log" \
     FAKE_PORKBUN_API_KEY_VALUE="$PORKBUN_API_KEY_VALUE" FAKE_PORKBUN_SECRET_KEY_VALUE="$PORKBUN_SECRET_KEY_VALUE" \
     FAKE_PORKBUN_RECORDS="$records" FAKE_APEX_CODE="$apex_code" FAKE_WWW_CODE="$www_code" \
@@ -348,11 +428,17 @@ run_case() {
     FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE="${FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE:-}" \
     FAKE_APP_CID="${FAKE_APP_CID:-}" FAKE_APP_ENV_LINES="${FAKE_APP_ENV_LINES:-}" \
     FAKE_DOCKER_PS_FAILS="${FAKE_DOCKER_PS_FAILS:-0}" FAKE_DOCKER_EXEC_FAILS="${FAKE_DOCKER_EXEC_FAILS:-0}" \
+    FAKE_DOCKER_INSPECT_RUNNING="${FAKE_DOCKER_INSPECT_RUNNING:-true}" FAKE_DOCKER_INSPECT_FAILS="${FAKE_DOCKER_INSPECT_FAILS:-0}" \
+    FAKE_APP_CID_POST="${FAKE_APP_CID_POST-deadbeef0001}" \
+    FAKE_DEPLOY_TRIGGERED_MARKER="$deploy_triggered_marker" FAKE_DEPLOY_STATUS="${FAKE_DEPLOY_STATUS:-finished}" \
+    FAKE_SSLIP_HTTP_CODE="${FAKE_SSLIP_HTTP_CODE:-}" FAKE_SSLIP_HTTPS_CODE="${FAKE_SSLIP_HTTPS_CODE:-}" \
+    FAKE_CONTROL_HTTP_CODE="${FAKE_CONTROL_HTTP_CODE:-}" FAKE_CONTROL_HTTPS_CODE="${FAKE_CONTROL_HTTPS_CODE:-}" \
     bash "$SMOKE_SH" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
   CASE_PORTS_PATCH_MARKER="$ports_patch_marker"
   CASE_COMPOSE_DOMAINS_PATCH_MARKER="$compose_domains_patch_marker"
+  CASE_DEPLOY_TRIGGERED_MARKER="$deploy_triggered_marker"
 
   if [[ "$rc" != "$expect_exit" ]]; then
     echo "FAIL: [$desc] expected exit $expect_exit, got $rc" >&2
@@ -623,121 +709,201 @@ if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "does not exactly equal the intende
   FAIL=1
 fi
 
-# 22. POST-ASSIGNMENT-ENV-READ-NOT-APPLICABLE -- no container running yet
-#     for the app (the common not-yet-redeployed case, default
-#     FAKE_APP_CID empty) -- informational, never blocks the exit code.
-run_case "post-assignment env read: no running container, not applicable" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
-if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "container-env read not applicable" <<<"$CASE_OUTPUT"; then
-  echo "FAIL: [post-assignment env read: no container] did not report inapplicability -- captured output: $CASE_OUTPUT" >&2
+# 25. POST-REDEPLOY-NO-RUNNING-CONTAINER-REFUSES -- the redeploy reports
+#     finished but no container is running afterward -- a HARD refusal
+#     now, not the old informational skip.
+FAKE_APP_CID_POST=""
+run_case "post-redeploy env read: no running container refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_CID_POST
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "found NO running container" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [post-redeploy: no container] did not name the refusal -- captured output: $CASE_OUTPUT" >&2
   FAIL=1
 fi
 
-# 23. POST-ASSIGNMENT-ENV-READ-NAMES-FOUND -- a running container reports
-#     SERVICE_FQDN_*/COOLIFY_FQDN names -- printed as a MEASURED line,
-#     names only (never a value, matching this repo's names-only
-#     discipline for env-store contents elsewhere).
-FAKE_APP_CID=abc123def456
-FAKE_APP_ENV_LINES=$'COOLIFY_FQDN=http://abc.sslip.io\nSERVICE_FQDN_APP=https://fake-domain.test'
-run_case "post-assignment env read: names found, reported MEASURED" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
-unset FAKE_APP_CID FAKE_APP_ENV_LINES
-if [[ -n "${CASE_OUTPUT:-}" ]]; then
-  if ! grep -qF "MEASURED" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [post-assignment env read: names found] did not print a MEASURED line -- captured output: $CASE_OUTPUT" >&2
-    FAIL=1
-  fi
-  if ! grep -qF "COOLIFY_FQDN" <<<"$CASE_OUTPUT" || ! grep -qF "SERVICE_FQDN_APP" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [post-assignment env read: names found] did not name both env vars found -- captured output: $CASE_OUTPUT" >&2
-    FAIL=1
-  fi
-fi
-
-# 24. POST-ASSIGNMENT-ENV-READ-NO-NAMES-CONTROL-GAP -- a running
-#     container injects NONE of the watched names -- reported as a
-#     CONTROL GAP to investigate, never silently passed over as success.
-FAKE_APP_CID=abc123def789
-FAKE_APP_ENV_LINES=""
-run_case "post-assignment env read: no names found, reported as a control gap" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
-unset FAKE_APP_CID FAKE_APP_ENV_LINES
-if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "CONTROL GAP" <<<"$CASE_OUTPUT"; then
-  echo "FAIL: [post-assignment env read: no names] did not name the control gap -- captured output: $CASE_OUTPUT" >&2
+# 25b. POST-REDEPLOY-AMBIGUOUS-CONTAINERS-REFUSES -- 2 containers match
+#     the name filter after the redeploy -- never silently pick the
+#     first (the old `head -1` pattern), same discipline as every
+#     sibling script.
+FAKE_APP_CID_POST=$'abc123def456
+abc123def789'
+run_case "post-redeploy env read: ambiguous containers refuse" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_CID_POST
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "AMBIGUOUS" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [post-redeploy: ambiguous] did not name the ambiguity -- captured output: $CASE_OUTPUT" >&2
   FAIL=1
 fi
 
-# 25. POST-ASSIGNMENT-ENV-READ-DOCKER-PS-FAILS (Sec F-3, PR #866 review)
-#     -- 'docker ps' itself fails (transport/daemon error) -- must be
-#     reported as a READ FAILURE, never collapsed into the same "no
-#     container" / "MEASURED ... NONE" wording as a genuinely empty
-#     result. exit code is UNCHANGED (still informational, never a hard
-#     gate) -- only the WORDING is under test here.
+# 25c. POST-REDEPLOY-DOCKER-PS-FAILS-REFUSES -- 'docker ps' itself fails
+#     (transport/daemon error) on the post-redeploy check.
 FAKE_DOCKER_PS_FAILS=1
-run_case "post-assignment env read: docker ps fails, reported as a read failure" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+run_case "post-redeploy env read: docker ps fails refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
 unset FAKE_DOCKER_PS_FAILS
-if [[ -n "${CASE_OUTPUT:-}" ]]; then
-  if ! grep -qF "READ FAILURE" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [docker ps fails] did not name the read failure -- captured output: $CASE_OUTPUT" >&2
-    FAIL=1
-  fi
-  if grep -qE "injects (NONE of|:)" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [docker ps fails] printed an env-injection measurement despite the read itself failing -- a failed read is not a measurement of anything." >&2
-    FAIL=1
-  fi
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "'docker ps' itself failed" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [post-redeploy: docker ps fails] did not name the read failure -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
 fi
 
-# 26. POST-ASSIGNMENT-ENV-READ-AMBIGUOUS-CONTAINERS (Sec F-3, PR #866
-#     review) -- 2 running containers match the name filter -- never
-#     silently pick the first (the old `head -1` pattern); reported as
-#     ambiguous, no docker exec issued.
-FAKE_APP_CID=$'abc123def456\nabc123def789'
-run_case "post-assignment env read: ambiguous containers, never guesses" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
-unset FAKE_APP_CID
-if [[ -n "${CASE_OUTPUT:-}" ]]; then
-  if ! grep -qF "ambiguous" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [ambiguous containers] did not name the ambiguity -- captured output: $CASE_OUTPUT" >&2
-    FAIL=1
-  fi
-  if grep -qE "injects (NONE of|:)" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [ambiguous containers] printed an env-injection measurement despite never resolving which container is authoritative." >&2
-    FAIL=1
-  fi
-fi
-
-# 27. POST-ASSIGNMENT-ENV-READ-DOCKER-EXEC-FAILS (Sec F-3, PR #866
-#     review) -- a container IS resolved, but 'docker exec ... env'
-#     itself fails -- must be reported as a READ FAILURE, never as a
-#     "MEASURED ... injects NONE" / CONTROL GAP (the false-positive shape
-#     this finding named specifically).
-FAKE_APP_CID=abc123def456
+# 25d. POST-REDEPLOY-DOCKER-EXEC-FAILS-REFUSES -- a container IS
+#     resolved and confirmed running, but 'docker exec ... env' itself
+#     fails.
 FAKE_DOCKER_EXEC_FAILS=1
-run_case "post-assignment env read: docker exec fails, reported as a read failure" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
-unset FAKE_APP_CID FAKE_DOCKER_EXEC_FAILS
+run_case "post-redeploy env read: docker exec fails refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_DOCKER_EXEC_FAILS
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "env' rc=" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [post-redeploy: docker exec fails] did not name the read failure -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 25e. POST-REDEPLOY-NON-HEX-CID-REFUSES -- 'docker ps' resolves to
+#     exactly one value but it is NOT container-id-shaped -- refuses
+#     before ever interpolating it into a remote docker exec command.
+FAKE_APP_CID_POST='not-a-valid-container-id!'
+run_case "post-redeploy env read: non-hex CID refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_CID_POST
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "non-container-id-shaped" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [post-redeploy: non-hex CID] did not name the shape refusal -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 25f. POST-REDEPLOY-IDENTICAL-TO-PRE-DEPLOY-CID-REFUSES (Sec redeploy
+#     addenda, requirement 1: set-difference on ids, naming BOTH on a
+#     match, never "most recent"/start time) -- the redeploy reports
+#     finished but the "new" container id equals the pre-redeploy one.
+FAKE_APP_CID=abc123def456
+FAKE_APP_CID_POST=abc123def456
+run_case "post-redeploy env read: identical to pre-deploy CID refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_CID FAKE_APP_CID_POST
 if [[ -n "${CASE_OUTPUT:-}" ]]; then
-  if ! grep -qF "READ FAILURE" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [docker exec fails] did not name the read failure -- captured output: $CASE_OUTPUT" >&2
+  if ! grep -qF "IDENTICAL to the pre-redeploy container id (abc123def456)" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [post-redeploy: same CID] did not name BOTH ids in the refusal -- captured output: $CASE_OUTPUT" >&2
     FAIL=1
   fi
-  if grep -qF "that is a CONTROL GAP to report" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [docker exec fails] reported a CONTROL GAP for a read that never actually happened -- this is exactly the false positive Sec's F-3 named." >&2
+  if grep -qE "injects (NONE of|:)" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [post-redeploy: same CID] printed an env-injection measurement despite refusing -- a read of the OLD container is a READ-OF-THE-WRONG-THING, not a measurement." >&2
     FAIL=1
   fi
 fi
 
-# 28. POST-ASSIGNMENT-ENV-READ-NON-HEX-CID-REFUSES (Sec F-3 follow-up,
-#     PR #866 re-review) -- 'docker ps' returns a value that resolves
-#     (rc=0, single match) but is NOT container-id-shaped -- refuses to
-#     interpolate it into a remote docker exec command, never guessing
-#     it's safe just because it came from docker ps today.
-FAKE_APP_CID='not-a-valid-container-id!'
-run_case "post-assignment env read: non-hex CID refuses before docker exec" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
-unset FAKE_APP_CID
+# 25g. POST-REDEPLOY-DOCKER-INSPECT-NOT-RUNNING-REFUSES (Sec redeploy
+#     addenda, requirement 4) -- 'docker ps --filter status=running'
+#     resolved a single container, but the independent 'docker inspect'
+#     confirmation reports State.Running=false -- refuses, never trusts
+#     the ps filter alone.
+FAKE_DOCKER_INSPECT_RUNNING="false"
+run_case "post-redeploy env read: docker inspect not-running refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_DOCKER_INSPECT_RUNNING
 if [[ -n "${CASE_OUTPUT:-}" ]]; then
-  if ! grep -qF "non-container-id-shaped" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [non-hex CID] did not name the shape refusal -- captured output: $CASE_OUTPUT" >&2
+  if ! grep -qF "State.Running=false, not true" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [post-redeploy: not running] did not name the State.Running refusal -- captured output: $CASE_OUTPUT" >&2
     FAIL=1
   fi
   if grep -qE "injects (NONE of|:)" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [non-hex CID] printed an env-injection measurement despite refusing the shape check -- docker exec must never have run." >&2
+    echo "FAIL: [post-redeploy: not running] printed an env-injection measurement despite refusing -- docker exec must never have run." >&2
     FAIL=1
   fi
+fi
+
+# 25h. POST-REDEPLOY-VALUES-FOR-THE-THREE-FAMILIES-ONLY (Sec relaxation)
+#     -- COOLIFY_FQDN/COOLIFY_URL/SERVICE_FQDN_* print their VALUES, not
+#     just their names; a deliberate secret-bearing distractor var
+#     outside those three families must never appear in the captured
+#     output at all.
+FAKE_APP_ENV_LINES=$'COOLIFY_FQDN=http://abc.1.2.3.4.sslip.io
+COOLIFY_URL=http://abc.1.2.3.4.sslip.io
+SERVICE_FQDN_APP=https://fake-domain.test
+DATABASE_URL=postgres://fake-user:fake-super-secret-value@127.0.0.1/fake'
+run_case "post-redeploy env read: values printed for the three families only" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_ENV_LINES
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "COOLIFY_FQDN=http://abc.1.2.3.4.sslip.io" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [post-redeploy: values] did not print COOLIFY_FQDN's VALUE -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "SERVICE_FQDN_APP=https://fake-domain.test" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [post-redeploy: values] did not print SERVICE_FQDN_APP's VALUE -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qF "fake-super-secret-value" <<<"$CASE_OUTPUT" || grep -qF "DATABASE_URL" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [post-redeploy: values] a non-relaxed env var leaked into the captured output -- names-only discipline still applies to everything outside the three named families." >&2
+    FAIL=1
+  fi
+fi
+
+# 25i. POST-REDEPLOY-NO-WATCHED-NAMES-CONTROL-GAP -- a resolved,
+#     confirmed-running, differing container injects none of the three
+#     watched families -- reported as a CONTROL GAP to investigate,
+#     never silently passed over as success.
+FAKE_APP_ENV_LINES=""
+run_case "post-redeploy env read: no watched names found, reported as a control gap" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_ENV_LINES
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "CONTROL GAP" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [post-redeploy: no watched names] did not name the control gap -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# 25j. DEPLOY-WAIT-TIMEOUT-FAILS-CLOSED (Sec redeploy addenda,
+#     requirement 3) -- the deployment never reaches status=finished
+#     within DEPLOY_POLL_ATTEMPTS x DEPLOY_POLL_INTERVAL_SECONDS
+#     (run_case hardcodes 2x0s so this redens fast) -- must refuse,
+#     never fall through to the container-env read below it.
+FAKE_DEPLOY_STATUS="in_progress"
+run_case "deploy wait: never reaches finished within the bound refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_DEPLOY_STATUS
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "did not reach status=finished within" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [deploy wait timeout] did not name the bounded-timeout refusal -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qF "Post-redeploy container-env read" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [deploy wait timeout] fell through to the post-redeploy env-read step despite the deploy never finishing." >&2
+    FAIL=1
+  fi
+fi
+
+# 25k. REDEPLOY-ACTUALLY-FIRES -- positive control: the deploy POST and
+#     the deployments-poll GET must actually have been issued, not just
+#     assumed from the exit code.
+run_case "redeploy actually fires: POST /deploy + deployments-poll GET both issued" 0 --apply "$REAL_SHAPE_APEX_RECORDS" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+if [[ -n "${CASE_LOG:-}" ]]; then
+  if ! grep -qF "COOLIFY-DEPLOY-TRIGGERED" "$CASE_LOG"; then
+    echo "FAIL: [redeploy positive control] no POST /deploy?uuid= call was issued -- captured log: $(cat "$CASE_LOG")" >&2
+    FAIL=1
+  fi
+  if ! grep -q "/deployments/" "$CASE_LOG"; then
+    echo "FAIL: [redeploy positive control] no deployments-poll GET was issued -- captured log: $(cat "$CASE_LOG")" >&2
+    FAIL=1
+  fi
+fi
+
+# --- sslip reachability probe, post-redeploy, with a nonexistent-host
+# control (Sec redeploy addenda, requirement 2) ------------------------
+SSLIP_APP_HOST_FQDN="http://sslipprobe0000000001.127.0.0.1.sslip.io"
+
+# 25l. SSLIP-PROBE-FINDING-ON-DIVERGENCE -- the app's own sslip host
+#     answers DIFFERENTLY from the nonexistent-host control -- an
+#     unintended second route -- printed as a FINDING, never a failure.
+FAKE_SSLIP_HTTP_CODE=200
+FAKE_SSLIP_HTTPS_CODE=200
+run_case "sslip probe: divergence from the nonexistent-host control prints a FINDING" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_SSLIP_HTTP_CODE FAKE_SSLIP_HTTPS_CODE
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "FINDING:" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [sslip probe divergence] did not print a FINDING despite the sslip host answering differently from the control -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "sslipprobe0000000001" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [sslip probe divergence] did not name the sslip host it probed -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 25m. SSLIP-PROBE-NO-FINDING-WHEN-MATCHING -- inversion of 25l: the
+#     sslip host and the control agree (both default to 404) -- no
+#     FINDING line.
+run_case "sslip probe: matching the control prints no FINDING" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+if [[ -n "${CASE_OUTPUT:-}" ]] && grep -qF "FINDING:" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [sslip probe no divergence] printed a FINDING despite the sslip host matching the control -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
 fi
 
 # --- www-as-A / Porkbun status-preserving / wildcard-WARN scenarios

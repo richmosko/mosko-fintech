@@ -127,6 +127,49 @@
 # only `--apply` actually fires it, and the apply path's own read-back
 # (a fresh GET immediately after) is what confirms the write took.
 #
+# THE CONTAINER-ENV FACT IS MEASURED ONLY POST-REDEPLOY (team-lead,
+# run-21 fix follow-up, 2026-09-22) -- Coolify only injects
+# SERVICE_FQDN_*/COOLIFY_FQDN/COOLIFY_URL and regenerates Traefik proxy
+# labels at container START, never retroactively for an already-running
+# one. A domain PATCH alone (everything above) leaves the OLD
+# pre-assignment container running; reading ITS env, or polling for a
+# cert against the routing IT was started with, would be a
+# READ-OF-THE-WRONG-THING, not a measurement -- the exact mistake an
+# earlier draft of this section made. `--apply` therefore ALWAYS
+# triggers a redeploy (POST /deploy + poll, the same mechanism
+# deploy-app.sh uses, duplicated here per this repo's own sibling-script
+# convention) immediately after a successful domain PATCH, before the
+# env read or the cert poll below: the env read then REQUIRES the new
+# container id to differ from whatever was running pre-redeploy
+# (refusing, never silently reading the old one), and the cert poll
+# runs against a container that actually carries the new routing.
+#
+# ENV-READ VALUES RELAXATION (Sec, run-21 fix follow-up): the
+# post-redeploy env read prints VALUES, not just names, for EXACTLY
+# THREE families -- `COOLIFY_FQDN`, `COOLIFY_URL`, `SERVICE_FQDN_*` --
+# a deliberate, narrow exception to this repo's names-only discipline
+# for env-store contents elsewhere. Justified because (a) these are
+# public HOSTNAMES, not secrets -- the sslip form already embeds a uuid
+# that is in this repo in plaintext (COOLIFY-FACT-04) -- and (b) this
+# app now carries BOTH the app-level sslip `fqdn` and the
+# service-level `docker_compose_domains`, so only the VALUE (not just
+# the name) attributes which source produced which route; naming alone
+# cannot distinguish them. Nothing outside these three exact names is
+# ever read or printed by this step.
+#
+# SSLIP REACHABILITY RE-MEASURED POST-REDEPLOY, WITH A CONTROL (Sec,
+# same follow-up): COOLIFY-FACT-05/06's own "not routed, 404 identical
+# to control" fact was measured BEFORE this app carried
+# `docker_compose_domains` at all and no longer covers this state --
+# this app may now be reachable via BOTH the intended domain AND its
+# own Coolify-assigned sslip default, an unintended second route. The
+# post-redeploy step re-probes the app's own sslip host (http AND
+# https) against a nonexistent-host control on the same box, prints
+# both side by side, and reports a status-code DIVERGENCE as a
+# FINDING, never a failure -- this script has no mechanism to change
+# `fqdn` and does not attempt to; it only surfaces the observation
+# before DNS cutover completes.
+#
 # KEYS NEVER TOUCH ANY PROCESS'S OWN ARGV -- same discipline as every
 # sibling script that handles a credential, applied at BOTH hops this
 # script has (Sec VETO-2, PR #849 review corrected an earlier version of
@@ -160,6 +203,12 @@
 #   CERT_POLL_ATTEMPTS (default 30) / CERT_POLL_INTERVAL_SECONDS (default
 #   30 -- so 30x30s = 15 minutes bounded) are env-var-overridable, for a
 #   slower or faster LE issuance than the default bound assumes.
+#   DEPLOY_POLL_ATTEMPTS (default 90) / DEPLOY_POLL_INTERVAL_SECONDS
+#   (default 4 -- so 90x4s = 6 minutes bounded) are the same shape,
+#   env-var-overridable, for the post-domain-assignment redeploy's own
+#   status poll (see step 9 below) -- FAILS CLOSED (refuses, never falls
+#   through to the container-env read) if the deployment has not reached
+#   status=finished within the bound.
 #
 # EXIT CODES
 #   0  VERIFIED -- DNS records match the target state, ports_exposes and
@@ -170,8 +219,17 @@
 #      type at a target name, ambiguous (>1) application match, a
 #      docker_compose_domains 422 (see this script's own header --
 #      distinct from a read-back mismatch), a read-back that does not
-#      contain the target domain, the cert poll exhausts its bound, or
-#      `www` does not serve.
+#      contain the target domain, the post-domain-assignment redeploy
+#      failing to reach status=finished within DEPLOY_POLL_ATTEMPTS x
+#      DEPLOY_POLL_INTERVAL_SECONDS, the post-redeploy container-env read
+#      failing to resolve a SINGLE, DIFFERENT-from-pre-deploy,
+#      CONFIRMED-RUNNING container (no container / ambiguous /
+#      non-container-id-shaped / docker ps, inspect, or exec itself
+#      failing / identical to the pre-redeploy container / docker
+#      inspect not reporting State.Running=true -- see
+#      resolve_running_cid(), confirm_container_running(), and their
+#      callers below), the cert poll exhausts its bound, or `www` does
+#      not serve.
 #   2  FAILED -- a precondition this script could not even attempt under
 #      (missing .env names, box unreachable, Porkbun/Coolify API error).
 #
@@ -205,6 +263,12 @@ ROOT_DOMAIN="${ROOT_DOMAIN:-pfindash.com}"
 APP_NAME="${APP_NAME:-pfin-app}"
 CERT_POLL_ATTEMPTS="${CERT_POLL_ATTEMPTS:-30}"
 CERT_POLL_INTERVAL_SECONDS="${CERT_POLL_INTERVAL_SECONDS:-30}"
+# Sec ask (run-21 fix follow-up, redeploy addenda): the redeploy-status
+# poll's bound must be a NAMED, fail-closed timeout like the cert poll
+# above, not a hardcoded loop -- 90x4s=360s is the real-world default,
+# but a fence needs to exercise the timeout path in well under a second.
+DEPLOY_POLL_ATTEMPTS="${DEPLOY_POLL_ATTEMPTS:-90}"
+DEPLOY_POLL_INTERVAL_SECONDS="${DEPLOY_POLL_INTERVAL_SECONDS:-4}"
 AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
 
 die()  { printf '\n\033[31mFAIL\033[0m  %s\n' "$*" >&2; exit 1; }
@@ -953,55 +1017,229 @@ esac
 ok "docker_compose_domains PATCH read-back domain SET for '$APP_COMPOSE_SERVICE' exactly matches intended: $NEW_COMPOSE_DOMAINS"
 info "app-level fqdn after this PATCH: ${NEW_FQDN_AFTER_COMPOSE_PATCH:-<empty>} -- INFORMATIONAL ONLY (whether Coolify derives/mirrors fqdn from docker_compose_domains is UNMEASURED; this script's success does not depend on it)."
 
-# Post-assignment container-env read (team-lead, Sec-adjacent ask) --
-# NAMES ONLY, box-side grep, never a value: tests whether CA-1's own
-# admission-guard-relevant surface can even SEE a compose-service domain
-# at all. Coolify only injects env at container START (same caveat as
-# provision-worker.sh's own stale-container warning), so if the app
-# hasn't been redeployed since this PATCH, there is nothing to read yet
-# -- informational, never a hard gate on this script's own exit code.
-step "Post-assignment container-env read (informational -- names only, never a value)"
-# Sec F-3 (PR #866 review): the previous `2>/dev/null || true` collapsed
-# a FAILED read (ssh/docker error) into the same empty result as "read
-# succeeded, found nothing" -- which then printed a false positive
-# "MEASURED ... CONTROL GAP" fact for a read that never actually
-# happened. A read failure is reported as a failure, distinctly, never
-# as a measurement of anything. `head -1` silently picked the first of
-# several containers on an ambiguous match -- also fixed: >1 match
-# refuses to guess, same discipline as this script's own application-
-# uuid resolution.
-set +e
-CID_RAW="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.ID}}'" </dev/null 2>&1)"
-CID_RC=$?
+# resolve_running_cid -- prints exactly one RESULT LINE, never guesses:
+#   CID:<hex>          -- exactly one running container matched
+#   READ_FAILURE:<msg> -- 'docker ps' itself failed (ssh/transport error)
+#   NONE               -- no running container matched (not an error)
+#   AMBIGUOUS:<ids>     -- more than one running container matched
+#   BAD_SHAPE:<value>  -- 'docker ps' returned something not
+#                         container-id-shaped
+# Shared by the PRE- and POST-redeploy capture below (team-lead, run-21
+# fix follow-up) -- previously this logic lived inline, used once,
+# informationally. It is now REQUIRED post-redeploy (a fresh container
+# must exist and must differ from whatever was running before), so it
+# is a function, not duplicated prose.
+resolve_running_cid() {
+  local raw rc count shape_re='^[a-f0-9]{6,64}$'
+  set +e
+  raw="$(sshx "docker ps --filter 'name=$APP_UUID' --filter 'status=running' --format '{{.ID}}'" </dev/null 2>&1)"
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    printf 'READ_FAILURE:%s' "$raw"
+    return
+  fi
+  if [[ -z "$raw" ]]; then
+    printf 'NONE'
+    return
+  fi
+  count="$(printf '%s\n' "$raw" | grep -c .)"
+  if [[ "$count" -gt 1 ]]; then
+    printf 'AMBIGUOUS:%s' "$(printf '%s' "$raw" | tr '\n' ' ')"
+    return
+  fi
+  if [[ ! "$raw" =~ $shape_re ]]; then
+    printf 'BAD_SHAPE:%s' "$raw"
+    return
+  fi
+  printf 'CID:%s' "$raw"
+}
+
+# confirm_container_running <cid> -- prints exactly one RESULT LINE:
+#   true / false / <anything else docker inspect prints (unexpected)
+#   INSPECT_FAILURE:<msg> -- 'docker inspect' itself failed
+# A second, independent check on top of resolve_running_cid()'s own
+# 'docker ps --filter status=running' (Sec ask, redeploy addenda
+# requirement 4) -- never trusts the ps filter alone for something as
+# consequential as "safe to docker exec and read env from".
+confirm_container_running() {
+  local cid="$1" raw rc
+  set +e
+  raw="$(sshx "docker inspect --format '{{.State.Running}}' $cid" </dev/null 2>&1)"
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    printf 'INSPECT_FAILURE:%s' "$raw"
+    return
+  fi
+  printf '%s' "$raw"
+}
+
+# PRE-redeploy capture -- informational only (the very first-ever
+# assignment legitimately has nothing running yet); its only job is to
+# give the POST-redeploy check below something to compare against.
+PRE_DEPLOY_RESULT="$(resolve_running_cid)"
+case "$PRE_DEPLOY_RESULT" in
+  CID:*) PRE_DEPLOY_CID="${PRE_DEPLOY_RESULT#CID:}" ;;
+  *) PRE_DEPLOY_CID="" ;;
+esac
+
+# Trigger a redeploy so the new domain assignment actually reaches a
+# running container (team-lead, run-21 fix follow-up: without this, the
+# env read below and the cert poll further down both hit the OLD,
+# pre-assignment container -- Coolify only injects env / regenerates
+# Traefik proxy labels at deploy time, never retroactively for an
+# already-running container). Same POST /deploy + 90x4s poll shape
+# deploy-app.sh already uses (duplicated here rather than sourced --
+# this repo's own convention for sibling scripts, see this file's own
+# TARGET GUARD section above for the same pattern applied to a
+# different helper).
+step "Triggering a redeploy of '$APP_NAME' so the domain assignment above reaches a running container"
+DEPLOY_OUT="$(sshx "env app_uuid=$(printf '%q' "$APP_UUID") deploy_poll_attempts=$(printf '%q' "$DEPLOY_POLL_ATTEMPTS") deploy_poll_interval=$(printf '%q' "$DEPLOY_POLL_INTERVAL_SECONDS") bash -s" <<REMOTE
 set -e
-if [[ $CID_RC -ne 0 ]]; then
-  info "container-env read SKIPPED -- 'docker ps' itself failed (rc=$CID_RC): $CID_RAW -- a READ FAILURE, not a measurement of anything; never reported as a MEASURED fact."
-elif [[ -z "$CID_RAW" ]]; then
-  info "no running container for '$APP_NAME' yet -- container-env read not applicable until the next deploy picks up this domain assignment."
-else
-  CID_COUNT="$(printf '%s\n' "$CID_RAW" | grep -c .)"
-  CID_SHAPE_RE='^[a-f0-9]{6,64}$'
-  if [[ "$CID_COUNT" -gt 1 ]]; then
-    info "container-env read SKIPPED -- $CID_COUNT running containers matched name filter '$APP_UUID' ($(printf '%s' "$CID_RAW" | tr '\n' ' ')) -- ambiguous, never guessing which is authoritative."
-  elif [[ ! "$CID_RAW" =~ $CID_SHAPE_RE ]]; then
-    info "container-env read SKIPPED -- 'docker ps' returned a non-container-id-shaped value ('$CID_RAW'); refusing to pass it to docker exec."
-  else
-    EXISTING_APP_CID="$CID_RAW"
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "\$app_uuid" "\$deploy_poll_attempts" "\$deploy_poll_interval" <<'PYEOF'
+$PY_API_HELPER
+import sys, time
+token, app_uuid = sys.argv[1], sys.argv[2]
+poll_attempts, poll_interval = int(sys.argv[3]), int(sys.argv[4])
+d = api(token, "POST", f"/deploy?uuid={app_uuid}")
+deployments = (d or {}).get("deployments") or [{}]
+deploy_uuid = deployments[0].get("deployment_uuid", "")
+if not deploy_uuid:
+    die("deploy call did not return a deployment_uuid")
+print(f"QUEUED: {deploy_uuid}")
+status = ""
+for _ in range(poll_attempts):
+    dep = api(token, "GET", f"/deployments/{deploy_uuid}")
+    status = (dep or {}).get("status", "")
+    if status in ("finished", "failed"):
+        break
+    time.sleep(poll_interval)
+if status != "finished":
+    # Sec ask (redeploy addenda): a bounded timeout FAILS CLOSED -- this
+    # covers BOTH an explicit status=failed AND the loop simply exhausting
+    # its bound without ever reaching a terminal state, with ONE die(),
+    # never a fall-through to the container-env read below.
+    dep = api(token, "GET", f"/deployments/{deploy_uuid}") or {}
+    raw = dep.get("logs") or "[]"
+    import json as _json
+    entries = _json.loads(raw) if isinstance(raw, str) else (raw or [])
+    print("\n".join(e.get("output", "") for e in entries[-60:]), file=sys.stderr)
+    die(f"deployment {deploy_uuid} did not reach status=finished within {poll_attempts} attempts x {poll_interval}s (last observed status={status!r}) -- see log above. Refusing to proceed to the container-env read.")
+print("FINISHED")
+PYEOF
+REMOTE
+)"
+grep -qF "FINISHED" <<<"$DEPLOY_OUT" || die "redeploy of app $APP_NAME did not finish -- see captured deploy output: $DEPLOY_OUT -- re-run this script once fixed (idempotent)."
+ok "redeploy finished"
+
+# POST-redeploy container-env read -- now REQUIRED, not informational:
+# a fresh container must exist AND must differ from whatever was
+# running before the redeploy above -- a read of the OLD container is a
+# READ-OF-THE-WRONG-THING, not a measurement (team-lead, run-21 fix
+# follow-up). Prints VALUES, not just names, for exactly three env
+# families -- COOLIFY_FQDN, COOLIFY_URL, SERVICE_FQDN_* -- Sec
+# explicitly relaxed the names-only discipline used everywhere else in
+# this repo's env-store handling for ONLY these three: they are public
+# hostnames (the sslip form already embeds a uuid that is in this repo
+# in plaintext), and since this app now carries BOTH the app-level
+# sslip `fqdn` and the service-level docker_compose_domains, only the
+# VALUE (not just the name) attributes which source produced which
+# route -- naming alone cannot distinguish them. Nothing outside these
+# three names is ever read or printed here.
+step "Post-redeploy container-env read (VALUES for COOLIFY_FQDN/COOLIFY_URL/SERVICE_FQDN_* only -- see header)"
+POST_DEPLOY_RESULT="$(resolve_running_cid)"
+case "$POST_DEPLOY_RESULT" in
+  READ_FAILURE:*)
+    die "post-redeploy container-env read FAILED -- 'docker ps' itself failed: ${POST_DEPLOY_RESULT#READ_FAILURE:} -- the redeploy reported finished but this script could not confirm a running container. Investigate before treating step 9 as done."
+    ;;
+  NONE)
+    die "post-redeploy container-env read found NO running container for '$APP_NAME' -- the redeploy reported finished but nothing is running. Investigate before treating step 9 as done."
+    ;;
+  AMBIGUOUS:*)
+    die "post-redeploy container-env read is AMBIGUOUS -- multiple running containers matched name filter '$APP_UUID' (${POST_DEPLOY_RESULT#AMBIGUOUS:}) -- refusing to guess which is this deploy's. Investigate on the box before treating step 9 as done."
+    ;;
+  BAD_SHAPE:*)
+    die "post-redeploy container-env read: 'docker ps' returned a non-container-id-shaped value (${POST_DEPLOY_RESULT#BAD_SHAPE:}) -- refusing to pass it to docker exec."
+    ;;
+  CID:*)
+    NEW_APP_CID="${POST_DEPLOY_RESULT#CID:}"
+    # Sec ask (redeploy addenda, requirement 1): the comparison is a
+    # set-difference on ids captured BEFORE vs AFTER the redeploy, never
+    # "most recent" / start time / "the one running" -- both AMBIGUOUS
+    # above already refuses whenever more than one running container
+    # matches the name filter on either side, so this single-id
+    # inequality check IS that set-difference at the only cardinality
+    # this script ever proceeds past (exactly one, on each side). On a
+    # match, name BOTH ids explicitly rather than just the new one.
+    if [[ -n "$PRE_DEPLOY_CID" && "$NEW_APP_CID" == "$PRE_DEPLOY_CID" ]]; then
+      die "post-redeploy container id ($NEW_APP_CID) is IDENTICAL to the pre-redeploy container id ($PRE_DEPLOY_CID) -- the redeploy reported finished but did not actually replace the running container. Refusing to read its env as a measurement of the new domain assignment -- a read of the OLD container is a READ-OF-THE-WRONG-THING, not a measurement. Investigate on the box before treating step 9 as done."
+    fi
+    # Sec ask (redeploy addenda, requirement 4): 'docker ps --filter
+    # status=running' already excludes a merely-created container, but
+    # this is a second, independent confirmation via 'docker inspect'
+    # rather than trusting that filter alone -- Coolify injects env at
+    # container START, not creation, so a container this script has not
+    # independently confirmed as State.Running=true is not yet a valid
+    # env-read target even if 'docker ps' listed it.
+    RUNNING_CHECK="$(confirm_container_running "$NEW_APP_CID")"
+    case "$RUNNING_CHECK" in
+      true)
+        ;;
+      INSPECT_FAILURE:*)
+        die "post-redeploy container-env read FAILED -- 'docker inspect' on $NEW_APP_CID itself failed: ${RUNNING_CHECK#INSPECT_FAILURE:} -- refusing to treat an uninspectable container as running."
+        ;;
+      *)
+        die "post-redeploy container $NEW_APP_CID was resolved via 'docker ps' but 'docker inspect' reports State.Running=$RUNNING_CHECK, not true -- Coolify injects env at container START, not creation; refusing to read its env until it is confirmed genuinely running."
+        ;;
+    esac
     set +e
-    ENV_RAW="$(sshx "docker exec $EXISTING_APP_CID env" </dev/null 2>&1)"
+    ENV_RAW="$(sshx "docker exec $NEW_APP_CID env" </dev/null 2>&1)"
     ENV_RC=$?
     set -e
     if [[ $ENV_RC -ne 0 ]]; then
-      info "container-env read FAILED -- 'docker exec $EXISTING_APP_CID env' rc=$ENV_RC: $ENV_RAW -- a READ FAILURE, not a measurement of absence; never reported as a CONTROL GAP."
-    else
-      ENV_NAMES_FOUND="$(printf '%s\n' "$ENV_RAW" | grep -oE '^(SERVICE_FQDN_[A-Za-z0-9_]*|COOLIFY_FQDN|COOLIFY_URL)=' | cut -d= -f1 | sort -u || true)"
-      if [[ -z "$ENV_NAMES_FOUND" ]]; then
-        info "MEASURED $(date -u +%Y-%m-%d): container $EXISTING_APP_CID for '$APP_NAME' injects NONE of SERVICE_FQDN_*/COOLIFY_FQDN/COOLIFY_URL -- if this persists after a redeploy, that is a CONTROL GAP to report (CA-1's admission-guard-relevant surface would have nothing to see for this app), not something to paper over."
-      else
-        info "MEASURED $(date -u +%Y-%m-%d): container $EXISTING_APP_CID for '$APP_NAME' injects: $(printf '%s' "$ENV_NAMES_FOUND" | tr '\n' ' ')"
-      fi
-      info "Append this line to scripts/COOLIFY-API-MEASURED.md's COOLIFY-FACT-06 entry (names only, this run's date, whether a redeploy had already happened) -- this script does not write to that file itself."
+      die "post-redeploy container-env read FAILED -- 'docker exec $NEW_APP_CID env' rc=$ENV_RC: $ENV_RAW. Investigate before treating step 9 as done."
     fi
+    ENV_LINES_FOUND="$(printf '%s\n' "$ENV_RAW" | grep -E '^(SERVICE_FQDN_[A-Za-z0-9_]*|COOLIFY_FQDN|COOLIFY_URL)=' | sort -u || true)"
+    if [[ -z "$ENV_LINES_FOUND" ]]; then
+      info "MEASURED $(date -u +%Y-%m-%d): NEW container $NEW_APP_CID (post-redeploy, differs from pre-deploy) for '$APP_NAME' injects NONE of SERVICE_FQDN_*/COOLIFY_FQDN/COOLIFY_URL -- this is a CONTROL GAP to report (CA-1's admission-guard-relevant surface would have nothing to see for this app), not something to paper over."
+    else
+      info "MEASURED $(date -u +%Y-%m-%d): NEW container $NEW_APP_CID (post-redeploy, differs from pre-deploy) for '$APP_NAME' injects: $(printf '%s' "$ENV_LINES_FOUND" | tr '\n' ' ')"
+    fi
+    info "Append this line to scripts/COOLIFY-API-MEASURED.md's COOLIFY-FACT-06 entry (this run's date) -- this script does not write to that file itself."
+    ;;
+esac
+
+# Re-take the off-box sslip reachability probe, post-redeploy, WITH a
+# nonexistent-host control (Sec ask, run-21 fix follow-up, and reaffirmed
+# in the redeploy addenda requirement 2: this probe MUST run after the
+# redeploy above, never before it -- Coolify only regenerates Traefik's
+# proxy config at deploy time, so a pre-redeploy probe would still be
+# measuring the OLD routing state):
+# COOLIFY-FACT-05/06's own "not routed, 404 identical to control" fact
+# was measured BEFORE docker_compose_domains existed on this app and no
+# longer covers this state -- this app may now be reachable via BOTH
+# the intended domain (this script's own target) and its own
+# Coolify-assigned sslip default, an UNINTENDED second route. Observed
+# and reported as a FINDING, never a failure -- this script does not
+# change fqdn and has no mechanism to fix a divergence, only to surface
+# it before DNS cutover completes.
+step "Re-taking the sslip reachability probe (post-redeploy) with a nonexistent-host control"
+SSLIP_HOST="${NEW_FQDN_AFTER_COMPOSE_PATCH#http://}"
+SSLIP_HOST="${SSLIP_HOST#https://}"
+SSLIP_HOST="${SSLIP_HOST%%/*}"
+if [[ -z "$SSLIP_HOST" ]]; then
+  info "sslip reachability probe SKIPPED -- app-level fqdn is empty; nothing to probe."
+else
+  CONTROL_HOST="nonexistent-$((RANDOM * RANDOM)).${BOX_IP}.sslip.io"
+  SSLIP_HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$SSLIP_HOST/" 2>/dev/null || true)"
+  SSLIP_HTTPS_CODE="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$SSLIP_HOST/" 2>/dev/null || true)"
+  CONTROL_HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$CONTROL_HOST/" 2>/dev/null || true)"
+  CONTROL_HTTPS_CODE="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$CONTROL_HOST/" 2>/dev/null || true)"
+  info "sslip host $SSLIP_HOST: http=${SSLIP_HTTP_CODE:-(no response)} https=${SSLIP_HTTPS_CODE:-(no response)}  |  nonexistent-host control $CONTROL_HOST: http=${CONTROL_HTTP_CODE:-(no response)} https=${CONTROL_HTTPS_CODE:-(no response)}"
+  if [[ "$SSLIP_HTTP_CODE" != "$CONTROL_HTTP_CODE" || "$SSLIP_HTTPS_CODE" != "$CONTROL_HTTPS_CODE" ]]; then
+    info "FINDING: the sslip host answered DIFFERENTLY from the nonexistent-host control (http $SSLIP_HTTP_CODE vs $CONTROL_HTTP_CODE; https $SSLIP_HTTPS_CODE vs $CONTROL_HTTPS_CODE) -- this app may be reachable via an UNINTENDED second route (its own Coolify-assigned sslip default), not just the domain this script assigned. Not a failure -- investigate before DNS cutover completes."
   fi
 fi
 
