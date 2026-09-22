@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# fake-ssh -- offline stand-in for ssh, used by
+# scripts/ci/fence-smoke-remaining-checks-strikes.sh. Same shape as the
+# sibling fences' own fake-ssh (fence-smoke-admission-endpoint-strikes.sh,
+# fence-smoke-etl-poll-strikes.sh): rewrites the `/root/.pfin` path the
+# real script hardcodes to a fixture-local one, then dispatches on the
+# LAST argument's shape --
+#   "true"                      -> the preflight one-word probe, exit 0.
+#   "test -s /root/.pfin/..."   -> the coolify.env preflight, exit 0.
+#   "... bash -s" (heredoc-fed) -> everything scripts/smoke-remaining-
+#     checks.sh runs via `sshx "env ... bash -s" <<REMOTE`: resolve_app
+#     (x2), psql_admin (x4 distinct queries), and the Resend probe.
+#   anything else (a single plain command string) -> find_running_
+#     container's docker-compose/inspect pipeline, and the CA-7
+#     positive-control `docker exec ... node -e` call.
+# In both remote-execution branches, PATH is prepended with $FAKE_BIN so
+# the fake docker/curl fixtures answer instead of the real binaries. Every
+# other FAKE_* env var is inherited automatically (a bash -c child always
+# inherits its parent's exported environment) -- no need to re-list each
+# one by name here, unlike some sibling fences' more defensive shape.
+
+set -euo pipefail
+
+if [[ "${@: -1}" == "true" ]]; then
+  exit 0
+fi
+if [[ "$*" == *"test -s /root/.pfin/coolify.env"* ]]; then
+  exit 0
+fi
+
+LAST="${@: -1}"
+if [[ "$LAST" == "-s" || "$LAST" == *" bash -s" ]]; then
+  CMDLINE="$LAST"
+  [[ "$CMDLINE" == "-s" ]] && CMDLINE="bash -s"
+  CMDLINE="$(printf '%s' "$CMDLINE" | sed "s#/root/\\.pfin#$FAKE_ROOT_PFIN#g")"
+  REWRITTEN="$(sed "s#/root/\\.pfin#$FAKE_ROOT_PFIN#g")"
+  PATH="$FAKE_BIN:$PATH" bash -c "$CMDLINE" <<< "$REWRITTEN"
+  exit $?
+fi
+
+CMD="${@: -1}"
+CMD_REWRITTEN="$(printf '%s' "$CMD" | sed "s#/root/\\.pfin#$FAKE_ROOT_PFIN#g")"
+PATH="$FAKE_BIN:$PATH" bash -c "$CMD_REWRITTEN"

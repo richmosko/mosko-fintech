@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#
+# fake-nc -- offline stand-in for `nc -z -w <timeout> <host> <port>`, used
+# by scripts/ci/fence-smoke-remaining-checks-strikes.sh for CA-7's N1
+# negative TCP-connect probe. Exit 0 (a real connect succeeded, i.e. the
+# port is OPEN) only if the target port is listed in the comma-separated
+# $FAKE_NC_OPEN; exit 1 (refused/closed) otherwise -- matching real nc's
+# own -z exit-status convention.
+
+set -euo pipefail
+
+PORT="${*: -1}"
+IFS=',' read -r -a OPEN_PORTS <<< "${FAKE_NC_OPEN:-}"
+for p in "${OPEN_PORTS[@]}"; do
+  if [[ "$p" == "$PORT" ]]; then
+    exit 0
+  fi
+done
+exit 1

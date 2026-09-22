@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#
+# fake-docker -- offline stand-in for docker, used by
+# scripts/ci/fence-smoke-remaining-checks-strikes.sh. Handles every docker
+# invocation scripts/smoke-remaining-checks.sh makes:
+#   1. `docker compose --project-name <uuid> ps -q <service>` -- one
+#      container id per line (two if FAKE_CONTAINERS=2, striking the
+#      ambiguity guard).
+#   2. `docker inspect --format '...' <id>` -- RUNNING, real tab.
+#   3. `docker compose --project-name <uuid> exec -T db psql ... -tAc
+#      "<query>"` -- distinguished by a SANITY-TOKEN substring unique to
+#      each of the four psql_admin() call sites in the real script (the
+#      SAME tokens that query's own SQL text carries):
+#        pg_db_role_setting   -> TZ-1                 -> $FAKE_TZ1_ROWS
+#        relrowsecurity       -> RLS enumeration       -> $FAKE_RLS_ENUM
+#        set role authenticated -> RLS privileged-baseline + zero-context
+#                                   combined query (Sec F-1, PR #869
+#                                   review) -> $FAKE_ZERO_CTX, format
+#                                   "PRIV|table|count\nAUTH|table|count"
+#                                   per discovered table.
+#        rolbypassrls         -> service_role BYPASSRLS -> $FAKE_BYPASSRLS
+#   4. `docker compose --project-name <uuid> exec -T auth node -e '...'`
+#      -- the Resend send-acceptance probe -- prints $FAKE_RESEND_OUT.
+#   5. `docker exec <container> node -e '...'` (no `compose`, no `auth`)
+#      -- the CA-7 positive-control probe -- prints "$FAKE_CA7_GW
+#      $FAKE_CA7_P1 $FAKE_CA7_P2".
+
+set -euo pipefail
+
+ARGS="$*"
+
+if [[ "$ARGS" == *"compose --project-name"*"ps -q"* ]]; then
+  echo "container-abc123"
+  if [[ "${FAKE_CONTAINERS:-1}" == "2" ]]; then
+    echo "container-def456"
+  fi
+  exit 0
+fi
+
+if [[ "$ARGS" == *"inspect --format"* ]]; then
+  ID="${*: -1}"
+  printf 'true\t%s\t2026-01-01T00:00:00Z\n' "$ID"
+  exit 0
+fi
+
+if [[ "$ARGS" == *"exec -T db psql"* ]]; then
+  if [[ "$ARGS" == *"pg_db_role_setting"* ]]; then
+    printf '%s' "${FAKE_TZ1_ROWS:-}"
+    exit 0
+  fi
+  if [[ "$ARGS" == *"relrowsecurity"* ]]; then
+    printf '%s' "${FAKE_RLS_ENUM:-}"
+    exit 0
+  fi
+  if [[ "$ARGS" == *"set role authenticated"* ]]; then
+    printf '%s' "${FAKE_ZERO_CTX:-}"
+    exit 0
+  fi
+  if [[ "$ARGS" == *"rolbypassrls"* ]]; then
+    printf '%s' "${FAKE_BYPASSRLS:-true}"
+    exit 0
+  fi
+  echo "FAKE DOCKER: unrecognised psql -tAc query shape: $ARGS" >&2
+  exit 1
+fi
+
+if [[ "$ARGS" == *"exec -T auth node -e"* ]]; then
+  printf '%s\n' "${FAKE_RESEND_OUT:-RESEND_KEY_ABSENT}"
+  exit 0
+fi
+
+if [[ "$ARGS" == *"exec"*"node -e"* ]]; then
+  printf '%s %s %s\n' "${FAKE_CA7_GW:-200}" "${FAKE_CA7_P1:-OPEN}" "${FAKE_CA7_P2:-OPEN}"
+  exit 0
+fi
+
+echo "FAKE DOCKER: unrecognised invocation: $ARGS" >&2
+exit 1

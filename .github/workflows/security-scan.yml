@@ -4197,6 +4197,46 @@ jobs:
       - name: offline strike-proofs (happy-path / unmatched-finding / none-injected / ambiguous-containers / no-running-container / resource-absent / node-import-failed / box-ip-missing / box-unreachable)
         run: bash scripts/ci/fence-smoke-ca1-env-pattern-strikes.sh
 
+  fence-smoke-remaining-checks-strikes:
+    name: smoke-remaining-checks.sh — CA-7/TZ-1/RLS-isolation/auth-login strike-proofs
+    runs-on: ubuntu-latest
+    # BACKLOG.md §7.36 item 81. QA-owned (CA-7/TZ-1 mechanics consulted
+    # with DevOps). scripts/smoke-remaining-checks.sh scripts the
+    # `remaining-checks` step of provision.sh, replacing an unconditional
+    # `return 4` stub: TZ-1's query is extracted LIVE from docs/
+    # deployment-runbook.md §4.1 (never retyped -- reuses scripts/ci/
+    # check-tz-sweep-identical.py's own extract_runbook() as a module) and
+    # run against the box's `db` container; CA-7 probes the Supabase
+    # datastore's external unreachability (a portable `nc`-based
+    # substitute for the archive's named `nmap`, stated as a deliberate
+    # departure in the target script's own header) plus an attached-
+    # network positive control; RLS isolation is a READ-ONLY catalog +
+    # zero-JWT-context behavioral check (ADR-011 surface, Sec-consulted);
+    # auth-login reports SKIPPED before a public domain exists and
+    # exercises everything automatable once one does, capping at MANUAL
+    # for the one genuinely unscriptable piece (the email-confirmation
+    # round-trip). ⚠ tests/fixtures/ci/smoke-remaining-checks/{fake-ssh,
+    # fake-docker,fake-curl,fake-nc} resolve every Coolify/box/container
+    # call with CANNED values -- this fence proves the shell script's own
+    # control flow (which verdict/exit code each response shape drives),
+    # never that a real deployment's TZ-1 query, port state, RLS catalog
+    # shape, or Resend API response actually match. Those are proven only
+    # when the script runs against a live box (docs/deployment-
+    # runbook.md Part 3, `remaining-checks`).
+    # scripts/ci/fence-smoke-remaining-checks-strikes.sh proves: the
+    # domain-assigned happy path caps at MANUAL, never a false VERIFIED,
+    # for the permanently-by-hand email round-trip; no-domain reports
+    # SKIPPED; each of CA-7's negative-control/domain-check/positive-
+    # control/ambiguity guards refuses alone; TZ-1 drift refuses; each of
+    # RLS's rowsecurity/policy-count/anon-grant/zero-context/BYPASSRLS/
+    # empty-enumeration guards refuses alone; each of auth-login's login-
+    # page/signup-validation status checks refuses alone; and an absent
+    # Resend key is informational only, never a failure.
+    steps:
+      - uses: actions/checkout@v4
+      - name: offline strike-proofs (happy-path-manual-ceiling / no-domain-skipped / ca7-n1-open / ca7-domain-assigned / ca7-positive-gw-down / ca7-positive-supavisor-down / ca7-ambiguous / tz1-drift / rls-disabled / rls-anon-grant / rls-zero-context-nonzero / rls-bypassrls-false / rls-empty-enumeration / auth-login-wrong-status / auth-signup-wrong-status / auth-resend-key-absent / auth-login-curl-empty)
+        run: bash scripts/ci/fence-smoke-remaining-checks-strikes.sh
+
   fence-db-bootstrap-strikes:
     name: db-bootstrap.sh — database bootstrap strike-proofs
     runs-on: ubuntu-latest

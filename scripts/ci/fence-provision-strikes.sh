@@ -328,25 +328,34 @@ run_case() {
   return 0
 }
 
-# 1. HAPPY-PATH -- dns -> ci-keypair -> github-ci -> deploy-on-success,
-# FOUR CONSECUTIVE, fully-scripted steps (the registry's last four before
-# cutover), correctly STOPPING at cutover, the always-MANUAL terminal gate
-# (run_cutover returns 4 unconditionally, --confirm-cutover or not -- it
-# only changes the printed message). This is this orchestrator's real
-# terminal behavior BY DESIGN: no --from invocation can ever complete past
-# cutover with exit 0, because that gate is a deliberate one-way door,
-# never auto-satisfied. A "happy path" scenario for THIS registry is
-# therefore "N steps VERIFIED, then a clean MANUAL stop at cutover" -- not
-# "exit 0 across the whole remaining run".
+# 1. HAPPY-PATH -- dns -> ci-keypair -> github-ci -> deploy-on-success ->
+# remaining-checks, FIVE CONSECUTIVE, fully-scripted steps (the
+# registry's last five before cutover -- QA, BACKLOG.md §7.36 item 81
+# moved `remaining-checks` to immediately before `cutover`, after
+# `deploy-on-success`, so its own auth-login leg can reach the domain
+# `dns` assigns; it was FOUR before that move), correctly STOPPING at
+# cutover, the always-MANUAL terminal gate (run_cutover returns 4
+# unconditionally, --confirm-cutover or not -- it only changes the
+# printed message). This is this orchestrator's real terminal behavior BY
+# DESIGN: no --from invocation can ever complete past cutover with exit
+# 0, because that gate is a deliberate one-way door, never auto-
+# satisfied. A "happy path" scenario for THIS registry is therefore "N
+# steps VERIFIED, then a clean MANUAL stop at cutover" -- not "exit 0
+# across the whole remaining run". `remaining-checks` reads VERIFIED here
+# because the generic fake-step.sh dispatcher's own default (no
+# FAKE_RC_smoke_remaining_checks override in this scenario's CASE_ENV) is
+# exit 0 -- this scenario is about the REGISTRY WALK, not
+# smoke-remaining-checks.sh's own control flow, which
+# fence-smoke-remaining-checks-strikes.sh covers on its own.
 CASE_ENV=()
 # Sec F-6 (PR #849 review): dns is now ALSO gated behind
 # --confirm-cutover (the apex A repoint is the user-visible go-live
 # switch) -- a happy-path run reaching dns->cutover must pass it, same
 # as it always needed to for cutover's own gate.
-run_case "happy-path (dns -> ci-keypair -> github-ci -> deploy-on-success VERIFIED, stops at cutover)" 1 --from dns --confirm-cutover || FAIL=1
+run_case "happy-path (dns -> ci-keypair -> github-ci -> deploy-on-success -> remaining-checks VERIFIED, stops at cutover)" 1 --from dns --confirm-cutover || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   VERIFIED_COUNT="$(grep -c ': VERIFIED' "$CASE_LAST_DIR/out.txt" 2>/dev/null || echo 0)"
-  [[ "$VERIFIED_COUNT" == "4" ]] || { echo "FAIL: [happy-path] expected 4 VERIFIED steps, saw $VERIFIED_COUNT" >&2; FAIL=1; }
+  [[ "$VERIFIED_COUNT" == "5" ]] || { echo "FAIL: [happy-path] expected 5 VERIFIED steps, saw $VERIFIED_COUNT" >&2; FAIL=1; }
   grep -q -- "--from cutover" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [happy-path] resume hint does not name cutover" >&2; FAIL=1; }
 fi
 
@@ -610,7 +619,7 @@ fi
 CASE_ENV=()
 run_case "BOX_IP reaches every sub-script that requires it" 0 --dry-run || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
-  BOX_IP_REQUIRED_NAMES="coolify-env provision-migrator-app migrator-scheduled-task provision-app provision-worker record-coolify-uuids push-production-secrets mint-supabase-jwt-keys db-role-handoff deploy-app smoke-admission-endpoint smoke-etl-poll smoke-pdf-roundtrip smoke-pfin-exposure smoke-ca1-env-pattern worker-scheduled-task verify-worker-ca1-clear"
+  BOX_IP_REQUIRED_NAMES="coolify-env provision-migrator-app migrator-scheduled-task provision-app provision-worker record-coolify-uuids push-production-secrets mint-supabase-jwt-keys db-role-handoff deploy-app smoke-admission-endpoint smoke-etl-poll smoke-pdf-roundtrip smoke-pfin-exposure smoke-ca1-env-pattern smoke-remaining-checks worker-scheduled-task verify-worker-ca1-clear"
   CHECKED_ANY=0
   for n in $BOX_IP_REQUIRED_NAMES; do
     if grep -q "^$n " "$CASE_LAST_DIR/calls.log" 2>/dev/null; then
