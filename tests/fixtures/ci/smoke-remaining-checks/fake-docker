@@ -9,8 +9,8 @@
 #   2. `docker inspect --format '...' <id>` -- RUNNING, real tab.
 #   3. `docker compose --project-name <uuid> exec -T db psql ... -tAc
 #      "<query>"` -- distinguished by a SANITY-TOKEN substring unique to
-#      each of the four psql_admin() call sites in the real script (the
-#      SAME tokens that query's own SQL text carries):
+#      each of the psql_admin() call sites in the real script (the SAME
+#      tokens that query's own SQL text carries):
 #        pg_db_role_setting   -> TZ-1                 -> $FAKE_TZ1_ROWS
 #        relrowsecurity       -> RLS enumeration (7 fields per row:
 #                                   table|rls|polcount|anon-table-sel|
@@ -19,11 +19,41 @@
 #                                   round-2 review, PR #880: all four
 #                                   grant checks live in THIS query now,
 #                                   not a second round trip) -> $FAKE_RLS_ENUM
-#        set role authenticated -> RLS privileged-baseline + zero-context
-#                                   combined query (Sec F-1, PR #869
-#                                   review) -> $FAKE_ZERO_CTX, format
-#                                   "PRIV|table|count\nAUTH|table|count"
-#                                   per discovered table.
+#        'PRIV' as ctx         -> RLS privileged-baseline batched query
+#                                   (ALL tables, one UNION ALL call, admin
+#                                   never errors) -> $FAKE_PRIV, format
+#                                   "PRIV|table|count" per discovered
+#                                   table.
+#        set role authenticated -> real-run 25 fix (2026-09-22), amended
+#                                   by Sec's 2026-09-22 ruling: the
+#                                   `authenticated` count is now ONE
+#                                   psql invocation PER TABLE, via
+#                                   `psql_admin_auth_read()`'s three
+#                                   separate `-c` flags (`\set VERBOSITY
+#                                   verbose`, `set role authenticated`,
+#                                   `select count(*) from pfin.<table>`
+#                                   -- no semicolons, no double-quoted
+#                                   identifier). Table name is extracted
+#                                   from the END of the query text
+#                                   (`pfin.<table>` is the last thing on
+#                                   the line -- nothing else follows it
+#                                   in the reconstructed "$*" once the
+#                                   `</dev/null` redirection is stripped
+#                                   by the shell before argv) and looked
+#                                   up in $FAKE_AUTH_TABLE_RESULTS, one
+#                                   line per table, format
+#                                   "table|MODE|value" where MODE is one
+#                                   of OK (prints <value>, exit 0),
+#                                   DENIED (prints the real psql VERBOSE
+#                                   error -- SQLSTATE 42501 on the ERROR
+#                                   line, plus HINT/LOCATION -- to
+#                                   stderr, exit 1; byte-matches the
+#                                   real script's own MEASURED pin, see
+#                                   below), or ERROR (prints a
+#                                   NON-42501-shaped error to stderr,
+#                                   exit 1 -- an unrecognised error, must
+#                                   stay a precondition failure scoped to
+#                                   that one table, never a pass).
 #        rolbypassrls         -> service_role BYPASSRLS -> $FAKE_BYPASSRLS
 #   4. `docker compose --project-name <uuid> exec -T auth node -e '...'`
 #      -- the Resend send-acceptance probe -- prints $FAKE_RESEND_OUT.
@@ -58,9 +88,57 @@ if [[ "$ARGS" == *"exec -T db psql"* ]]; then
     printf '%s' "${FAKE_RLS_ENUM:-}"
     exit 0
   fi
-  if [[ "$ARGS" == *"set role authenticated"* ]]; then
-    printf '%s' "${FAKE_ZERO_CTX:-}"
+  if [[ "$ARGS" == *"'PRIV' as ctx"* ]]; then
+    printf '%s' "${FAKE_PRIV:-}"
     exit 0
+  fi
+  if [[ "$ARGS" == *"set role authenticated"* ]]; then
+    # `pfin.<table>` is the LAST thing on the reconstructed "$*" line --
+    # no trailing semicolon (a bare `-c` argument, not a semicolon-joined
+    # statement), no surrounding quotes (the identifier is never
+    # double-quoted any more -- see psql_admin_auth_read()'s own header),
+    # nothing follows it (`</dev/null` is a redirection, stripped from
+    # argv by the shell before this fixture ever sees it). Anchor on end
+    # of string.
+    TBL="$(printf '%s' "$ARGS" | sed -n 's/.*pfin\.\([a-z_][a-z0-9_]*\)$/\1/p')"
+    if [[ -z "$TBL" ]]; then
+      echo "FAKE DOCKER: could not extract table name from authenticated-read query: $ARGS" >&2
+      exit 1
+    fi
+    ROW="$(printf '%s\n' "${FAKE_AUTH_TABLE_RESULTS:-}" | awk -F'|' -v t="$TBL" '$1==t {print; exit}')"
+    if [[ -z "$ROW" ]]; then
+      echo "FAKE DOCKER: no FAKE_AUTH_TABLE_RESULTS row for table '$TBL' -- fixture gap: $ARGS" >&2
+      exit 1
+    fi
+    MODE="$(printf '%s' "$ROW" | awk -F'|' '{print $2}')"
+    VAL="$(printf '%s' "$ROW" | awk -F'|' '{print $3}')"
+    case "$MODE" in
+      OK)
+        printf '%s' "$VAL"
+        exit 0
+        ;;
+      DENIED)
+        # Byte-matches the real script's own MEASURED pin (real dev
+        # stack, 2026-09-22 -- see psql_admin_auth_read()'s own header)
+        # so the SQLSTATE-42501 classification is proven against the
+        # real verbose-error shape, not a paraphrase. `%s` substitutes
+        # only the table name, matching the pinned audit_log example
+        # byte-for-byte when $TBL is audit_log.
+        printf 'ERROR:  42501: permission denied for table %s\nHINT:  Grant the required privileges to the current role with: GRANT SELECT ON pfin.%s TO authenticated;\nLOCATION:  aclcheck_error, aclchk.c:2843\n' "$TBL" "$TBL" >&2
+        exit 1
+        ;;
+      ERROR)
+        # Deliberately NOT SQLSTATE 42501 -- proves the "any other
+        # error" precondition path is reached on its own merits, not by
+        # accidentally also matching the 42501 classification.
+        printf 'ERROR:  58P01: %s\n' "${VAL:-simulated unexpected error}" >&2
+        exit 1
+        ;;
+      *)
+        echo "FAKE DOCKER: unrecognised FAKE_AUTH_TABLE_RESULTS mode '$MODE' for table '$TBL'" >&2
+        exit 1
+        ;;
+    esac
   fi
   if [[ "$ARGS" == *"rolbypassrls"* ]]; then
     printf '%s' "${FAKE_BYPASSRLS:-true}"

@@ -17,7 +17,19 @@
 #      naive string substitution).
 #   2. GET .../login -- prints $FAKE_LOGIN_STATUS (the %{http_code} shape
 #      the real -w '%{http_code}' -o /dev/null invocation produces).
-#   3. POST .../signup -- prints $FAKE_SIGNUP_STATUS, same shape.
+#   3. POST .../signup -- real-run 25 fix (2026-09-22): the real script
+#      now calls curl with `-o <body-file> -D <header-file> -w
+#      '%{http_code}'`, so this fixture parses ITS OWN `-o`/`-D` argument
+#      VALUES out of argv and writes the simulated response there (never
+#      hardcoded paths -- the real script picks fresh `mktemp` paths
+#      every run). $FAKE_SIGNUP_STATUS still picks the HTTP status
+#      (default 400; "EMPTY" simulates a curl-level failure as before).
+#      When it is "200", $FAKE_SIGNUP_CTYPE (default application/json)
+#      and $FAKE_SIGNUP_BODY (default: the byte-exact envelope pinned in
+#      the real script's own header, reused here rather than retyped --
+#      see the fence's ENVELOPE_LITERAL) are written to the header/body
+#      files respectively; any other status writes an empty body and a
+#      bare status-line header.
 #   4. Anything else -- unrecognised, fails loudly (never silently "000"
 #      -- a silent default would mask a real call-shape drift).
 
@@ -26,6 +38,25 @@ set -euo pipefail
 ARGS="$*"
 LOG="${FAKE_CURL_LOG:-/dev/null}"
 printf '%s\n' "$ARGS" >> "$LOG"
+
+extract_opt() {
+  # extract_opt <flag> <args...> -- prints the value immediately
+  # following the FIRST occurrence of <flag> in the given args, or
+  # nothing if absent.
+  local flag="$1"; shift
+  local prev=""
+  local a
+  for a in "$@"; do
+    if [[ "$prev" == "$flag" ]]; then
+      printf '%s' "$a"
+      return 0
+    fi
+    prev="$a"
+  done
+}
+
+OUT_FILE="$(extract_opt -o "$@")"
+HDR_FILE="$(extract_opt -D "$@")"
 
 if [[ "$ARGS" == *"localhost:8000/api/v1"* ]]; then
   python3 <<'PYEOF'
@@ -62,6 +93,15 @@ if [[ "$ARGS" == *"/signup"* ]]; then
   CODE="${FAKE_SIGNUP_STATUS:-400}"
   if [[ "$CODE" == "EMPTY" ]]; then
     exit 7
+  fi
+  if [[ "$CODE" == "200" ]]; then
+    CTYPE="${FAKE_SIGNUP_CTYPE:-application/json}"
+    BODY="${FAKE_SIGNUP_BODY:?fake-curl: FAKE_SIGNUP_BODY must be set when FAKE_SIGNUP_STATUS=200 -- refusing to guess an envelope}"
+    [[ -n "$HDR_FILE" ]] && printf 'HTTP/1.1 200 OK\r\nContent-Type: %s\r\n\r\n' "$CTYPE" > "$HDR_FILE"
+    [[ -n "$OUT_FILE" ]] && printf '%s' "$BODY" > "$OUT_FILE"
+  else
+    [[ -n "$HDR_FILE" ]] && printf 'HTTP/1.1 %s\r\n\r\n' "$CODE" > "$HDR_FILE"
+    [[ -n "$OUT_FILE" ]] && : > "$OUT_FILE"
   fi
   printf '%s' "$CODE"
   exit 0
