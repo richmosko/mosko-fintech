@@ -67,15 +67,22 @@
 #      SINGLE matching role row -> die, naming "FAILED at (4/5)" and the
 #      actual row count -- cardinality itself is part of the proof, not
 #      just non-empty presence.
-#   8. JWT-SECRET-UNSET (Sec F-2, PR #852 AMBER review) -- probe (5/5)
-#      alone fails (app.settings.jwt_secret unset) -> die, isolated from
-#      the other four probes (all of which would pass).
-#   9-11. PROBE-5-FAIL-OPEN (Sec C-4, PR #852 AMBER review round 2) -- the
+#   8. PROBE-5-NON-CANONICAL-TOKEN (Sec F-2, PR #852 AMBER review;
+#      re-derived 2026-09-21 -- see this scenario's own inline comment
+#      for the full correction) -- probe (5/5) alone fails because the
+#      GUC answers with a token that is not the positive one -> die,
+#      isolated from the other four probes (all of which would pass).
+#      NOT "unset" (a prior label claimed this; a genuinely unset GUC is
+#      observationally identical to scenario 9's empty output, not to
+#      this scenario's non-empty token, and the OLD scenario 11 --
+#      dropped -- duplicated this one exactly under a different name).
+#   9-10. PROBE-5-FAIL-OPEN (Sec C-4, PR #852 AMBER review round 2) -- the
 #      ORIGINAL probe 5 (refuse only on one literal error string) was
-#      fail-open on every OTHER non-canonical answer -- empty output, a
-#      different error string, and the GUC explicitly set to the empty
-#      string all must refuse identically under the new positive-token
-#      check, not just the one string scenario 8 alone would catch.
+#      fail-open on every OTHER non-canonical answer -- empty output
+#      (which also covers a genuinely unset GUC, see scenario 9) and a
+#      different error string -- both must refuse identically under the
+#      new positive-token check, not just the one string scenario 8
+#      alone would catch.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -194,8 +201,8 @@ FAIL=0
 #
 # [jwt_setting] (Sec F-2, PR #852 AMBER review) defaults to a healthy,
 # non-error value when omitted, so scenarios 1-7 (none of which need probe
-# (5/5) to fail) are unaffected by its addition -- only scenario 8 passes
-# it explicitly.
+# (5/5) to fail) are unaffected by its addition -- only scenarios 8-10
+# pass it explicitly.
 #
 # ⚠ The fake `sshx()` below reads FAKE_-prefixed variable names, never
 # bare names like `containers`/`gw_status`/`pgver`/`init_state` --
@@ -286,7 +293,7 @@ sshx() {
       # (5/5) is now `select current_setting('app.settings.jwt_secret',
       # true) <> '';` -- a positive boolean token ('t'/'f'), never the
       # secret's own value or an error-string match. Default (see
-      # run_case) is 't' (healthy); scenarios 8/9/10/11 override it to
+      # run_case) is 't' (healthy); scenarios 8/9/10 override it to
       # exercise every non-canonical answer, not just the one string the
       # OLD version's fake modeled.
       printf '%s' "$FAKE_JWT_SETTING"
@@ -452,31 +459,43 @@ if [[ -n "${OUT7:-}" ]]; then
   echo "$OUT7" | grep -q "expected 4 role rows, got 1" || { echo "FAIL: [partial-init-state-one-role] did not name the actual row count" >&2; FAIL=1; }
 fi
 
-# 8. JWT-SECRET-UNSET (Sec F-2, PR #852 AMBER review; updated under Sec
-#    C-4 round 2) -- probe (5/5) alone fails: all four role passwords
-#    set, but current_setting('app.settings.jwt_secret', true) returns
-#    NULL for a genuinely unset GUC -> the fake's positive-token check
-#    ('t'/anything-else) refuses, isolated from the other four probes
-#    (all of which would pass).
-OUT8="$(run_case "jwt-secret-unset" 1 "" 7 401 17 "$HEALTHY_ROLES" 1 "f")" || FAIL=1
+# 8. PROBE-5 NON-CANONICAL TOKEN (Sec F-2, PR #852 AMBER review;
+#    re-derived 2026-09-21). The label this scenario carried until now,
+#    "jwt-secret-unset", was WRONG: it passes "f" as $9 -- a non-empty
+#    token, which is not what an unset GUC produces. Scenario 11
+#    ("probe5-guc-empty-string") passed the IDENTICAL argument, so the
+#    two were one test run twice under different names; 11 is dropped.
+#    A genuinely UNSET GUC makes current_setting(...,true) return NULL,
+#    which psql -At renders as EMPTY output -- observably identical to
+#    scenario 9, which is where that case is covered.
+#    What this scenario actually models: all four role passwords set,
+#    probe (5/5) alone fails because the GUC answers with a token that
+#    is not the positive one.
+OUT8="$(run_case "probe5-non-canonical-token" 1 "" 7 401 17 "$HEALTHY_ROLES" 1 "f")" || FAIL=1
 if [[ -n "${OUT8:-}" ]]; then
-  echo "$OUT8" | grep -q "FAILED at (5/5)" || { echo "FAIL: [jwt-secret-unset] did not isolate the failure to probe (5/5)" >&2; FAIL=1; }
-  echo "$OUT8" | grep -q "app.settings.jwt_secret is unset" || { echo "FAIL: [jwt-secret-unset] did not name jwt_secret as the cause" >&2; FAIL=1; }
+  echo "$OUT8" | grep -q "FAILED at (5/5)" || { echo "FAIL: [probe5-non-canonical-token] did not isolate the failure to probe (5/5)" >&2; FAIL=1; }
+  echo "$OUT8" | grep -q "app.settings.jwt_secret is unset" || { echo "FAIL: [probe5-non-canonical-token] did not name jwt_secret as the cause" >&2; FAIL=1; }
 fi
 
-# 9/10/11. PROBE-5-FAIL-OPEN (Sec C-4, PR #852 AMBER review round 2) -- an
+# 9/10. PROBE-5-FAIL-OPEN (Sec C-4, PR #852 AMBER review round 2) -- an
 #    unset GUC is not the only way probe 5 can be unsatisfiable. The
 #    ORIGINAL version here (refuse only on the literal "unrecognized
 #    configuration parameter" error string) was fail-open on every OTHER
 #    non-canonical answer -- struck three ways by Sec, all green when
 #    they should have been red: empty output (psql died / container
 #    gone), a DIFFERENT error string (db unreachable), and the GUC
-#    explicitly set to the empty string. The new positive-token check
-#    ('t'/anything-else) must refuse identically on all three.
+#    explicitly set to the empty string (see scenario 8 above -- folded
+#    in there, not repeated here). The new positive-token check
+#    ('t'/anything-else) must refuse identically on every one of these.
+#    Scenario 9 covers BOTH shapes that arrive as empty output: psql
+#    dying / the container being gone, AND a genuinely unset GUC
+#    (current_setting returns NULL, rendered empty by psql -At). They
+#    are indistinguishable at this fake's interface by construction, and
+#    the positive-token check must refuse on both -- which is the
+#    property under test, so collapsing them costs no coverage.
 OUT9="$(run_case  "probe5-empty-output"      1 "" 7 401 17 "$HEALTHY_ROLES" 1 "")" || FAIL=1
 OUT10="$(run_case "probe5-psql-error"        1 "" 7 401 17 "$HEALTHY_ROLES" 1 "psql: error: connection to server on socket failed")" || FAIL=1
-OUT11="$(run_case "probe5-guc-empty-string"  1 "" 7 401 17 "$HEALTHY_ROLES" 1 "f")" || FAIL=1
-for O in "${OUT9:-}" "${OUT10:-}" "${OUT11:-}"; do
+for O in "${OUT9:-}" "${OUT10:-}"; do
   [[ -n "$O" ]] && { echo "$O" | grep -q "FAILED at (5/5)" || { echo "FAIL: [probe5-fail-open] a non-canonical probe-5 answer did not refuse at (5/5)" >&2; FAIL=1; }; }
 done
 
