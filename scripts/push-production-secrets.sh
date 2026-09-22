@@ -817,7 +817,11 @@ report_destroy() {
   fi
   echo "DESTROYED: $box_seed $box_body (mechanism: $mech)"
 }
-trap report_destroy EXIT
+# Sec F-2 (PR #870 review): EXIT alone does not fire reliably if the ssh
+# connection itself drops (SIGHUP) -- an interrupted run is exactly when
+# destruction matters most, so the same handler is armed on HUP/INT/TERM
+# too, not just a clean exit.
+trap report_destroy EXIT HUP INT TERM
 TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
 python3 - "$TOKEN" "$uuid" "$box_seed" "$box_body" <<'PYEOF'
 import json, os, subprocess, sys

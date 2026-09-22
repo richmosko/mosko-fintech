@@ -685,7 +685,11 @@ report_shred_seed() {
   fi
   echo "DESTROYED: $SEED_FILE (mechanism: $mech)"
 }
-trap report_shred_seed EXIT
+# Sec F-2 (PR #870 review): EXIT alone does not fire reliably if the ssh
+# connection itself drops (SIGHUP) -- an interrupted run is exactly when
+# destruction matters most, so the same handler is armed on HUP/INT/TERM
+# too, not just a clean exit.
+trap report_shred_seed EXIT HUP INT TERM
 
 PW="$(cat "$SEED_FILE")"
 [ -n "$PW" ] || { echo "FATAL: seed file read as empty -- refusing to proceed." >&2; exit 1; }
