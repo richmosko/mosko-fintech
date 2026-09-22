@@ -60,15 +60,17 @@
 #      two, or a SUPERSTRING near-miss ("notfake-domain.test" contains
 #      "fake-domain.test") -> both refuse; a plain CONTAINS($ROOT_DOMAIN)
 #      check would have passed both silently.
-#   25/26/27. POST-ASSIGNMENT-ENV-READ FAIL-CLOSED (Sec F-3, PR #866
+#   25/26/27/28. POST-ASSIGNMENT-ENV-READ FAIL-CLOSED (Sec F-3, PR #866
 #      review) -- 'docker ps' itself failing, 2+ containers matching the
-#      name filter (never the old `head -1` first-of-several guess), and
-#      'docker exec ... env' itself failing must each be reported as a
-#      READ FAILURE / ambiguity, never collapsed into the same wording as
-#      a genuinely empty result -- the prior `2>/dev/null || true` shape
-#      printed a false-positive "MEASURED ... CONTROL GAP" fact for a
-#      read that never happened. This section stays informational (exit
-#      code unaffected in all three cases); only the WORDING is asserted.
+#      name filter (never the old `head -1` first-of-several guess),
+#      'docker exec ... env' itself failing, and 'docker ps' returning a
+#      non-container-id-shaped value, must each be reported as a READ
+#      FAILURE / ambiguity / shape refusal, never collapsed into the same
+#      wording as a genuinely empty result -- the prior
+#      `2>/dev/null || true` shape printed a false-positive "MEASURED ...
+#      CONTROL GAP" fact for a read that never happened. This section
+#      stays informational (exit code unaffected in all four cases); only
+#      the WORDING is asserted.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -652,6 +654,25 @@ if [[ -n "${CASE_OUTPUT:-}" ]]; then
   fi
   if grep -qF "that is a CONTROL GAP to report" <<<"$CASE_OUTPUT"; then
     echo "FAIL: [docker exec fails] reported a CONTROL GAP for a read that never actually happened -- this is exactly the false positive Sec's F-3 named." >&2
+    FAIL=1
+  fi
+fi
+
+# 28. POST-ASSIGNMENT-ENV-READ-NON-HEX-CID-REFUSES (Sec F-3 follow-up,
+#     PR #866 re-review) -- 'docker ps' returns a value that resolves
+#     (rc=0, single match) but is NOT container-id-shaped -- refuses to
+#     interpolate it into a remote docker exec command, never guessing
+#     it's safe just because it came from docker ps today.
+FAKE_APP_CID='not-a-valid-container-id!'
+run_case "post-assignment env read: non-hex CID refuses before docker exec" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_APP_CID
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "non-container-id-shaped" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [non-hex CID] did not name the shape refusal -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qE "injects (NONE of|:)" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [non-hex CID] printed an env-injection measurement despite refusing the shape check -- docker exec must never have run." >&2
     FAIL=1
   fi
 fi

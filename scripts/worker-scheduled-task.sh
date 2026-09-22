@@ -69,6 +69,15 @@
 #   5. Reads the task back after creation (or after a command-only
 #      PATCH) and compares byte-exact before declaring success.
 #
+#      RATIFIED 2026-09-21 (team-lead, under F/CTO delegation; Sec
+#      non-objection, PR #868 review): this script MAY silently rewrite a
+#      live Scheduled Task's `command` on --apply when that is the ONLY
+#      disagreement, because the repo is the source of truth for what
+#      runs on a schedule. Recorded as a DECISION, not merely as
+#      behaviour. The ratification rests on exactly two bounds -- the
+#      refusal on every other field, and the byte-exact read-back -- so
+#      weakening either one voids it and needs a fresh ruling.
+#
 # No secret value or Coolify API token is ever placed in curl's own argv
 # on either machine — same `-K -` stdin-token + temp-file-body pattern as
 # scripts/coolify-env.sh / scripts/migrator-scheduled-task.sh. This

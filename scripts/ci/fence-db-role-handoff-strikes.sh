@@ -160,6 +160,31 @@ FAKE_BIN="$WORK/bin"
 mkdir -p "$FAKE_BIN"
 ln -s "$FIXTURE_DIR/fake-curl" "$FAKE_BIN/curl"
 
+# Fake `shred` -- execution-record fix (Sec finding, run 7; ratified
+# 2026-09-21). This host has no real `shred` (macOS), so without this
+# fixture every scenario would exercise only the `rm -f` fallback branch
+# of the destroy-and-report logic, never the primary `shred` mechanism a
+# real (Debian-based) production box actually has. Normally ACTUALLY
+# removes its target(s) and exits 0, so every scenario now exercises the
+# real "shred" mechanism. $FAKE_SHRED_LIES=1 strikes the exact defect the
+# destroy-and-report logic exists to catch: shred reports success (exit
+# 0) WITHOUT actually removing anything -- the script must still detect
+# the surviving artifact and FATAL, never trust the exit code alone.
+cat > "$FAKE_BIN/shred" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+files=()
+for a in "$@"; do
+  [[ "$a" == -* ]] && continue
+  files+=("$a")
+done
+if [[ "${FAKE_SHRED_LIES:-0}" != "1" ]]; then
+  rm -f "${files[@]}"
+fi
+exit 0
+EOF
+chmod +x "$FAKE_BIN/shred"
+
 # Fake `docker` -- stands in for every `docker compose --project-name X
 # exec -T db psql ...` call and the `docker exec coolify php artisan
 # tinker --execute` readback. Distinguishes the FOUR distinct psql call
@@ -501,7 +526,7 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_CONTROL_SUCCEEDS="\$FAKE_CONTROL_SUCCEEDS" FAKE_CONTROL_WRONG_ERROR="\$FAKE_CONTROL_WRONG_ERROR" \\
     FAKE_CONTROL_WRONG_ROLE_ERROR="\$FAKE_CONTROL_WRONG_ROLE_ERROR" FAKE_ECHO_PW_IN_CONTROL="\$FAKE_ECHO_PW_IN_CONTROL" \\
     FAKE_SUPPRESS_REAL_PROMPT="\$FAKE_SUPPRESS_REAL_PROMPT" \\
-    FAKE_CONNECT_CALL_LOG="\$FAKE_CONNECT_CALL_LOG" \\
+    FAKE_CONNECT_CALL_LOG="\$FAKE_CONNECT_CALL_LOG" FAKE_SHRED_LIES="\$FAKE_SHRED_LIES" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -575,7 +600,7 @@ run_scenario() {
     FAKE_CONTROL_SUCCEEDS="$control_succeeds" FAKE_CONTROL_WRONG_ERROR="$control_wrong_error" \
     FAKE_CONTROL_WRONG_ROLE_ERROR="$control_wrong_role_error" FAKE_ECHO_PW_IN_CONTROL="$echo_pw_in_control" \
     FAKE_SUPPRESS_REAL_PROMPT="$suppress_real_prompt" \
-    FAKE_CONNECT_CALL_LOG="$CONNECT_CALL_LOG" \
+    FAKE_CONNECT_CALL_LOG="$CONNECT_CALL_LOG" FAKE_SHRED_LIES="${FAKE_SHRED_LIES:-0}" \
     bash "$DB_ROLE_HANDOFF_SH" "$role" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -701,6 +726,27 @@ assert_output_lacks "placeholder-row" "${OUT2H:-}" "does NOT authenticate" || FA
 #     UPDATED to exactly one real row, never duplicated.
 OUT2I="$(run_scenario "placeholder-row-rotate: succeeds via plain rotate path" 0 pfin_etl "--apply --rotate" clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "" 0 0 0 0 0)" || FAIL=1
 assert_output_contains "placeholder-row-rotate" "${OUT2I:-}" "hash-bound to the generated credential confirmed" || FAIL=1
+
+# 2j. SHRED-LIES-FATALS (execution-record fix, Sec finding run 7; ratified
+#     2026-09-21) -- same otherwise-happy path as 2i, but EVERY `shred`
+#     call (the PATCH-body tempfile's, inside step D's python, and
+#     SEED_FILE's own bash EXIT trap) reports success (exit 0) WITHOUT
+#     actually removing its target. Neither destroy-and-report site may
+#     trust the exit code alone -- both re-check existence and FATAL; the
+#     PATCH-body site's die() fires first (step D runs before the
+#     SEED_FILE trap), so this scenario also proves `set -e` propagates
+#     that failure into the remote shell's own exit and still fires the
+#     SEED_FILE trap during unwind -- both destruction attempts run and
+#     both are expected to report the same failure shape.
+FAKE_SHRED_LIES=1
+OUT2J="$(run_scenario "shred lies about destroying SEED_FILE: FATALs" 1 pfin_etl "--apply --rotate" clean "true|true" "true|true" 0 0 0 0 "" 0 0 "" 0 1 "" 0 0 0 0 0)" || FAIL=1
+unset FAKE_SHRED_LIES
+assert_output_contains "shred-lies" "${OUT2J:-}" "STILL EXISTS after destruction attempt" || FAIL=1
+assert_output_contains "shred-lies" "${OUT2J:-}" "mechanism: shred" || FAIL=1
+if grep -qF "DESTROYED:" <<<"${OUT2J:-}"; then
+  echo "FAIL: [shred-lies] reported a DESTROYED line despite the artifact still existing -- must never report success on an unverified destruction." >&2
+  FAIL=1
+fi
 
 # 2g. ALREADY-HANDED-OFF-BIND-CHECK-CONNECT-FAILS -- the store carries a
 #     real-looking value, but connecting AS the role with it fails --
@@ -985,6 +1031,86 @@ assert_output_lacks "already-handed-off-control-cleartext-leak" "${OUT18G:-}" "a
 # 18h. LEG-C-CONTROL-CLEARTEXT-LEAK -- same strike against the fresh-handoff leg C.
 OUT18H="$(run_scenario "leg-c-control-cleartext-leak: refuses" 1 pfin_etl --apply clean "false|false" "true|true" 0 0 0 0 "" 0 0 "" 0 0 "" 0 0 0 0 1 0 1)" || FAIL=1
 assert_output_contains "leg-c-control-cleartext-leak" "${OUT18H:-}" "cleartext value appeared in the trust-path control's own captured output" || FAIL=1
+
+# SEED-TRAP-SIGNAL-ONCE-ONLY (Sec follow-up, PR #870 review) -- the
+# split EXIT / HUP-INT-TERM trap must fire the destroy-and-report
+# handler EXACTLY ONCE per run, on every exit path, and must never
+# report a false mechanism on the interrupted path. Extracts the real
+# trap block VERBATIM (FENCE-EXTRACT-SEED-TRAP-BEGIN/-END) -- never a
+# hand-copied stand-in that could drift from the shipped logic -- and
+# drives it under a REAL SIGTERM, not a simulated one (SIGINT specifically is IGNORED by bash for asynchronous &-backgrounded commands per POSIX/bash semantics -- measured here -- so SIGTERM is the signal this harness can actually deliver; SIGTERM is also the more realistic production interruption anyway -- a container stop/timeout, not an interactive Ctrl-C).
+strike_seed_trap_once_only() {
+  local extract="$WORK/seed-trap-extract.sh"
+  awk '/# FENCE-EXTRACT-SEED-TRAP-BEGIN/{flag=1;next}/# FENCE-EXTRACT-SEED-TRAP-END/{flag=0}flag' "$DB_ROLE_HANDOFF_SH" > "$extract"
+  if [[ ! -s "$extract" ]]; then
+    echo "FAIL: [seed-trap extraction] produced nothing -- the FENCE-EXTRACT-SEED-TRAP marker pair moved or was removed from db-role-handoff.sh" >&2
+    return 1
+  fi
+
+  # Signal case: SIGTERM delivered ~0.3s after the wrapper starts -- the
+  # extracted block's own last two statements are the trap-arming lines
+  # themselves (no work precedes them), so the traps are armed almost
+  # immediately; the wrapper then sleeps 2s, giving an ample window to
+  # deliver the signal well after arming and well before natural exit.
+  local seedfile="$WORK/seedfile.$$"
+  printf 'dummy-credential-value-64-chars-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$seedfile"
+  local wrapper="$WORK/seed-trap-wrapper-sigint.$$.sh"
+  { printf 'set -euo pipefail\nSEED_FILE=%q\n' "$seedfile"; cat "$extract"; printf 'sleep 2\necho MADE_IT_PAST_TRAP_ARM\n'; } > "$wrapper"
+  local out="$WORK/seed-trap-sigint-out.$$"
+  bash "$wrapper" > "$out" 2>&1 &
+  local pid=$!
+  sleep 0.3
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid"
+  local rc=$?
+  local n_destroyed
+  n_destroyed="$(grep -c '^DESTROYED:' "$out" || true)"
+  if [[ "$rc" != "130" ]]; then
+    echo "FAIL: [seed-trap SIGTERM] expected exit 130, got $rc -- captured: $(cat "$out")" >&2
+    return 1
+  fi
+  if [[ "$n_destroyed" != "1" ]]; then
+    echo "FAIL: [seed-trap SIGTERM] expected exactly 1 DESTROYED line, got $n_destroyed -- captured: $(cat "$out")" >&2
+    return 1
+  fi
+  if [[ -e "$seedfile" ]]; then
+    echo "FAIL: [seed-trap SIGTERM] seed file still exists after SIGTERM destroy" >&2
+    return 1
+  fi
+  if grep -q 'MADE_IT_PAST_TRAP_ARM' "$out"; then
+    echo "FAIL: [seed-trap SIGTERM] script kept running after the signal instead of stopping" >&2
+    return 1
+  fi
+  echo "OK: [seed-trap SIGTERM] exactly one DESTROYED line, exit 130, script stopped, file gone." >&2
+
+  # Control: the natural EXIT path (no signal) must still report exactly
+  # once -- proves the split didn't break the ordinary case while fixing
+  # the interrupted one.
+  local seedfile2="$WORK/seedfile2.$$"
+  printf 'dummy-credential-value-64-chars-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$seedfile2"
+  local wrapper2="$WORK/seed-trap-wrapper-exit.$$.sh"
+  { printf 'set -euo pipefail\nSEED_FILE=%q\n' "$seedfile2"; cat "$extract"; printf 'echo MADE_IT_PAST_TRAP_ARM\n'; } > "$wrapper2"
+  local out2="$WORK/seed-trap-exit-out.$$"
+  bash "$wrapper2" > "$out2" 2>&1
+  local rc2=$?
+  local n2
+  n2="$(grep -c '^DESTROYED:' "$out2" || true)"
+  if [[ "$rc2" != "0" ]]; then
+    echo "FAIL: [seed-trap natural exit] expected exit 0, got $rc2 -- captured: $(cat "$out2")" >&2
+    return 1
+  fi
+  if [[ "$n2" != "1" ]]; then
+    echo "FAIL: [seed-trap natural exit] expected exactly 1 DESTROYED line, got $n2 -- captured: $(cat "$out2")" >&2
+    return 1
+  fi
+  if [[ -e "$seedfile2" ]]; then
+    echo "FAIL: [seed-trap natural exit] seed file still exists after natural-exit destroy" >&2
+    return 1
+  fi
+  echo "OK: [seed-trap natural exit] exactly one DESTROYED line, exit 0, file gone." >&2
+  return 0
+}
+strike_seed_trap_once_only || FAIL=1
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
