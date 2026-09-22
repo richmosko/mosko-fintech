@@ -238,6 +238,26 @@ def die(msg):
 def porkbun_api(api_key, secret_key, path, extra=None):
     if '"' in api_key or '"' in secret_key or "\n" in api_key or "\n" in secret_key:
         die("a Porkbun key contains an unexpected character -- refusing to build a request body for it")
+
+    def scrub(t):
+        # Sec F-1, PR #877 review: this function's whole purpose is to
+        # start printing response bodies -f used to discard, and the
+        # SUBMITTED REQUEST body carries both Porkbun keys ({"apikey":
+        # ..., "secretapikey": ...}). If Porkbun ever echoes the
+        # submitted request back on a validation error -- exactly the
+        # undocumented-response shape the raw-text fallbacks below exist
+        # for -- a key would print to the operator's terminal and into
+        # a run log, which gets pasted into chat/PR bodies. Applied to
+        # every piece of Porkbun response text this function ever
+        # prints, not just the three sites Sec named, since it costs
+        # nothing and the alternative is trusting a fallback path to
+        # never contain one. Deliberately NOT applied to the Coolify
+        # api() helper below -- its token travels as a header via `-K -`
+        # on stdin, never in the request body, so its own raw-body
+        # prints cannot carry the credential; scrubbing there would be
+        # cargo-culting, per Sec's own explicit instruction.
+        return t.replace(api_key, "<redacted>").replace(secret_key, "<redacted>")
+
     body = {"apikey": api_key, "secretapikey": secret_key}
     if extra:
         body.update(extra)
@@ -270,16 +290,16 @@ def porkbun_api(api_key, secret_key, path, extra=None):
     raw = result.stdout.decode()
     out_text, _, code = raw.rpartition("\n")
     if not code.isdigit():
-        die(f"Porkbun API POST {path}: could not parse an HTTP status code off curls own -w output -- refusing to guess success or failure. Raw tail: {raw[-200:]!r}")
+        die(f"Porkbun API POST {path}: could not parse an HTTP status code off curls own -w output -- refusing to guess success or failure. Raw tail: {scrub(raw)[-200:]!r}")
     status = int(code)
     try:
         out = json.loads(out_text)
     except json.JSONDecodeError:
-        die(f"Porkbun API POST {path} -> HTTP {status}: response body was not valid JSON: {out_text[:200]!r}")
+        die(f"Porkbun API POST {path} -> HTTP {status}: response body was not valid JSON: {scrub(out_text)[:200]!r}")
     if not (200 <= status < 300):
-        die(f"Porkbun API POST {path} -> HTTP {status}: {out.get('message', out_text)[:300]}")
+        die(f"Porkbun API POST {path} -> HTTP {status}: {scrub(out.get('message', out_text))[:300]}")
     if out.get("status") != "SUCCESS":
-        die(f"Porkbun API {path} returned status={out.get('status')}: {out.get('message', '')[:200]}")
+        die(f"Porkbun API {path} returned status={out.get('status')}: {scrub(out.get('message', ''))[:200]}")
     return out
 PY
 

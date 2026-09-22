@@ -768,6 +768,38 @@ if [[ -n "${CASE_OUTPUT:-}" ]]; then
   fi
 fi
 
+# 32b. PORKBUN-KEY-ECHOED-IN-ERROR-IS-REDACTED (Sec F-1, PR #877 review)
+#     -- models Porkbun echoing the SUBMITTED request back on a
+#     validation error (an undocumented-but-real shape some APIs use,
+#     exactly the case the raw-text fallbacks exist for) -- the fake key
+#     value must NEVER reach the captured output, but the refusal must
+#     still fire and still be useful (a <redacted> marker in its place).
+FAKE_PORKBUN_WRITE_HTTP_STATUS=400
+# No embedded double-quote characters here, deliberately -- fake-curl
+# splices this straight into a JSON string value via plain printf (no
+# JSON-escaping of its own); a literal `"` here would break the JSON,
+# which would then be caught by json.loads()'s OWN except branch
+# instead of the status>=300 branch this scenario means to exercise --
+# self-caught mid-session: my first draft embedded a fake JSON snippet
+# with literal quotes, which silently exercised the WRONG code path
+# (still scrubbed there too, so the scenario still passed, but not for
+# the reason its own name claimed) and made a subsequent inversion test
+# fail to redden. Plain key=value text both avoids the JSON-breaking
+# characters and is itself a realistic echo shape.
+FAKE_PORKBUN_WRITE_ERROR_MESSAGE="fake: rejected request; submitted apikey=$PORKBUN_API_KEY_VALUE secretapikey=$PORKBUN_SECRET_KEY_VALUE"
+run_case "Porkbun key echoed in an error message is redacted, never printed" 1 --apply '[]' 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_PORKBUN_WRITE_HTTP_STATUS FAKE_PORKBUN_WRITE_ERROR_MESSAGE
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if grep -qF "$PORKBUN_API_KEY_VALUE" <<<"$CASE_OUTPUT" || grep -qF "$PORKBUN_SECRET_KEY_VALUE" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [porkbun key echoed] a Porkbun key value leaked into the captured output via an echoed error message -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "<redacted>" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [porkbun key echoed] scrub() did not leave a <redacted> marker -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
 # 33. WILDCARD-A-MISMATCH-WARNS -- a wildcard A record pointing
 #     somewhere other than box_ip -- READ-ONLY warn (never a refusal,
 #     never a write); preflight mode so a stray write call would be
