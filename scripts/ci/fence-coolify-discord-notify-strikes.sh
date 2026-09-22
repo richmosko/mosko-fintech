@@ -126,6 +126,17 @@
 #      ..." confirmation -> the caller refuses rather than silently
 #      assuming the seed file was cleaned up ("run 18 destroyed it but
 #      reported nothing").
+#  30. APPLY-NULL-FLAG-FORCES-WRITE -- backup_failure reads back a
+#      genuine NULL (Sec requirement) instead of the box's measured
+#      `true` default, with the hash and every OTHER target flag
+#      already matching -> the write call DOES happen, proving NULL is
+#      never coerced to "false" and accepted as an idempotency match
+#      against backup_failure's own false target.
+#  31. APPLY-POSTWRITE-NULL-FLAG-FAILS -- the post-write flag re-read
+#      comes back with backup_failure still NULL (the write did not
+#      actually land on that one column) -> the real script's post-write
+#      flag-readback check refuses rather than treating NULL as
+#      close-enough to false.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -185,6 +196,15 @@ RAW_ENABLED_TARGET_FLAGS="true|false|${TARGET_FLAGS}"
 # hash already match (scenario 12b below).
 TARGET_FLAGS_BACKUP_STALE="${TARGET_FLAGS/backup_failure=false/backup_failure=true}"
 RAW_ENABLED_TARGET_FLAGS_BACKUP_STALE="true|false|${TARGET_FLAGS_BACKUP_STALE}"
+
+# TARGET_FLAGS with backup_failure read back as a genuine DB NULL
+# (`read_state()`'s own fail-closed token, Sec requirement) rather than
+# the box's measured `true` default -- proves NULL is never folded into
+# "false" and treated as an idempotency match against backup_failure's
+# false target (scenario 30 below: forces a write) or a post-write
+# success (scenario 31 below: forces a die).
+TARGET_FLAGS_BACKUP_NULL="${TARGET_FLAGS/backup_failure=false/backup_failure=NULL}"
+RAW_ENABLED_TARGET_FLAGS_BACKUP_NULL="true|false|${TARGET_FLAGS_BACKUP_NULL}"
 
 # The 16 real `discord_notification_settings` columns -- COOLIFY-FACT-13
 # in scripts/COOLIFY-API-MEASURED.md, measured 2026-09-22 05:55Z. Shared
@@ -496,6 +516,24 @@ FAKE_STATE_RAW="$RAW_DISABLED" FAKE_SIMULATE_SHORT_COLUMN_NAMES=1 \
 FAKE_STATE_RAW="$RAW_DISABLED" FAKE_WRITE_NO_DESTROYED_LINE=1 \
   run_case "apply: WRITE_OK with no DESTROYED confirmation -- refuses" 1 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
 [[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/out.txt" "printed no seed-destruction confirmation" "apply-write-no-destroyed-line"
+
+# 30. APPLY-NULL-FLAG-FORCES-WRITE -- backup_failure NULL, hash + every
+# other target flag already match -> write still happens (NULL != the
+# false target -- fail closed, never an idempotency match).
+POSTWRITE_COUNTER_30="$WORK/postwrite-counter.30"
+FAKE_STATE_RAW="$RAW_ENABLED_TARGET_FLAGS_BACKUP_NULL" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS" FAKE_STATE_CALL_COUNTER="$POSTWRITE_COUNTER_30" \
+  FAKE_STORED_HASH="$VALID_HASH" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
+  run_case "apply: hash + other flags match, but backup_failure reads NULL -- writes anyway" 0 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
+[[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/ssh.log" "env SEED_ENV_FILE=" "apply-null-flag-forces-write"
+
+# 31. APPLY-POSTWRITE-NULL-FLAG-FAILS -- backup_failure reads back NULL
+# even AFTER the write (the column never actually landed) -> the
+# post-write flag-readback check must refuse, not accept NULL as
+# close-enough to the false target.
+FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS_BACKUP_NULL" FAKE_STATE_CALL_COUNTER="$WORK/postwrite-counter.31" \
+  FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
+  run_case "apply: post-write backup_failure still NULL -- refuses" 1 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
+[[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/out.txt" "post-write flag readback does not match the intended targets" "apply-postwrite-null-flag-fails"
 
 if [[ "$FAIL" -ne 0 ]]; then
   echo "" >&2

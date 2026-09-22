@@ -310,6 +310,19 @@ sshx true >/dev/null 2>&1 || die "box at $BOX_IP not reachable over SSH with $AU
 # needs it today" posture db-role-handoff.sh's own header states for its
 # leg B.
 read_state() {
+  # Per-event flags read via getAttribute() + an explicit is_null() check
+  # (Sec requirement, FACT-13 fix review) -- NEVER `$s->$col ? "true" :
+  # "false"`. That ternary coerces a genuinely NULL column to "false",
+  # indistinguishable from a real false. Since backup_failure's OWN
+  # target value is false, a null read would make the idempotency check
+  # below believe backup_failure "already correct" and SKIP the write --
+  # reporting success while never having confirmed the column was
+  # explicitly set. Printing a third "NULL" state (never silently
+  # folded into true/false) makes every downstream `== "true"` /
+  # `== "false"` bash comparison fail closed on it by construction --
+  # both the idempotency check's `[[ "${!var:-}" == "true" ]]` shape and
+  # the post-write flag readback below, with zero further bash-side
+  # change needed.
   local php_fields; php_fields="$(php_field_map)"
   sshx "docker exec coolify php artisan tinker --execute='
 /* probe:discord-notification-settings-state */
@@ -321,7 +334,7 @@ if (\$cnt > 1) { echo \"FATAL_CARDINALITY_\" . \$cnt; return; }
 \$s = \App\Models\DiscordNotificationSettings::where(\"team_id\", 0)->firstOrFail();
 \$fields = $php_fields;
 \$parts = [\$s->discord_enabled ? \"true\" : \"false\", ((string) \$s->discord_webhook_url === \"\") ? \"true\" : \"false\"];
-foreach (\$fields as \$display => \$col) { \$parts[] = \$display . \"=\" . (\$s->\$col ? \"true\" : \"false\"); }
+foreach (\$fields as \$display => \$col) { \$raw = \$s->getAttribute(\$col); \$parts[] = \$display . \"=\" . (is_null(\$raw) ? \"NULL\" : (\$raw ? \"true\" : \"false\")); }
 echo implode(\"|\", \$parts);
 ' </dev/null" 2>/dev/null | tail -1 | tr -d '\r\n'
 }
@@ -329,7 +342,8 @@ echo implode(\"|\", \$parts);
 # Parses read_state()'s own pipe-delimited output into:
 #   STATE            ABSENT|DISABLED|ENABLED-URL-EMPTY|ENABLED
 #   FLAG_LINE        the printed "name=true/false ..." block (--state only)
-#   FLAG_<name>      per-flag bash variable, true/false (apply's own idempotency check)
+#   FLAG_<name>      per-flag bash variable, true/false/NULL (fail-closed --
+#                    NULL is a genuine DB null, never folded into false)
 parse_state() {
   local raw="$1"
   case "$raw" in
@@ -355,7 +369,7 @@ parse_state() {
   else
     STATE="ENABLED"
   fi
-  # Populate FLAG_<name>=true/false for apply's own idempotency check.
+  # Populate FLAG_<name>=true/false/NULL for apply's own idempotency check.
   local IFS='|' entry name val
   for entry in $FLAG_LINE; do
     name="${entry%%=*}"; val="${entry#*=}"

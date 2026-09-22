@@ -202,12 +202,67 @@ referenced.
 
 ## COOLIFY-FACT-13 — the 15 per-event Discord flag columns all carry a `_discord_notifications` suffix; the display names do not
 
-- **Date:** 2026-09-22 05:55Z (team-lead)
+- **Date:** 2026-09-22T05:54:52Z (team-lead; supersedes an initial 05:55Z same-day pass with the identical result — re-run to get an exact query + `$fillable` capture for this entry)
 - **Coolify version:** 4.3.18
 - **Box:** production (cax21)
 - **Build pack:** N/A (schema-level, not resource-specific)
-- **Exact measurement:** `information_schema.columns` queried directly on the box for the `discord_notification_settings` table.
+- **Exact measurement:** `docker exec coolify-db psql -U coolify -d coolify -At -c "select column_name||':'||data_type from information_schema.columns where table_name='discord_notification_settings' order by ordinal_position"` — full column list, in `ordinal_position` order, with type:
+
+  ```
+  id:bigint
+  team_id:bigint
+  discord_enabled:boolean
+  discord_webhook_url:text
+  deployment_success_discord_notifications:boolean
+  deployment_failure_discord_notifications:boolean
+  status_change_discord_notifications:boolean
+  backup_success_discord_notifications:boolean
+  backup_failure_discord_notifications:boolean
+  scheduled_task_success_discord_notifications:boolean
+  scheduled_task_failure_discord_notifications:boolean
+  docker_cleanup_success_discord_notifications:boolean
+  docker_cleanup_failure_discord_notifications:boolean
+  server_disk_usage_discord_notifications:boolean
+  server_reachable_discord_notifications:boolean
+  server_unreachable_discord_notifications:boolean
+  discord_ping_enabled:boolean
+  server_patch_discord_notifications:boolean
+  traefik_outdated_discord_notifications:boolean
+  restart_limit_reached_discord_notifications:boolean
+  ```
+
+  17 boolean columns total (`discord_enabled` + `discord_ping_enabled` + the 15 event flags); `discord_webhook_url` is `text` (`encrypted` cast on the Eloquent model, per FACT-12); `id`/`team_id` are `bigint`.
+
+  Also read live from the box: `App\Models\DiscordNotificationSettings`'s own `$fillable`:
+
+  ```php
+      protected $fillable = [
+          'team_id',
+
+          'discord_enabled',
+          'discord_webhook_url',
+
+          'deployment_success_discord_notifications',
+          'deployment_failure_discord_notifications',
+          'status_change_discord_notifications',
+          'restart_limit_reached_discord_notifications',
+          'backup_success_discord_notifications',
+          'backup_failure_discord_notifications',
+          'scheduled_task_success_discord_notifications',
+          'scheduled_task_failure_discord_notifications',
+          'docker_cleanup_success_discord_notifications',
+          'docker_cleanup_failure_discord_notifications',
+          'server_disk_usage_discord_notifications',
+          'server_reachable_discord_notifications',
+          'server_unreachable_discord_notifications',
+          'server_patch_discord_notifications',
+          'traefik_outdated_discord_notifications',
+          'discord_ping_enabled',
+      ];
+  ```
+
+  Every one of the 16 columns this script writes (15 event columns + `discord_ping_enabled`) IS present in `$fillable` — confirms `update([...])` with the real column names actually persists, not merely that the column exists in the schema. `id` is absent from `$fillable` (expected, primary key).
 - **Result:** every per-event flag column is named `<event>_discord_notifications`, never the bare event name. The 15 real columns are: `deployment_success_discord_notifications`, `deployment_failure_discord_notifications`, `status_change_discord_notifications`, `backup_success_discord_notifications`, `backup_failure_discord_notifications`, `scheduled_task_success_discord_notifications`, `scheduled_task_failure_discord_notifications`, `docker_cleanup_success_discord_notifications`, `docker_cleanup_failure_discord_notifications`, `server_disk_usage_discord_notifications`, `server_reachable_discord_notifications`, `server_unreachable_discord_notifications`, `server_patch_discord_notifications`, `traefik_outdated_discord_notifications`, `restart_limit_reached_discord_notifications`. Three related columns are correctly named with no suffix: `discord_ping_enabled`, `discord_enabled`, `discord_webhook_url`.
 - **Defect this corrects:** `scripts/coolify-discord-notify.sh`'s original `--apply`/`--state` implementation (BACKLOG.md §7.36 item 74, run 18) used the bare event name as the column name in both `read_state()`'s `$fields` list and the write's `->update([...])` payload. Eloquent's `update()` silently drops unknown/non-existent keys rather than erroring, so the write reported `WRITE_OK` while touching none of the 15 columns, and `read_state()`'s `$s->$f` on a nonexistent attribute returned `null` → printed `false` for every flag unconditionally — exactly the "VERIFIED but every flag false" symptom run 18 measured. The fake-ssh fixture backing `scripts/ci/fence-coolify-discord-notify-strikes.sh` echoed a canned `WRITE_OK` without inspecting the payload's column names, so the fence stayed green through the defect (fixture-fidelity class, fourth instance in one week per Sec).
-- **Fix landed:** `scripts/coolify-discord-notify.sh`'s `EVENT_FLAGS` array (display name : real column : target value) is the single source for both `read_state()`'s field map and the write's update-fields block, generated via `php_field_map()`/`php_update_fields()` so the two cannot drift apart again. The 16 real column names here (15 event columns + `discord_ping_enabled`) are the ones `scripts/ci/fence-coolify-discord-notify-strikes.sh` pins against both the script's own source and the fake-ssh fixture's write-inspection branch.
+- **Fix landed:** `scripts/coolify-discord-notify.sh`'s `EVENT_FLAGS` array (display name : real column : target value) is the single source for both `read_state()`'s field map and the write's update-fields block, generated via `php_field_map()`/`php_update_fields()` so the two cannot drift apart again. The 16 real column names here (15 event columns + `discord_ping_enabled`) are the ones `scripts/ci/fence-coolify-discord-notify-strikes.sh` pins against both the script's own source and the fake-ssh fixture's write-inspection branch. Sec's own review of this fix (PR #873) additionally required `read_state()` to fail closed on a genuinely-NULL column rather than coercing it to `"false"` via a bare ternary — a NULL `backup_failure` would otherwise read as "already false" and make the idempotency check skip a write that was never actually confirmed; `read_state()` now prints a distinct `NULL` token per-flag, which every downstream `== "true"`/`== "false"` bash comparison already fails closed on by construction.
 - **NOT measured:** whether any Coolify version upgrade has ever renamed or added a flag column — this fact is a point-in-time schema read, not a migration-tracked guarantee; re-measure after any Coolify version bump that touches notification settings.
