@@ -337,19 +337,28 @@ fi
 # refused/timeout alike -- `|| true` only suppresses the exit STATUS,
 # never the already-written stdout) prints "000" for the control host on
 # BOTH schemes -- the REAL failure shape, and the one 25n asserts on.
-# FAKE_CONTROL_EMPTY=1 keeps the OLD (build-dependent, believed-wrong-
-# but-still-worth-covering) empty-output shape as a second, separate
-# row for build-independence, per Sec's own explicit ask -- never the
+# FAKE_CONTROL_EMPTY=1 keeps a SEPARATE build-independence row (curl
+# itself missing/broken -- NO output at all, not even "000"), never the
 # primary. FAKE_SSLIP_UNREACHABLE=1 mirrors FAKE_CONTROL_UNREACHABLE for
 # the app's OWN sslip host, for the "this machine cannot reach the box
 # at all" scenario where BOTH sides return 000, not just the control.
+# Sec's amended ask (curl-FAITHFUL, not just curl-faithful OUTPUT,
+# copying tests/fixtures/ci/smoke-admission-endpoint/fake-curl's own
+# V-1 pattern, PR #848 review): real curl exits NON-ZERO on the
+# connection-level failure that produces "000" -- an `exit 0` here on
+# either axis (wrong output OR wrong exit status) would fail to strike
+# a future script that starts checking curl's own exit code, the same
+# defect class V-1 named. Both UNREACHABLE (prints "000") and EMPTY
+# (prints nothing) exit 7 here, even though the real script's own
+# `2>/dev/null || true` swallows the distinction today -- fidelity with
+# the sibling fixture's convention, not a behavior change for #878.
 if [[ "$ARGS" == *"nonexistent-"*".sslip.io"* ]]; then
+  if [[ "${FAKE_CONTROL_EMPTY:-0}" == "1" ]]; then
+    exit 7
+  fi
   if [[ "${FAKE_CONTROL_UNREACHABLE:-0}" == "1" ]]; then
     printf '000'
-    exit 0
-  fi
-  if [[ "${FAKE_CONTROL_EMPTY:-0}" == "1" ]]; then
-    exit 0
+    exit 7
   fi
   if [[ "$ARGS" == *"https://"* ]]; then
     printf '%s' "${FAKE_CONTROL_HTTPS_CODE:-404}"
@@ -361,7 +370,7 @@ fi
 if [[ "$ARGS" == *".sslip.io"* ]]; then
   if [[ "${FAKE_SSLIP_UNREACHABLE:-0}" == "1" ]]; then
     printf '000'
-    exit 0
+    exit 7
   fi
   if [[ "$ARGS" == *"https://"* ]]; then
     printf '%s' "${FAKE_SSLIP_HTTPS_CODE:-404}"
