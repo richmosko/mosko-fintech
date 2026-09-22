@@ -149,7 +149,15 @@
 #         ACL is checked independently"). Sec: the absence of a separate
 #         `authenticated.rolbypassrls = false` assertion is not a gap --
 #         if `authenticated` ever held BYPASSRLS the behavioral read above
-#         would already FAIL loudly (it would see every row).
+#         would already FAIL loudly (it would see every row). Sec's own
+#         condition on accepting this (PR #881 review, 2026-09-22): it
+#         holds only when PROVEN_COUNT contains at least one table where a
+#         real row-read actually happened -- true by construction now
+#         that a REFUSED-at-grant read is classified INCONCLUSIVE rather
+#         than PROVEN (a zero-grant table would stay `permission denied`
+#         under BYPASSRLS too, revealing nothing), and the
+#         `PROVEN_COUNT -eq 0 -> SKIPPED` guard below is what keeps this
+#         argument honest on a run where every table is empty or refused.
 #     A pgTAP two-tenant INSERT-then-rollback battery (this repo's own
 #     CI/local pattern) was considered and rejected here: even a rolled-
 #     back write against PRODUCTION carries a different risk posture
