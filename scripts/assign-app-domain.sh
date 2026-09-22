@@ -1237,17 +1237,27 @@ else
   SSLIP_HTTPS_CODE="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$SSLIP_HOST/" 2>/dev/null || true)"
   CONTROL_HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$CONTROL_HOST/" 2>/dev/null || true)"
   CONTROL_HTTPS_CODE="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$CONTROL_HOST/" 2>/dev/null || true)"
-  info "sslip host $SSLIP_HOST: http=${SSLIP_HTTP_CODE:-(no response)} https=${SSLIP_HTTPS_CODE:-(no response)}  |  nonexistent-host control $CONTROL_HOST: http=${CONTROL_HTTP_CODE:-(no response)} https=${CONTROL_HTTPS_CODE:-(no response)}"
-  # Sec F-1 (PR #878 review): the control is a nonexistent host on the
-  # SAME box behind the SAME proxy -- on a working path it always
-  # returns SOMETHING, so both its codes coming back empty is a clean
-  # signal the probe itself never ran (network/DNS/curl failure from
-  # THIS machine), not that the sslip route is clear. Without this
-  # branch, "matches control" and "instrument never fired" produce the
-  # identical (silent) output -- a false all-clear on the one
-  # measurement that exists to catch an unintended second route.
-  if [[ -z "$CONTROL_HTTP_CODE" && -z "$CONTROL_HTTPS_CODE" ]]; then
-    info "sslip reachability probe NOT MEASURED -- the nonexistent-host control returned no response on either scheme, so the probe itself did not run (network/DNS/curl failure from this machine). 'Matches control' would be meaningless here. Re-run from a host that can reach $BOX_IP before treating the sslip route as clear."
+  info "sslip host $SSLIP_HOST: http=$SSLIP_HTTP_CODE https=$SSLIP_HTTPS_CODE  |  nonexistent-host control $CONTROL_HOST: http=$CONTROL_HTTP_CODE https=$CONTROL_HTTPS_CODE"
+  # Sec F-1 (PR #878 review, corrected after df89cf9f): the precondition
+  # is NOT "the control variable is empty" -- Sec's own re-measurement
+  # showed curl still writes its -w format on a failed transfer, with
+  # http_code=000 for DNS failure, connection refused, and timeout
+  # alike, under this script's exact `-s -o /dev/null -w '%{http_code}'
+  # ... 2>/dev/null || true` argv shape; `|| true` only suppresses the
+  # nonzero EXIT STATUS, never the already-written stdout. The control
+  # is a nonexistent host on the SAME box behind the SAME proxy -- on a
+  # working path it always returns a real HTTP status, so failing to
+  # produce one (000, empty, or any other non-3-digit-status value) is
+  # the clean, non-flaky signal the probe itself never ran (network/DNS/
+  # curl failure from THIS machine), not that the sslip route is clear.
+  # The `[[ ]] && VAR=1` form below does not trip errexit when the test
+  # is false (the `[[ ]]` is not the command FOLLOWING the final `&&` in
+  # its own list, so `set -e` does not see it as the list's failure).
+  CONTROL_ANSWERED=0
+  [[ "$CONTROL_HTTP_CODE" =~ ^[1-5][0-9][0-9]$ ]] && CONTROL_ANSWERED=1
+  [[ "$CONTROL_HTTPS_CODE" =~ ^[1-5][0-9][0-9]$ ]] && CONTROL_ANSWERED=1
+  if [[ "$CONTROL_ANSWERED" -ne 1 ]]; then
+    info "sslip reachability probe NOT MEASURED -- the nonexistent-host control returned no usable HTTP status on either scheme (curl reports 000 for DNS failure, connection refused, and timeout alike), so the probe itself did not run from this machine. 'Matches control' would be meaningless here. Re-run from a host that can reach $BOX_IP before treating the sslip route as clear."
   elif [[ "$SSLIP_HTTP_CODE" != "$CONTROL_HTTP_CODE" || "$SSLIP_HTTPS_CODE" != "$CONTROL_HTTPS_CODE" ]]; then
     info "FINDING: the sslip host answered DIFFERENTLY from the nonexistent-host control (http $SSLIP_HTTP_CODE vs $CONTROL_HTTP_CODE; https $SSLIP_HTTPS_CODE vs $CONTROL_HTTPS_CODE) -- this app may be reachable via an UNINTENDED second route (its own Coolify-assigned sslip default), not just the domain this script assigned. Not a failure -- investigate before DNS cutover completes."
   else

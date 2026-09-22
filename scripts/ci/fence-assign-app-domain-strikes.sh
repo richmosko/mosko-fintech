@@ -60,7 +60,7 @@
 #      two, or a SUPERSTRING near-miss ("notfake-domain.test" contains
 #      "fake-domain.test") -> both refuse; a plain CONTAINS($ROOT_DOMAIN)
 #      check would have passed both silently.
-#   25-25n. POST-REDEPLOY CONTAINER-ENV READ + SSLIP PROBE, REQUIRED GATE
+#   25-25p. POST-REDEPLOY CONTAINER-ENV READ + SSLIP PROBE, REQUIRED GATE
 #      (team-lead run-21 fix follow-up + Sec's redeploy-addenda review,
 #      2026-09-22) -- the real script now ALWAYS triggers a Coolify
 #      redeploy (POST /deploy?uuid=, same shape deploy-app.sh already
@@ -124,12 +124,22 @@
 #             (Sec F-1: the positive result must be as greppable as the
 #             FINDING, never silent).
 #        25n. SSLIP-PROBE-CONTROL-UNREACHABLE-NOT-MEASURED (Sec F-1,
-#             PR #878 review) -- the nonexistent-host control itself
-#             returns no response on either scheme (this machine cannot
-#             reach the box at all) -- must print NOT MEASURED, never a
-#             FINDING or a MEASURED-clean line: an unperformed probe is
-#             not the same as a clean one, and "empty equals empty"
-#             would otherwise be a false all-clear.
+#             PR #878 review, corrected after df89cf9f: curl writes
+#             http_code=000 on a failed transfer, never nothing) -- the
+#             nonexistent-host control returns 000 on both schemes --
+#             must print NOT MEASURED, never a FINDING or a
+#             MEASURED-clean line: an unperformed probe is not the same
+#             as a clean one, and "000 equals 000" would otherwise be a
+#             false all-clear.
+#        25o. SSLIP-PROBE-MACHINE-FULLY-UNREACHABLE-NOT-MEASURED -- the
+#             real-world defect Sec's re-review caught: BOTH the sslip
+#             host and the control return 000 (this machine cannot
+#             reach the box at all) -- the equal-comparison branch that
+#             was the actual false all-clear, not just the control side.
+#        25p. SSLIP-PROBE-CONTROL-EMPTY-OUTPUT-NOT-MEASURED --
+#             build-independence coverage: a curl build producing
+#             genuinely empty stdout on total failure is ALSO NOT
+#             MEASURED, not just the 000 shape.
 #   29/30. WWW-AS-A (live dns fix, 2026-09-22 -- www.pfindash.com already
 #      existed as an A record, not a CNAME, and this script only ever
 #      looked for a CNAME) -- a mismatched www A edits in place to box_ip
@@ -442,7 +452,8 @@ run_case() {
     FAKE_DEPLOY_TRIGGERED_MARKER="$deploy_triggered_marker" FAKE_DEPLOY_STATUS="${FAKE_DEPLOY_STATUS:-finished}" \
     FAKE_SSLIP_HTTP_CODE="${FAKE_SSLIP_HTTP_CODE:-}" FAKE_SSLIP_HTTPS_CODE="${FAKE_SSLIP_HTTPS_CODE:-}" \
     FAKE_CONTROL_HTTP_CODE="${FAKE_CONTROL_HTTP_CODE:-}" FAKE_CONTROL_HTTPS_CODE="${FAKE_CONTROL_HTTPS_CODE:-}" \
-    FAKE_CONTROL_UNREACHABLE="${FAKE_CONTROL_UNREACHABLE:-0}" \
+    FAKE_CONTROL_UNREACHABLE="${FAKE_CONTROL_UNREACHABLE:-0}" FAKE_CONTROL_EMPTY="${FAKE_CONTROL_EMPTY:-0}" \
+    FAKE_SSLIP_UNREACHABLE="${FAKE_SSLIP_UNREACHABLE:-0}" \
     bash "$SMOKE_SH" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
   local rc=$?
   set -e
@@ -924,12 +935,15 @@ if [[ -n "${CASE_OUTPUT:-}" ]]; then
 fi
 
 # 25n. SSLIP-PROBE-CONTROL-UNREACHABLE-NOT-MEASURED (Sec F-1, PR #878
-#     review) -- the nonexistent-host control itself returns no
-#     response on either scheme -- must print NOT MEASURED, never a
-#     FINDING or a MEASURED-clean line -- "empty equals empty" is a
+#     review -- CORRECTED after df89cf9f: Sec's own re-measurement
+#     showed curl writes http_code=000 on a failed transfer, never
+#     nothing, so this is the PRIMARY shape, not the empty one the
+#     first fix wrongly assumed) -- the control returns 000 on BOTH
+#     schemes -- must print NOT MEASURED, never a FINDING or a
+#     MEASURED-clean line -- "000 equals 000" would otherwise be a
 #     false all-clear, not a clean result.
 FAKE_CONTROL_UNREACHABLE=1
-run_case "sslip probe: unreachable control prints NOT MEASURED, never a false all-clear" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+run_case "sslip probe: unreachable control (000) prints NOT MEASURED, never a false all-clear" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
 unset FAKE_CONTROL_UNREACHABLE
 if [[ -n "${CASE_OUTPUT:-}" ]]; then
   if ! grep -qF "sslip reachability probe NOT MEASURED" <<<"$CASE_OUTPUT"; then
@@ -940,6 +954,40 @@ if [[ -n "${CASE_OUTPUT:-}" ]]; then
     echo "FAIL: [sslip probe control unreachable] printed a FINDING or a MEASURED-clean line despite the control never having responded -- an unperformed probe is not a clean one." >&2
     FAIL=1
   fi
+fi
+
+# 25o. SSLIP-PROBE-MACHINE-FULLY-UNREACHABLE-NOT-MEASURED -- the actual
+#     real-world defect Sec named: THIS machine cannot reach the box at
+#     all, so BOTH the sslip host AND the control return 000 (the old,
+#     wrongly-specified guard only ever struck the control side, never
+#     reaching the equal-comparison branch that was the real defect --
+#     the subject and control comparing EQUAL at 000/000). Must still
+#     print NOT MEASURED, never a false MEASURED-clean.
+FAKE_CONTROL_UNREACHABLE=1
+FAKE_SSLIP_UNREACHABLE=1
+run_case "sslip probe: machine fully unreachable (both sides 000) prints NOT MEASURED" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_CONTROL_UNREACHABLE FAKE_SSLIP_UNREACHABLE
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "sslip reachability probe NOT MEASURED" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [sslip probe machine unreachable] did not print the NOT MEASURED refusal despite both sides returning 000 -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qF "sslip reachability probe MEASURED:" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [sslip probe machine unreachable] printed a false MEASURED-clean line for 000==000 -- this is the exact defect Sec's re-review caught." >&2
+    FAIL=1
+  fi
+fi
+
+# 25p. SSLIP-PROBE-CONTROL-EMPTY-OUTPUT-NOT-MEASURED -- build-
+#     independence coverage (Sec's own explicit ask): a curl build that
+#     genuinely produces no stdout at all on total failure (rather than
+#     000) must ALSO be treated as NOT MEASURED, not just the 000 shape.
+FAKE_CONTROL_EMPTY=1
+run_case "sslip probe: control with genuinely empty output also prints NOT MEASURED" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_CONTROL_EMPTY
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "sslip reachability probe NOT MEASURED" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [sslip probe control empty output] did not print the NOT MEASURED refusal for a genuinely empty control response -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
 fi
 
 # --- www-as-A / Porkbun status-preserving / wildcard-WARN scenarios

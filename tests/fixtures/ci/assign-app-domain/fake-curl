@@ -331,13 +331,24 @@ fi
 # nonexistent-host control. The control host is matched first (its own
 # name starts with "nonexistent-", a substring the real app sslip host
 # never contains) so the two never collide.
-# FAKE_CONTROL_UNREACHABLE=1 (Sec F-1, PR #878 review) models the
-# real script's own failure mode -- this machine cannot reach the box at
-# all -- by printing NOTHING for the control host on either scheme,
-# matching what `2>/dev/null || true` leaves in the real script's
-# CONTROL_HTTP_CODE/CONTROL_HTTPS_CODE when curl itself never completes.
+# FAKE_CONTROL_UNREACHABLE=1 (Sec F-1, PR #878 review -- CORRECTED after
+# df89cf9f: Sec's own re-measurement showed curl still writes its -w
+# format on a failed transfer, http_code=000 for DNS failure/connection
+# refused/timeout alike -- `|| true` only suppresses the exit STATUS,
+# never the already-written stdout) prints "000" for the control host on
+# BOTH schemes -- the REAL failure shape, and the one 25n asserts on.
+# FAKE_CONTROL_EMPTY=1 keeps the OLD (build-dependent, believed-wrong-
+# but-still-worth-covering) empty-output shape as a second, separate
+# row for build-independence, per Sec's own explicit ask -- never the
+# primary. FAKE_SSLIP_UNREACHABLE=1 mirrors FAKE_CONTROL_UNREACHABLE for
+# the app's OWN sslip host, for the "this machine cannot reach the box
+# at all" scenario where BOTH sides return 000, not just the control.
 if [[ "$ARGS" == *"nonexistent-"*".sslip.io"* ]]; then
   if [[ "${FAKE_CONTROL_UNREACHABLE:-0}" == "1" ]]; then
+    printf '000'
+    exit 0
+  fi
+  if [[ "${FAKE_CONTROL_EMPTY:-0}" == "1" ]]; then
     exit 0
   fi
   if [[ "$ARGS" == *"https://"* ]]; then
@@ -348,6 +359,10 @@ if [[ "$ARGS" == *"nonexistent-"*".sslip.io"* ]]; then
   exit 0
 fi
 if [[ "$ARGS" == *".sslip.io"* ]]; then
+  if [[ "${FAKE_SSLIP_UNREACHABLE:-0}" == "1" ]]; then
+    printf '000'
+    exit 0
+  fi
   if [[ "$ARGS" == *"https://"* ]]; then
     printf '%s' "${FAKE_SSLIP_HTTPS_CODE:-404}"
   else
