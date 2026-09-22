@@ -150,6 +150,20 @@
 #      box is never asked to write at all (ssh.log carries no write
 #      call) -- the guard fires before any write is attempted, not only
 #      after one silently no-ops.
+#  34. APPLY-PING-STALE-STILL-WRITES (run 19 fix, team-lead) -- hash +
+#      every OTHER target flag already match, but discord_ping_enabled
+#      is still `false` -> the write call DOES happen on this ONE flag
+#      alone, proving the idempotency check's discord_ping_enabled
+#      comparison (added alongside EVENT_FLAGS membership in this fix)
+#      is independently load-bearing, the same rigor scenario 12b
+#      already applies to backup_failure.
+#  35. APPLY-POSTWRITE-PING-ABSENT-FAILS -- the post-write flag re-read
+#      omits the discord_ping_enabled field ENTIRELY (not merely
+#      wrong-valued) -- the same observable shape run 19's actual defect
+#      had before this fix (read_state() never printed it at all) ->
+#      the post-write flag-readback check must FATAL naming
+#      discord_ping_enabled specifically, not silently treat an absent
+#      field as false-and-therefore-fine.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -177,27 +191,92 @@ VALID_HASH="$(printf '%s' "$VALID_URL" | sha256sum | cut -c1-16)"
 WRONG_HASH="0000000000000000"
 [[ "$VALID_HASH" != "$WRONG_HASH" ]] || { echo "FATAL: fixture collision -- pick a different WRONG_HASH" >&2; exit 2; }
 
-# --- FAKE_STATE_RAW building blocks -- must match read_state()'s own
-# field order in scripts/coolify-discord-notify.sh EXACTLY: enabled|
-# url_empty|discord_ping_enabled=..|deployment_success=..|
-# deployment_failure=..|status_change=..|backup_success=..|
-# backup_failure=..|scheduled_task_success=..|scheduled_task_failure=..|
-# docker_cleanup_success=..|docker_cleanup_failure=..|
-# server_disk_usage=..|server_reachable=..|server_unreachable=..|
-# server_patch=..|traefik_outdated=..|restart_limit_reached=..
-#
-# MEASURED_FLAGS -- team-lead, live box, 2026-09-21 22:35Z (this script's
-# own header cites the same measurement): every flag at its CURRENT
-# default except discord_enabled=false.
-MEASURED_FLAGS="discord_ping_enabled=true|deployment_success=false|deployment_failure=true|status_change=false|backup_success=false|backup_failure=true|scheduled_task_success=false|scheduled_task_failure=true|docker_cleanup_success=false|docker_cleanup_failure=true|server_disk_usage=true|server_reachable=false|server_unreachable=true|server_patch=true|traefik_outdated=true|restart_limit_reached=true"
-# TARGET_FLAGS -- MEASURED_FLAGS with the four flags this script turns ON
-# (deployment_success, status_change, scheduled_task_success,
-# server_reachable) flipped to true, PLUS backup_failure flipped to
-# false (Sec ruling, PR #871 review: BackupFailed.php's own `Output`
-# field is unbounded command output reaching a third party -- written
-# `false` regardless of the box's measured `true` default), everything
-# else unchanged.
-TARGET_FLAGS="discord_ping_enabled=true|deployment_success=true|deployment_failure=true|status_change=true|backup_success=false|backup_failure=false|scheduled_task_success=true|scheduled_task_failure=true|docker_cleanup_success=false|docker_cleanup_failure=true|server_disk_usage=true|server_reachable=true|server_unreachable=true|server_patch=true|traefik_outdated=true|restart_limit_reached=true"
+# --- FAKE_STATE_RAW building blocks. Field SET + target values are
+# extracted LIVE from the real script's own EVENT_FLAGS array -- never
+# hand-typed here anymore (team-lead's run-19 fix directive). Run 19's
+# own defect is exactly what a hand-typed pipe string can't catch:
+# read_state() silently stopped printing discord_ping_enabled when
+# EVENT_FLAGS was refactored, and this fence's OLD MEASURED_FLAGS/
+# TARGET_FLAGS strings still carried `discord_ping_enabled=true` from
+# before that refactor -- the fixture just echoed them back verbatim,
+# so every scenario kept "passing" against a field set the real script
+# had already stopped producing. A field the script stops printing now
+# shrinks this extraction; the count guard below catches it, and the
+# derived string genuinely reflects what the script emits, not what a
+# comment here still claims it emits.
+EVENT_FLAG_DISPLAYS=()
+EVENT_FLAG_TARGETS=()
+while IFS= read -r __entry; do
+  __display="${__entry%%:*}"
+  __target="${__entry##*:}"
+  EVENT_FLAG_DISPLAYS+=("$__display")
+  EVENT_FLAG_TARGETS+=("$__target")
+done < <(
+  awk '/^EVENT_FLAGS=\(/ { grab = 1; next } grab && /^\)/ { exit } grab' "$SCRIPT_UNDER_TEST" \
+    | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*,?[[:space:]]*$//'
+)
+if [[ "${#EVENT_FLAG_DISPLAYS[@]}" -eq 0 ]]; then
+  echo "FATAL: extracted zero entries from $SCRIPT_UNDER_TEST's own EVENT_FLAGS array -- extraction broke, or the array itself is empty/renamed" >&2
+  exit 2
+fi
+
+# TARGET_FLAGS -- built directly from the extraction above, in
+# EVENT_FLAGS's own order. No hand-typed target values: they come from
+# the exact same array the real write's update() call reads (Sec ruling,
+# PR #871 review, carried through unchanged: backup_failure targets
+# `false` regardless of the box's measured `true` default; the four
+# enables plus discord_ping_enabled target `true`).
+target_flags_string() {
+  local out="" i
+  for i in "${!EVENT_FLAG_DISPLAYS[@]}"; do
+    out+="${EVENT_FLAG_DISPLAYS[$i]}=${EVENT_FLAG_TARGETS[$i]}|"
+  done
+  printf '%s' "${out%|}"
+}
+TARGET_FLAGS="$(target_flags_string)"
+
+# MEASURED_FLAGS -- the box's CURRENT/default value per flag (team-lead,
+# live box, 2026-09-21 22:35Z; this script's own header cites the same
+# measurement) is genuine external data this fence cannot derive from
+# the script itself -- but it is looked up BY DISPLAY NAME against the
+# SAME extracted list above, so a flag EVENT_FLAGS gains with no entry
+# here FATALs the build rather than silently omitting it from every
+# scenario (the same class of gap that let discord_ping_enabled's
+# absence go unnoticed, applied to the OTHER direction of drift).
+measured_default_for() {
+  case "$1" in
+    discord_ping_enabled) printf 'true' ;;
+    deployment_success) printf 'false' ;;
+    deployment_failure) printf 'true' ;;
+    status_change) printf 'false' ;;
+    backup_success) printf 'false' ;;
+    backup_failure) printf 'true' ;;
+    scheduled_task_success) printf 'false' ;;
+    scheduled_task_failure) printf 'true' ;;
+    docker_cleanup_success) printf 'false' ;;
+    docker_cleanup_failure) printf 'true' ;;
+    server_disk_usage) printf 'true' ;;
+    server_reachable) printf 'false' ;;
+    server_unreachable) printf 'true' ;;
+    server_patch) printf 'true' ;;
+    traefik_outdated) printf 'true' ;;
+    restart_limit_reached) printf 'true' ;;
+    *) return 1 ;;
+  esac
+}
+measured_flags_string() {
+  local out="" i display val
+  for i in "${!EVENT_FLAG_DISPLAYS[@]}"; do
+    display="${EVENT_FLAG_DISPLAYS[$i]}"
+    val="$(measured_default_for "$display")" || {
+      echo "FATAL: no measured-default entry for '$display' in this fence's measured_default_for() -- EVENT_FLAGS gained a flag this fence doesn't know the box's live default for. Add it (with a fresh measurement) before trusting this fence's scenarios again." >&2
+      exit 2
+    }
+    out+="${display}=${val}|"
+  done
+  printf '%s' "${out%|}"
+}
+MEASURED_FLAGS="$(measured_flags_string)"
 
 RAW_DISABLED="false|true|${MEASURED_FLAGS}"
 RAW_ENABLED_URL_EMPTY="true|true|${MEASURED_FLAGS}"
@@ -218,6 +297,27 @@ RAW_ENABLED_TARGET_FLAGS_BACKUP_STALE="true|false|${TARGET_FLAGS_BACKUP_STALE}"
 # success (scenario 31 below: forces a die).
 TARGET_FLAGS_BACKUP_NULL="${TARGET_FLAGS/backup_failure=false/backup_failure=NULL}"
 RAW_ENABLED_TARGET_FLAGS_BACKUP_NULL="true|false|${TARGET_FLAGS_BACKUP_NULL}"
+
+# TARGET_FLAGS with discord_ping_enabled left at `false` (not yet
+# corrected by a write) -- isolates that THIS ONE flag alone still
+# forces a write even when every other target flag + the hash already
+# match (scenario 34 below), the same rigor already applied to
+# backup_failure in scenario 12b -- proves the idempotency check's
+# discord_ping_enabled comparison (added in this same fix) is
+# independently load-bearing, not merely riding along with the other
+# four enables.
+TARGET_FLAGS_PING_STALE="${TARGET_FLAGS/discord_ping_enabled=true/discord_ping_enabled=false}"
+RAW_ENABLED_TARGET_FLAGS_PING_STALE="true|false|${TARGET_FLAGS_PING_STALE}"
+
+# TARGET_FLAGS with the discord_ping_enabled SEGMENT REMOVED ENTIRELY
+# (not merely wrong-valued) -- models a box read that omits the field
+# altogether, the same observable shape run 19's actual defect had
+# BEFORE this fix (read_state() never printed discord_ping_enabled at
+# all). Used post-write only (scenario 35 below): the field-completeness
+# check must FATAL naming the missing flag, not silently treat an
+# absent field as false-and-therefore-fine.
+TARGET_FLAGS_PING_ABSENT="${TARGET_FLAGS/|discord_ping_enabled=true/}"
+RAW_ENABLED_TARGET_FLAGS_PING_ABSENT="true|false|${TARGET_FLAGS_PING_ABSENT}"
 
 # The 16 real `discord_notification_settings` columns -- parsed LIVE out
 # of COOLIFY-FACT-13's own fenced `information_schema.columns` block in
@@ -579,6 +679,22 @@ FAKE_STATE_RAW="FATAL_UNKNOWN_COLUMN_backup_failure_discord_notifications" \
 if [[ -n "$CASE_LAST_DIR" ]]; then
   assert_grep "$CASE_LAST_DIR/out.txt" "backup_failure_discord_notifications" "apply-unknown-column-names-it"
   assert_not_grep "$CASE_LAST_DIR/ssh.log" "env SEED_ENV_FILE=" "apply-unknown-column-no-write-attempted"
+fi
+
+# 34. APPLY-PING-STALE-STILL-WRITES (run 19 fix)
+POSTWRITE_COUNTER_34="$WORK/postwrite-counter.34"
+FAKE_STATE_RAW="$RAW_ENABLED_TARGET_FLAGS_PING_STALE" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS" FAKE_STATE_CALL_COUNTER="$POSTWRITE_COUNTER_34" \
+  FAKE_STORED_HASH="$VALID_HASH" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
+  run_case "apply: hash + every other flag match, but discord_ping_enabled still false -- writes anyway" 0 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
+[[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/ssh.log" "env SEED_ENV_FILE=" "apply-ping-stale-writes"
+
+# 35. APPLY-POSTWRITE-PING-ABSENT-FAILS
+FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS_PING_ABSENT" FAKE_STATE_CALL_COUNTER="$WORK/postwrite-counter.35" \
+  FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
+  run_case "apply: post-write answer omits discord_ping_enabled entirely -- refuses, names it" 1 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
+if [[ -n "$CASE_LAST_DIR" ]]; then
+  assert_grep "$CASE_LAST_DIR/out.txt" "post-write flag readback does not match the intended targets" "apply-postwrite-ping-absent-fails"
+  assert_grep "$CASE_LAST_DIR/out.txt" "discord_ping_enabled(expected=true,got=<unset>)" "apply-postwrite-ping-absent-names-it"
 fi
 
 if [[ "$FAIL" -ne 0 ]]; then
