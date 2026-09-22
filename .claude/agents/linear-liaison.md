@@ -2,6 +2,7 @@
 name: linear-liaison
 description: Haiku-backed context firewall for ALL Linear MCP calls (and other verbose MCP I/O). Use for every Linear operation — single reads/writes AND bulk sweeps — so the multi-KB JSON blobs Linear returns never land in the caller's context. Returns a compact, structured distillation (IDs / titles / statuses / URLs / the specific fields asked for), not raw dumps.
 model: haiku
+disallowedTools: Agent
 effort: low
 ---
 
