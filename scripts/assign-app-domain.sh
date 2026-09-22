@@ -1266,80 +1266,53 @@ else
 fi
 
 # domain_serves_result <host> -- one HTTPS probe; prints one line:
-#   "<TOKEN> <http_code> <ssl_verify_result> <redirect_url-or-empty>"
-# TOKEN is one of OK / OFF_DOMAIN_REDIRECT / BAD_TLS / BAD_STATUS.
-# Run-22 fix (team-lead, live cutover): the OLD check was a bare
-# `== "200"`, which can NEVER pass once the app starts redirecting an
-# unauthenticated '/' to '/login' -- measured live 2026-09-22:
-# https://pfindash.com/ -> 303 -> /login (200), ssl_verify_result=0,
-# real Let's Encrypt cert (CN=pfindash.com) -- a live, correctly
-# routed, TLS-verified app, not a poll failure. The actual "cert
-# issued and trusted" fact is ssl_verify_result=0, not a bare 200; a
-# 3xx counts as served ONLY when its own redirect target is on this
-# app's own domain family ($ROOT_DOMAIN / www.$ROOT_DOMAIN) -- an
-# OFF-DOMAIN redirect (a misconfigured proxy sending traffic
-# elsewhere) is never treated as "serving".
+#   "<TOKEN> <http_code> <ssl_verify_result>"
+# TOKEN is OK or NOT_SERVED. Run-22 fix (team-lead, live cutover),
+# predicate CORRECTED per Sec's own review (this is the script's ONLY
+# TLS assertion): the app 303s an unauthenticated '/' to '/login' --
+# measured live 2026-09-22: https://pfindash.com/ -> 303 -> /login
+# (200), ssl_verify_result=0, real Let's Encrypt cert (CN=pfindash.com)
+# -- a live, correctly routed, TLS-verified app, not a poll failure.
+# Sec's ruling: a bare "2xx/3xx" accept is looser than it needs to be
+# (a redirect chain could point off-host and a single-request 3xx
+# accept only verifies the FIRST hop's cert). Correct shape: `-L
+# --max-redirs 5` follows the redirect chain to its real final state
+# and verifies TLS at EVERY hop; require BOTH a final 2xx AND
+# ssl_verify_result==0 -- ssl_verify_result reads 0 on a TRANSPORT
+# FAILURE too (no verification was even attempted), so it is only
+# meaningful paired with a real 2xx, never as proof of a valid cert by
+# itself. NEVER add `-k` here (unlike the sslip reachability probe
+# above, which asks a reachability question, not a trust question) --
+# `-k` would make ssl_verify_result stop gating anything.
 domain_serves_result() {
-  local host="$1" out code ssl_verify redirect_url redirect_host
-  out="$(curl -s -o /dev/null -w '%{http_code} %{ssl_verify_result} %{redirect_url}' --max-time 10 "https://$host/" 2>/dev/null || true)"
-  read -r code ssl_verify redirect_url <<<"$out"
-  if [[ ! "${code:-000}" =~ ^[23][0-9][0-9]$ ]]; then
-    printf 'BAD_STATUS %s %s %s' "${code:-000}" "${ssl_verify:-}" "${redirect_url:-}"
-    return
+  local host="$1" out code verify
+  out="$(curl -sS -o /dev/null -L --max-redirs 5 --max-time 10 -w '%{http_code} %{ssl_verify_result}' "https://$host/" 2>/dev/null || true)"
+  code="${out%% *}"
+  verify="${out##* }"
+  if [[ "${verify:-1}" == "0" && "${code:-000}" =~ ^2[0-9][0-9]$ ]]; then
+    printf 'OK %s %s' "${code:-000}" "${verify:-<empty>}"
+  else
+    printf 'NOT_SERVED %s %s' "${code:-000}" "${verify:-<empty>}"
   fi
-  if [[ "${ssl_verify:-1}" != "0" ]]; then
-    printf 'BAD_TLS %s %s %s' "$code" "${ssl_verify:-<empty>}" "${redirect_url:-}"
-    return
-  fi
-  if [[ "$code" == 3* ]]; then
-    if [[ -z "${redirect_url:-}" ]]; then
-      printf 'BAD_STATUS %s %s %s' "$code" "$ssl_verify" ""
-      return
-    fi
-    redirect_host="${redirect_url#*://}"
-    redirect_host="${redirect_host%%/*}"
-    redirect_host="${redirect_host%%\?*}"
-    redirect_host="${redirect_host%%\#*}"
-    redirect_host="${redirect_host%%:*}"
-    if [[ "$redirect_host" != "$ROOT_DOMAIN" && "$redirect_host" != "www.$ROOT_DOMAIN" ]]; then
-      printf 'OFF_DOMAIN_REDIRECT %s %s %s' "$code" "$ssl_verify" "$redirect_url"
-      return
-    fi
-  fi
-  printf 'OK %s %s %s' "$code" "$ssl_verify" "${redirect_url:-}"
 }
 
 # poll_domain_serves <host> <label> -- polls up to CERT_POLL_ATTEMPTS x
 # CERT_POLL_INTERVAL_SECONDS for an OK result from domain_serves_result
-# above; dies naming the LAST observed result on exhaustion, never a
-# bare "expected 200".
+# above; dies naming the LAST observed (code, ssl_verify_result) pair
+# on exhaustion, never a bare "expected 200".
 poll_domain_serves() {
-  local host="$1" label="$2" i result token code ssl_verify redirect_url
+  local host="$1" label="$2" i result token code verify
   for ((i = 1; i <= CERT_POLL_ATTEMPTS; i++)); do
     result="$(domain_serves_result "$host")"
-    read -r token code ssl_verify redirect_url <<<"$result"
-    case "$token" in
-      OK)
-        if [[ -n "$redirect_url" ]]; then
-          ok "https://$host/ answers over a verified TLS cert (http $code, redirect -> $redirect_url)"
-        else
-          ok "https://$host/ answers over a verified TLS cert (http $code, no redirect)"
-        fi
-        return 0
-        ;;
-      OFF_DOMAIN_REDIRECT)
-        info "attempt $i/$CERT_POLL_ATTEMPTS: https://$host/ -> $code redirects OFF-DOMAIN to $redirect_url -- not treating as served"
-        ;;
-      BAD_TLS)
-        info "attempt $i/$CERT_POLL_ATTEMPTS: https://$host/ -> http $code but ssl_verify_result=$ssl_verify (cert not yet verified) -- waiting for LE issuance"
-        ;;
-      *)
-        info "attempt $i/$CERT_POLL_ATTEMPTS: https://$host/ -> ${code:-(no response)} -- waiting for DNS propagation + LE issuance"
-        ;;
-    esac
+    read -r token code verify <<<"$result"
+    if [[ "$token" == "OK" ]]; then
+      ok "https://$host/ answers over a verified TLS cert after following redirects (final http $code)"
+      return 0
+    fi
+    info "attempt $i/$CERT_POLL_ATTEMPTS: https://$host/ -> http ${code:-(no response)}, ssl_verify_result=${verify:-<empty>} -- waiting for DNS propagation + LE issuance"
     sleep "$CERT_POLL_INTERVAL_SECONDS"
   done
-  die "https://$host/ ($label) never answered over a verified TLS cert within $((CERT_POLL_ATTEMPTS * CERT_POLL_INTERVAL_SECONDS))s -- last result: token=$token code=${code:-<empty>} ssl_verify=${ssl_verify:-<empty>} redirect=${redirect_url:-<none>}. DNS may not have propagated yet, Coolify/Traefik may not have issued the cert, or the app may be redirecting off-domain. Re-run this script (idempotent) once you've confirmed DNS has propagated (\`dig A $ROOT_DOMAIN\`)."
+  die "https://$host/ ($label) never answered a final 2xx over a verified TLS cert within $((CERT_POLL_ATTEMPTS * CERT_POLL_INTERVAL_SECONDS))s -- last result: http ${code:-<empty>}, ssl_verify_result=${verify:-<empty>}. DNS may not have propagated yet, or Coolify/Traefik has not issued the cert. Re-run this script (idempotent) once you've confirmed DNS has propagated (\`dig A $ROOT_DOMAIN\`)."
 }
 
 step "Polling for the Let's Encrypt cert on https://$ROOT_DOMAIN (bounded: $CERT_POLL_ATTEMPTS x ${CERT_POLL_INTERVAL_SECONDS}s)"

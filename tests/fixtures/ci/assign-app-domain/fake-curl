@@ -380,22 +380,26 @@ if [[ "$ARGS" == *".sslip.io"* ]]; then
   exit 0
 fi
 
-# --- Public HTTPS poll (domain_serves_result(), run-22 fix) ---------------
-# The real script's -w format now asks for THREE space-separated values
-# -- '%{http_code} %{ssl_verify_result} %{redirect_url}' -- matching
-# what curl actually prints for that exact format string. Default
-# ssl_verify=0 (a verified cert) and empty redirect_url (no redirect)
-# so an EXISTING scenario that only sets FAKE_APEX_CODE/FAKE_WWW_CODE
-# (a plain 200) still passes unchanged. FAKE_APEX_SSL_VERIFY/
-# FAKE_WWW_SSL_VERIFY and FAKE_APEX_REDIRECT_URL/FAKE_WWW_REDIRECT_URL
-# model the run-22 live shape: a 303 to an on-domain '/login' over a
-# verified cert.
+# --- Public HTTPS poll (domain_serves_result(), run-22 fix, predicate
+# CORRECTED per Sec review) --------------------------------------------
+# The real script's -w format now asks for TWO space-separated values
+# -- '%{http_code} %{ssl_verify_result}' -- and uses `-L --max-redirs 5`
+# so this fixture models the FINAL post-redirect-chain state directly
+# (a full redirect-chain simulation is unnecessary for exercising the
+# script's own predicate). Default ssl_verify=0 (a verified cert) so an
+# EXISTING scenario that only sets FAKE_APEX_CODE/FAKE_WWW_CODE (a
+# plain 200) still passes unchanged. FAKE_APEX_SSL_VERIFY/
+# FAKE_WWW_SSL_VERIFY model TLS verification failing independently of
+# the status code -- Sec's own point: ssl_verify_result reads 0 on a
+# transport failure too, so FAKE_APEX_CODE=000 with the DEFAULT
+# ssl_verify=0 (unchanged) is the fixture's own positive control for
+# "0 alone is not proof of a valid cert".
 if [[ "$ARGS" == *"https://www."* ]]; then
-  printf '%s %s %s' "${FAKE_WWW_CODE:-200}" "${FAKE_WWW_SSL_VERIFY:-0}" "${FAKE_WWW_REDIRECT_URL:-}"
+  printf '%s %s' "${FAKE_WWW_CODE:-200}" "${FAKE_WWW_SSL_VERIFY:-0}"
   exit 0
 fi
 if [[ "$ARGS" == *"https://"* ]]; then
-  printf '%s %s %s' "${FAKE_APEX_CODE:-200}" "${FAKE_APEX_SSL_VERIFY:-0}" "${FAKE_APEX_REDIRECT_URL:-}"
+  printf '%s %s' "${FAKE_APEX_CODE:-200}" "${FAKE_APEX_SSL_VERIFY:-0}"
   exit 0
 fi
 
