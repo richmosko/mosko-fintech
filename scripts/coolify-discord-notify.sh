@@ -264,11 +264,21 @@ EVENT_FLAGS=(
   "server_patch:server_patch_discord_notifications:true"
   "traefik_outdated:traefik_outdated_discord_notifications:true"
   "restart_limit_reached:restart_limit_reached_discord_notifications:true"
+  "discord_ping_enabled:discord_ping_enabled:true"
 )
-# `discord_ping_enabled` is a real, correctly-named column (no suffix)
-# -- NOT part of EVENT_FLAGS (it has no per-event target/measured pair
-# the way the 15 above do), but pinned alongside them in FACT-13 since
-# it is read/written by this same script.
+# `discord_ping_enabled` IS part of EVENT_FLAGS (run 19 defect, found by
+# team-lead's live --apply + independent psql read): it was originally
+# excluded here on the reasoning that it "has no per-event target/
+# measured pair the way the 15 above do" -- true, but that exclusion
+# silently dropped it from php_field_map() too, so read_state() stopped
+# printing it at all. The post-write flag-readback check below (which
+# DOES still reference FLAG_discord_ping_enabled directly) then read an
+# always-unset variable and FATAL'd on every single run ("got=<unset>"),
+# even though the write itself (a separate, still-hardcoded update()
+# key) had correctly set it true on the box. One column, one entry, one
+# place it can go missing from -- not two behaviors to keep in sync by
+# hand. Its own real column happens to share its display name (no
+# suffix), unlike the 15 siblings above.
 
 # Builds the PHP associative-array literal `["display" => "column", ...]`
 # read_state() embeds for its own $fields map.
@@ -353,6 +363,21 @@ echo implode(\"|\", \$parts);
 #                    NULL is a genuine DB null, never folded into false)
 parse_state() {
   local raw="$1"
+  # Reset every FLAG_* global before parsing -- read_state() is called
+  # TWICE per --apply write path (pre-write idempotency read, post-write
+  # readback), and printf -v only SETS a variable for a name it actually
+  # sees in this call's own FLAG_LINE; it never unsets one from a PRIOR
+  # call. Without this reset, a field genuinely absent from the SECOND
+  # read (a box read that regresses to omitting a flag, or a field this
+  # script itself stops printing -- run 19's own defect class) would
+  # silently keep reading as whatever the FIRST call happened to set it
+  # to, masking exactly the failure the post-write readback exists to
+  # catch. `${!FLAG_@}` (variable-name-by-prefix expansion) is bash
+  # 2.05b+, safe under this repo's bash 3.2 pin.
+  local __stale_flag_var
+  for __stale_flag_var in ${!FLAG_@}; do
+    unset -v "$__stale_flag_var"
+  done
   case "$raw" in
     FATAL_TEAM_ABSENT) die "Team id=0 does not exist on the box -- this is not a Discord-specific problem, something upstream (RootUserSeeder / provision-vps.sh's admin bootstrap) never ran. Investigate before retrying." ;;
     FATAL_CARDINALITY_*) die "discord_notification_settings has ${raw#FATAL_CARDINALITY_} rows for team_id=0, expected exactly 1 -- refusing to guess which is authoritative." ;;
@@ -420,9 +445,14 @@ echo \$s ? substr(hash(\"sha256\", (string) \$s->discord_webhook_url), 0, 16) : 
     # idempotency skip could report "already correct" while a real flag
     # (e.g. backup_failure, Sec's PR #871 ruling) still needs writing.
     # deployment_success/status_change/scheduled_task_success/
-    # server_reachable target "true"; backup_failure targets "false".
+    # server_reachable/discord_ping_enabled target "true"; backup_failure
+    # targets "false". discord_ping_enabled added here per team-lead's
+    # run-19 fix directive (its column now lives in EVENT_FLAGS too --
+    # see that array's own header comment for the read-side defect this
+    # closes; this loop is the write-skip half of the same "one source"
+    # requirement, not automatically covered by EVENT_FLAGS membership).
     FLAGS_MATCH=1
-    for f in deployment_success status_change scheduled_task_success server_reachable; do
+    for f in deployment_success status_change scheduled_task_success server_reachable discord_ping_enabled; do
       var="FLAG_${f}"
       [[ "${!var:-}" == "true" ]] || FLAGS_MATCH=0
     done
@@ -488,7 +518,6 @@ docker exec --env-file "$SEED_ENV_FILE" coolify php artisan tinker --execute='
   $s->update([
     "discord_enabled" => true,
     "discord_webhook_url" => $url,
-    "discord_ping_enabled" => true,
 __EVENT_FLAG_UPDATES__
   ]);
   echo "WRITE_OK";
@@ -558,7 +587,7 @@ echo \$s ? substr(hash(\"sha256\", (string) \$s->discord_webhook_url), 0, 16) : 
   # SAME read_state()/EVENT_FLAGS table the write itself used, so a
   # future column-name regression fails HERE rather than only being
   # visible on a later, separately-run `--state` call.
-  step "Post-write flag readback (every EVENT_FLAGS target value + discord_ping_enabled)"
+  step "Post-write flag readback (every EVENT_FLAGS target value, discord_ping_enabled included -- it is a member, not a bolt-on)"
   RAW_AFTER="$(read_state)"
   parse_state "$RAW_AFTER"
   MISMATCHES=""
@@ -570,13 +599,10 @@ echo \$s ? substr(hash(\"sha256\", (string) \$s->discord_webhook_url), 0, 16) : 
       MISMATCHES="$MISMATCHES $display(expected=$target,got=${!var:-<unset>})"
     fi
   done
-  if [[ "${FLAG_discord_ping_enabled:-}" != "true" ]]; then
-    MISMATCHES="$MISMATCHES discord_ping_enabled(expected=true,got=${FLAG_discord_ping_enabled:-<unset>})"
-  fi
   if [[ -n "$MISMATCHES" ]]; then
     die "post-write flag readback does not match the intended targets -- the write did not take effect on:$MISMATCHES. Investigate before retrying (a wrong Eloquent column name silently drops the write for that key alone)."
   fi
-  ok "flag readback confirmed: every EVENT_FLAGS target + discord_ping_enabled landed"
+  ok "flag readback confirmed: every EVENT_FLAGS target (including discord_ping_enabled) landed"
 fi
 
 step "Sending the live Discord test notification (same payload Coolify's own Test-notification button sends) and asserting acceptance"
