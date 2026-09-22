@@ -59,29 +59,66 @@ if [[ "$ARGS" == *"api.porkbun.com"* ]]; then
   # in argv (already checked above) and, for retrieve, to prove SOMETHING
   # was actually sent.
   BODY_FILE=""
+  WRITEOUT_FMT=""
+  HAS_DASH_F=0
   prev=""
   for a in "$@"; do
     if [[ "$prev" == "--data-binary" ]]; then
       BODY_FILE="${a#@}"
     fi
+    if [[ "$prev" == "-w" ]]; then
+      WRITEOUT_FMT="$a"
+    fi
+    [[ "$a" == "-f" || "$a" == "-fsS" || "$a" == "-sSf" ]] && HAS_DASH_F=1
     prev="$a"
   done
-  [[ -n "$BODY_FILE" && -f "$BODY_FILE" ]] || { echo '{"status":"ERROR","message":"fake-curl: no --data-binary body file found"}'; exit 0; }
+
+  emit_porkbun() {
+    # emit_porkbun <body> [status=200] -- honors -w exactly the way
+    # porkbun_api() itself now relies on (never -f -- porkbun_api() no
+    # longer passes it), AND honors -f exactly as real curl does when a
+    # caller (an inversion test reverting this fix) DOES pass it:
+    # discards the body, exits 22 on >=400 -- the SAME behavior the
+    # Coolify branch below own emit() already models. Without this, a
+    # scenario reverting porkbun_api() back to `-fsS` would still see
+    # the fake message text (since this fixture would hand it over
+    # regardless of -f), understating what real curl actually does and
+    # making the inversion test dishonest about what the fix protects
+    # against. Same shape as the Coolify branch below own emit().
+    local body="$1" status="${2:-200}"
+    if [[ "$HAS_DASH_F" -eq 1 && "$status" -ge 400 ]]; then
+      echo "curl: (22) The requested URL returned error: $status" >&2
+      exit 22
+    fi
+    printf '%s' "$body"
+    if [[ -n "$WRITEOUT_FMT" ]]; then
+      printf '%s' "$WRITEOUT_FMT" | sed "s/%{http_code}/$status/"
+    fi
+    exit 0
+  }
+
+  [[ -n "$BODY_FILE" && -f "$BODY_FILE" ]] || emit_porkbun '{"status":"ERROR","message":"fake-curl: no --data-binary body file found"}'
 
   if [[ "$ARGS" == *"/dns/retrieve/"* ]]; then
-    printf '{"status":"SUCCESS","records":%s}\n' "${FAKE_PORKBUN_RECORDS:-[]}"
-    exit 0
+    emit_porkbun "$(printf '{"status":"SUCCESS","records":%s}' "${FAKE_PORKBUN_RECORDS:-[]}")"
   fi
   if [[ "$ARGS" == *"/dns/create/"* || "$ARGS" == *"/dns/editByNameType/"* ]]; then
-    if [[ "${FAKE_PORKBUN_WRITE_MODE:-ok}" == "error" ]]; then
-      echo '{"status":"ERROR","message":"fake Porkbun write failure"}'
-      exit 0
+    # FAKE_PORKBUN_WRITE_HTTP_STATUS models a real non-2xx transport
+    # status (the actual 400 measured 2026-09-22 on a www CNAME create
+    # beside an existing A record) -- distinct from
+    # FAKE_PORKBUN_WRITE_MODE=error below, which models a 200 whose OWN
+    # body carries status=ERROR (a Porkbun-level application error, not
+    # an HTTP-level one). Both are real, distinguishable Porkbun failure
+    # shapes; this fixture keeps them separately triggerable.
+    if [[ -n "${FAKE_PORKBUN_WRITE_HTTP_STATUS:-}" && "${FAKE_PORKBUN_WRITE_HTTP_STATUS}" != "200" ]]; then
+      emit_porkbun "$(printf '{"status":"ERROR","message":"%s"}' "${FAKE_PORKBUN_WRITE_ERROR_MESSAGE:-fake: record with that name and type already exists}")" "$FAKE_PORKBUN_WRITE_HTTP_STATUS"
     fi
-    echo '{"status":"SUCCESS"}'
-    exit 0
+    if [[ "${FAKE_PORKBUN_WRITE_MODE:-ok}" == "error" ]]; then
+      emit_porkbun '{"status":"ERROR","message":"fake Porkbun write failure"}'
+    fi
+    emit_porkbun '{"status":"SUCCESS"}'
   fi
-  echo '{"status":"ERROR","message":"fake-curl: unrecognised Porkbun path"}'
-  exit 0
+  emit_porkbun '{"status":"ERROR","message":"fake-curl: unrecognised Porkbun path"}'
 fi
 
 # --- Coolify API ---------------------------------------------------------

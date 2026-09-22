@@ -28,10 +28,33 @@
 #   - apex: refuses only if a CNAME/ALIAS already exists there (DNS's
 #     CNAME-exclusivity rule -- it cannot coexist with the A record this
 #     script sets). MX/TXT/NS/SRV pass through untouched.
-#   - www: refuses on anything other than A/AAAA/CNAME (unchanged).
+#   - www: handled by MEASURED type -- an existing A record is EDITED IN
+#     PLACE to box_ip (never a CNAME created alongside it); an existing
+#     CNAME is edited in place to the apex domain (unchanged); no record
+#     creates a CNAME, as before. Anything else refuses, by name
+#     (corrected 2026-09-22 -- AAAA is no longer a passed-through type;
+#     see the live measurement below for why).
 #   - apex CAA: refuses explicitly, by name, if a CAA record exists that
 #     does not authorise Let's Encrypt -- otherwise this would only ever
 #     surface later as an opaque cert-poll timeout.
+#
+# LIVE MEASUREMENT, 2026-09-22 ~15:45Z (F/CTO-run `--from dns
+# --confirm-cutover`, real cutover attempt) -- www.pfindash.com already
+# existed as an A record (ttl 600) pointing at the incumbent host, NOT a
+# CNAME; there was also a `*.pfindash.com` wildcard A record. This
+# script's OWN www-action detection only ever looked for a www CNAME, so
+# it computed "create" regardless -- Porkbun refuses a CNAME create
+# beside an existing A of the same name (dns/create -> HTTP 400; a name
+# cannot hold a CNAME alongside any other record type). A second,
+# independent defect compounded this: porkbun_api() used `curl -fsS`,
+# which discards the response body on any non-2xx, so the actual
+# Porkbun error (its own `message` field explaining WHY) never reached
+# the operator -- only a bare "exit 56" curl transport error. Both fixed
+# in this same pass; see porkbun_api() below for the second fix and the
+# DIFF_JSON python block below for the first. The wildcard A record is
+# left alone (read-only WARN if it does not point at box_ip -- see the
+# DNS-diff step) -- an F/CTO cutover decision, not this script own to
+# make.
 #
 # THE COOLIFY DOMAIN-ASSIGNMENT MECHANISM IS docker_compose_domains, NOT
 # fqdn -- corrected 2026-09-21 (Sec merge condition, PR #866 review, on
@@ -214,19 +237,37 @@ def porkbun_api(api_key, secret_key, path, extra=None):
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(json.dumps(body).encode())
-        cmd = ["curl", "-fsS", "-X", "POST", "--data-binary", f"@{body_path}",
+        # Status-preserving, not `-fsS` (measured 2026-09-22: a Porkbun
+        # 400 on the www CNAME create surfaced ONLY as "curl: (56) The
+        # requested URL returned error: 400" -- `-f` discards the
+        # response BODY on any non-2xx, so Porkbun own `message` field
+        # explaining WHY never reached the operator; same class as the
+        # Coolify api() `-f` fix this file already carries -- see that
+        # helper below for the identical shape, already Sec-reviewed
+        # there).
+        cmd = ["curl", "-sS", "-X", "POST", "--data-binary", f"@{body_path}",
+               "-w", "\n%{http_code}",
                f"https://api.porkbun.com/api/json/v3{path}"]
-        try:
-            result = subprocess.run(cmd, capture_output=True, check=True)
-        except subprocess.CalledProcessError as exc:
-            die(f"Porkbun API POST {path} failed: exit {exc.returncode} "
-                f"({exc.stderr.decode(errors='replace').strip()[:200]})")
+        result = subprocess.run(cmd, capture_output=True)
     finally:
         try:
             os.unlink(body_path)
         except OSError:
             pass
-    out = json.loads(result.stdout.decode())
+    if result.returncode != 0:
+        die(f"Porkbun API POST {path} failed: curl exit {result.returncode} "
+            f"({result.stderr.decode(errors='replace').strip()[:200]})")
+    raw = result.stdout.decode()
+    out_text, _, code = raw.rpartition("\n")
+    if not code.isdigit():
+        die(f"Porkbun API POST {path}: could not parse an HTTP status code off curls own -w output -- refusing to guess success or failure. Raw tail: {raw[-200:]!r}")
+    status = int(code)
+    try:
+        out = json.loads(out_text)
+    except json.JSONDecodeError:
+        die(f"Porkbun API POST {path} -> HTTP {status}: response body was not valid JSON: {out_text[:200]!r}")
+    if not (200 <= status < 300):
+        die(f"Porkbun API POST {path} -> HTTP {status}: {out.get('message', out_text)[:300]}")
     if out.get("status") != "SUCCESS":
         die(f"Porkbun API {path} returned status={out.get('status')}: {out.get('message', '')[:200]}")
     return out
@@ -277,6 +318,7 @@ def at(name_suffix):
 
 apex = at("")
 www = at("www")
+wildcard = at("*")
 
 def refuse(msg):
     print(json.dumps({"refuse": msg}))
@@ -304,10 +346,23 @@ if apex_conflict:
     refuse(f"apex: existing {[r['type'] for r in apex_conflict]} record(s) cannot coexist "
            f"with an A record at the same name -- refusing to overwrite or delete them")
 
-bad_www = [r for r in www if r["type"] not in ("A", "AAAA", "CNAME")]
-if bad_www:
-    refuse(f"www: existing record(s) of unexpected type {[r['type'] for r in bad_www]} -- "
-           f"refusing to touch anything but A/AAAA/CNAME")
+# www handled by MEASURED type (2026-09-22 ~15:45Z, this file own
+# header): www already existed as an A record on the real domain, and
+# Porkbun refuses a CNAME create beside an existing A of the same name
+# (dns/create -> HTTP 400) -- a name cannot hold a CNAME alongside any
+# other record type. Three, and only three, handled shapes; anything
+# else refuses, by name, rather than falling through to a guessed
+# create that a live 400 would then explain badly:
+#   A     -> edit that A in place to box_ip. Never create a CNAME
+#            alongside it -- that IS the conflict measured live.
+#   CNAME -> existing edit-in-place path, unchanged.
+#   none  -> create a CNAME to the apex domain, as before.
+www_a = [r for r in www if r["type"] == "A"]
+www_cname = [r for r in www if r["type"] == "CNAME"]
+www_other = [r for r in www if r["type"] not in ("A", "CNAME")]
+if www_other:
+    refuse(f"www: existing record(s) of unexpected type {[r['type'] for r in www_other]} -- "
+           f"refusing to touch anything but A (edited in place to the box) or CNAME")
 
 # CAA governs certificate issuance -- a CAA row at the apex that does NOT
 # authorise the Let s Encrypt CA blocks Traefik issuance outright. Left
@@ -325,16 +380,42 @@ if apex_caa:
                f"restrictive one) before retrying.")
 
 apex_a = [r for r in apex if r["type"] == "A"]
-www_cname = [r for r in www if r["type"] == "CNAME"]
+
+if www_a:
+    www_type = "a"
+    www_current = www_a[0]["content"]
+    www_target = box_ip
+    www_action = "none" if www_current == box_ip else "edit"
+elif www_cname:
+    www_type = "cname"
+    www_current = www_cname[0]["content"]
+    www_target = domain
+    www_action = "none" if www_current.rstrip(".") == domain else "edit"
+else:
+    www_type = "cname"
+    www_current = None
+    www_target = domain
+    www_action = "create"
+
+# Wildcard A -- READ-ONLY, never a refusal and never a write target
+# (this measurement pass): if it points somewhere other than box_ip,
+# cutover leaves it dangling on the incumbent host -- an F/CTO decision
+# this script does not make on its own.
+wildcard_a = [r for r in wildcard if r["type"] == "A"]
+wildcard_warning = None
+if wildcard_a and wildcard_a[0]["content"] != box_ip:
+    wildcard_warning = wildcard_a[0]["content"]
 
 plan = {
     "refuse": None,
     "apex_current": apex_a[0]["content"] if apex_a else None,
     "apex_target": box_ip,
     "apex_action": "none" if apex_a and apex_a[0]["content"] == box_ip else ("edit" if apex_a else "create"),
-    "www_current": www_cname[0]["content"] if www_cname else None,
-    "www_target": domain,
-    "www_action": "none" if www_cname and www_cname[0]["content"].rstrip(".") == domain else ("edit" if www_cname else "create"),
+    "www_type": www_type,
+    "www_current": www_current,
+    "www_target": www_target,
+    "www_action": www_action,
+    "wildcard_warning": wildcard_warning,
 }
 print(json.dumps(plan))
 PYEOF
@@ -344,13 +425,23 @@ REFUSAL="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('
 [[ -z "$REFUSAL" ]] || die "$REFUSAL"
 
 APEX_ACTION="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['apex_action'])" "$DIFF_JSON")"
+WWW_TYPE="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['www_type'])" "$DIFF_JSON")"
 WWW_ACTION="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['www_action'])" "$DIFF_JSON")"
+WWW_TARGET="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['www_target'])" "$DIFF_JSON")"
 APEX_CURRENT="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['apex_current'] or '(absent)')" "$DIFF_JSON")"
 WWW_CURRENT="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['www_current'] or '(absent)')" "$DIFF_JSON")"
+WILDCARD_WARNING="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('wildcard_warning') or '')" "$DIFF_JSON")"
 
 step "DNS diff"
 info "apex A:      $APEX_CURRENT -> $BOX_IP  [$APEX_ACTION]"
-info "www  CNAME:  $WWW_CURRENT -> $ROOT_DOMAIN  [$WWW_ACTION]"
+if [[ "$WWW_TYPE" == "a" ]]; then
+  info "www  A:      $WWW_CURRENT -> $WWW_TARGET  [$WWW_ACTION] (CNAME not created -- an A record already exists at www; measured 2026-09-22)"
+else
+  info "www  CNAME:  $WWW_CURRENT -> $WWW_TARGET  [$WWW_ACTION]"
+fi
+if [[ -n "$WILDCARD_WARNING" ]]; then
+  info "(warn) wildcard A (*.${ROOT_DOMAIN}) points elsewhere: $WILDCARD_WARNING (not $BOX_IP) -- cutover leaves it dangling on the incumbent; F/CTO decision, not changed by this script."
+fi
 
 # --- ports_exposes preflight (Sec availability finding, run-10 stop, MEASURED
 # live): pfin-app's ports_exposes is Coolify's OWN create-time default ('80'),
@@ -546,23 +637,36 @@ PYEOF
 fi
 
 if [[ "$WWW_ACTION" == "none" ]]; then
-  ok "www CNAME already correct -- nothing to change"
+  ok "www $([[ "$WWW_TYPE" == "a" ]] && echo A || echo CNAME) already correct -- nothing to change"
 else
+  # www_type "a" (MEASURED 2026-09-22 ~15:45Z) edits the EXISTING A
+  # record in place to box_ip -- never creates a CNAME alongside it,
+  # which is the exact conflict a live Porkbun 400 measured. action can
+  # only be "edit" when www_type is "a" (an A record that already
+  # exists cannot also be the "create" case -- see the DIFF_JSON python
+  # above), but this still branches on action defensively rather than
+  # assuming that invariant holds.
   PY_WWW_FILE="$(porkbun_scratch_file)"
   cat > "$PY_WWW_FILE" <<PYEOF
 import sys
 api_key = sys.stdin.readline().rstrip("\n")
 secret_key = sys.stdin.readline().rstrip("\n")
-domain, action = sys.argv[1], sys.argv[2]
+domain, box_ip, action, wtype = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 $PY_PORKBUN_HELPER
-if action == "create":
+if wtype == "a":
+    porkbun_api(api_key, secret_key, f"/dns/editByNameType/{domain}/A/www", {"content": box_ip, "ttl": "300"})
+elif action == "create":
     porkbun_api(api_key, secret_key, f"/dns/create/{domain}", {"name": "www", "type": "CNAME", "content": domain, "ttl": "300"})
 else:
     porkbun_api(api_key, secret_key, f"/dns/editByNameType/{domain}/CNAME/www", {"content": domain, "ttl": "300"})
 PYEOF
-  printf '%s\n%s\n' "$PORKBUN_API_KEY" "$PORKBUN_SECRET_KEY" | python3 "$PY_WWW_FILE" "$ROOT_DOMAIN" "$WWW_ACTION"
+  printf '%s\n%s\n' "$PORKBUN_API_KEY" "$PORKBUN_SECRET_KEY" | python3 "$PY_WWW_FILE" "$ROOT_DOMAIN" "$BOX_IP" "$WWW_ACTION" "$WWW_TYPE"
   rm -f "$PY_WWW_FILE"
-  ok "www CNAME -> $ROOT_DOMAIN ($WWW_ACTION)"
+  if [[ "$WWW_TYPE" == "a" ]]; then
+    ok "www A -> $BOX_IP ($WWW_ACTION; CNAME not created because an A record exists)"
+  else
+    ok "www CNAME -> $ROOT_DOMAIN ($WWW_ACTION)"
+  fi
 fi
 
 # ports_exposes PATCH -- BEFORE the domain is assigned (below), on
