@@ -178,9 +178,66 @@ if [[ "$ARGS" == *"localhost:8000/api/v1"* ]]; then
     exit 0
   }
 
+  # build_compose_domains_field <comma-separated-domains-or-empty> --
+  # COOLIFY-FACT-15 (measured 2026-09-22 ~17:10Z): docker_compose_domains
+  # reads back as a JSON STRING whose own content is a JSON OBJECT keyed
+  # by compose service name (`{"app":{"domain":"https://a,https://b"}}`),
+  # NOT a flat comma-separated list -- the prior version of this fixture
+  # emitted the flat list directly, so the real script's OLD
+  # comma-split read-back parser "passed" against a shape Coolify never
+  # actually returns (fixture-restates-the-lie class, per team-lead --
+  # this is the sixth instance this week). Built via python3 json.dumps
+  # (nested TWICE: once for the inner object, once to turn that whole
+  # object into the outer JSON STRING value) rather than hand-escaped
+  # printf/sed, to avoid the exact malformed-JSON-from-hand-escaping
+  # class this session already hit once (PR #877's key-redaction
+  # inversion-test bug). FAKE_COMPOSE_DOMAINS_READBACK_SHAPE=array
+  # switches to the PATCH-shape array instead (team-lead: "the API
+  # might change" -- tolerance, not a measured fact).
+  # FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE renames the object key
+  # away from "app" (models the target service key being absent).
+  # FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE adds a second key alongside "app"
+  # (models an unexpected extra service in the read-back).
+  # FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE, when set, bypasses all of the
+  # above and is spliced in VERBATIM (already the full outer-field
+  # STRING content, unescaped) -- used to feed COOLIFY-FACT-15's own
+  # exact measured bytes, extracted live from
+  # scripts/COOLIFY-API-MEASURED.md by the fence, straight through the
+  # real script's parser.
+  build_compose_domains_field() {
+    local domains="$1"
+    if [[ -n "${FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE:-}" ]]; then
+      python3 -c '
+import json, sys
+print(json.dumps(sys.argv[1]))
+' "$FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE"
+      return
+    fi
+    if [[ -z "$domains" ]]; then
+      printf '""'
+      return
+    fi
+    if [[ "${FAKE_COMPOSE_DOMAINS_READBACK_SHAPE:-object-string}" == "array" ]]; then
+      python3 -c '
+import json, sys
+svc, domains = sys.argv[1], sys.argv[2]
+print(json.dumps([{"name": svc, "domain": domains}]))
+' "${FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE:-app}" "$domains"
+    else
+      python3 -c '
+import json, sys
+svc, domains, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+obj = {svc: {"domain": domains}}
+if extra:
+    obj[extra] = {"domain": domains}
+print(json.dumps(json.dumps(obj)))
+' "${FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE:-app}" "$domains" "${FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE:-}"
+    fi
+  }
+
   if [[ "$METHOD" == "GET" && "$URL" == *"/applications" ]]; then
-    emit "$(printf '[{"uuid": "%s", "name": "%s", "fqdn": "%s", "docker_compose_domains": "%s", "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}]' \
-      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "${FAKE_OLD_FQDN:-}" "${FAKE_OLD_COMPOSE_DOMAINS:-}" \
+    emit "$(printf '[{"uuid": "%s", "name": "%s", "fqdn": "%s", "docker_compose_domains": %s, "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}]' \
+      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "${FAKE_OLD_FQDN:-}" "$(build_compose_domains_field "${FAKE_OLD_COMPOSE_DOMAINS:-}")" \
       "${FAKE_APP_BASE_DIR:-/api}" "${FAKE_APP_BUILD_PACK:-dockercompose}" "${FAKE_APP_PORTS:-3000}")"
   fi
 
@@ -233,8 +290,8 @@ if [[ "$ARGS" == *"localhost:8000/api/v1"* ]]; then
       COMPOSE_DOMAINS_OUT="${FAKE_NEW_COMPOSE_DOMAINS:-}"
     fi
     FQDN_OUT="${FAKE_OLD_FQDN:-}"
-    emit "$(printf '{"uuid": "%s", "name": "%s", "fqdn": "%s", "docker_compose_domains": "%s", "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}' \
-      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "$FQDN_OUT" "$COMPOSE_DOMAINS_OUT" \
+    emit "$(printf '{"uuid": "%s", "name": "%s", "fqdn": "%s", "docker_compose_domains": %s, "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}' \
+      "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "$FQDN_OUT" "$(build_compose_domains_field "$COMPOSE_DOMAINS_OUT")" \
       "${FAKE_APP_BASE_DIR:-/api}" "${FAKE_APP_BUILD_PACK:-dockercompose}" "$PORTS_OUT")"
   fi
 

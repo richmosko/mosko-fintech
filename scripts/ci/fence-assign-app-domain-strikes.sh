@@ -89,6 +89,27 @@
 #      other than box_ip prints a READ-ONLY warning (never a refusal,
 #      never a write -- an F/CTO cutover decision); already matching
 #      prints nothing.
+#   35-39. docker_compose_domains READ-BACK SHAPE (run-21 live defect,
+#      2026-09-22, COOLIFY-FACT-15 -- the field reads back as a JSON
+#      STRING whose content is a JSON OBJECT keyed by compose service
+#      name, not a flat comma-separated list; the fixture now models
+#      that measured shape by default, not the flat-list shape the
+#      original fence wrongly assumed):
+#        35. one of the two intended domains missing from the live set
+#            refuses, naming it.
+#        36. the read-back object has no "app" key at all refuses,
+#            naming which service keys WERE present.
+#        37. the read-back carries "app" PLUS an unexpected second
+#            service key refuses, naming the extra key -- never guesses
+#            which one is authoritative.
+#        38. the read-back in the PATCH's own array shape (instead of
+#            the measured object-string shape) still passes -- tolerance
+#            for a future API change, not a measured fact.
+#        39. COOLIFY-FACT-15's own exact measured bytes (extracted LIVE
+#            from COOLIFY-API-MEASURED.md, zero retyped copies), fed
+#            verbatim through the real parser -- proves the parser
+#            handles the ACTUAL production bytes that broke run 21, not
+#            just a synthetic approximation of their shape.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -100,6 +121,21 @@ SMOKE_SH="$REPO_ROOT/scripts/assign-app-domain.sh"
 
 [[ -x "$FIXTURE_DIR/fake-curl" ]] || { echo "FATAL: $FIXTURE_DIR/fake-curl missing or not executable" >&2; exit 2; }
 [[ -f "$SMOKE_SH" ]] || { echo "FATAL: $SMOKE_SH not found" >&2; exit 2; }
+
+# COOLIFY-FACT-15's own exact measured docker_compose_domains bytes,
+# extracted LIVE from scripts/COOLIFY-API-MEASURED.md (zero retyped
+# copies -- team-lead: pin it in the fence by grep -F against FACT-15).
+# Used to feed the real script's parser the ACTUAL production bytes
+# Coolify returned, not a synthetic approximation of them.
+COOLIFY_API_MEASURED_MD="$REPO_ROOT/scripts/COOLIFY-API-MEASURED.md"
+[[ -f "$COOLIFY_API_MEASURED_MD" ]] || { echo "FATAL: $COOLIFY_API_MEASURED_MD not found -- cannot extract FACT-15's measured bytes" >&2; exit 2; }
+FACT15_RAW="$(awk '
+  /^## COOLIFY-FACT-15/ { infact = 1 }
+  infact && /^[[:space:]]*```$/ { fence++; next }
+  infact && fence == 1 { print }
+  infact && fence >= 2 { exit }
+' "$COOLIFY_API_MEASURED_MD" | sed -E 's/^[[:space:]]*//')"
+[[ -n "$FACT15_RAW" ]] || { echo "FATAL: extracted an empty string for FACT-15's measured bytes -- COOLIFY-API-MEASURED.md's FACT-15 fenced block shape changed; fix the extractor above, do not silently proceed with an empty pin" >&2; exit 2; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -163,6 +199,10 @@ if [[ "\$LAST" == "-s" || "\$LAST" == *" bash -s" ]]; then
     FAKE_OLD_COMPOSE_DOMAINS="\${FAKE_OLD_COMPOSE_DOMAINS:-}" FAKE_NEW_COMPOSE_DOMAINS="\${FAKE_NEW_COMPOSE_DOMAINS:-}" \\
     FAKE_COMPOSE_DOMAINS_PATCH_MARKER="\${FAKE_COMPOSE_DOMAINS_PATCH_MARKER:-}" FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT="\${FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT:-}" \\
     FAKE_COMPOSE_DOMAINS_PATCH_STATUS="\${FAKE_COMPOSE_DOMAINS_PATCH_STATUS:-}" \\
+    FAKE_COMPOSE_DOMAINS_READBACK_SHAPE="\${FAKE_COMPOSE_DOMAINS_READBACK_SHAPE:-}" \\
+    FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE="\${FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE:-}" \\
+    FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE="\${FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE:-}" \\
+    FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE="\${FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE:-}" \\
     bash -c "\$CMDLINE" <<< "\$REWRITTEN"
   exit \$?
 fi
@@ -302,6 +342,10 @@ run_case() {
     FAKE_COMPOSE_DOMAINS_PATCH_MARKER="$compose_domains_patch_marker" \
     FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT="${FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT:-$patch_effect}" \
     FAKE_COMPOSE_DOMAINS_PATCH_STATUS="${FAKE_COMPOSE_DOMAINS_PATCH_STATUS:-200}" \
+    FAKE_COMPOSE_DOMAINS_READBACK_SHAPE="${FAKE_COMPOSE_DOMAINS_READBACK_SHAPE:-}" \
+    FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE="${FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE:-}" \
+    FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE="${FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE:-}" \
+    FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE="${FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE:-}" \
     FAKE_APP_CID="${FAKE_APP_CID:-}" FAKE_APP_ENV_LINES="${FAKE_APP_ENV_LINES:-}" \
     FAKE_DOCKER_PS_FAILS="${FAKE_DOCKER_PS_FAILS:-0}" FAKE_DOCKER_EXEC_FAILS="${FAKE_DOCKER_EXEC_FAILS:-0}" \
     bash "$SMOKE_SH" $apply_flag < /dev/null > "$WORK/out.$$" 2>&1
@@ -828,6 +872,100 @@ run_case "wildcard A matching box_ip prints no warning" 0 "" "$WILDCARD_MATCH" 2
 if [[ -n "${CASE_OUTPUT:-}" ]] && grep -qF "wildcard A" <<<"$CASE_OUTPUT"; then
   echo "FAIL: [wildcard no-warn] printed a wildcard warning despite it already matching box_ip -- captured output: $CASE_OUTPUT" >&2
   FAIL=1
+fi
+
+# --- docker_compose_domains read-back shape scenarios (run-21 live
+# defect, 2026-09-22 -- COOLIFY-FACT-15) -------------------------------
+# The fixture now models the MEASURED object-string shape by default
+# (see build_compose_domains_field() in fake-curl); every scenario
+# above that reaches this PATCH already exercises that default shape
+# implicitly (21/21b/21c/apply-happy-path). These scenarios isolate the
+# NEW predicates specifically.
+
+# 35. DOMAIN-MISSING-ONE-REFUSES -- the live set carries only ONE of the
+#     two intended domains (the apex, not www) -- must refuse, naming
+#     the missing one, never treat a partial match as close enough.
+FAKE_NEW_COMPOSE_DOMAINS="https://fake-domain.test"
+run_case "docker_compose_domains read-back missing one intended domain refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_NEW_COMPOSE_DOMAINS
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "does not exactly equal the intended set" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [domain missing one] did not name the exact-set mismatch -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "www.fake-domain.test" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [domain missing one] did not name the missing domain -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 36. DOMAIN-SERVICE-ABSENT-REFUSES -- the read-back object is keyed
+#     under a DIFFERENT service name, never "app" -- must refuse by
+#     name (team-lead item 1: refuse if the app key is absent).
+FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE="otherservice"
+run_case "docker_compose_domains read-back missing the app service key refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_COMPOSE_DOMAINS_SERVICE_NAME_OVERRIDE
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "no 'app' service key" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [domain service absent] did not name the absent service key -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "otherservice" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [domain service absent] did not name which services WERE present -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 37. DOMAIN-SERVICE-EXTRA-REFUSES -- the read-back carries "app" PLUS
+#     an unexpected second service key -- must refuse, naming it, never
+#     guess which one is authoritative (team-lead item 1: refuse if a
+#     second service key appears).
+FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE="etl"
+run_case "docker_compose_domains read-back with an unexpected extra service key refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_COMPOSE_DOMAINS_EXTRA_SERVICE
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "unexpected extra service key" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [domain service extra] did not name the unexpected-extra predicate -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "etl" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [domain service extra] did not name the extra service key -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 38. DOMAIN-ARRAY-FORM-ALSO-PASSES -- the read-back uses the PATCH's
+#     OWN array shape instead of the measured object-string shape
+#     (team-lead: "the API might change") -- must still succeed, proving
+#     the tolerance, not just the measured-shape path.
+FAKE_COMPOSE_DOMAINS_READBACK_SHAPE="array"
+run_case "docker_compose_domains read-back in array form also passes" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_COMPOSE_DOMAINS_READBACK_SHAPE
+
+# 39. DOMAIN-FACT15-EXACT-BYTES-PARSED -- FACT-15's own exact measured
+#     bytes (extracted live above, zero retyped copies), fed VERBATIM
+#     through the real parser via FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE.
+#     ROOT_DOMAIN here is fake-domain.test (this fence own fixed test
+#     domain), not pfindash.com, so this CANNOT match the intended set
+#     -- the point is proving the PARSE succeeds against the real
+#     measured production bytes (reaching DOMAIN_SET_MISMATCH, never
+#     DOMAIN_READBACK_UNPARSEABLE/DOMAIN_SERVICE_ABSENT) and that the
+#     reported "extra" domains are the CORRECTLY PARSED pfindash.com
+#     set, not the raw JSON blob treated as one nonsense domain (the
+#     original run-21 defect, reproduced here against the literal bytes
+#     that broke it live).
+FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE="$FACT15_RAW"
+run_case "FACT-15's exact measured bytes parse correctly (mismatch on domain identity, not on parse failure)" 1 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_COMPOSE_DOMAINS_RAW_OVERRIDE
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "does not exactly equal the intended set" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [FACT-15 exact bytes] did not reach the exact-set mismatch path -- parse likely failed structurally instead. Captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "https://pfindash.com,https://www.pfindash.com" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [FACT-15 exact bytes] the reported extra-domains set was not the correctly-parsed pfindash.com set from FACT-15's own bytes -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
 fi
 
 if [[ $FAIL -ne 0 ]]; then

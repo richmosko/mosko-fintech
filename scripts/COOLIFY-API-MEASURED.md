@@ -282,3 +282,23 @@ referenced.
   4. `$s->backup_failure_discord_notifications` → **true** (Coolify's own default; the Sec PR #871 F1 ruling — write `false` — had not yet been applied on the box at measurement time).
 - **Result:** confirms the one premise PR #873's F-1 fix (`array_key_exists($col, $s->getAttributes())` guard in `read_state()`) rests on: `getAttributes()` genuinely omits a key for a column that isn't a real DB column on this Coolify/Eloquent version, and a bare `$s->$shortName` read on that same absent key returns `null`, not an exception and not a coerced `false` unless the calling code does that coercion itself (which is exactly the bug PR #873 fixed). Closes the caveat `scripts/ci/fence-coolify-discord-notify-strikes.sh`'s scenarios 30–33 state explicitly (those scenarios drive the fake-ssh transport with a hardcoded token/value and can only prove bash reacts correctly GIVEN that signal — they cannot exercise real PHP, since this fence has no PHP runtime). This measurement is the missing PHP-side half.
 - **NOT measured:** any other Eloquent model's `getAttributes()` behavior, any Coolify version other than 4.3.18, or `$fillable`'s write-side omission behavior beyond what FACT-13 already records (this fact is read-only).
+
+---
+
+## COOLIFY-FACT-15 — `docker_compose_domains` reads back as a JSON string whose content is an object keyed by service name, not the array shape the PATCH sends
+
+- **Date:** 2026-09-22 ~17:10Z (team-lead)
+- **Coolify version:** 4.3.18
+- **Box:** production (cax21)
+- **Build pack:** `dockercompose` (measured on `pfin-app`)
+- **Exact measurement:** `GET /api/v1/applications/<uuid>` immediately after a `PATCH` with body `{"docker_compose_domains": [{"name": "app", "domain": "https://pfindash.com,https://www.pfindash.com"}]}` had already returned HTTP 200.
+- **Result:** `docker_compose_domains` in the GET response is a **string**, whose own content (after the outer JSON parse already unescapes it once) is the literal text:
+
+  ```
+  {"app":{"domain":"https://pfindash.com,https://www.pfindash.com"}}
+  ```
+
+  i.e. a JSON **object** keyed by compose service name, each value itself an object with a `domain` key carrying the same comma-separated URL list the PATCH sent — NOT the flat comma-separated string, and NOT the array-of-`{name,domain}` shape the PATCH itself accepts. The underlying DB column holds the identical text (confirmed via a separate read). `fqdn` remained the Coolify-assigned sslip.io default (unrelated to this field); `ports_exposes` read back `"3000"` (correct, from the same run's ports_exposes PATCH).
+- **Defect this corrects:** `scripts/assign-app-domain.sh`'s original read-back check treated the raw `docker_compose_domains` string AS the domain list and split it on commas directly — against the real value above, that produces a single nonsense "domain" equal to the whole JSON blob, which can never equal the intended set. The PATCH itself was correct (Coolify accepted and stored the write); only the read-back PARSER was wrong. Run 21 (`--only dns --confirm-cutover`, main `bb3ee6eb`) hit this live: `FAIL docker_compose_domains PATCH 200'd but the read-back domain SET does not exactly equal the intended set -- live='{"app":{"domain":"https:\/\/pfindash.com,https:\/\/www.pfindash.com"}}' ...` (log: `temp/runlogs-2026-09-21/realrun21-dns.clean.log`).
+- **Fix landed:** the read-back now `json.loads()`s the string a SECOND time (the outer `api()` helper's own `json.loads()` on the whole HTTP response body already unescapes it once) to get the real object, selects the target service key, and compares that service's own `domain` value (split on commas) as an exact SET against the intended domains — the same Sec F-4 exact-set discipline this script already applied, now pointed at the correct field. Tolerates the array shape too (in case a future Coolify version reads back what it was sent), and refuses by name if the target service key is absent or an unexpected second service key is present, rather than guessing which one is authoritative.
+- **NOT measured:** whether any OTHER `docker_compose_domains`-consuming endpoint or Coolify version returns the array shape instead of this measured object-string shape — the read-back parser tolerates it defensively, but only THIS shape has actually been observed live.

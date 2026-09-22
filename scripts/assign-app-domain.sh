@@ -98,20 +98,25 @@
 #     `{"name": "<compose service>", "domain": "<comma-separated
 #     URLs>"}` -- this script PATCHes exactly one element, name="app"
 #     (this repo's own api/docker-compose.yaml service name).
-#   READ-BACK ASYMMETRY (COOLIFY-FACT-06, same source, worth stating
-#     explicitly since it shapes the read-back check below): the WRITE
-#     shape is an array; the RESPONSE model's own `docker_compose_domains`
-#     field is documented as a plain nullable STRING, not an array --
-#     Coolify evidently serializes it differently for read than it
-#     accepts it for write. The exact runtime string shape is UNMEASURED
-#     -- the read-back below splits the live comma-separated string and
-#     compares it as a SET against the intended domain set (Sec F-4, PR
-#     #866 review: a substring/containment check passes even with extra
-#     domains present, or on a superstring near-miss like
-#     "notexample.com" containing "example.com" -- neither means this
-#     app now serves EXACTLY the intended domains), and logs the raw
-#     field so a future run turns this into a measured fact (append it to
-#     COOLIFY-API-MEASURED.md).
+#   READ-BACK ASYMMETRY (COOLIFY-FACT-06/15) -- the WRITE shape is an
+#     array; the RESPONSE model's own `docker_compose_domains` field is
+#     documented as a plain nullable STRING, not an array. MEASURED
+#     2026-09-22 ~17:10Z (COOLIFY-FACT-15, run 21 hit this live): the
+#     runtime string content is itself a JSON OBJECT keyed by compose
+#     service name (`{"app":{"domain":"https://a,https://b"}}`), NOT a
+#     flat comma-separated list -- the original read-back parser
+#     (splitting the raw string on commas directly) produced a single
+#     nonsense "domain" equal to the whole JSON blob and could never
+#     match. The read-back below now `json.loads()`s the string a
+#     SECOND time, selects the target service key, and compares ITS
+#     `domain` value (split on commas) as a SET against the intended
+#     domain set (Sec F-4, PR #866 review: a substring/containment check
+#     passes even with extra domains present, or on a superstring
+#     near-miss like "notexample.com" containing "example.com" --
+#     neither means this app now serves EXACTLY the intended domains),
+#     refusing by name if the service key is absent or an unexpected
+#     second one is present -- see COOLIFY-FACT-15 for the full raw
+#     strings.
 #   NO TINKER FALLBACK HERE (Sec explicit instruction, PR #866 review):
 #     if docker_compose_domains cannot actually route traffic, this
 #     script STOPS -- a new tinker-write proposal goes to Sec FIRST, it
@@ -827,7 +832,7 @@ set -e
 TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
 python3 - "\$TOKEN" "\$app_uuid" "\$service" "\$target_domain" <<'PYEOF'
 $PY_API_HELPER
-import sys
+import sys, json
 token, uuid, service, target = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 status, body = api_allow_status(token, "PATCH", f"/applications/{uuid}",
     {"docker_compose_domains": [{"name": service, "domain": target}]}, 422)
@@ -836,21 +841,74 @@ if status == 422:
     print((body or "")[:500].replace("\n", " "))
     sys.exit(0)
 readback = api(token, "GET", f"/applications/{uuid}")
-live = readback.get("docker_compose_domains") or ""
+live_raw = readback.get("docker_compose_domains") or ""
 print("PATCH_OK")
-print(live)
+print(live_raw)
 print(readback.get("fqdn") or "")
-# Sec F-4 (PR #866 review): a CONTAINS($ROOT_DOMAIN) check passes even
-# with EXTRA domains present in the live comma-separated list, or on a
-# superstring near-miss (e.g. "notexample.com" contains "example.com")
-# -- neither means this app now serves EXACTLY the domains intended.
-# Compare SETS, not substrings, and say precisely what differs.
-intended_set = {d.strip() for d in target.split(",") if d.strip()}
-live_set = {d.strip() for d in live.split(",") if d.strip()}
-if live_set != intended_set:
-    print("DOMAIN_SET_MISMATCH")
-    print(",".join(sorted(intended_set - live_set)) or "-")
-    print(",".join(sorted(live_set - intended_set)) or "-")
+
+# MEASURED 2026-09-22 ~17:10Z, Coolify 4.3.18 (COOLIFY-FACT-15): the
+# read-back is NOT a plain comma-separated domain list -- it is a JSON
+# STRING whose own content is a JSON OBJECT keyed by compose service
+# name, e.g. the outer field value equals the TEXT
+# {"app":{"domain":"https://a,https://b"}} (already unescaped once by
+# the OUTER json.loads() this function ran on the whole response body
+# -- a SECOND json.loads() below parses that text into the real
+# structure). The PATCH itself still sends the array form
+# [{"name": service, "domain": target}] -- Coolify accepts that shape
+# and stores/serves the object shape back; this is a genuine write/read
+# asymmetry, not a bug in the write. normalize_domains() below tolerates
+# BOTH the measured object form and the array form (Coolify might
+# change this later), rather than assuming only one shape forever.
+def normalize_domains(raw):
+    if raw in (None, ""):
+        return {}
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    else:
+        parsed = raw
+    out = {}
+    if isinstance(parsed, dict):
+        for svc, entry in parsed.items():
+            dom = entry.get("domain", "") if isinstance(entry, dict) else ""
+            out[svc] = {d.strip() for d in dom.split(",") if d.strip()}
+    elif isinstance(parsed, list):
+        for entry in parsed:
+            svc = entry.get("name") if isinstance(entry, dict) else None
+            dom = entry.get("domain", "") if isinstance(entry, dict) else ""
+            if svc:
+                out[svc] = {d.strip() for d in dom.split(",") if d.strip()}
+    else:
+        return None
+    return out
+
+services = normalize_domains(live_raw)
+if services is None:
+    print("DOMAIN_READBACK_UNPARSEABLE")
+    print(str(live_raw)[:300].replace("\n", " "))
+elif service not in services:
+    print("DOMAIN_SERVICE_ABSENT")
+    print(",".join(sorted(services.keys())) or "-")
+elif len(services) > 1:
+    print("DOMAIN_SERVICE_UNEXPECTED_EXTRA")
+    print(",".join(sorted(k for k in services if k != service)))
+else:
+    # Sec F-4 (PR #866 review): a CONTAINS($ROOT_DOMAIN) check passes
+    # even with EXTRA domains present in the live comma-separated list,
+    # or on a superstring near-miss (e.g. notexample.com contains
+    # example.com) -- neither means this app now serves EXACTLY the
+    # domains intended. Compare SETS, not substrings, say precisely
+    # what differs.
+    intended_set = {d.strip() for d in target.split(",") if d.strip()}
+    live_set = services[service]
+    if live_set != intended_set:
+        print("DOMAIN_SET_MISMATCH")
+        print(",".join(sorted(intended_set - live_set)) or "-")
+        print(",".join(sorted(live_set - intended_set)) or "-")
+    else:
+        print("DOMAIN_SET_OK")
 PYEOF
 REMOTE
 )"
@@ -862,12 +920,37 @@ fi
 NEW_COMPOSE_DOMAINS="$(sed -n '2p' <<<"$PATCH_OUT")"
 NEW_FQDN_AFTER_COMPOSE_PATCH="$(sed -n '3p' <<<"$PATCH_OUT")"
 DOMAIN_SET_CHECK="$(sed -n '4p' <<<"$PATCH_OUT")"
-if [[ "$DOMAIN_SET_CHECK" == "DOMAIN_SET_MISMATCH" ]]; then
-  MISSING_DOMAINS="$(sed -n '5p' <<<"$PATCH_OUT")"
-  EXTRA_DOMAINS="$(sed -n '6p' <<<"$PATCH_OUT")"
-  die "docker_compose_domains PATCH 200'd but the read-back domain SET does not exactly equal the intended set -- live='$NEW_COMPOSE_DOMAINS' intended='$COOLIFY_TARGET_DOMAIN' (missing: $MISSING_DOMAINS; extra: $EXTRA_DOMAINS) -- a substring/containment check would have passed this silently (extra domains route real traffic this script never intended; a superstring near-miss like 'notexample.com' containing 'example.com' would also have passed). Investigate before treating step 9 as done; do not assume success from a 200 alone."
-fi
-ok "docker_compose_domains PATCH read-back domain SET exactly matches intended: $NEW_COMPOSE_DOMAINS"
+# MEASURED 2026-09-22 ~17:10Z (COOLIFY-FACT-15): the read-back is a JSON
+# string whose own content is a JSON object keyed by compose service
+# name, not a plain comma-separated list -- the python block above
+# parses both that measured shape and the array shape the PATCH itself
+# sends (tolerant of either), so this bash side only ever sees one of
+# these five named result tokens, never raw JSON to re-parse itself.
+case "$DOMAIN_SET_CHECK" in
+  DOMAIN_SET_OK)
+    ;;
+  DOMAIN_READBACK_UNPARSEABLE)
+    RAW_TAIL="$(sed -n '5p' <<<"$PATCH_OUT")"
+    die "docker_compose_domains PATCH 200'd but the read-back could not be parsed as JSON (even after accounting for the field's own string-of-JSON shape, COOLIFY-FACT-06/15) -- raw: '$RAW_TAIL'. Investigate before treating step 9 as done."
+    ;;
+  DOMAIN_SERVICE_ABSENT)
+    OTHER_SERVICES="$(sed -n '5p' <<<"$PATCH_OUT")"
+    die "docker_compose_domains PATCH 200'd but the read-back has no '$APP_COMPOSE_SERVICE' service key -- services present: $OTHER_SERVICES. Investigate before treating step 9 as done."
+    ;;
+  DOMAIN_SERVICE_UNEXPECTED_EXTRA)
+    OTHER_SERVICES="$(sed -n '5p' <<<"$PATCH_OUT")"
+    die "docker_compose_domains PATCH 200'd but the read-back carries an unexpected extra service key beyond '$APP_COMPOSE_SERVICE': $OTHER_SERVICES -- refusing to guess which service is authoritative. Investigate before treating step 9 as done."
+    ;;
+  DOMAIN_SET_MISMATCH)
+    MISSING_DOMAINS="$(sed -n '5p' <<<"$PATCH_OUT")"
+    EXTRA_DOMAINS="$(sed -n '6p' <<<"$PATCH_OUT")"
+    die "docker_compose_domains PATCH 200'd but the read-back domain SET for '$APP_COMPOSE_SERVICE' does not exactly equal the intended set -- live='$NEW_COMPOSE_DOMAINS' intended='$COOLIFY_TARGET_DOMAIN' (missing: $MISSING_DOMAINS; extra: $EXTRA_DOMAINS) -- a substring/containment check would have passed this silently (extra domains route real traffic this script never intended; a superstring near-miss like 'notexample.com' containing 'example.com' would also have passed). Investigate before treating step 9 as done; do not assume success from a 200 alone."
+    ;;
+  *)
+    die "docker_compose_domains PATCH 200'd but this script's own read-back check printed an unrecognised result token ('$DOMAIN_SET_CHECK') -- refusing to guess whether the write succeeded."
+    ;;
+esac
+ok "docker_compose_domains PATCH read-back domain SET for '$APP_COMPOSE_SERVICE' exactly matches intended: $NEW_COMPOSE_DOMAINS"
 info "app-level fqdn after this PATCH: ${NEW_FQDN_AFTER_COMPOSE_PATCH:-<empty>} -- INFORMATIONAL ONLY (whether Coolify derives/mirrors fqdn from docker_compose_domains is UNMEASURED; this script's success does not depend on it)."
 
 # Post-assignment container-env read (team-lead, Sec-adjacent ask) --
