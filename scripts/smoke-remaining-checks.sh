@@ -72,7 +72,10 @@
 #     READ-ONLY check). Production may hold zero real tenant rows, or it
 #     may already hold real financial data:
 #       - Every `pfin.*` table carrying a `users_id` column is discovered
-#         LIVE from information_schema.columns (never a hand-maintained
+#         LIVE from pg_attribute (never information_schema.columns --
+#         that view is role-filtered, same premise Sec had removed from
+#         the privilege checks below; pg_attribute is catalog-level and
+#         does not depend on who is asking. Never a hand-maintained
 #         list -- the B-1 dynamic-enumeration convention
 #         scripts/pgrst-exposure-gates.sh already established).
 #       - For each discovered table: `pg_class.relrowsecurity = true`
@@ -236,6 +239,32 @@ STACK_APP_NAME="${STACK_APP_NAME:-pfin-supabase-stack}"
 SIBLING_APP_NAME="${SIBLING_APP_NAME:-pfin-app}"
 COMPOSE_SERVICE="${COMPOSE_SERVICE:-app}"
 
+# Sec-RATIFIED 2026-09-22 (all four). RLS on + ZERO policies + zero
+# authenticated/anon grant is the ratified posture for these tables,
+# not a coverage gap: 026:197/204-205, 027:169/175-176,
+# 015:487/626 (named a deliberate exclusion at 025:180-182), and
+# 111:622/628. Default-deny is STRICTER than any users_id policy, and
+# per 111:511 adding an authenticated read policy ENDS that table's
+# aal2-clause exemption. ADDING TO THIS ARRAY IS A JOINT-REVIEW ACT
+# (ADR-011 D1/D2 surface) -- it must not grow without Sec review.
+#
+# A table Sec later rules a real gap on is REMOVED so this leg FAILS on
+# it again. A table that later gains a real policy moves out of
+# DENY-ALL on its own (reported INFO, not removed by hand -- see LEG 3
+# below). A table with 0 policies NOT on this list is FAILED
+# unconditionally, in the enumeration loop itself -- never a generic
+# "0 policies + authenticated sees 0 rows => DENY-ALL" rule, which
+# would bless a forgotten policy.
+RLS_DENY_ALL_EXPECTED=(audit_log linked_source_sync_audit mfa_recovery_attempt mfa_recovery_code)
+
+is_deny_all_expected() {
+  local t="$1" x
+  for x in "${RLS_DENY_ALL_EXPECTED[@]}"; do
+    [[ "$x" == "$t" ]] && return 0
+  done
+  return 1
+}
+
 die()   { printf '\n\033[31mFAIL\033[0m  %s\n' "$*" >&2; exit 1; }
 ok()    { printf '\033[32m  ok\033[0m  %s\n' "$*"; }
 info()  { printf '      %s\n' "$*"; }
@@ -303,6 +332,7 @@ if len(matches) != 1:
 a = matches[0]
 print(a["uuid"])
 print(a.get("fqdn") or "")
+print(a.get("docker_compose_domains") or "")
 PYEOF
 REMOTE
 }
@@ -315,7 +345,8 @@ ok "resolved '$STACK_APP_NAME' -> $STACK_UUID"
 SIBLING_RESOLVED="$(resolve_app "$SIBLING_APP_NAME")" || die "could not resolve '$SIBLING_APP_NAME'"
 SIBLING_UUID="$(sed -n 1p <<<"$SIBLING_RESOLVED")"
 SIBLING_FQDN="$(sed -n 2p <<<"$SIBLING_RESOLVED")"
-ok "resolved '$SIBLING_APP_NAME' -> $SIBLING_UUID (fqdn: ${SIBLING_FQDN:-<none>})"
+SIBLING_COMPOSE_DOMAINS="$(sed -n 3p <<<"$SIBLING_RESOLVED")"
+ok "resolved '$SIBLING_APP_NAME' -> $SIBLING_UUID (fqdn: ${SIBLING_FQDN:-<none>}, docker_compose_domains: ${SIBLING_COMPOSE_DOMAINS:-<none>})"
 
 find_running_container() {
   # find_running_container <project-uuid> <compose-service> -- prints the
@@ -504,7 +535,30 @@ step "Leg 3/4 -- RLS isolation: anon/authenticated/service_role visibility shape
 RLS_STATUS="VERIFIED"
 RLS_MSGS=()
 
-RLS_ENUM_QUERY="select c.relname, c.relrowsecurity::text, (select count(*) from pg_policies p where p.schemaname = n.nspname and p.tablename = c.relname)::text, has_table_privilege('anon', c.oid, 'SELECT')::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and c.relkind in ('r','p') and exists (select 1 from information_schema.columns col where col.table_schema = 'pfin' and col.table_name = c.relname and col.column_name = 'users_id') order by c.relname;"
+# Sec F-1 (round-2 review, PR #880): the original enumeration asserted
+# anon's TABLE-level grant only -- authenticated's table-level grant and
+# BOTH roles' COLUMN-level grants (has_any_column_privilege subsumes a
+# table-level grant too, per Sec's own note) were invisible to it. A
+# grant added later (e.g. `grant select on pfin.mfa_recovery_code to
+# authenticated`, or a column-scoped grant per
+# 026_mfa_recovery_code.sql:222's own pattern) would still read 0 rows
+# under RLS with 0 policies -- the behavioral read can't see the grant,
+# only the grant's absence can be asserted directly. Four privilege
+# columns, all fetched here in the one enumeration query (no second
+# round trip): anon/authenticated at table level, then anon/authenticated
+# at column level, in that order.
+# Sec (non-gating flag, PR #880 round-3 GREEN): table DISCOVERY used
+# information_schema.columns, a view that shows only columns the
+# CURRENT ROLE can see -- the same role-visibility premise Sec had
+# already made us remove from the privilege checks (has_table_privilege/
+# has_any_column_privilege don't have it). It returns the complete set
+# only because psql_admin connects as supabase_admin, a superuser; if
+# that ever changes, this view returns FEWER tables, the loop checks
+# fewer tables, and the leg reports OK -- a fail-open on the leg's
+# COVERAGE, not on any single table's verdict (the empty-set guard below
+# catches total loss, not partial). pg_attribute is catalog-level, not
+# role-filtered -- discovery no longer depends on who is asking.
+RLS_ENUM_QUERY="select c.relname, c.relrowsecurity::text, (select count(*) from pg_policies p where p.schemaname = n.nspname and p.tablename = c.relname)::text, has_table_privilege('anon', c.oid, 'SELECT')::text, has_table_privilege('authenticated', c.oid, 'SELECT')::text, has_any_column_privilege('anon', c.oid, 'SELECT')::text, has_any_column_privilege('authenticated', c.oid, 'SELECT')::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and c.relkind in ('r','p') and exists (select 1 from pg_attribute a where a.attrelid = c.oid and a.attname = 'users_id' and a.attnum > 0 and not a.attisdropped) order by c.relname;"
 
 set +e
 RLS_ENUM="$(psql_admin "$RLS_ENUM_QUERY")"
@@ -523,7 +577,8 @@ elif [[ -z "$RLS_ENUM" ]]; then
   RLS_MSGS+=("zero pfin tables with a users_id column were discovered -- this cannot be right for a stack running these migrations. The enumeration query itself is almost certainly broken; treating an empty result as a pass would be exactly the invariance-is-blindness failure this repo's own testing discipline forbids.")
 else
   TABLES=()
-  while IFS='|' read -r tbl rls polcount anonsel; do
+  ALLOWLIST_CANDIDATES=()
+  while IFS='|' read -r tbl rls polcount anonsel authsel anoncol authcol; do
     [[ -z "$tbl" ]] && continue
     if [[ ! "$tbl" =~ ^[a-z_][a-z0-9_]*$ ]]; then
       RLS_STATUS="FAILED"
@@ -535,13 +590,42 @@ else
       RLS_STATUS="FAILED"
       RLS_MSGS+=("pfin.$tbl: relrowsecurity=$rls, expected true -- RLS is not enabled on a table carrying users_id.")
     fi
-    if [[ "$polcount" -lt 1 ]]; then
-      RLS_STATUS="FAILED"
-      RLS_MSGS+=("pfin.$tbl: 0 policies in pg_policies -- RLS may be enabled but nothing enforces tenant scoping.")
-    fi
     if [[ "$anonsel" != "false" ]]; then
       RLS_STATUS="FAILED"
       RLS_MSGS+=("pfin.$tbl: anon holds SELECT (has_table_privilege=$anonsel) -- anon must hold no grant on any pfin relation.")
+    fi
+    # Sec ruling (real-run 23 close-out, 2026-09-22): 0 policies is
+    # FAILED for any table not on RLS_DENY_ALL_EXPECTED, unconditionally
+    # -- never a generic "0 policies + authenticated sees 0 rows =>
+    # DENY-ALL" rule, which would bless a forgotten policy on a table
+    # that was never meant to be service_role-only. This decision does
+    # not wait on, and is never rescued by, the behavioral read below.
+    if [[ "$polcount" -lt 1 ]]; then
+      if is_deny_all_expected "$tbl"; then
+        ALLOWLIST_CANDIDATES+=("$tbl")
+        # Sec F-1 (round-2 review, PR #880): a DENY-ALL-allowlisted table
+        # must hold ZERO grant to anon or authenticated at BOTH table
+        # AND column level -- has_any_column_privilege() subsumes a
+        # table-level grant too, so all four columns are checked
+        # separately so the failure message can name which shape was
+        # found (a column-scoped grant is a live idiom in this repo,
+        # 026_mfa_recovery_code.sql:222, not a hypothetical).
+        if [[ "$authsel" != "false" ]]; then
+          RLS_STATUS="FAILED"
+          RLS_MSGS+=("pfin.$tbl: DENY-ALL-allowlisted but authenticated holds table-level SELECT (has_table_privilege=$authsel) -- the service_role-only design this table's own migration documents requires zero authenticated grant, not just zero anon grant.")
+        fi
+        if [[ "$anoncol" != "false" ]]; then
+          RLS_STATUS="FAILED"
+          RLS_MSGS+=("pfin.$tbl: DENY-ALL-allowlisted but anon holds a column-level SELECT grant (has_any_column_privilege=$anoncol) -- a column-scoped grant (this table's own migration pattern uses column-scoped grants for service_role) must never extend to anon.")
+        fi
+        if [[ "$authcol" != "false" ]]; then
+          RLS_STATUS="FAILED"
+          RLS_MSGS+=("pfin.$tbl: DENY-ALL-allowlisted but authenticated holds a column-level SELECT grant (has_any_column_privilege=$authcol) -- a column-scoped grant (this table's own migration pattern uses column-scoped grants for service_role) must never extend to authenticated.")
+        fi
+      else
+        RLS_STATUS="FAILED"
+        RLS_MSGS+=("pfin.$tbl: 0 policies in pg_policies and NOT in RLS_DENY_ALL_EXPECTED -- either this is a real policy-coverage gap (add a policy), or it is meant to be service_role-only and Sec needs to rule so it can be added to the allowlist by migration. Treating as FAILED until then.")
+      fi
     fi
   done <<<"$RLS_ENUM"
   info "discovered ${#TABLES[@]} users_id-bearing pfin table(s): ${TABLES[*]}"
@@ -572,6 +656,12 @@ else
       if [[ $first -eq 1 ]]; then PRIV_SQL="select 'PRIV' as ctx, '$t' as t, count(*) as n from pfin.\"$t\""; first=0
       else PRIV_SQL="$PRIV_SQL union all select 'PRIV', '$t', count(*) from pfin.\"$t\""; fi
     done
+    # Grant-conjunction checking (table+column level, both roles) now
+    # happens upstream in the enumeration loop above, against the SAME
+    # RLS_ENUM_QUERY read that already carries all four privilege
+    # columns -- no second round trip needed (Sec F-1, round-2 review,
+    # PR #880: originally a separate GRANT_SQL query here; folded into
+    # the enumeration query instead).
     AUTH_SQL=""
     first=1
     for t in "${TABLES[@]}"; do
@@ -594,9 +684,11 @@ else
       # "CTX|table|count" output instead of a hash map.
       PROVEN_COUNT=0
       INCONCLUSIVE_COUNT=0
+      DENY_ALL_COUNT=0
       for t in "${TABLES[@]}"; do
         p="$(printf '%s\n' "$ZERO_CTX_OUT" | awk -F'|' -v t="$t" '$1=="PRIV" && $2==t {print $3; exit}')"
         a="$(printf '%s\n' "$ZERO_CTX_OUT" | awk -F'|' -v t="$t" '$1=="AUTH" && $2==t {print $3; exit}')"
+        polcount="$(printf '%s\n' "$RLS_ENUM" | awk -F'|' -v t="$t" '$1==t {print $3; exit}')"
         if [[ -z "$p" || -z "$a" ]]; then
           RLS_STATUS="FAILED"
           RLS_MSGS+=("pfin.$t: missing a privileged or authenticated row-count reading in the combined query output -- precondition, treat as unverified.")
@@ -605,18 +697,56 @@ else
         if [[ "$a" != "0" ]]; then
           RLS_STATUS="FAILED"
           RLS_MSGS+=("pfin.$t: $a row(s) visible to a session with NO tenant identity established (SET ROLE authenticated, no request.jwt.claims) -- expected 0. This is a live RLS bypass, not a fixture artifact.")
-        elif [[ "$p" -gt 0 ]]; then
-          PROVEN_COUNT=$((PROVEN_COUNT + 1))
+          continue
+        fi
+        if [[ "$polcount" -ge 1 ]]; then
+          # POLICY-SCOPED -- at least one real pg_policies row.
+          if is_deny_all_expected "$t"; then
+            info "pfin.$t: in RLS_DENY_ALL_EXPECTED but carries $polcount polic(ies) now -- POLICY-SCOPED, not DENY-ALL any more (INFO, not a failure; consider removing it from the allowlist once Sec confirms)."
+          fi
+          if [[ "$p" -gt 0 ]]; then
+            PROVEN_COUNT=$((PROVEN_COUNT + 1))
+          else
+            INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+          fi
         else
-          INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+          # 0-policy table -- the enumeration loop above already FAILED
+          # and left this whole block for any table not in
+          # RLS_DENY_ALL_EXPECTED, so reaching here means $t IS
+          # allowlisted. Defensive re-check anyway (fail closed on a
+          # future logic change; never trust "should be unreachable").
+          if ! is_deny_all_expected "$t"; then
+            RLS_STATUS="FAILED"
+            RLS_MSGS+=("pfin.$t: INTERNAL: reached DENY-ALL verification with 0 policies but is NOT in RLS_DENY_ALL_EXPECTED -- this should be unreachable (the enumeration loop should have failed it already). Treating as FAILED, not a pass.")
+            continue
+          fi
+          # The FULL grant conjunction (RLS on, 0 policies, anon+
+          # authenticated zero grant at table AND column level) was
+          # already asserted in the enumeration loop above, against this
+          # same table's row from RLS_ENUM -- reaching here with
+          # RLS_STATUS still VERIFIED means it held. The behavioral half
+          # (authenticated sees 0 of >0 real rows) only PROVES anything
+          # when the privileged baseline is non-zero (Sec requirement
+          # 4) -- on an empty table the structural conjunction is
+          # VERIFIED but the row observation is INCONCLUSIVE, never
+          # reported as DENY-ALL fully demonstrated.
+          DENY_ALL_COUNT=$((DENY_ALL_COUNT + 1))
+          CONJUNCTION_TERMS="RLS on, 0 policies, and all four privilege terms false (anon table-level, authenticated table-level, anon column-level, authenticated column-level)"
+          if [[ "$p" -gt 0 ]]; then
+            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS) AND authenticated sees 0 of $p row(s) visible to supabase_admin -- ALLOWLISTED, isolation demonstrated."
+            PROVEN_COUNT=$((PROVEN_COUNT + 1))
+          else
+            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS); row observation INCONCLUSIVE (privileged count is 0 too -- nothing to isolate, never reported as DENY-ALL fully demonstrated on an empty table)."
+            INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+          fi
         fi
       done
       if [[ "$RLS_STATUS" == "VERIFIED" ]]; then
         if [[ "$PROVEN_COUNT" -eq 0 ]]; then
           RLS_STATUS="SKIPPED"
-          RLS_MSGS+=("every discovered table holds zero rows -- no rows exist to be isolated, so isolation is UNPROVEN, not proven absent. RLS-enabled/policy-present/anon-zero-grant all checked structurally and hold; the behavioral zero-context read has nothing to demonstrate on an empty table. Re-run once at least one table holds real (or synthetic-but-real) tenant data.")
+          RLS_MSGS+=("every discovered table holds zero rows -- no rows exist to be isolated, so isolation is UNPROVEN, not proven absent. RLS-enabled/anon-zero-grant all checked structurally and hold; the behavioral zero-context read has nothing to demonstrate on an empty table. Re-run once at least one table holds real (or synthetic-but-real) tenant data.")
         else
-          ok "RLS: every discovered table -- RLS on, >=1 policy, anon zero-grant; $PROVEN_COUNT table(s) PROVEN isolated (privileged count >0, authenticated sees 0), $INCONCLUSIVE_COUNT table(s) INCONCLUSIVE (empty, nothing to isolate)"
+          ok "RLS: every discovered table -- RLS on, anon zero-grant; $PROVEN_COUNT table(s) PROVEN isolated ($DENY_ALL_COUNT via allowlisted DENY-ALL, $((PROVEN_COUNT - DENY_ALL_COUNT)) via >=1 policy), $INCONCLUSIVE_COUNT table(s) INCONCLUSIVE (empty, nothing to isolate)"
         fi
       fi
     fi
@@ -641,6 +771,107 @@ if [[ "$RLS_STATUS" != "VERIFIED" ]]; then
   for m in "${RLS_MSGS[@]}"; do warn "RLS: $m"; done
 fi
 
+# derive_auth_host <docker_compose_domains raw string> <fqdn> <compose
+# service> -- LEG 4's own host-derivation step, corrected 2026-09-22 (run
+# 23): resolve_app()'s `fqdn` alone is Coolify's own default sslip.io URL
+# on this box (COOLIFY-FACT-04) once a real domain is assigned via
+# docker_compose_domains instead -- the OLD code built `https://$fqdn`
+# against a value that was ALREADY a full `http://...` URL, and never
+# looked at docker_compose_domains at all. Prints exactly two lines on
+# success ("<host>" then "<source>", source one of
+# docker_compose_domains/fqdn), or "REFUSED\n<reason>" / "NONE\n<empty>"
+# otherwise. normalize_domains() below is copied VERBATIM from
+# scripts/assign-app-domain.sh's own function of the same name
+# (COOLIFY-FACT-15 measured shape: the field reads back as a JSON STRING
+# whose own content is a JSON OBJECT keyed by compose service name) --
+# this repo's own sibling-script convention is a verbatim copy, never a
+# shared-library import (assign-app-domain.sh's own header cites its
+# api() helper as the precedent for that convention). Keep both copies
+# byte-identical if either one changes.
+derive_auth_host() {
+  local raw="$1" fqdn="$2" service="$3"
+  python3 - "$raw" "$fqdn" "$service" <<'PYEOF'
+import json, re, sys
+
+raw, fqdn, service = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# Verbatim copy of scripts/assign-app-domain.sh's own normalize_domains()
+# -- if that source changes, this copy is silently stale; check both.
+def normalize_domains(raw):
+    if raw in (None, ""):
+        return {}
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    else:
+        parsed = raw
+    out = {}
+    if isinstance(parsed, dict):
+        for svc, entry in parsed.items():
+            dom = entry.get("domain", "") if isinstance(entry, dict) else ""
+            out[svc] = {d.strip() for d in dom.split(",") if d.strip()}
+    elif isinstance(parsed, list):
+        for entry in parsed:
+            svc = entry.get("name") if isinstance(entry, dict) else None
+            dom = entry.get("domain", "") if isinstance(entry, dict) else ""
+            if svc:
+                out[svc] = {d.strip() for d in dom.split(",") if d.strip()}
+    else:
+        return None
+    return out
+
+HOSTNAME_RE = re.compile(
+    r'^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$'
+)
+
+def strip_scheme(url):
+    m = re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://(.*)$', url)
+    return m.group(1) if m else url
+
+services = normalize_domains(raw)
+if services is None and raw not in (None, ""):
+    print("REFUSED")
+    print(f"docker_compose_domains ('{raw[:200]}') could not be parsed (even after accounting for its own string-of-JSON shape, COOLIFY-FACT-06/15) -- refusing to guess a host.")
+    sys.exit(0)
+
+candidate = None
+# Named host_source, not "source" -- scripts/ci/fence-no-source-
+# credential-files.sh greps tree-wide for any line whose first token is
+# literally "source" (a shell-sourcing violation pattern), with no
+# language awareness; it cannot distinguish this Python assignment
+# inside a heredoc from a real `source $FILE` shell statement. Renamed
+# to stay out of that pattern's way rather than seeking an allowlist
+# exemption -- this was never a real sourcing hit to begin with.
+host_source = None
+if services and services.get(service):
+    candidate = sorted(services[service])[0]
+    host_source = "docker_compose_domains"
+elif fqdn:
+    candidate = fqdn
+    host_source = "fqdn"
+
+if not candidate:
+    print("NONE")
+    print("")
+    sys.exit(0)
+
+host = strip_scheme(candidate)
+if "://" in host:
+    print("REFUSED")
+    print(f"'{candidate}' (from {host_source}) still carries a scheme prefix after stripping -- refusing to build a URL against it.")
+    sys.exit(0)
+if not HOSTNAME_RE.match(host):
+    print("REFUSED")
+    print(f"derived host '{host}' (from {host_source}, raw value '{candidate}') is not hostname-shaped -- refusing to build a URL against it.")
+    sys.exit(0)
+
+print(host)
+print(host_source)
+PYEOF
+}
+
 # =====================================================================
 # LEG 4 -- auth login
 # =====================================================================
@@ -648,20 +879,30 @@ step "Leg 4/4 -- auth login"
 AUTH_STATUS="VERIFIED"
 AUTH_MSG=""
 
-if [[ -z "$SIBLING_FQDN" ]]; then
+AUTH_DERIVE="$(derive_auth_host "$SIBLING_COMPOSE_DOMAINS" "$SIBLING_FQDN" "$COMPOSE_SERVICE")"
+AUTH_DERIVE_1="$(sed -n 1p <<<"$AUTH_DERIVE")"
+AUTH_DERIVE_2="$(sed -n 2p <<<"$AUTH_DERIVE")"
+
+if [[ "$AUTH_DERIVE_1" == "NONE" ]]; then
   AUTH_STATUS="SKIPPED"
-  AUTH_MSG="no public domain assigned to '$SIBLING_APP_NAME' yet (the dns/cutover steps haven't run) -- auth-login cannot be exercised over a real domain. Re-run once a domain is assigned."
-  warn "auth login: $AUTH_MSG"
+  AUTH_MSG="no domain on '$SIBLING_APP_NAME' yet -- neither docker_compose_domains nor fqdn yields a usable host (the dns/cutover steps haven't run). Re-run once a domain is assigned."
+elif [[ "$AUTH_DERIVE_1" == "REFUSED" ]]; then
+  AUTH_STATUS="FAILED"
+  AUTH_MSG="host derivation refused: $AUTH_DERIVE_2"
 else
-  LOGIN_STATUS="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$SIBLING_FQDN/login" 2>/dev/null || true)"
-  [[ -n "$LOGIN_STATUS" ]] || { AUTH_STATUS="FAILED"; AUTH_MSG="the GET https://$SIBLING_FQDN/login probe produced no output at all -- local curl may be missing/broken, or the domain does not resolve/TLS-handshake. A precondition, not a reachability finding either way."; }
+  AUTH_HOST="$AUTH_DERIVE_1"
+  AUTH_SOURCE="$AUTH_DERIVE_2"
+  info "auth login: using host '$AUTH_HOST' (source: $AUTH_SOURCE)"
+
+  LOGIN_STATUS="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$AUTH_HOST/login" 2>/dev/null || true)"
+  [[ -n "$LOGIN_STATUS" ]] || { AUTH_STATUS="FAILED"; AUTH_MSG="the GET https://$AUTH_HOST/login probe produced no output at all -- local curl may be missing/broken, or the domain does not resolve/TLS-handshake. A precondition, not a reachability finding either way."; }
 
   if [[ "$AUTH_STATUS" != "FAILED" ]]; then
     if [[ "$LOGIN_STATUS" == "200" ]]; then
       ok "auth login: GET /login -> 200"
     else
       AUTH_STATUS="FAILED"
-      AUTH_MSG="GET https://$SIBLING_FQDN/login -> HTTP $LOGIN_STATUS, expected 200."
+      AUTH_MSG="GET https://$AUTH_HOST/login -> HTTP $LOGIN_STATUS, expected 200."
     fi
   fi
 
@@ -670,17 +911,17 @@ else
     # CSRF guard 403s a cross-origin-looking POST before the route's own
     # Zod validation ever runs -- see this file's own header for why.
     SIGNUP_STATUS="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-      -H "Origin: https://$SIBLING_FQDN" \
+      -H "Origin: https://$AUTH_HOST" \
       --data-urlencode "email=smoke-remaining-checks-invalid@example.invalid" \
-      "https://$SIBLING_FQDN/signup" 2>/dev/null || true)"
+      "https://$AUTH_HOST/signup" 2>/dev/null || true)"
     if [[ -z "$SIGNUP_STATUS" ]]; then
       AUTH_STATUS="FAILED"
-      AUTH_MSG="the POST https://$SIBLING_FQDN/signup probe produced no output at all -- precondition, not a validation finding."
+      AUTH_MSG="the POST https://$AUTH_HOST/signup probe produced no output at all -- precondition, not a validation finding."
     elif [[ "$SIGNUP_STATUS" == "400" ]]; then
       ok "auth login: POST /signup with a missing 'password' field -> 400 (Zod .strict() validation fires; no real account was created)"
     else
       AUTH_STATUS="FAILED"
-      AUTH_MSG="POST https://$SIBLING_FQDN/signup (missing password) -> HTTP $SIGNUP_STATUS, expected 400."
+      AUTH_MSG="POST https://$AUTH_HOST/signup (missing password) -> HTTP $SIGNUP_STATUS, expected 400."
     fi
   fi
 
@@ -733,8 +974,18 @@ REMOTE
     # exists; MANUAL is the honest ceiling, not a downgrade to chase away.
     AUTH_STATUS="MANUAL"
     AUTH_MSG="login page (200) / signup validation (400) / Resend send-acceptance all checked automatically and passed. The email-confirmation round-trip -- following the real link a confirmation email carries and confirming the session establishes -- requires reading an arbitrary recipient's real inbox, which no credential this repo holds grants; scripting it would mean creating a real account against production on every run. This is the one unavoidable by-hand step. See docs/deployment-runbook.md's unavoidable-manual list."
-    warn "auth login: $AUTH_MSG"
   fi
+fi
+
+# Every leg above sets AUTH_MSG on its own FAILED/SKIPPED/MANUAL branch but
+# does not print it inline any more (run 23: a FAILED set deep in the
+# if-chain above printed NOTHING -- the rest of the chain's own `if
+# AUTH_STATUS != FAILED` guards silently skipped every later warn call
+# too). One unconditional print here, same shape LEG 3's own trailing
+# "if RLS_STATUS != VERIFIED" block already uses, guarantees the message
+# reaches stdout/stderr exactly once regardless of which branch set it.
+if [[ "$AUTH_STATUS" != "VERIFIED" && -n "$AUTH_MSG" ]]; then
+  warn "auth login: $AUTH_MSG"
 fi
 
 # =====================================================================
