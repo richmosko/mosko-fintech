@@ -380,13 +380,32 @@ if [[ "$ARGS" == *".sslip.io"* ]]; then
   exit 0
 fi
 
-# --- Public HTTPS poll -----------------------------------------------------
+# --- Public HTTPS poll (domain_serves_result(), run-22 fix, predicate
+# CORRECTED TWICE per Sec review) ---------------------------------------
+# The real script's -w format now asks for THREE space-separated values
+# -- '%{http_code} %{ssl_verify_result} %{url_effective}' -- and uses
+# `-L --max-redirs 5` so this fixture models the FINAL post-redirect-
+# chain state directly (a full redirect-chain simulation is unnecessary
+# for exercising the script's own predicate). Defaults: ssl_verify=0
+# (verified) and effective = this exact request's own on-domain https
+# URL (ROOT_DOMAIN is a FENCE CONSTANT, always fake-domain.test, so
+# hardcoding it here is safe) -- so an EXISTING scenario that only sets
+# FAKE_APEX_CODE/FAKE_WWW_CODE (a plain 200) still passes unchanged.
+# FAKE_APEX_SSL_VERIFY/FAKE_WWW_SSL_VERIFY model TLS verification
+# failing independently of the status code -- Sec's round-1 point:
+# ssl_verify_result reads 0 on a transport failure too, so
+# FAKE_APEX_CODE=000 with the DEFAULT ssl_verify=0 (unchanged) is the
+# fixture's own positive control for "0 alone is not proof of a valid
+# cert". FAKE_APEX_EFFECTIVE_URL/FAKE_WWW_EFFECTIVE_URL model round-2's
+# hole: an off-domain redirect target, a scheme-downgraded (http://)
+# final URL, or a userinfo-bearing off-domain URL that would defeat a
+# naive host parse.
 if [[ "$ARGS" == *"https://www."* ]]; then
-  printf '%s' "${FAKE_WWW_CODE:-200}"
+  printf '%s %s %s' "${FAKE_WWW_CODE:-200}" "${FAKE_WWW_SSL_VERIFY:-0}" "${FAKE_WWW_EFFECTIVE_URL:-https://www.fake-domain.test/}"
   exit 0
 fi
 if [[ "$ARGS" == *"https://"* ]]; then
-  printf '%s' "${FAKE_APEX_CODE:-200}"
+  printf '%s %s %s' "${FAKE_APEX_CODE:-200}" "${FAKE_APEX_SSL_VERIFY:-0}" "${FAKE_APEX_EFFECTIVE_URL:-https://fake-domain.test/}"
   exit 0
 fi
 
