@@ -103,6 +103,25 @@
 # every scripts/*.sh file as committed, including
 # migrator-cutover-verify.sh's `{{println .}}` idiom, is clean.
 #
+# DOUBLE-QUOTED TEMPLATE COVERAGE (Sec #861 F-1 follow-up; ratified
+# 2026-09-21) -- verified by scratch-file strike, not committed as a
+# permanent fixture (matching this fence's own established convention:
+# no sibling fence-*-strikes.sh exists for it, or for fence-heredoc-
+# stdin-drain.sh / fence-boolean-cast-pairing.sh, the two siblings this
+# fence's own header already cites as sharing its structural/source-
+# literal shape). A scratch `scripts/*.sh` file containing
+# `sshx "docker inspect --format \"{{.State.Running}}\t{{.Id}}\" $CID"`
+# (the sshx-nested, once-escaped double-quote shape Sec's finding named
+# as the natural place one would appear) reddens at that exact line,
+# naming the bare backslash-t; the correct nested form,
+# `sshx "docker inspect --format \"{{.State.Running}}{{\"\t\"}}{{.Id}}\" $CID"`,
+# does not false-positive. A bare, non-nested `--format "..."` (no sshx
+# wrapper) is also covered and behaves identically to the single-quoted
+# case. NOT handled, deliberately (no live instance, no realistic call
+# shape found for it): a second level of escaping from being nested two
+# sshx/heredoc layers deep -- add a fourth CALL alternative the same way
+# if that shape ever appears.
+#
 # Structural / source-literal, same convention as fence-heredoc-stdin-
 # drain.sh and fence-boolean-cast-pairing.sh -- parses the tree's own
 # scripts/*.sh text and executes nothing.
@@ -121,12 +140,35 @@ trap 'rm -f "$PY_TMP"' EXIT
 cat > "$PY_TMP" <<'PYEOF'
 import re, sys, os
 
-# `docker inspect` ... `--format '<template>'`, template captured
-# non-greedily up to the next single quote. Deliberately requires the
+# `docker inspect` ... `--format '<template>'` OR `--format "<template>"`
+# (bare or once-escaped) -- Sec's #861 F-1 follow-up (PR #861 review;
+# ratified 2026-09-21): the single-quote-only form missed a double-
+# quoted template entirely (no live instance measured, but the natural
+# place to write one is inside an outer `sshx "..."` bash string, where
+# interpolating a shell variable into the format argument forces double
+# quotes -- and that outer wrapper forces the format argument's own
+# quotes to be escaped once, `\"..\"`, not left bare). Three
+# alternatives: single-quoted, bare double-quoted (a top-level, non-
+# nested `--format "..."`), and once-escaped double-quoted (the sshx-
+# nested `--format \"..\"` shape). All three tolerate an embedded escaped
+# quote inside the template's own content without ending the match early
+# -- needed because a Go template action written as `{{"\t"}}` becomes
+# `{{\"\t\"}}` once its own quotes share the same single level of
+# backslash-escaping as the format argument's outer delimiters (bash's
+# `\"` rule doesn't distinguish "this quote is a delimiter" from "this
+# quote is content" -- both are just one backslash before one doublequote
+# -- so the content pattern must accept `\"` freely and rely on the
+# template body never containing a stray, non-quote-paired backslash
+# right before the true closing delimiter, which the greedy repetition +
+# backtracking on the mandatory trailing delimiter guarantees). NOT
+# handled, and deliberately so (no live instance, no realistic call
+# shape found for it): a SECOND level of escaping from being nested two
+# sshx/heredoc layers deep -- if that shape appears, this fence needs a
+# fourth alternative, added the same way. Deliberately requires the
 # literal substring "docker inspect" on the same line as "--format" --
 # this is what keeps every docker ps/images/compose-ps --format site
 # structurally out of scope (see this fence's own header).
-CALL = re.compile(r"docker inspect(?:(?!--format).)*--format '([^']*)'")
+CALL = re.compile(r"docker inspect(?:(?!--format).)*--format (?:'([^']*)'|\"((?:[^\"\\]|\\.)*)\"|\\\"((?:[^\"\\]|\\.)*)\\\")")
 COMMENT_LINE = re.compile(r'^\s*#')
 
 # Sec option 2 (PR #861 review): a Go template action -- `{{...}}` --
@@ -148,7 +190,7 @@ def scan_file(path):
         if COMMENT_LINE.match(line):
             continue
         for m in CALL.finditer(line):
-            template = m.group(1)
+            template = next(g for g in m.groups() if g is not None)
             literal_only = ACTION.sub('', template)
             for esc in LITERAL_ESCAPE.finditer(literal_only):
                 findings.append((i + 1, esc.group(1), line.strip()))
