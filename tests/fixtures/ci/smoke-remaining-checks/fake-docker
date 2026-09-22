@@ -15,9 +15,13 @@
 #        relrowsecurity       -> RLS enumeration       -> $FAKE_RLS_ENUM
 #        set role authenticated -> RLS privileged-baseline + zero-context
 #                                   combined query (Sec F-1, PR #869
-#                                   review) -> $FAKE_ZERO_CTX, format
-#                                   "PRIV|table|count\nAUTH|table|count"
-#                                   per discovered table.
+#                                   review; DENY-ALL conjunction legs, Sec
+#                                   real-run-23 close-out) -> $FAKE_ZERO_CTX,
+#                                   format "PRIV|table|count\nAUTH|table|
+#                                   count" per discovered table, plus
+#                                   "COLGRANT|table|count" and
+#                                   "AUTHTBL|table|bool" for DENY-ALL
+#                                   allowlist candidates only.
 #        rolbypassrls         -> service_role BYPASSRLS -> $FAKE_BYPASSRLS
 #   4. `docker compose --project-name <uuid> exec -T auth node -e '...'`
 #      -- the Resend send-acceptance probe -- prints $FAKE_RESEND_OUT.

@@ -97,12 +97,20 @@
 #       only the Summary table -- this is the exact real-run-23 regression
 #       (a FAILED leg printed nothing before Summary).
 #   22. RLS-DENY-ALL-ALLOWLISTED -- a discovered table with RLS on, 0
-#       policies, anon zero-grant, privileged count >0, authenticated
-#       count 0, and its name IN RLS_DENY_ALL_EXPECTED -- reported as a
-#       distinct DENY-ALL/ALLOWLISTED line, NOT a failure.
+#       policies, anon zero-grant, authenticated zero table-grant, zero
+#       column-level grants, privileged count >0, authenticated count 0,
+#       and its name IN RLS_DENY_ALL_EXPECTED -- reported as a distinct
+#       DENY-ALL/ALLOWLISTED line, NOT a failure.
+#   22b/22c. RLS-DENY-ALL-ALLOWLISTED-{COLGRANT,AUTHTBL}-LEAK -- Sec's
+#       added conjunction legs (real-run 23 close-out): the SAME
+#       allowlisted table with an otherwise-clean row observation but a
+#       column-level grant leak, or authenticated table-level SELECT --
+#       both must still refuse; the mechanism, not just the row read,
+#       is what's being verified.
 #   23. RLS-DENY-ALL-UNLISTED -- same shape, but the table's name is NOT
-#       in RLS_DENY_ALL_EXPECTED -- RLS FAILED, naming the table and the
-#       allowlist gap explicitly.
+#       in RLS_DENY_ALL_EXPECTED -- RLS FAILED in the ENUMERATION loop
+#       itself (never rescued by a behavioral read), naming the table
+#       and the allowlist gap explicitly.
 #   24. RLS-ALLOWLISTED-WITH-POLICIES -- a table IN RLS_DENY_ALL_EXPECTED
 #       that now carries >=1 real policy -- POLICY-SCOPED (not DENY-ALL
 #       any more), reported as an INFO line, not a failure.
@@ -359,11 +367,14 @@ else
 fi
 
 # 22. RLS-DENY-ALL-ALLOWLISTED -- a discovered table with RLS on, 0
-#     policies, anon zero-grant, privileged count >0, authenticated
-#     count 0, name IN RLS_DENY_ALL_EXPECTED -- reported as a distinct
+#     policies, anon zero-grant, authenticated zero table-grant, zero
+#     column-level grants, privileged count >0, authenticated count 0,
+#     name IN RLS_DENY_ALL_EXPECTED -- reported as a distinct
 #     DENY-ALL/ALLOWLISTED line, NOT a failure (overall stays MANUAL,
 #     same ceiling as the happy path -- this table contributes to
-#     PROVEN_COUNT via the default-deny mechanism, not a policy).
+#     PROVEN_COUNT via the default-deny mechanism, not a policy). Sec's
+#     added conjunction legs (COLGRANT/AUTHTBL) must both read clean or
+#     this scenario itself would wrongly FAIL.
 DENY_ALL_RLS_ENUM='account|true|1|false
 account_users|true|1|false
 audit_log|true|0|false'
@@ -372,7 +383,9 @@ AUTH|account|0
 PRIV|account_users|3
 AUTH|account_users|0
 PRIV|audit_log|7
-AUTH|audit_log|0'
+AUTH|audit_log|0
+COLGRANT|audit_log|0
+AUTHTBL|audit_log|false'
 run_scenario "RLS DENY-ALL table on the allowlist: not a failure" 4 \
   FAKE_RLS_ENUM="$DENY_ALL_RLS_ENUM" FAKE_ZERO_CTX="$DENY_ALL_ZERO_CTX" || FAIL=1
 if grep -qF "DENY-ALL: pfin.audit_log" "$LAST_OUT" 2>/dev/null && grep -qF "ALLOWLISTED" "$LAST_OUT" 2>/dev/null; then
@@ -383,10 +396,54 @@ else
   FAIL=1
 fi
 
+# 22b. RLS-DENY-ALL-ALLOWLISTED-COLGRANT-LEAK -- same allowlisted table,
+#      but a column-level grant to authenticated exists -- Sec's added
+#      conjunction leg must catch this even though the table-level grant
+#      and the row-visibility read are both clean (the exact risk this
+#      leg exists for: 026_mfa_recovery_code.sql:222's own column-scoped
+#      grants pattern, misapplied to the wrong role).
+run_scenario "RLS DENY-ALL allowlisted table with a column-level grant leak: refuses" 1 \
+  FAKE_RLS_ENUM="$DENY_ALL_RLS_ENUM" FAKE_ZERO_CTX='PRIV|account|5
+AUTH|account|0
+PRIV|account_users|3
+AUTH|account_users|0
+PRIV|audit_log|7
+AUTH|audit_log|0
+COLGRANT|audit_log|1
+AUTHTBL|audit_log|false' || FAIL=1
+if grep -qF "pfin.audit_log: DENY-ALL-allowlisted but" "$LAST_OUT" 2>/dev/null && grep -qF "column-level grant" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-DENY-ALL-ALLOWLISTED-COLGRANT-LEAK] column-grant conjunction leg caught it." >&2
+else
+  echo "FAIL: [RLS-DENY-ALL-ALLOWLISTED-COLGRANT-LEAK] expected column-grant refusal message not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 22c. RLS-DENY-ALL-ALLOWLISTED-AUTHTBL-LEAK -- same, but authenticated
+#      holds table-level SELECT -- Sec's added conjunction leg must catch
+#      this even though anon's own table-level grant (checked
+#      separately, unaffected) and column grants are both clean.
+run_scenario "RLS DENY-ALL allowlisted table with authenticated table-level SELECT: refuses" 1 \
+  FAKE_RLS_ENUM="$DENY_ALL_RLS_ENUM" FAKE_ZERO_CTX='PRIV|account|5
+AUTH|account|0
+PRIV|account_users|3
+AUTH|account_users|0
+PRIV|audit_log|7
+AUTH|audit_log|0
+COLGRANT|audit_log|0
+AUTHTBL|audit_log|true' || FAIL=1
+if grep -qF "pfin.audit_log: DENY-ALL-allowlisted but authenticated holds table-level SELECT" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-DENY-ALL-ALLOWLISTED-AUTHTBL-LEAK] authenticated-table-grant conjunction leg caught it." >&2
+else
+  echo "FAIL: [RLS-DENY-ALL-ALLOWLISTED-AUTHTBL-LEAK] expected authenticated-table-grant refusal message not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
 # 23. RLS-DENY-ALL-UNLISTED -- same shape, but the table's name is NOT
-#     in RLS_DENY_ALL_EXPECTED -- RLS FAILED, naming the table and the
-#     allowlist gap explicitly (never silently passed as if it were the
-#     ratified posture).
+#     in RLS_DENY_ALL_EXPECTED -- RLS FAILED in the ENUMERATION loop
+#     itself (Sec requirement 2: never rescued by any behavioral read),
+#     naming the table and the allowlist gap explicitly.
 DENY_ALL_UNLISTED_RLS_ENUM='account|true|1|false
 account_users|true|1|false
 planning_target|true|0|false'
@@ -398,7 +455,7 @@ PRIV|planning_target|2
 AUTH|planning_target|0'
 run_scenario "RLS DENY-ALL table NOT on the allowlist: refuses" 1 \
   FAKE_RLS_ENUM="$DENY_ALL_UNLISTED_RLS_ENUM" FAKE_ZERO_CTX="$DENY_ALL_UNLISTED_ZERO_CTX" || FAIL=1
-if grep -qF "pfin.planning_target: DENY-ALL" "$LAST_OUT" 2>/dev/null && grep -qF "NOT in RLS_DENY_ALL_EXPECTED" "$LAST_OUT" 2>/dev/null; then
+if grep -qF "pfin.planning_target: 0 policies in pg_policies and NOT in RLS_DENY_ALL_EXPECTED" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-DENY-ALL-UNLISTED] refusal names the table and the allowlist gap." >&2
 else
   echo "FAIL: [RLS-DENY-ALL-UNLISTED] expected refusal message not found." >&2
