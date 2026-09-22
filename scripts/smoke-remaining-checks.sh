@@ -717,11 +717,12 @@ else
           # VERIFIED but the row observation is INCONCLUSIVE, never
           # reported as DENY-ALL fully demonstrated.
           DENY_ALL_COUNT=$((DENY_ALL_COUNT + 1))
+          CONJUNCTION_TERMS="RLS on, 0 policies, and all four privilege terms false (anon table-level, authenticated table-level, anon column-level, authenticated column-level)"
           if [[ "$p" -gt 0 ]]; then
-            info "DENY-ALL: pfin.$t -- structural conjunction verified (RLS on, 0 policies, anon+authenticated zero grant at table+column level) AND authenticated sees 0 of $p row(s) visible to supabase_admin -- ALLOWLISTED, isolation demonstrated."
+            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS) AND authenticated sees 0 of $p row(s) visible to supabase_admin -- ALLOWLISTED, isolation demonstrated."
             PROVEN_COUNT=$((PROVEN_COUNT + 1))
           else
-            info "DENY-ALL: pfin.$t -- structural conjunction verified (RLS on, 0 policies, anon+authenticated zero grant at table+column level); row observation INCONCLUSIVE (privileged count is 0 too -- nothing to isolate, never reported as DENY-ALL fully demonstrated on an empty table)."
+            info "DENY-ALL: pfin.$t -- structural conjunction verified ($CONJUNCTION_TERMS); row observation INCONCLUSIVE (privileged count is 0 too -- nothing to isolate, never reported as DENY-ALL fully demonstrated on an empty table)."
             INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
           fi
         fi
@@ -822,13 +823,20 @@ if services is None and raw not in (None, ""):
     sys.exit(0)
 
 candidate = None
-source = None
+# Named host_source, not "source" -- scripts/ci/fence-no-source-
+# credential-files.sh greps tree-wide for any line whose first token is
+# literally "source" (a shell-sourcing violation pattern), with no
+# language awareness; it cannot distinguish this Python assignment
+# inside a heredoc from a real `source $FILE` shell statement. Renamed
+# to stay out of that pattern's way rather than seeking an allowlist
+# exemption -- this was never a real sourcing hit to begin with.
+host_source = None
 if services and services.get(service):
     candidate = sorted(services[service])[0]
-    source = "docker_compose_domains"
+    host_source = "docker_compose_domains"
 elif fqdn:
     candidate = fqdn
-    source = "fqdn"
+    host_source = "fqdn"
 
 if not candidate:
     print("NONE")
@@ -838,15 +846,15 @@ if not candidate:
 host = strip_scheme(candidate)
 if "://" in host:
     print("REFUSED")
-    print(f"'{candidate}' (from {source}) still carries a scheme prefix after stripping -- refusing to build a URL against it.")
+    print(f"'{candidate}' (from {host_source}) still carries a scheme prefix after stripping -- refusing to build a URL against it.")
     sys.exit(0)
 if not HOSTNAME_RE.match(host):
     print("REFUSED")
-    print(f"derived host '{host}' (from {source}, raw value '{candidate}') is not hostname-shaped -- refusing to build a URL against it.")
+    print(f"derived host '{host}' (from {host_source}, raw value '{candidate}') is not hostname-shaped -- refusing to build a URL against it.")
     sys.exit(0)
 
 print(host)
-print(source)
+print(host_source)
 PYEOF
 }
 
