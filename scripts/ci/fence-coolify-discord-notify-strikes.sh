@@ -137,6 +137,19 @@
 #      actually land on that one column) -> the real script's post-write
 #      flag-readback check refuses rather than treating NULL as
 #      close-enough to false.
+#  32. STATE-UNKNOWN-COLUMN -- the box's own read reports it could not
+#      find `backup_failure_discord_notifications` (Sec F-1, PR #873
+#      round 2: a regression to a wrong/short name on a TARGET-FALSE
+#      flag specifically -- on a target-true flag the existing
+#      true/false comparison would already refuse, masking whether this
+#      NEW array_key_exists() guard fired at all) -> refuses
+#      immediately, naming the exact column, rather than folding a
+#      missing column into "false" and passing silently.
+#  33. APPLY-UNKNOWN-COLUMN-REFUSES-BEFORE-WRITE -- same FATAL, surfaced
+#      on --apply's own PRE-write idempotency read -> refuses, and the
+#      box is never asked to write at all (ssh.log carries no write
+#      call) -- the guard fires before any write is attempted, not only
+#      after one silently no-ops.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -206,27 +219,42 @@ RAW_ENABLED_TARGET_FLAGS_BACKUP_STALE="true|false|${TARGET_FLAGS_BACKUP_STALE}"
 TARGET_FLAGS_BACKUP_NULL="${TARGET_FLAGS/backup_failure=false/backup_failure=NULL}"
 RAW_ENABLED_TARGET_FLAGS_BACKUP_NULL="true|false|${TARGET_FLAGS_BACKUP_NULL}"
 
-# The 16 real `discord_notification_settings` columns -- COOLIFY-FACT-13
-# in scripts/COOLIFY-API-MEASURED.md, measured 2026-09-22 05:55Z. Shared
-# by scenarios 26/27 (structural + generated-payload presence pins).
-REAL_COLUMN_NAMES=(
-  "deployment_success_discord_notifications"
-  "deployment_failure_discord_notifications"
-  "status_change_discord_notifications"
-  "backup_success_discord_notifications"
-  "backup_failure_discord_notifications"
-  "scheduled_task_success_discord_notifications"
-  "scheduled_task_failure_discord_notifications"
-  "docker_cleanup_success_discord_notifications"
-  "docker_cleanup_failure_discord_notifications"
-  "server_disk_usage_discord_notifications"
-  "server_reachable_discord_notifications"
-  "server_unreachable_discord_notifications"
-  "server_patch_discord_notifications"
-  "traefik_outdated_discord_notifications"
-  "restart_limit_reached_discord_notifications"
-  "discord_ping_enabled"
+# The 16 real `discord_notification_settings` columns -- parsed LIVE out
+# of COOLIFY-FACT-13's own fenced `information_schema.columns` block in
+# scripts/COOLIFY-API-MEASURED.md (Sec F-2, PR #873 round 2: a SECOND
+# hand-typed copy of this list is a re-transcription, not a fix, for
+# the exact transcription-error class this whole PR exists to close --
+# if this fence's own copy ever drifted from FACT-13 it would demand
+# the WRONG names from the script and both would silently agree). Same
+# "extract the pinned source live, zero retyped copies" shape QA's
+# smoke-remaining-checks.sh TZ-1 leg already uses via
+# check-tz-sweep-identical.py's own extract_runbook(). MEASURED_FLAGS/
+# TARGET_FLAGS above stay hand-typed display-name pipe strings -- those
+# model read_state()'s OWN OUTPUT FORMAT (short display names), which
+# this fix deliberately did not change, not the real column vocabulary
+# FACT-13 pins.
+COOLIFY_API_MEASURED_MD="$REPO_ROOT/scripts/COOLIFY-API-MEASURED.md"
+[[ -f "$COOLIFY_API_MEASURED_MD" ]] || { echo "FATAL: $COOLIFY_API_MEASURED_MD not found -- cannot extract FACT-13's column list" >&2; exit 2; }
+# Built with a plain `while read` + `+=` append, not `mapfile` (bash-4+
+# only -- this repo pins bash 3.2, same discipline scenario 24 below
+# checks for the script under test).
+REAL_COLUMN_NAMES=()
+while IFS= read -r __col; do
+  REAL_COLUMN_NAMES+=("$__col")
+done < <(
+  awk '
+    /^## COOLIFY-FACT-13/ { infact = 1 }
+    infact && /^[[:space:]]*```$/ { fence++; next }
+    infact && fence == 1 { print }
+    infact && fence >= 2 { exit }
+  ' "$COOLIFY_API_MEASURED_MD" \
+    | sed -E 's/^[[:space:]]*//' \
+    | awk -F: '/_discord_notifications:boolean$/ || $0 == "discord_ping_enabled:boolean" { print $1 }'
 )
+if [[ "${#REAL_COLUMN_NAMES[@]}" -ne 16 ]]; then
+  echo "FATAL: extracted ${#REAL_COLUMN_NAMES[@]} column names from FACT-13, expected 16 -- COOLIFY-API-MEASURED.md's FACT-13 fenced block shape changed; fix the extractor above, don't silently proceed with a wrong count." >&2
+  exit 2
+fi
 
 FAIL=0
 CASE_LAST_DIR=""
@@ -534,6 +562,24 @@ FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLA
   FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
   run_case "apply: post-write backup_failure still NULL -- refuses" 1 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
 [[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/out.txt" "post-write flag readback does not match the intended targets" "apply-postwrite-null-flag-fails"
+
+# 32. STATE-UNKNOWN-COLUMN -- backup_failure_discord_notifications (a
+# TARGET-FALSE flag, Sec's own specific instruction -- a target-true
+# flag would already refuse via the plain true/false comparison,
+# masking whether this NEW array_key_exists() guard actually fired).
+FAKE_STATE_RAW="FATAL_UNKNOWN_COLUMN_backup_failure_discord_notifications" \
+  run_case "state: unknown column (target-false flag) refuses" 1 state "" || true
+[[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/out.txt" "backup_failure_discord_notifications" "state-unknown-column-names-it"
+
+# 33. APPLY-UNKNOWN-COLUMN-REFUSES-BEFORE-WRITE -- same FATAL, via
+# --apply's own pre-write idempotency read -> refuses, and the box is
+# never asked to write (ssh.log carries no write call at all).
+FAKE_STATE_RAW="FATAL_UNKNOWN_COLUMN_backup_failure_discord_notifications" \
+  run_case "apply: unknown column on pre-write read -- refuses before any write" 1 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
+if [[ -n "$CASE_LAST_DIR" ]]; then
+  assert_grep "$CASE_LAST_DIR/out.txt" "backup_failure_discord_notifications" "apply-unknown-column-names-it"
+  assert_not_grep "$CASE_LAST_DIR/ssh.log" "env SEED_ENV_FILE=" "apply-unknown-column-no-write-attempted"
+fi
 
 if [[ "$FAIL" -ne 0 ]]; then
   echo "" >&2

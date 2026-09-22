@@ -310,19 +310,22 @@ sshx true >/dev/null 2>&1 || die "box at $BOX_IP not reachable over SSH with $AU
 # needs it today" posture db-role-handoff.sh's own header states for its
 # leg B.
 read_state() {
-  # Per-event flags read via getAttribute() + an explicit is_null() check
-  # (Sec requirement, FACT-13 fix review) -- NEVER `$s->$col ? "true" :
-  # "false"`. That ternary coerces a genuinely NULL column to "false",
-  # indistinguishable from a real false. Since backup_failure's OWN
-  # target value is false, a null read would make the idempotency check
-  # below believe backup_failure "already correct" and SKIP the write --
-  # reporting success while never having confirmed the column was
-  # explicitly set. Printing a third "NULL" state (never silently
-  # folded into true/false) makes every downstream `== "true"` /
-  # `== "false"` bash comparison fail closed on it by construction --
-  # both the idempotency check's `[[ "${!var:-}" == "true" ]]` shape and
-  # the post-write flag readback below, with zero further bash-side
-  # change needed.
+  # Per-event flags read via two layers (Sec F-1, PR #873 round 2 --
+  # the first layer alone, an is_null() check on getAttribute(), was
+  # NOT sufficient: array_key_exists() on $s->getAttributes() is a
+  # STRUCTURAL check -- a wrong/nonexistent column name refuses
+  # immediately, before any write is attempted, naming the exact column,
+  # rather than relying on the fact that Eloquent's getAttribute() ALSO
+  # happens to return null for a missing key and hoping the generic
+  # null-handling below catches it too. Layer 2 (is_null on the actual
+  # value) still matters separately: a CORRECTLY-named column can hold a
+  # genuine NULL value, which array_key_exists() alone would not catch
+  # (the key exists; only the value is null) -- that still must not be
+  # coerced to "false" for the same reason a missing column must not:
+  # backup_failure's own target is false, so a null read (of EITHER
+  # kind) folded into "false" would make the idempotency check below
+  # believe backup_failure "already correct" and skip a write that was
+  # never actually confirmed -- the exact flag Sec ruled on in PR #871.
   local php_fields; php_fields="$(php_field_map)"
   sshx "docker exec coolify php artisan tinker --execute='
 /* probe:discord-notification-settings-state */
@@ -334,7 +337,11 @@ if (\$cnt > 1) { echo \"FATAL_CARDINALITY_\" . \$cnt; return; }
 \$s = \App\Models\DiscordNotificationSettings::where(\"team_id\", 0)->firstOrFail();
 \$fields = $php_fields;
 \$parts = [\$s->discord_enabled ? \"true\" : \"false\", ((string) \$s->discord_webhook_url === \"\") ? \"true\" : \"false\"];
-foreach (\$fields as \$display => \$col) { \$raw = \$s->getAttribute(\$col); \$parts[] = \$display . \"=\" . (is_null(\$raw) ? \"NULL\" : (\$raw ? \"true\" : \"false\")); }
+foreach (\$fields as \$display => \$col) {
+  if (!array_key_exists(\$col, \$s->getAttributes())) { echo \"FATAL_UNKNOWN_COLUMN_\" . \$col; return; }
+  \$raw = \$s->getAttribute(\$col);
+  \$parts[] = \$display . \"=\" . (is_null(\$raw) ? \"NULL\" : (\$raw ? \"true\" : \"false\"));
+}
 echo implode(\"|\", \$parts);
 ' </dev/null" 2>/dev/null | tail -1 | tr -d '\r\n'
 }
@@ -349,6 +356,7 @@ parse_state() {
   case "$raw" in
     FATAL_TEAM_ABSENT) die "Team id=0 does not exist on the box -- this is not a Discord-specific problem, something upstream (RootUserSeeder / provision-vps.sh's admin bootstrap) never ran. Investigate before retrying." ;;
     FATAL_CARDINALITY_*) die "discord_notification_settings has ${raw#FATAL_CARDINALITY_} rows for team_id=0, expected exactly 1 -- refusing to guess which is authoritative." ;;
+    FATAL_UNKNOWN_COLUMN_*) die "column '${raw#FATAL_UNKNOWN_COLUMN_}' does not exist on discord_notification_settings -- EVENT_FLAGS names a column the live schema does not have (a regression to a wrong/short name, or a schema drift). Refusing to read or write any flag rather than folding this into false. Re-measure scripts/COOLIFY-API-MEASURED.md FACT-13 against information_schema.columns before retrying." ;;
     "") die "read_state() returned empty output -- SSH/tinker call produced nothing to parse." ;;
   esac
   if [[ "$raw" == "ABSENT" ]]; then
