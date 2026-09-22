@@ -670,6 +670,10 @@ umask 077
 # never reports success on an unverified destruction. This is the
 # script's ONLY confirmation of SEED_FILE's fate; no other line claims
 # it (see the removed line at this script's own end).
+# FENCE-EXTRACT-SEED-TRAP-BEGIN -- scripts/ci/fence-db-role-handoff-strikes.sh
+# extracts this block VERBATIM to strike the once-only/correct-mechanism
+# property under a real signal; do not reformat/rename inside this pair
+# without updating that fence's own extraction.
 report_shred_seed() {
   local mech
   if shred -u "$SEED_FILE" 2>/dev/null; then
@@ -705,6 +709,7 @@ report_shred_seed() {
 # once per run, on every path.
 trap report_shred_seed EXIT
 trap 'trap - EXIT; report_shred_seed; exit 130' HUP INT TERM
+# FENCE-EXTRACT-SEED-TRAP-END
 
 PW="$(cat "$SEED_FILE")"
 [ -n "$PW" ] || { echo "FATAL: seed file read as empty -- refusing to proceed." >&2; exit 1; }

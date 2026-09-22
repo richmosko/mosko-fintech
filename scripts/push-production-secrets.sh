@@ -799,6 +799,10 @@ box_body="$box_seed.body.json"
 # each is actually gone, and FATALs (nonzero exit from the trap itself,
 # which is this remote shell's own exit code) if either survives --
 # never reports success on an unverified destruction.
+# FENCE-EXTRACT-DESTROY-TRAP-BEGIN -- scripts/ci/fence-push-secrets-strikes.sh
+# extracts this block VERBATIM to strike the once-only/correct-mechanism
+# property under a real signal; do not reformat/rename inside this pair
+# without updating that fence's own extraction.
 report_destroy() {
   local mech
   if shred -u "$box_seed" "$box_body" 2>/dev/null; then
@@ -837,6 +841,7 @@ report_destroy() {
 # once per run, on every path.
 trap report_destroy EXIT
 trap 'trap - EXIT; report_destroy; exit 130' HUP INT TERM
+# FENCE-EXTRACT-DESTROY-TRAP-END
 TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
 python3 - "$TOKEN" "$uuid" "$box_seed" "$box_body" <<'PYEOF'
 import json, os, subprocess, sys

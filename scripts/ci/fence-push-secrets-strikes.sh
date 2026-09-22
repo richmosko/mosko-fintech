@@ -280,6 +280,93 @@ if grep -qF "DESTROYED:" <<<"${OUT_VII:-}"; then
   FAIL=1
 fi
 
+# DESTROY-TRAP-SIGNAL-ONCE-ONLY (Sec follow-up, PR #870 review) -- the
+# split EXIT / HUP-INT-TERM trap must fire the destroy-and-report
+# handler EXACTLY ONCE per run, on every exit path, and must never
+# report a false mechanism on the interrupted path. Extracts the real
+# trap block VERBATIM (FENCE-EXTRACT-DESTROY-TRAP-BEGIN/-END) -- never a
+# hand-copied stand-in that could drift from the shipped logic -- and
+# drives it under a REAL SIGTERM (SIGINT specifically is IGNORED by bash
+# for asynchronous &-backgrounded commands per POSIX/bash semantics --
+# measured directly -- so SIGTERM is the signal this harness can
+# actually deliver; SIGTERM is also the more realistic production
+# interruption anyway -- a container stop/timeout, not an interactive
+# Ctrl-C).
+strike_destroy_trap_once_only() {
+  local extract="$WORK/destroy-trap-extract.sh"
+  awk '/# FENCE-EXTRACT-DESTROY-TRAP-BEGIN/{flag=1;next}/# FENCE-EXTRACT-DESTROY-TRAP-END/{flag=0}flag' "$PUSH_SECRETS_SH" > "$extract"
+  if [[ ! -s "$extract" ]]; then
+    echo "FAIL: [destroy-trap extraction] produced nothing -- the FENCE-EXTRACT-DESTROY-TRAP marker pair moved or was removed from push-production-secrets.sh" >&2
+    return 1
+  fi
+
+  # Signal case: SIGTERM delivered ~0.3s after the wrapper starts -- the
+  # extracted block's own last two statements are the trap-arming lines
+  # themselves (no work precedes them), so the traps are armed almost
+  # immediately; the wrapper then sleeps 2s, giving an ample window to
+  # deliver the signal well after arming and well before natural exit.
+  local seed="$WORK/box_seed.$$" body="$WORK/box_seed.$$.body.json"
+  printf 'dummy-seed-value' > "$seed"
+  printf '{"data":[{"key":"X","value":"dummy"}]}' > "$body"
+  local wrapper="$WORK/destroy-trap-wrapper-sigterm.$$.sh"
+  { printf 'set -euo pipefail\nbox_seed=%q\nbox_body=%q\n' "$seed" "$body"; cat "$extract"; printf 'sleep 2\necho MADE_IT_PAST_TRAP_ARM\n'; } > "$wrapper"
+  local out="$WORK/destroy-trap-sigterm-out.$$"
+  bash "$wrapper" > "$out" 2>&1 &
+  local pid=$!
+  sleep 0.3
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid"
+  local rc=$?
+  local n_destroyed
+  n_destroyed="$(grep -c '^DESTROYED:' "$out" || true)"
+  if [[ "$rc" != "130" ]]; then
+    echo "FAIL: [destroy-trap SIGTERM] expected exit 130, got $rc -- captured: $(cat "$out")" >&2
+    return 1
+  fi
+  if [[ "$n_destroyed" != "1" ]]; then
+    echo "FAIL: [destroy-trap SIGTERM] expected exactly 1 DESTROYED line, got $n_destroyed -- captured: $(cat "$out")" >&2
+    return 1
+  fi
+  if [[ -e "$seed" || -e "$body" ]]; then
+    echo "FAIL: [destroy-trap SIGTERM] an artifact still exists after SIGTERM destroy" >&2
+    return 1
+  fi
+  if grep -q 'MADE_IT_PAST_TRAP_ARM' "$out"; then
+    echo "FAIL: [destroy-trap SIGTERM] script kept running after the signal instead of stopping" >&2
+    return 1
+  fi
+  echo "OK: [destroy-trap SIGTERM] exactly one DESTROYED line, exit 130, script stopped, both artifacts gone." >&2
+
+  # Control: the natural EXIT path (no signal) must still report exactly
+  # once -- proves the split didn't break the ordinary case while fixing
+  # the interrupted one.
+  local seed2="$WORK/box_seed2.$$" body2="$WORK/box_seed2.$$.body.json"
+  printf 'dummy-seed-value' > "$seed2"
+  printf '{"data":[{"key":"X","value":"dummy"}]}' > "$body2"
+  local wrapper2="$WORK/destroy-trap-wrapper-exit.$$.sh"
+  { printf 'set -euo pipefail\nbox_seed=%q\nbox_body=%q\n' "$seed2" "$body2"; cat "$extract"; printf 'echo MADE_IT_PAST_TRAP_ARM\n'; } > "$wrapper2"
+  local out2="$WORK/destroy-trap-exit-out.$$"
+  bash "$wrapper2" > "$out2" 2>&1
+  local rc2=$?
+  local n2
+  n2="$(grep -c '^DESTROYED:' "$out2" || true)"
+  if [[ "$rc2" != "0" ]]; then
+    echo "FAIL: [destroy-trap natural exit] expected exit 0, got $rc2 -- captured: $(cat "$out2")" >&2
+    return 1
+  fi
+  if [[ "$n2" != "1" ]]; then
+    echo "FAIL: [destroy-trap natural exit] expected exactly 1 DESTROYED line, got $n2 -- captured: $(cat "$out2")" >&2
+    return 1
+  fi
+  if [[ -e "$seed2" || -e "$body2" ]]; then
+    echo "FAIL: [destroy-trap natural exit] an artifact still exists after natural-exit destroy" >&2
+    return 1
+  fi
+  echo "OK: [destroy-trap natural exit] exactly one DESTROYED line, exit 0, both artifacts gone." >&2
+  return 0
+}
+strike_destroy_trap_once_only || FAIL=1
+
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
   echo "FATAL: one or more push-production-secrets.sh strike-proofs did not behave as specified -- failing closed." >&2
