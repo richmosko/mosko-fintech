@@ -43,6 +43,27 @@ case "$CMD" in
     exit 0
     ;;
   *"probe:discord-notification-settings-state"*)
+    # read_state() is called twice per real --apply write path (the
+    # pre-write idempotency read, then the NEW post-write flag
+    # readback) -- this fake has no persistent state across its own
+    # per-invocation processes, so a scenario that needs the SECOND call
+    # to answer differently from the first (e.g. "the write actually
+    # took effect") tracks its own call count via FAKE_STATE_CALL_COUNTER
+    # (a scenario-supplied file path) and supplies the second answer via
+    # FAKE_STATE_RAW_POSTWRITE. A scenario that sets neither gets the
+    # SAME FAKE_STATE_RAW on every call (pre-existing behaviour,
+    # unchanged) -- correct for --state (one read only) and for any
+    # apply scenario that dies before a second read would happen.
+    if [[ -n "${FAKE_STATE_CALL_COUNTER:-}" ]]; then
+      count=0
+      [[ -f "$FAKE_STATE_CALL_COUNTER" ]] && count="$(cat "$FAKE_STATE_CALL_COUNTER")"
+      count=$((count + 1))
+      printf '%s' "$count" > "$FAKE_STATE_CALL_COUNTER"
+      if [[ "$count" -gt 1 && -n "${FAKE_STATE_RAW_POSTWRITE:-}" ]]; then
+        printf '%s' "$FAKE_STATE_RAW_POSTWRITE"
+        exit 0
+      fi
+    fi
     printf '%s' "${FAKE_STATE_RAW:-ABSENT}"
     exit 0
     ;;
@@ -64,11 +85,32 @@ case "$CMD" in
     ;;
   "env SEED_ENV_FILE="*"bash -s")
     # The write remote script's own BODY (the TINKER-WRITE-ALLOW-08 block
-    # + its trap) arrives on stdin -- consumed and discarded; this fake
-    # never actually parses/executes it (it is not a real docker/PHP
-    # environment), it only echoes what that body WOULD have printed,
+    # + its trap) arrives on stdin. Captured to FAKE_WRITE_PAYLOAD_LOG
+    # when a scenario sets it (structural column-name pin -- proves the
+    # RUNTIME-GENERATED payload carries the real column names, not just
+    # the static source); otherwise discarded as before. This fake never
+    # actually parses/executes the body (it is not a real docker/PHP
+    # environment) -- it only echoes what that body WOULD have printed,
     # per the scenario's own FAKE_* controls.
-    cat > /dev/null
+    if [[ -n "${FAKE_WRITE_PAYLOAD_LOG:-}" ]]; then
+      cat > "$FAKE_WRITE_PAYLOAD_LOG"
+    else
+      cat > /dev/null
+    fi
+    if [[ "${FAKE_SIMULATE_SHORT_COLUMN_NAMES:-0}" == "1" ]]; then
+      # Models a REGRESSION to short (unsuffixed) column names -- never
+      # what this script actually sends today. Real Eloquent `update()`
+      # silently drops an unknown key rather than erroring, so WRITE_OK
+      # still prints below; the only observable symptom is that the
+      # columns never change. This fake has no real DB to leave
+      # unwritten, so it signals the same outcome the direct way: the
+      # scenario itself omits FAKE_STATE_RAW_POSTWRITE, so the SAME
+      # FAKE_STATE_RAW comes back on the post-write re-read too --
+      # proving the real script's own post-write flag readback (not
+      # this fake) is what turns a silently-dropped write into a
+      # failure instead of a false WRITE_OK.
+      :
+    fi
     if [[ "${FAKE_SSH_UNREACHABLE_MIDWAY:-0}" == "1" ]]; then
       echo "ssh_exchange_identification: read: Connection reset by peer" >&2
       exit 255
@@ -95,6 +137,20 @@ case "$CMD" in
       exit 0
     fi
     echo "WRITE_OK"
+    if [[ "${FAKE_WRITE_NO_DESTROYED_LINE:-0}" != "1" ]]; then
+      # Real report_shred_seed() prints "DESTROYED: <path> (mechanism:
+      # ...)" for the SAME $SEED_ENV_FILE the real script's own argv
+      # embedded in this remote command string -- extracted here (not
+      # hardcoded) so the caller's own DESTROYED_LINE grep genuinely
+      # matches, the same way FAKE_STORED_HASH_AFTER genuinely matches a
+      # real computed hash rather than a fixed stand-in value.
+      SEED_PATH="$(printf '%s' "$CMD" | sed -n 's/^env SEED_ENV_FILE="\([^"]*\)".*/\1/p')"
+      echo "DESTROYED: $SEED_PATH (mechanism: shred)"
+    fi
+    # FAKE_WRITE_NO_DESTROYED_LINE=1 models run 18's own defect: WRITE_OK
+    # prints but the shred confirmation never does -- proves the
+    # caller's own FATAL for a missing destruction line actually fires
+    # rather than trusting a clean WRITE_OK sentinel alone.
     echo REMOTE_DONE
     exit 0
     ;;

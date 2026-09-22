@@ -231,6 +231,72 @@ AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=6 -i "$AUTOMATION_KEY")
 sshx() { ssh "${SSH_OPTS[@]}" "root@$BOX_IP" "$@"; }
 
+# --- ONE table: display-name : real Coolify column : this script's own
+# target value -- MEASURED 2026-09-22 05:55Z from information_schema.
+# columns on the live box (scripts/COOLIFY-API-MEASURED.md FACT-13).
+# Team-lead's original brief transcribed these WITHOUT the
+# `_discord_notifications` suffix every one of them actually carries;
+# Eloquent's own `$fillable` then silently DROPPED every unknown key on
+# `->update([...])`, so the write always reported WRITE_OK while never
+# touching a single one of these 15 columns, and `read_state()`'s own
+# `$s->$f` on a nonexistent attribute returned NULL -> `false` for
+# every flag, unconditionally -- the exact symptom run 18 measured
+# ("--state prints every flag false" against a box whose real defaults
+# are a genuine true/false mix). Sourced ONCE here; read_state()'s own
+# $fields map and the write's update() call are BOTH generated from
+# this same list (see php_field_map()/php_update_fields() below) so
+# the two can never drift from each other again -- Sec's own naming of
+# this as a fourth-instance fixture-fidelity class this week is why
+# generation, not just a fence cross-check, is the fix.
+EVENT_FLAGS=(
+  "deployment_success:deployment_success_discord_notifications:true"
+  "deployment_failure:deployment_failure_discord_notifications:true"
+  "status_change:status_change_discord_notifications:true"
+  "backup_success:backup_success_discord_notifications:false"
+  "backup_failure:backup_failure_discord_notifications:false"
+  "scheduled_task_success:scheduled_task_success_discord_notifications:true"
+  "scheduled_task_failure:scheduled_task_failure_discord_notifications:true"
+  "docker_cleanup_success:docker_cleanup_success_discord_notifications:false"
+  "docker_cleanup_failure:docker_cleanup_failure_discord_notifications:true"
+  "server_disk_usage:server_disk_usage_discord_notifications:true"
+  "server_reachable:server_reachable_discord_notifications:true"
+  "server_unreachable:server_unreachable_discord_notifications:true"
+  "server_patch:server_patch_discord_notifications:true"
+  "traefik_outdated:traefik_outdated_discord_notifications:true"
+  "restart_limit_reached:restart_limit_reached_discord_notifications:true"
+)
+# `discord_ping_enabled` is a real, correctly-named column (no suffix)
+# -- NOT part of EVENT_FLAGS (it has no per-event target/measured pair
+# the way the 15 above do), but pinned alongside them in FACT-13 since
+# it is read/written by this same script.
+
+# Builds the PHP associative-array literal `["display" => "column", ...]`
+# read_state() embeds for its own $fields map.
+php_field_map() {
+  local out="[" e display col
+  for e in "${EVENT_FLAGS[@]}"; do
+    display="${e%%:*}"
+    col="${e#*:}"; col="${col%%:*}"
+    out+="\"$display\" => \"$col\", "
+  done
+  out+="]"
+  printf '%s' "$out"
+}
+
+# Builds the PHP `"column" => target,` lines the write's update() call
+# embeds, one per event flag, target values exactly as ruled (Sec PR
+# #871 review: backup_failure written false regardless of the box's
+# measured default; the four enables team-lead named in ARCH §4).
+php_update_fields() {
+  local out="" e col target
+  for e in "${EVENT_FLAGS[@]}"; do
+    col="${e#*:}"; col="${col%%:*}"
+    target="${e##*:}"
+    out+="    \"$col\" => $target,"$'\n'
+  done
+  printf '%s' "$out"
+}
+
 sshx true >/dev/null 2>&1 || die "box at $BOX_IP not reachable over SSH with $AUTOMATION_KEY -- run scripts/provision-vps.sh first"
 
 # --- The one read-only state query, shared by --state and --apply's own
@@ -244,6 +310,7 @@ sshx true >/dev/null 2>&1 || die "box at $BOX_IP not reachable over SSH with $AU
 # needs it today" posture db-role-handoff.sh's own header states for its
 # leg B.
 read_state() {
+  local php_fields; php_fields="$(php_field_map)"
   sshx "docker exec coolify php artisan tinker --execute='
 /* probe:discord-notification-settings-state */
 \$t = \App\Models\Team::find(0);
@@ -252,9 +319,9 @@ if (!\$t) { echo \"FATAL_TEAM_ABSENT\"; return; }
 if (\$cnt === 0) { echo \"ABSENT\"; return; }
 if (\$cnt > 1) { echo \"FATAL_CARDINALITY_\" . \$cnt; return; }
 \$s = \App\Models\DiscordNotificationSettings::where(\"team_id\", 0)->firstOrFail();
-\$fields = [\"discord_ping_enabled\",\"deployment_success\",\"deployment_failure\",\"status_change\",\"backup_success\",\"backup_failure\",\"scheduled_task_success\",\"scheduled_task_failure\",\"docker_cleanup_success\",\"docker_cleanup_failure\",\"server_disk_usage\",\"server_reachable\",\"server_unreachable\",\"server_patch\",\"traefik_outdated\",\"restart_limit_reached\"];
+\$fields = $php_fields;
 \$parts = [\$s->discord_enabled ? \"true\" : \"false\", ((string) \$s->discord_webhook_url === \"\") ? \"true\" : \"false\"];
-foreach (\$fields as \$f) { \$parts[] = \$f . \"=\" . (\$s->\$f ? \"true\" : \"false\"); }
+foreach (\$fields as \$display => \$col) { \$parts[] = \$display . \"=\" . (\$s->\$col ? \"true\" : \"false\"); }
 echo implode(\"|\", \$parts);
 ' </dev/null" 2>/dev/null | tail -1 | tr -d '\r\n'
 }
@@ -355,10 +422,41 @@ if [[ "$NEED_WRITE" -eq 1 ]]; then
   step "Writing discord_enabled + discord_webhook_url + flags via Coolify's own Eloquent model (encrypted-cast column -- raw SQL cannot write it)"
   WRITE_LOG="$(mktemp)"
   chmod 600 "$WRITE_LOG"
-  if sshx "env SEED_ENV_FILE=\"$SEED_ENV_FILE\" bash -s" <<'REMOTE' > "$WRITE_LOG" 2>&1
+  # The 15 per-event `"column" => target,` lines are GENERATED from
+  # EVENT_FLAGS (see php_update_fields() above) and spliced into this
+  # quoted heredoc via a literal placeholder token + bash's own `${//}`
+  # substitution (never sed -- no `&`/backslash re-interpretation risk),
+  # so the write can never drift from read_state()'s own column names
+  # again. The heredoc stays quoted (<<'REMOTE') and fully readable in
+  # the diff; only the placeholder line is templated.
+  REMOTE_SCRIPT="$(cat <<'REMOTE'
 set -euo pipefail
 umask 077
-trap 'shred -u "$SEED_ENV_FILE" 2>/dev/null || rm -f "$SEED_ENV_FILE"' EXIT
+# Execution-record standard (PR #870): destroy the seed, verify it is
+# actually gone, name the mechanism, FATAL if it survives -- never a
+# future-tense claim with nothing to confirm it. Split EXIT from
+# HUP/INT/TERM (Sec own PR #870 follow-up finding): a bash SIGNAL trap runs
+# and execution CONTINUES, so a combined EXIT+signal trap double-fires
+# and reports a false mechanism on the interrupted path -- EXIT keeps
+# its own handler; HUP/INT/TERM disarm EXIT first, then destroy, then
+# stop (exit 130) rather than limping on in a half-torn-down state.
+report_shred_seed() {
+  local mech
+  if shred -u "$SEED_ENV_FILE" 2>/dev/null; then
+    mech="shred"
+  elif rm -f "$SEED_ENV_FILE" 2>/dev/null; then
+    mech="rm-fallback (shred unavailable or failed)"
+  else
+    mech="NEITHER (both shred and rm failed)"
+  fi
+  if [ -e "$SEED_ENV_FILE" ]; then
+    echo "FATAL: $SEED_ENV_FILE STILL EXISTS after destruction attempt (mechanism: $mech) -- refusing to report success." >&2
+    exit 1
+  fi
+  echo "DESTROYED: $SEED_ENV_FILE (mechanism: $mech)"
+}
+trap report_shred_seed EXIT
+trap 'trap - EXIT; report_shred_seed; exit 130' HUP INT TERM
 docker exec --env-file "$SEED_ENV_FILE" coolify php artisan tinker --execute='
 /* TINKER-WRITE-ALLOW-08 */
 (function () {
@@ -369,27 +467,16 @@ docker exec --env-file "$SEED_ENV_FILE" coolify php artisan tinker --execute='
     "discord_enabled" => true,
     "discord_webhook_url" => $url,
     "discord_ping_enabled" => true,
-    "deployment_success" => true,
-    "deployment_failure" => true,
-    "status_change" => true,
-    "backup_success" => false,
-    "backup_failure" => false,
-    "scheduled_task_success" => true,
-    "scheduled_task_failure" => true,
-    "docker_cleanup_success" => false,
-    "docker_cleanup_failure" => true,
-    "server_disk_usage" => true,
-    "server_reachable" => true,
-    "server_unreachable" => true,
-    "server_patch" => true,
-    "traefik_outdated" => true,
-    "restart_limit_reached" => true,
+__EVENT_FLAG_UPDATES__
   ]);
   echo "WRITE_OK";
 })();
 ' </dev/null
 echo REMOTE_DONE
 REMOTE
+  )"
+  REMOTE_SCRIPT="${REMOTE_SCRIPT//__EVENT_FLAG_UPDATES__/$(php_update_fields)}"
+  if sshx "env SEED_ENV_FILE=\"$SEED_ENV_FILE\" bash -s" <<< "$REMOTE_SCRIPT" > "$WRITE_LOG" 2>&1
   then
     WRITE_RC=0
   else
@@ -415,8 +502,22 @@ REMOTE
     info "write step output (mode 600, preserved for diagnosis): $WRITE_LOG"
     die "the write script completed without printing the expected WRITE_OK sentinel -- refusing to trust an unconfirmed write. See $WRITE_LOG"
   fi
+  # Surface the seed's own destruction line to the operator -- run 18
+  # destroyed /root/.pfin/_discord_seed.<pid>.env and reported nothing,
+  # because WRITE_LOG (which captured report_shred_seed()'s own
+  # "DESTROYED: ... (mechanism: ...)" line) was deleted unseen on
+  # success. FATAL (not merely a missing-info warning) if the line is
+  # absent -- report_shred_seed() itself already dies if the file
+  # survives, so a clean WRITE_OK exit with NO destruction line at all
+  # means something upstream of that guard went unreachably wrong.
+  DESTROYED_LINE="$(grep -F "DESTROYED: $SEED_ENV_FILE" "$WRITE_LOG" || true)"
+  if [[ -z "$DESTROYED_LINE" ]]; then
+    info "write step output (mode 600, preserved for diagnosis): $WRITE_LOG"
+    die "the write script exited with WRITE_OK but printed no seed-destruction confirmation for $SEED_ENV_FILE -- refusing to assume the seed was cleaned up. See $WRITE_LOG"
+  fi
   rm -f "$WRITE_LOG"
   ok "write applied"
+  ok "$DESTROYED_LINE"
 
   step "Hash-bound readback (post-write, value never printed)"
   STORED_HASH_AFTER="$(sshx "docker exec coolify php artisan tinker --execute='
@@ -426,6 +527,34 @@ echo \$s ? substr(hash(\"sha256\", (string) \$s->discord_webhook_url), 0, 16) : 
 ' </dev/null" 2>/dev/null | tail -1 | tr -d '\r\n')"
   [[ "$STORED_HASH_AFTER" == "$EXPECTED_HASH" ]] || die "post-write hash-bound readback does not match the .env value's hash (stored='$STORED_HASH_AFTER' expected='$EXPECTED_HASH') -- the write did not take effect as expected. Hash only -- neither value is ever read back or printed."
   ok "hash-bound readback confirmed: the stored discord_webhook_url matches .env's DISCORD_WEBHOOK_URL"
+
+  # Post-write FLAG readback -- the hash check above only proves the URL
+  # column landed; a wrong/short column name anywhere in EVENT_FLAGS
+  # (this script's own FACT-13 defect class -- Eloquent's `update()`
+  # silently drops an unknown key rather than erroring, so WRITE_OK
+  # prints regardless) would otherwise ship undetected. Re-reads via the
+  # SAME read_state()/EVENT_FLAGS table the write itself used, so a
+  # future column-name regression fails HERE rather than only being
+  # visible on a later, separately-run `--state` call.
+  step "Post-write flag readback (every EVENT_FLAGS target value + discord_ping_enabled)"
+  RAW_AFTER="$(read_state)"
+  parse_state "$RAW_AFTER"
+  MISMATCHES=""
+  for e in "${EVENT_FLAGS[@]}"; do
+    display="${e%%:*}"
+    target="${e##*:}"
+    var="FLAG_${display}"
+    if [[ "${!var:-}" != "$target" ]]; then
+      MISMATCHES="$MISMATCHES $display(expected=$target,got=${!var:-<unset>})"
+    fi
+  done
+  if [[ "${FLAG_discord_ping_enabled:-}" != "true" ]]; then
+    MISMATCHES="$MISMATCHES discord_ping_enabled(expected=true,got=${FLAG_discord_ping_enabled:-<unset>})"
+  fi
+  if [[ -n "$MISMATCHES" ]]; then
+    die "post-write flag readback does not match the intended targets -- the write did not take effect on:$MISMATCHES. Investigate before retrying (a wrong Eloquent column name silently drops the write for that key alone)."
+  fi
+  ok "flag readback confirmed: every EVENT_FLAGS target + discord_ping_enabled landed"
 fi
 
 step "Sending the live Discord test notification (same payload Coolify's own Test-notification button sends) and asserting acceptance"

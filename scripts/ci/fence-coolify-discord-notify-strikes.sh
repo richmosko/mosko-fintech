@@ -94,10 +94,38 @@
 #      grep for `declare -A` (a bash-4-only construct `-n` alone cannot
 #      catch, since it never actually declares the array) finds none.
 #  25. SHRED-TRAP-PRESENT -- structural pin: the seed-delivery remote
-#      script's own `trap ... EXIT` line contains `shred -u`, so a
-#      future edit that drops the shred (leaving only `rm -f`) is caught
-#      here rather than silently regressing to a recoverable-on-disk
-#      seed file.
+#      script's own `report_shred_seed()` function contains `shred -u`,
+#      AND is wired to BOTH `trap report_shred_seed EXIT` and a split
+#      `trap '...report_shred_seed...' HUP INT TERM` (the PR #870
+#      double-fire fix: EXIT must be disarmed before the signal handler
+#      re-invokes it) -- a future edit that drops the shred, or that
+#      recombines the two traps back into one, is caught here.
+#  26. COLUMN-NAMES-PINNED-IN-SOURCE -- structural pin (FACT-13): every
+#      one of the 16 real `discord_notification_settings` column names
+#      (15 `<event>_discord_notifications` + `discord_ping_enabled`) is
+#      grepped directly against the real script's OWN source -- a future
+#      edit that reverts any one of them to its bare display name is
+#      caught here, independent of any runtime behaviour.
+#  27. COLUMN-NAMES-IN-GENERATED-PAYLOAD -- a normal write scenario's
+#      actual remote-script BODY (as `php_update_fields()`/
+#      `php_field_map()` generate it at runtime, captured verbatim by
+#      the fake via FAKE_WRITE_PAYLOAD_LOG) is grepped for the same 16
+#      names -- proves the RUNTIME-GENERATED payload matches the source
+#      pin in #26, not just the static text.
+#  28. APPLY-SHORT-COLUMN-REGRESSION-FAILS -- models a hypothetical
+#      regression where the write's columns go unrecognized by Eloquent
+#      (the real silent-`$fillable`-drop behaviour: WRITE_OK still
+#      prints, but nothing actually changed) by having the post-write
+#      flag re-read come back IDENTICAL to the pre-write read -> the
+#      real script's own post-write flag-readback check (added alongside
+#      this fix) must refuse rather than report success. Proves the fix
+#      has a runtime backstop, not just the static pin in #26.
+#  29. APPLY-WRITE-NO-DESTROYED-LINE-REFUSES -- models run 18's own
+#      defect directly: the remote write script exits 0 and prints
+#      WRITE_OK, but never prints report_shred_seed()'s own "DESTROYED:
+#      ..." confirmation -> the caller refuses rather than silently
+#      assuming the seed file was cleaned up ("run 18 destroyed it but
+#      reported nothing").
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -157,6 +185,28 @@ RAW_ENABLED_TARGET_FLAGS="true|false|${TARGET_FLAGS}"
 # hash already match (scenario 12b below).
 TARGET_FLAGS_BACKUP_STALE="${TARGET_FLAGS/backup_failure=false/backup_failure=true}"
 RAW_ENABLED_TARGET_FLAGS_BACKUP_STALE="true|false|${TARGET_FLAGS_BACKUP_STALE}"
+
+# The 16 real `discord_notification_settings` columns -- COOLIFY-FACT-13
+# in scripts/COOLIFY-API-MEASURED.md, measured 2026-09-22 05:55Z. Shared
+# by scenarios 26/27 (structural + generated-payload presence pins).
+REAL_COLUMN_NAMES=(
+  "deployment_success_discord_notifications"
+  "deployment_failure_discord_notifications"
+  "status_change_discord_notifications"
+  "backup_success_discord_notifications"
+  "backup_failure_discord_notifications"
+  "scheduled_task_success_discord_notifications"
+  "scheduled_task_failure_discord_notifications"
+  "docker_cleanup_success_discord_notifications"
+  "docker_cleanup_failure_discord_notifications"
+  "server_disk_usage_discord_notifications"
+  "server_reachable_discord_notifications"
+  "server_unreachable_discord_notifications"
+  "server_patch_discord_notifications"
+  "traefik_outdated_discord_notifications"
+  "restart_limit_reached_discord_notifications"
+  "discord_ping_enabled"
+)
 
 FAIL=0
 CASE_LAST_DIR=""
@@ -252,11 +302,14 @@ if [[ -n "$CASE_LAST_DIR" ]]; then
 fi
 
 # 10. APPLY-FRESH-WRITES
-FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
+POSTWRITE_COUNTER_10="$WORK/postwrite-counter.10"
+FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS" FAKE_STATE_CALL_COUNTER="$POSTWRITE_COUNTER_10" \
+  FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
   run_case "apply: fresh state writes, hash-binds, test-send accepted" 0 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
 if [[ -n "$CASE_LAST_DIR" ]]; then
   assert_grep "$CASE_LAST_DIR/ssh.log" "env SEED_ENV_FILE=" "apply-fresh-write-happened"
   assert_grep "$CASE_LAST_DIR/out.txt" "OK: Discord accepted the Coolify test notification (HTTP 204)" "apply-fresh-test-send-ok"
+  assert_grep "$CASE_LAST_DIR/out.txt" "DESTROYED: " "apply-fresh-destroyed-line-surfaced"
 fi
 
 # 11. APPLY-IDEMPOTENT-SKIPS-WRITE
@@ -268,7 +321,9 @@ if [[ -n "$CASE_LAST_DIR" ]]; then
 fi
 
 # 12. APPLY-FLAGS-MISMATCH-STILL-WRITES
-FAKE_STATE_RAW="$RAW_ENABLED_FRESH_FLAGS" FAKE_STORED_HASH="$VALID_HASH" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
+POSTWRITE_COUNTER_12="$WORK/postwrite-counter.12"
+FAKE_STATE_RAW="$RAW_ENABLED_FRESH_FLAGS" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS" FAKE_STATE_CALL_COUNTER="$POSTWRITE_COUNTER_12" \
+  FAKE_STORED_HASH="$VALID_HASH" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
   run_case "apply: hash matches but target flags don't -- writes anyway" 0 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
 [[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/ssh.log" "env SEED_ENV_FILE=" "apply-flags-mismatch-writes"
 
@@ -279,12 +334,16 @@ FAKE_STATE_RAW="$RAW_ENABLED_FRESH_FLAGS" FAKE_STORED_HASH="$VALID_HASH" FAKE_ST
 # forces a write, proving the idempotency check's backup_failure=false
 # comparison is load-bearing on its own, not merely riding along with
 # the other four.
-FAKE_STATE_RAW="$RAW_ENABLED_TARGET_FLAGS_BACKUP_STALE" FAKE_STORED_HASH="$VALID_HASH" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
+POSTWRITE_COUNTER_12B="$WORK/postwrite-counter.12b"
+FAKE_STATE_RAW="$RAW_ENABLED_TARGET_FLAGS_BACKUP_STALE" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS" FAKE_STATE_CALL_COUNTER="$POSTWRITE_COUNTER_12B" \
+  FAKE_STORED_HASH="$VALID_HASH" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
   run_case "apply: hash + four target flags match, but backup_failure still true -- writes anyway" 0 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
 [[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/ssh.log" "env SEED_ENV_FILE=" "apply-backup-failure-stale-writes"
 
 # 13. APPLY-HASH-MISMATCH-STILL-WRITES
-FAKE_STATE_RAW="$RAW_ENABLED_TARGET_FLAGS" FAKE_STORED_HASH="$WRONG_HASH" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
+POSTWRITE_COUNTER_13="$WORK/postwrite-counter.13"
+FAKE_STATE_RAW="$RAW_ENABLED_TARGET_FLAGS" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS" FAKE_STATE_CALL_COUNTER="$POSTWRITE_COUNTER_13" \
+  FAKE_STORED_HASH="$WRONG_HASH" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
   run_case "apply: flags match but stored hash doesn't -- writes anyway" 0 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
 [[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/ssh.log" "env SEED_ENV_FILE=" "apply-hash-mismatch-writes"
 
@@ -320,17 +379,23 @@ FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STORED_HASH_AFTER="$WRONG_HASH" \
 [[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/out.txt" "does not match the .env value's hash" "apply-postwrite-hash-mismatch"
 
 # 19. APPLY-TESTSEND-NO-URL-REFUSES
-FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_NO_URL=1 \
+POSTWRITE_COUNTER_19="$WORK/postwrite-counter.19"
+FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS" FAKE_STATE_CALL_COUNTER="$POSTWRITE_COUNTER_19" \
+  FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_NO_URL=1 \
   run_case "apply: test-send finds URL empty -- refuses" 1 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
 [[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/out.txt" "read back empty immediately after a confirmed write" "apply-testsend-no-url"
 
 # 20. APPLY-TESTSEND-UNPARSEABLE-REFUSES
-FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS="garbage" \
+POSTWRITE_COUNTER_20="$WORK/postwrite-counter.20"
+FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS" FAKE_STATE_CALL_COUNTER="$POSTWRITE_COUNTER_20" \
+  FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS="garbage" \
   run_case "apply: test-send output unparseable -- refuses" 1 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
 [[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/out.txt" "did not report a parseable HTTP status" "apply-testsend-unparseable"
 
 # 21. APPLY-TESTSEND-NON2XX-REFUSES
-FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=429 \
+POSTWRITE_COUNTER_21="$WORK/postwrite-counter.21"
+FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS" FAKE_STATE_CALL_COUNTER="$POSTWRITE_COUNTER_21" \
+  FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=429 \
   run_case "apply: Discord rejects the test-send (429) -- refuses" 1 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
 if [[ -n "$CASE_LAST_DIR" ]]; then
   assert_grep "$CASE_LAST_DIR/out.txt" "Discord rejected the test notification: HTTP 429" "apply-testsend-non2xx"
@@ -365,13 +430,72 @@ else
   echo "OK: [bash-3.2-syntax] no 'declare -A' found." >&2
 fi
 
-# 25. SHRED-TRAP-PRESENT
-if grep -qE "trap '[^']*shred -u[^']*'[[:space:]]+EXIT" "$SCRIPT_UNDER_TEST"; then
-  echo "OK: [shred-trap-present] the seed-delivery remote script's EXIT trap contains 'shred -u'." >&2
+# 25. SHRED-TRAP-PRESENT -- the seed-delivery remote script now names a
+# report_shred_seed() function (execution-record standard, PR #870)
+# rather than inlining `shred -u` directly in a trap line -- pin (a) the
+# function body contains `shred -u`, (b) `trap report_shred_seed EXIT`
+# is wired standalone, and (c) HUP/INT/TERM disarm EXIT before
+# re-invoking it (the PR #870 double-fire fix), so a future edit that
+# recombines the two traps or drops the shred is caught.
+if grep -qE 'report_shred_seed\(\)[[:space:]]*\{' "$SCRIPT_UNDER_TEST" \
+  && awk '/report_shred_seed\(\)[[:space:]]*\{/,/^\}/' "$SCRIPT_UNDER_TEST" | grep -qF 'shred -u'; then
+  echo "OK: [shred-trap-present] report_shred_seed() is defined and contains 'shred -u'." >&2
 else
-  echo "FAIL: [shred-trap-present] no EXIT trap containing 'shred -u' found -- the seed file's shred-on-any-exit guarantee may have regressed" >&2
+  echo "FAIL: [shred-trap-present] report_shred_seed() missing, or does not contain 'shred -u' -- the seed file's shred-on-any-exit guarantee may have regressed" >&2
   FAIL=1
 fi
+if grep -qE "^trap report_shred_seed EXIT\$" "$SCRIPT_UNDER_TEST"; then
+  echo "OK: [shred-trap-present] 'trap report_shred_seed EXIT' is wired standalone." >&2
+else
+  echo "FAIL: [shred-trap-present] no standalone 'trap report_shred_seed EXIT' found" >&2
+  FAIL=1
+fi
+if grep -qE "trap 'trap - EXIT; report_shred_seed;[^']*'[[:space:]]+HUP INT TERM" "$SCRIPT_UNDER_TEST"; then
+  echo "OK: [shred-trap-present] HUP/INT/TERM disarms EXIT before re-invoking report_shred_seed (PR #870 double-fire fix intact)." >&2
+else
+  echo "FAIL: [shred-trap-present] HUP/INT/TERM trap does not disarm EXIT first -- the PR #870 double-fire defect may have regressed" >&2
+  FAIL=1
+fi
+
+# 26. COLUMN-NAMES-PINNED-IN-SOURCE (FACT-13)
+for col in "${REAL_COLUMN_NAMES[@]}"; do
+  assert_grep "$SCRIPT_UNDER_TEST" "$col" "column-names-pinned-in-source:$col"
+done
+
+# 27. COLUMN-NAMES-IN-GENERATED-PAYLOAD -- reuses a fresh fresh-write
+# scenario, capturing the ACTUAL runtime-generated remote-script body
+# (php_update_fields()/php_field_map() output spliced in) rather than
+# the static source, so a generator bug that produces wrong text even
+# though the source table (EVENT_FLAGS) is correct would still be caught.
+PAYLOAD_LOG="$WORK/write-payload.27"
+POSTWRITE_COUNTER_27="$WORK/postwrite-counter.27"
+FAKE_STATE_RAW="$RAW_DISABLED" FAKE_STATE_RAW_POSTWRITE="$RAW_ENABLED_TARGET_FLAGS" FAKE_STATE_CALL_COUNTER="$POSTWRITE_COUNTER_27" \
+  FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 FAKE_WRITE_PAYLOAD_LOG="$PAYLOAD_LOG" \
+  run_case "apply: generated write payload carries every real column name" 0 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
+if [[ -f "$PAYLOAD_LOG" ]]; then
+  for col in "${REAL_COLUMN_NAMES[@]}"; do
+    assert_grep "$PAYLOAD_LOG" "$col" "column-names-in-generated-payload:$col"
+  done
+else
+  echo "FAIL: [column-names-in-generated-payload] $PAYLOAD_LOG was never written -- the write call did not happen as expected" >&2
+  FAIL=1
+fi
+
+# 28. APPLY-SHORT-COLUMN-REGRESSION-FAILS -- models a hypothetical
+# regression to short column names via Eloquent's own silent-drop
+# behaviour (WRITE_OK still prints; the post-write re-read comes back
+# UNCHANGED from the pre-write read, since FAKE_STATE_RAW_POSTWRITE is
+# deliberately left unset here) -- the real script's own NEW post-write
+# flag-readback check must refuse, not report false success.
+FAKE_STATE_RAW="$RAW_DISABLED" FAKE_SIMULATE_SHORT_COLUMN_NAMES=1 \
+  FAKE_STORED_HASH_AFTER="$VALID_HASH" FAKE_TEST_STATUS=204 \
+  run_case "apply: post-write flags read back unchanged (simulated column-name regression) -- refuses" 1 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
+[[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/out.txt" "post-write flag readback does not match the intended targets" "apply-short-column-regression-fails"
+
+# 29. APPLY-WRITE-NO-DESTROYED-LINE-REFUSES
+FAKE_STATE_RAW="$RAW_DISABLED" FAKE_WRITE_NO_DESTROYED_LINE=1 \
+  run_case "apply: WRITE_OK with no DESTROYED confirmation -- refuses" 1 apply "DISCORD_WEBHOOK_URL=$VALID_URL" || true
+[[ -n "$CASE_LAST_DIR" ]] && assert_grep "$CASE_LAST_DIR/out.txt" "printed no seed-destruction confirmation" "apply-write-no-destroyed-line"
 
 if [[ "$FAIL" -ne 0 ]]; then
   echo "" >&2
