@@ -350,7 +350,7 @@ fi
 # happened AFTER this write -- same marker-file idiom the PATCH/deploy
 # markers above already use to thread state across separate, stateless
 # fake-ssh invocations.
-if [[ "$*" == *"artisan tinker"* && "$*" == *"TINKER-WRITE-ALLOW-09"* ]]; then
+if [[ "$*" == *"artisan tinker --execute"* && "$*" == *"TINKER-WRITE-ALLOW-09"* ]]; then
   RESULT="${FAKE_TINKER_FQDN_CLEAR_RESULT:-CLEARED}"
   if [[ "$RESULT" == "CLEARED" && -n "${FAKE_TINKER_FQDN_CLEARED_MARKER:-}" ]]; then
     echo 1 > "$FAKE_TINKER_FQDN_CLEARED_MARKER"
