@@ -783,6 +783,13 @@ else
       continue
     fi
     TABLES+=("$tbl")
+    # `hybrid` is `read`-populated (column 8 of RLS_ENUM_QUERY, declared
+    # `(exists(...))::text` in the SQL), so "true"/"false" is the correct
+    # vocabulary here -- but this is the ONE site left after the item-1
+    # cleanup below where that comparison exists at all, and Sec's own
+    # note: fence-boolean-cast-pairing.sh's heuristic only traces
+    # `VAR=$(...)` assignments, so a `read`-populated variable is
+    # invisible to it either way, correct or not.
     if [[ "$hybrid" == "true" ]]; then
       HYBRID_TABLES+=("$tbl")
     fi
@@ -865,8 +872,26 @@ else
     PRIV_SQL=""
     first=1
     for t in "${TABLES[@]}"; do
-      t_hybrid="$(printf '%s\n' "$RLS_ENUM" | awk -F'|' -v t="$t" '$1==t {print $8; exit}')"
-      if [[ "$t_hybrid" == "true" ]]; then
+      # Sec ruling 2026-09-22 (PR #883 review): membership in the
+      # already-populated HYBRID_TABLES array (built once, during
+      # discovery -- see the enumeration loop above), never a second
+      # awk re-parse of RLS_ENUM's column 8. An awk re-read here compared
+      # against the literal "true" defeats scripts/ci/fence-boolean-
+      # cast-pairing.sh's own heuristic: that fence resolves a variable's
+      # cast-ness by scanning FORWARD from its nearest psql-shaped
+      # assignment for `::text`, but RLS_ENUM_QUERY's `::text` casts are
+      # all textually BEFORE the `RLS_ENUM=$(psql_admin "$RLS_ENUM_QUERY")`
+      # call, never after it -- the fence resolves this as UNCAST and
+      # flags every "== \"true\"" comparison derived from it. Line 780's
+      # identifier-shape validation (`continue`s on anything not matching
+      # `^[a-z_][a-z0-9_]*$`) guarantees no discovered table name can
+      # contain a space, so this space-padded substring match cannot
+      # false-positive on a prefix/suffix collision. `${#HYBRID_TABLES[@]}
+      # -gt 0 &&` guards a real bash 3.2 gotcha (macOS's own /bin/bash):
+      # under `set -u`, `${arr[@]}`/`${arr[*]}` on a ZERO-length array
+      # throws "unbound variable" even after `arr=()` -- MEASURED against
+      # this fence when no hybrid table exists at all (the ordinary case).
+      if [[ ${#HYBRID_TABLES[@]} -gt 0 && " ${HYBRID_TABLES[*]} " == *" $t "* ]]; then
         EXPR="count(*) filter (where users_id is not null)"
       else
         EXPR="count(*)"
@@ -952,9 +977,14 @@ else
           continue
         fi
         polcount="$(printf '%s\n' "$RLS_ENUM" | awk -F'|' -v t="$t" '$1==t {print $3; exit}')"
-        hybrid="$(printf '%s\n' "$RLS_ENUM" | awk -F'|' -v t="$t" '$1==t {print $8; exit}')"
 
-        if [[ "$hybrid" == "true" ]]; then
+        # Sec ruling 2026-09-22 (PR #883 review): same fix as PRIV_SQL's
+        # own hybrid branch above -- membership in HYBRID_TABLES, never a
+        # second awk re-parse of RLS_ENUM's column 8 compared against the
+        # literal "true" (see that branch's own comment for exactly why
+        # this defeats fence-boolean-cast-pairing.sh's forward-scan
+        # heuristic).
+        if [[ ${#HYBRID_TABLES[@]} -gt 0 && " ${HYBRID_TABLES[*]} " == *" $t "* ]]; then
           # HYBRID (real-run 27, Sec-ruled 2026-09-22, PR #883 review --
           # TWO rounds) -- see psql_admin_auth_read_hybrid()'s own header.
           # TWO SEPARATE assertions, not one: (1) the LEAK half -- 0 rows
