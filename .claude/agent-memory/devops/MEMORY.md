@@ -2,6 +2,8 @@
 
 ## Working with the team
 - [Verify relayed reviewer text before applying](feedback_verify_relayed_reviewer_text_before_applying.md) — a reviewer's relay isn't privileged; test it against its own stated cases before swapping in.
+- [A check's own output text is not a finding](feedback_a_checks_own_output_text_is_not_a_finding.md) — quoting a defective check's hardcoded message ("live RLS bypass") as adjudicated fact; verify the string's claim, don't relay it (PR #882, Sec-corrected).
+- [Restate before push, even on an unambiguous correction](feedback_restate_before_push_even_on_an_unambiguous_correction.md) — protocol is restate → team-lead confirm → ONE push, not restate-only-when-ambiguous; pushing straight off Sec's correction request skipped the step that catches a crossed build.
 
 ## Fence design
 - [Fences must fail closed on their own dependency](feedback_fence_must_fail_closed_on_own_dependency.md) — a hook that shells to a parser (e.g. `jq`) must deny if that parser is missing, not just when the pattern doesn't match.
