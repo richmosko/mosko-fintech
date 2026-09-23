@@ -103,6 +103,20 @@ export const resetPasswordSchema = z
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 
 /**
+ * Email-OTP link type (ADR-074 / SSR `token_hash` auth-email pattern). Scoped to the
+ * five link-bearing GoTrue types our templates emit — `signup` (email confirmation),
+ * `invite`, `magiclink`, `recovery`, `email_change`. Deliberately narrower than
+ * `@supabase/auth-js`'s `EmailOtpType`, which additionally admits `'email'` (a
+ * different verifyOtp shape — 6-digit code, not `token_hash`) and a `(string & {})`
+ * escape hatch; this route accepts neither. An enum (not a bare string) both narrows
+ * the `verifyOtp({ type })` argument and closes the `auth/confirm` redirect-table
+ * lookup — an unlisted type cannot reach either.
+ */
+export const emailOtpTypeSchema = z.enum(['signup', 'invite', 'magiclink', 'recovery', 'email_change']);
+
+export type EmailOtpType = z.infer<typeof emailOtpTypeSchema>;
+
+/**
  * Open-redirect guard. A post-login / post-confirm redirect target is honored ONLY
  * when it is a SAME-SITE absolute path: a single leading `/`, and NOT a
  * protocol-relative URL (`//host`) or a backslash-smuggled one (`/\host`, which some

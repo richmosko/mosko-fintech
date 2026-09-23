@@ -20,16 +20,21 @@ Configure these on the **self-hosted Supabase / GoTrue** deployment env (Coolify
 | `SMTP_PASS` | **secret** | *(Resend API key)* | *(IAM-derived SMTP password)* |
 | `SMTP_ADMIN_EMAIL` | envelope sender | `noreply@<your-domain>` | `noreply@<your-domain>` |
 | `SMTP_SENDER_NAME` | display name | `mosko-fintech` | `mosko-fintech` |
+| `SITE_URL` | confirmation-email link host (ADR-074) | `https://pfindash.com` | `https://pfindash.com` |
 
 The `supabase/config.toml` `[auth.email.smtp]` block documents this shape (kept **commented** so local dev keeps using Inbucket). The prod flip happens in the GoTrue env, not that file.
 
+**[SCRIPTED, fail-closed]** `scripts/provision-supabase-stack.sh --apply` refuses when `SMTP_PASS` is set and `SMTP_ADMIN_EMAIL` is absent or ends `@example.com`; refuses when `SITE_URL` is absent, not `https://`, or contains `localhost`/`127.0.0.1`.
+
 ## Provider A — Resend (V1 default)
 
-1. Create a Resend account; add + **verify your sending domain** (`<your-domain>`).
-2. Add the Resend-generated DNS records to your domain: **SPF**, **DKIM**, and a **DMARC** policy record. Wait for verification to go green.
-3. Create an API key → put it in the root, **gitignored** `.env` as `SMTP_PASS` (see [`scripts/provision.env.example`](../scripts/provision.env.example)) — **scripted, not a Coolify dashboard click**, same operator-provided pattern as `HETZNER_API_TOKEN`/`COOLIFY_ADMIN_PASSWORD`. `SMTP_PASS` is declared `production_only` in [`secrets-manifest.yml`](../secrets-manifest.yml) — **Sec-reviewed** as a prod secret.
-4. Run `scripts/provision-supabase-stack.sh --apply` — it reads `SMTP_PASS` (and, optionally, `SMTP_ADMIN_EMAIL`/`SMTP_SENDER_NAME`) from `.env`, pushes it to the box over SSH (never a command-line arg, never printed), and OVERWRITES the stack's non-functional placeholders with it — `SMTP_PASS` itself, plus `SMTP_USER=resend`, `SMTP_HOST=smtp.resend.com`, `SMTP_PORT=465` (this script's own fixed values for Resend; there is no separate "set the other env vars" step). Leave `SMTP_PASS` unset and the script leaves the placeholders alone, printing a one-line reminder pointing back here.
-5. Verify: trigger a signup → the confirmation email lands in a **real inbox, not spam**.
+1. **[BY-HAND]** Create a Resend account; add + **verify your sending domain** (`<your-domain>`).
+2. **[BY-HAND]** Add the Resend-generated DNS records to your domain: **SPF**, **DKIM**, and a **DMARC** policy record. Wait for verification to go green.
+3. **[BY-HAND]** Create an API key → put it in the root, **gitignored** `.env` as `SMTP_PASS`, `SMTP_ADMIN_EMAIL`, `SMTP_SENDER_NAME` and `SITE_URL` (see [`scripts/provision.env.example`](../scripts/provision.env.example)). `SMTP_PASS` is declared `production_only` in [`secrets-manifest.yml`](../secrets-manifest.yml).
+4. **[SCRIPTED]** `scripts/provision-supabase-stack.sh --apply` — reads `SMTP_PASS`/`SMTP_ADMIN_EMAIL`/`SMTP_SENDER_NAME`/`SITE_URL` from `.env`, pushes them to the box over SSH (never a command-line arg, never printed), OVERWRITES the stack's placeholders with them (`SMTP_USER=resend`/`SMTP_HOST=smtp.resend.com`/`SMTP_PORT=465` are this script's own fixed Resend values), and redeploys the `auth` service so the change reaches the running container.
+5. **[SCRIPTED]** `scripts/smoke-remaining-checks.sh` Leg 4 (L4a/L4b) — confirms the env reached the container and the template URLs serve.
+6. **[SCRIPTED + BY-HAND]** Verify: production `auth.users` is empty until the founding account is invited, so **the invite round trip is the live verification, not recovery** — `scripts/invite-user.sh <email> --apply` → the invite email lands in a **real inbox, not spam**, sender reads `<SMTP_SENDER_NAME> <SMTP_ADMIN_EMAIL>`, link host is `SITE_URL` with path `/auth/confirm?token_hash=…&type=invite`, following it lands on `/reset-password` — set a password there to complete account creation. ⚠ A link containing `/auth/v1/verify` means the template fetch failed and GoTrue fell back to stock — stop, re-run step 5. **Signup is hard-gated off in prod (`GOTRUE_DISABLE_SIGNUP=true`); the recovery round trip (`/forgot-password`) becomes the live verification path only on a SECOND pass, once this founding account exists.**
+7. Access-log residual: Traefik access log is **OFF** (measured 2026-09-23: `coolify-proxy`'s own 18 command args carry no `--accesslog*` flag, and `/data/coolify/proxy/docker-compose.yml` has no accesslog/log directive either) — the confirmation token traveling in `/auth/confirm`'s query is not logged today. **Enabling Traefik's access log, adding a request logger to `api/`, or routing `/auth/confirm` through `api-gw` all re-trigger Sec's grade of this token-in-URL residual (ADR-074).**
 
 ## Provider B — Amazon SES (alternative)
 

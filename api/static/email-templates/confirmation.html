@@ -1,0 +1,11 @@
+<!-- pfin-template:signup v1 — canary: any received email is decidable custom-vs-stock,
+     since GoTrue silently falls back to its built-in body on a template-fetch failure. -->
+<!-- GoTrue signup email-confirmation template (ADR-074 SSR token_hash pattern).
+     Served by the app container over the private stack network
+     (GOTRUE_MAILER_TEMPLATES_CONFIRMATION=http://app:3000/email-templates/confirmation.html).
+     Plain, minimal HTML: no scripts, no user free-text. -->
+<h2>Confirm your email</h2>
+<p>Welcome to mosko-fintech. Confirm this email address to activate your account:</p>
+<p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&amp;type=signup">Confirm email address</a></p>
+<p>Or enter this code: <strong>{{ .Token }}</strong></p>
+<p>If you didn't create a mosko-fintech account, you can ignore this email.</p>

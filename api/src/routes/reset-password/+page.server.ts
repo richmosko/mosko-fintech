@@ -2,9 +2,12 @@
 // (SELF-288 / Auth-5, AC #1; F/CTO Option A). Backend-owned server source (ARCH §4.1
 // allowlist). NO service_role (RT-26), NO migration, NO DEFINER.
 //
-// REACHED VIA the recovery link: the email's ConfirmationURL → GoTrue verifies the
-// recovery token → redirects to /auth/callback?next=/reset-password&code=… → the callback
-// exchangeCodeForSession() mints a recovery SESSION (aal1) → bounces here.
+// REACHED VIA the recovery link (ADR-074 SSR token_hash pattern): the email's link is
+// {{ .SiteURL }}/auth/confirm?token_hash=…&type=recovery → auth/confirm/+server.ts
+// verifies it directly via verifyOtp({ token_hash, type: 'recovery' }), which mints a
+// recovery SESSION (aal1) as a side effect of @supabase/ssr's cookie handling → 303s
+// here on success. (The `?code=` / /auth/callback exchange this comment used to
+// describe is the OAuth/PKCE seam — still present, but no longer the recovery path.)
 //
 // MFA STEP-UP COMPOSITION (F/CTO Option A — the security crux, flagged for Sec):
 //   THE ENFORCER IS THE APP LAYER — the aal2 requirement for an MFA user's password reset is

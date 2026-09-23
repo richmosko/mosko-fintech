@@ -1,0 +1,11 @@
+<!-- pfin-template:invite v1 — canary: any received email is decidable custom-vs-stock,
+     since GoTrue silently falls back to its built-in body on a template-fetch failure. -->
+<!-- GoTrue invite template (ADR-074 SSR token_hash pattern). Served by the app
+     container over the private stack network
+     (GOTRUE_MAILER_TEMPLATES_INVITE=http://app:3000/email-templates/invite.html).
+     Plain, minimal HTML: no scripts, no user free-text. -->
+<h2>You've been invited</h2>
+<p>You've been invited to mosko-fintech. Accept the invitation to set up your account:</p>
+<p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&amp;type=invite">Accept invitation</a></p>
+<p>Or enter this code: <strong>{{ .Token }}</strong></p>
+<p>If you weren't expecting this invitation, you can ignore this email.</p>

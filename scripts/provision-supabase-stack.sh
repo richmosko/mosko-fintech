@@ -234,6 +234,68 @@ else
   SMTP_STATUS="none in .env -- placeholders stay (stack starts; real auth email won't send) -- see docs/email-smtp-runbook.md"
 fi
 
+# ADR-074 Decision A + Part 2(c) items 1-2: SITE_URL is operator-provided
+# (scripts/provision.env.example), unconditional overwrite, same
+# mechanism as SMTP_PASS above -- NONSECRET_DEFAULTS below still carries
+# the localhost literal as a mint-if-absent fallback for a genuinely
+# fresh box; this override corrects it once DNS/domain has a real value.
+# Fail-closed guards (Sec ship-block, F/CTO ruling 2026-09-23): this
+# provisioner has no local/dev mode -- it only ever targets a real box
+# over SSH/Coolify -- so both guards below fire UNCONDITIONALLY on every
+# run, never behind a self-declared "is this production" flag.
+SITE_URL_OVERRIDE="$(read_env_var SITE_URL)"
+if [[ -n "$SITE_URL_OVERRIDE" ]]; then
+  [[ "$SITE_URL_OVERRIDE" == https://* ]] \
+    || die "SITE_URL='$SITE_URL_OVERRIDE' in .env does not start with https:// -- refusing (ADR-074: the confirmation-email link's own host is dereferenced by mail clients over the public internet)."
+  case "$SITE_URL_OVERRIDE" in
+    *localhost*|*127.0.0.1*)
+      die "SITE_URL='$SITE_URL_OVERRIDE' in .env contains localhost/127.0.0.1 -- refusing (this would ship a dead link in every auth email; see ADR-074 Part 0)." ;;
+  esac
+fi
+if [[ -n "$SMTP_PASS" ]]; then
+  [[ -n "$SMTP_ADMIN_EMAIL_OVERRIDE" ]] \
+    || die "SMTP_PASS is set in .env but SMTP_ADMIN_EMAIL is not -- refusing (Sec ship-block: a real SMTP credential with no admin-email override would send from the placeholder admin@example.com)."
+  case "$SMTP_ADMIN_EMAIL_OVERRIDE" in
+    *@example.com)
+      die "SMTP_ADMIN_EMAIL='$SMTP_ADMIN_EMAIL_OVERRIDE' ends in @example.com -- refusing (Sec ship-block: this is the non-functional placeholder domain, never a real sender)." ;;
+  esac
+fi
+
+# The five GOTRUE_MAILER_TEMPLATES_* values are FIXED literals this
+# script computes itself -- never operator-provided, never read from
+# .env (ADR-074 Part 2(a) "New" column). Computed unconditionally
+# (independent of SITE_URL_OVERRIDE being set) since they point at the
+# `app` container over the private stack network, not at SITE_URL --
+# measured live, 2026-09-23: `getent hosts app` from inside the `auth`
+# container resolves 10.0.2.11 on the stack's own network
+# (nz7mbexygw9lesjlazcxeltn), discharging the ADR's own "app alias
+# UNMEASURED" residual risk.
+MAILER_TEMPLATES_INVITE="http://app:3000/email-templates/invite.html"
+MAILER_TEMPLATES_CONFIRMATION="http://app:3000/email-templates/confirmation.html"
+MAILER_TEMPLATES_RECOVERY="http://app:3000/email-templates/recovery.html"
+MAILER_TEMPLATES_MAGIC_LINK="http://app:3000/email-templates/magic_link.html"
+MAILER_TEMPLATES_EMAIL_CHANGE="http://app:3000/email-templates/email_change.html"
+# Guard (Sec, ADR-074 Part 2(c) item 2 + team-lead addendum A): each
+# value must carry an explicit scheme (Consequence 2 -- a bare path is
+# silently rewritten to SITE_URL + path by GoTrue's own
+# loadEntryBody(), an unnoticed public fetch) AND must not itself begin
+# with SITE_URL (the identical failure one layer up, or a copy-paste
+# mistake -- indistinguishable from the bug this guard exists to
+# catch). Asserted once, here, where the values are computed, so a
+# future edit to the literals above is protected too -- "a guard never
+# made to fail is an assumption" (Sec), struck by hand once below, not
+# by a new fixture (F/CTO ruling: no new tests for this build).
+for _tmpl_url in "$MAILER_TEMPLATES_INVITE" "$MAILER_TEMPLATES_CONFIRMATION" "$MAILER_TEMPLATES_RECOVERY" "$MAILER_TEMPLATES_MAGIC_LINK" "$MAILER_TEMPLATES_EMAIL_CHANGE"; do
+  case "$_tmpl_url" in
+    http://*|https://*) ;;
+    *) die "template URL '$_tmpl_url' does not start with http:// or https:// -- refusing (a bare path is silently rewritten to SITE_URL + path by GoTrue, becoming an unintended public fetch)." ;;
+  esac
+  if [[ -n "$SITE_URL_OVERRIDE" && "$_tmpl_url" == "$SITE_URL_OVERRIDE"* ]]; then
+    die "template URL '$_tmpl_url' begins with SITE_URL ('$SITE_URL_OVERRIDE') -- refusing (this is indistinguishable from the bare-path-rewrite failure this guard exists to catch)."
+  fi
+done
+unset _tmpl_url
+
 # INCIDENT, 2026-09-11: BOX_IP used to default to prod's IP
 # (188.245.166.206) when unset. Running this script against a scratch box
 # with BOX_IP correctly overridden still left ONE downstream call (to
@@ -749,6 +811,28 @@ else
   info "no SMTP_PASS in .env -- leaving the stack's non-functional SMTP placeholders in place. See docs/email-smtp-runbook.md to wire real delivery."
 fi
 
+step "SITE_URL + email templates (ADR-074): operator/script-provided URLs (unconditional overwrite)"
+# Same boundary-crossing shape as the SMTP block above -- a path pushed
+# over SSH stdin, read back by PATH only downstream, never a value on
+# argv or in a heredoc literal. Unlike SMTP, this file is ALWAYS pushed:
+# the five MAILER_TEMPLATES_* values are the same computed literals on
+# every run (never "nothing to push"), and they must reach the box
+# regardless of whether SITE_URL_OVERRIDE itself is set yet.
+URL_SEED_FILE="/root/.pfin/_url_seed.env.$$"
+{
+  printf 'SITE_URL=%s\n' "$SITE_URL_OVERRIDE"
+  printf 'MAILER_TEMPLATES_INVITE=%s\n' "$MAILER_TEMPLATES_INVITE"
+  printf 'MAILER_TEMPLATES_CONFIRMATION=%s\n' "$MAILER_TEMPLATES_CONFIRMATION"
+  printf 'MAILER_TEMPLATES_RECOVERY=%s\n' "$MAILER_TEMPLATES_RECOVERY"
+  printf 'MAILER_TEMPLATES_MAGIC_LINK=%s\n' "$MAILER_TEMPLATES_MAGIC_LINK"
+  printf 'MAILER_TEMPLATES_EMAIL_CHANGE=%s\n' "$MAILER_TEMPLATES_EMAIL_CHANGE"
+} | sshx "umask 077; mkdir -p /root/.pfin; cat > $URL_SEED_FILE"
+if [[ -n "$SITE_URL_OVERRIDE" ]]; then
+  ok "pushed SITE_URL + 5 mailer template URLs to the box -- will overwrite placeholders below"
+else
+  info "no SITE_URL in .env -- pushing the 5 mailer template URLs only; SITE_URL stays at its mint-if-absent localhost default until DNS/domain is decided (ADR-074 open question 2)"
+fi
+
 step "Secrets: mint-if-absent, set env vars, assert non-empty -- all on the box, no value ever leaves it"
 # Measured 2026-09-11 against a genuinely fresh scratch box: the OLD
 # "absent" check asked the API which KEYS have a row at all
@@ -783,7 +867,7 @@ NEED_MINT="$(sshx_in <<REMOTE
 docker exec coolify php artisan tinker --execute="
 (function () {
 \\\$app = \\App\\Models\\Application::where('uuid','$APP_UUID')->firstOrFail();
-\\\$check = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
+\\\$check = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL','MAILER_TEMPLATES_INVITE','MAILER_TEMPLATES_CONFIRMATION','MAILER_TEMPLATES_RECOVERY','MAILER_TEMPLATES_MAGIC_LINK','MAILER_TEMPLATES_EMAIL_CHANGE'];
 foreach (\\\$check as \\\$key) {
   \\\$env = \\\$app->environment_variables()->where('key', \\\$key)->first();
   \\\$nonEmpty = \\\$env && strlen((string) \\\$env->value) > 0;
@@ -794,6 +878,44 @@ return null;
 "
 REMOTE
 )"
+
+# ADR-074 Consequence 9 / team-lead's redeploy-when-changed ruling: NEED_MINT
+# above only distinguishes EMPTY-vs-not, not old-value-vs-new -- it cannot
+# tell "this run reasserts the identical value" from "this run actually
+# changes what's live", and only the second case needs a redeploy. Read the
+# CURRENT live values of the six auth-email keys (all non-secret -- safe to
+# echo in full, unlike the ~35 keys $check/$required cover above) and diff
+# them against what this run is about to set, in bash, before anything is
+# PATCHed.
+CURRENT_EMAIL_ENV="$(sshx_in <<REMOTE
+docker exec coolify php artisan tinker --execute="
+(function () {
+\\\$app = \\App\\Models\\Application::where('uuid','$APP_UUID')->firstOrFail();
+\\\$keys = ['SITE_URL','MAILER_TEMPLATES_INVITE','MAILER_TEMPLATES_CONFIRMATION','MAILER_TEMPLATES_RECOVERY','MAILER_TEMPLATES_MAGIC_LINK','MAILER_TEMPLATES_EMAIL_CHANGE'];
+foreach (\\\$keys as \\\$key) {
+  \\\$env = \\\$app->environment_variables()->where('key', \\\$key)->first();
+  echo \\\$key . '=' . (\\\$env ? (string) \\\$env->value : '') . PHP_EOL;
+}
+return null;
+})();
+"
+REMOTE
+)"
+EMAIL_ENV_CHANGED=0
+_email_env_diff() {
+  local key="$1" new="$2" old
+  old="$(printf '%s\n' "$CURRENT_EMAIL_ENV" | sed -n "s/^${key}=//p")"
+  [[ "$old" == "$new" ]] || EMAIL_ENV_CHANGED=1
+}
+# SITE_URL only counts if this run is actually overriding it -- comparing
+# against an intentionally-not-applied empty string would always read as
+# "changed" and force a needless redeploy on every run with no override set.
+[[ -z "$SITE_URL_OVERRIDE" ]] || _email_env_diff SITE_URL "$SITE_URL_OVERRIDE"
+_email_env_diff MAILER_TEMPLATES_INVITE "$MAILER_TEMPLATES_INVITE"
+_email_env_diff MAILER_TEMPLATES_CONFIRMATION "$MAILER_TEMPLATES_CONFIRMATION"
+_email_env_diff MAILER_TEMPLATES_RECOVERY "$MAILER_TEMPLATES_RECOVERY"
+_email_env_diff MAILER_TEMPLATES_MAGIC_LINK "$MAILER_TEMPLATES_MAGIC_LINK"
+_email_env_diff MAILER_TEMPLATES_EMAIL_CHANGE "$MAILER_TEMPLATES_EMAIL_CHANGE"
 
 # Item 19 fix (Sec-gated, booked BACKLOG.md §7.36 #19): this heredoc used
 # to be `sshx_in <<REMOTE` (unquoted delimiter), which made the LOCAL shell
@@ -817,7 +939,7 @@ REMOTE
 # key-list/path, not attacker input, so no extra %q-quoting beyond the
 # existing double-quote convention). bash -s then sees them as ordinary
 # already-exported variables, same names, same values, as before.
-sshx "env APP_UUID=\"$APP_UUID\" NEED_MINT=\"$NEED_MINT\" SMTP_SEED_FILE=\"$SMTP_SEED_FILE\" bash -s" <<'REMOTE'
+sshx "env APP_UUID=\"$APP_UUID\" NEED_MINT=\"$NEED_MINT\" SMTP_SEED_FILE=\"$SMTP_SEED_FILE\" URL_SEED_FILE=\"$URL_SEED_FILE\" bash -s" <<'REMOTE'
 set -e
 umask 077
 mkdir -p /root/.pfin
@@ -836,12 +958,12 @@ TOKEN="$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
 # trap body), so it correctly sees whatever this script's variable holds
 # at exit time, including if it's still empty (no seed was ever pushed --
 # the guard below is then a no-op).
-trap 'if [ -n "$SMTP_SEED_FILE" ]; then shred -u "$SMTP_SEED_FILE" 2>/dev/null || rm -f "$SMTP_SEED_FILE"; fi' EXIT
+trap 'if [ -n "$SMTP_SEED_FILE" ]; then shred -u "$SMTP_SEED_FILE" 2>/dev/null || rm -f "$SMTP_SEED_FILE"; fi; if [ -n "$URL_SEED_FILE" ]; then shred -u "$URL_SEED_FILE" 2>/dev/null || rm -f "$URL_SEED_FILE"; fi' EXIT
 
-python3 - "$TOKEN" "$APP_UUID" "$NEED_MINT" "$SMTP_SEED_FILE" <<'PYEOF'
+python3 - "$TOKEN" "$APP_UUID" "$NEED_MINT" "$SMTP_SEED_FILE" "$URL_SEED_FILE" <<'PYEOF'
 import json, subprocess, sys, secrets as pysecrets
 
-token, app_uuid, need_mint_raw, smtp_seed_file = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+token, app_uuid, need_mint_raw, smtp_seed_file, url_seed_file = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 need_mint = set(need_mint_raw.split())
 
 # SECURITY FIX, 2026-09-11 (Sec-flagged sibling finding to #734 -- Backend
@@ -945,8 +1067,17 @@ MINT_SECRETS = {"POSTGRES_PASSWORD": 32, "JWT_SECRET": 32, "SECRET_KEY_BASE": 32
 # defaults (http://localhost:8000 / :8000/auth/v1 / :3000) -- not an
 # invented value, upstream's own documented dev/fresh-install default.
 # mint-if-absent means this never overwrites prod's real values (already
-# set from the hand-run era). The REAL public-facing URL scheme (once
-# pfindash.com DNS/domain routing is decided) is still an open ARCH call.
+# set from the hand-run era).
+#
+# ADR-074 (ratified, F/CTO 2026-09-23) resolves that "open ARCH call" for
+# SITE_URL only: it gets a dedicated operator-override block below (see
+# "SITE_URL + email templates"), unconditional overwrite once DNS/domain
+# is decided. API_EXTERNAL_URL and SUPABASE_PUBLIC_URL DELIBERATELY stay
+# at their localhost literals here, mint-if-absent, no override path --
+# Consequences 3+4: API_EXTERNAL_URL is only GOTRUE_JWT_ISSUER (nothing
+# validates `iss` today) and SUPABASE_PUBLIC_URL is only Studio + Envoy
+# CORS (no browser origin reaches it under this design); both need only
+# to PARSE, never to be dereferenced by a mail client or a browser.
 NONSECRET_DEFAULTS = {"STUDIO_DEFAULT_ORGANIZATION": "mosko-fintech",
                        "STUDIO_DEFAULT_PROJECT": "pfin-supabase",
                        "DASHBOARD_USERNAME": "supabase",
@@ -1045,6 +1176,22 @@ if smtp_seed_file:
         to_set["SMTP_SENDER_NAME"] = seed["SMTP_SENDER_NAME"]
     print("SMTP: operator-provided Resend credentials applied (overwrote placeholders)")
 
+# ADR-074 Part 2(c) item 1: SITE_URL is operator-provided (unconditional
+# overwrite, like SMTP_PASS above); the five MAILER_TEMPLATES_* are
+# ALWAYS applied -- they are fixed literals this script computes, not an
+# optional operator value, so url_seed_file always carries them and this
+# block always runs (unlike the SMTP block, which only runs when
+# SMTP_PASS was present in .env).
+if url_seed_file:
+    with open(url_seed_file) as f:
+        useed = dict(line.rstrip("\n").split("=", 1) for line in f if "=" in line)
+    if useed.get("SITE_URL"):
+        to_set["SITE_URL"] = useed["SITE_URL"]
+    for _k in ("MAILER_TEMPLATES_INVITE", "MAILER_TEMPLATES_CONFIRMATION", "MAILER_TEMPLATES_RECOVERY", "MAILER_TEMPLATES_MAGIC_LINK", "MAILER_TEMPLATES_EMAIL_CHANGE"):
+        if useed.get(_k):
+            to_set[_k] = useed[_k]
+    print("URLS: SITE_URL (if provided) + 5 mailer template URLs applied (ADR-074)")
+
 if to_set:
     data = [{"key": k, "value": v} for k, v in to_set.items()]
     api("PATCH", f"/applications/{app_uuid}/envs/bulk", {"data": data})
@@ -1094,7 +1241,7 @@ chmod 600 /root/.pfin/supabase.env 2>/dev/null || true
 ASSERT_OUT="$(docker exec coolify php artisan tinker --execute="
 (function () {
 \$app = \App\Models\Application::where('uuid','$APP_UUID')->firstOrFail();
-\$required = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL'];
+\$required = ['POSTGRES_PASSWORD','JWT_SECRET','SECRET_KEY_BASE','VAULT_ENC_KEY','SERVICE_ROLE_KEY','ANON_KEY','DASHBOARD_PASSWORD','PG_META_CRYPTO_KEY','STUDIO_DEFAULT_ORGANIZATION','STUDIO_DEFAULT_PROJECT','DASHBOARD_USERNAME','DISABLE_SIGNUP','ENABLE_ANONYMOUS_USERS','ENABLE_EMAIL_AUTOCONFIRM','ENABLE_EMAIL_SIGNUP','ENABLE_PHONE_AUTOCONFIRM','ENABLE_PHONE_SIGNUP','JWT_EXPIRY','MAILER_URLPATHS_CONFIRMATION','MAILER_URLPATHS_EMAIL_CHANGE','MAILER_URLPATHS_INVITE','MAILER_URLPATHS_RECOVERY','PGRST_DB_EXTRA_SEARCH_PATH','PGRST_DB_MAX_ROWS','PGRST_DB_SCHEMAS','POOLER_DB_POOL_SIZE','POOLER_DEFAULT_POOL_SIZE','POOLER_MAX_CLIENT_CONN','POOLER_TENANT_ID','POSTGRES_DB','POSTGRES_HOST','POSTGRES_PORT','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SENDER_NAME','SMTP_ADMIN_EMAIL','SUPABASE_PUBLIC_URL','API_EXTERNAL_URL','SITE_URL','MAILER_TEMPLATES_INVITE','MAILER_TEMPLATES_CONFIRMATION','MAILER_TEMPLATES_RECOVERY','MAILER_TEMPLATES_MAGIC_LINK','MAILER_TEMPLATES_EMAIL_CHANGE'];
 foreach (\$required as \$key) {
   \$env = \$app->environment_variables()->where('key', \$key)->first();
   \$nonEmpty = \$env && strlen((string) \$env->value) > 0;
@@ -1125,8 +1272,13 @@ if [[ -z "$EXISTING_DB_VOLUME" ]]; then
 else
   info "${APP_UUID}_db-data already exists -- checking whether the stack is already healthy (a genuine idempotent re-run) before treating this as a poisoned volume"
   if check_stack_already_healthy; then
-    ok "stack already provisioned and healthy -- nothing to deploy (still running the full verification battery below to confirm, not stopping at this quick check)"
-    NEED_DEPLOY=0
+    if [[ "$EMAIL_ENV_CHANGED" == "1" ]]; then
+      info "stack already healthy, but this run changed the auth-email env (SITE_URL and/or a MAILER_TEMPLATES_* value) -- redeploying so the running auth container picks it up (ADR-074 Consequence 9: a store PATCH alone does not reach a container Coolify does not restart)."
+      NEED_DEPLOY=1
+    else
+      ok "stack already provisioned and healthy -- nothing to deploy (still running the full verification battery below to confirm, not stopping at this quick check)"
+      NEED_DEPLOY=0
+    fi
   else
     die "${APP_UUID}_db-data exists but the stack is NOT confirmed healthy (see the healthy-check output above for which probe failed) -- this script does not know whether it initialized against a bogus mount at some point. See docs/deployment-runbook.md §4 for how to confirm by hand, and 'docker compose --project-name $APP_UUID down -v' to destroy it ONLY once you've confirmed it's poisoned -- never automatic, never inferred from this failure alone. Refusing to deploy onto it silently."
   fi
@@ -1187,6 +1339,28 @@ done
 info "$CONTAINERS/7 containers healthy (db auth rest api-gw supavisor studio meta)"
 [[ "$CONTAINERS" == "7" ]] || die "expected 7 healthy containers, got $CONTAINERS after 45s of polling"
 ok "all 7 containers healthy"
+
+# ADR-074 Part 2(c) item 5: a DIFFERENT instrument than the store PATCH --
+# `docker inspect` on the running `auth` container's own Config.Env,
+# never `docker exec`, since GoTrue's image ships neither node nor curl
+# (measured, real run 27; same instrument smoke-remaining-checks.sh's own
+# resend_probe() already uses for exactly this reason). Confirms the
+# change actually reached the container Coolify started, not just the
+# Coolify env store this script PATCHed. `supabase-auth` is this
+# compose's own fixed `container_name` (infra/supabase/docker-
+# compose.yml), not a project-templated name, so no resolution step is
+# needed the way the generic 7-container health check above needs one.
+AUTH_ENV="$(sshx "docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' supabase-auth")"
+AUTH_SITE_URL="$(printf '%s\n' "$AUTH_ENV" | sed -n 's/^GOTRUE_SITE_URL=//p')"
+AUTH_MAILER_CONFIRMATION="$(printf '%s\n' "$AUTH_ENV" | sed -n 's/^GOTRUE_MAILER_TEMPLATES_CONFIRMATION=//p')"
+info "auth container GOTRUE_SITE_URL=$AUTH_SITE_URL"
+info "auth container GOTRUE_MAILER_TEMPLATES_CONFIRMATION=$AUTH_MAILER_CONFIRMATION"
+if [[ -n "$SITE_URL_OVERRIDE" && "$AUTH_SITE_URL" != "$SITE_URL_OVERRIDE" ]]; then
+  die "auth container's own GOTRUE_SITE_URL ('$AUTH_SITE_URL') does not match the SITE_URL this run set ('$SITE_URL_OVERRIDE') -- the env store PATCH did not reach the running container. Investigate before treating this run as done."
+fi
+[[ "$AUTH_MAILER_CONFIRMATION" == "$MAILER_TEMPLATES_CONFIRMATION" ]] \
+  || die "auth container's own GOTRUE_MAILER_TEMPLATES_CONFIRMATION ('$AUTH_MAILER_CONFIRMATION') does not match the value this run computed ('$MAILER_TEMPLATES_CONFIRMATION') -- the env store PATCH did not reach the running container. Investigate before treating this run as done."
+ok "auth container's own env confirms the current SITE_URL/MAILER_TEMPLATES_CONFIRMATION values (names+values, non-secret)"
 
 PGVER="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc 'show server_version;'" 2>/dev/null | cut -d. -f1)"
 [[ "$PGVER" == "17" ]] || die "expected Postgres 17, got server_version starting '$PGVER'"
