@@ -142,34 +142,54 @@
 #         applies -- each table's `authenticated` read is its own fresh
 #         docker-exec/psql connection now, so there is no shared session
 #         for a stray SET ROLE to leak across.
-#       - HYBRID tables (real-run 27, 2026-09-22 -- Sec-ruled) --
-#         `pfin.asset` (016_asset_registry.sql:307-309: "HYBRID RLS ...
-#         global rows (users_id NULL) readable by all authenticated") is
-#         BY DESIGN not a bare-deny table: a session with no tenant
-#         identity established is SUPPOSED to see the global rows.
-#         Real-run 27's naive read (a bare `count(*)`) saw 7 such rows
-#         and misreported a "live RLS bypass" -- the correct assertion
-#         for a hybrid table is "0 rows with a NON-NULL users_id are
-#         visible", not "0 rows total are visible". Discovered from the
-#         policy text ITSELF in `pg_policies.qual` (never a hand list --
-#         a `SELECT`/`ALL` policy whose USING clause matches
-#         `users_id\s+is\s+null`, case-insensitive), same B-1
-#         dynamic-enumeration convention as everything else in this leg.
-#         For each discovered hybrid table:
-#         `psql_admin_auth_read_hybrid()` reads BOTH the tenant-visible
-#         count (`count(*) filter (where users_id is not null)`, must be
-#         0) and the total visible count (informational) in one
-#         connection. tenant-visible > 0 -> FAILED, a real bypass,
-#         regardless of anything else. tenant-visible == 0 and total > 0
-#         -> PROVEN (reported `HYBRID: pfin.<t> -- N global rows visible
-#         (users_id NULL), 0 tenant rows visible`), counted toward
-#         PROVEN_COUNT the same as any other demonstrated table. total ==
-#         0 too -> INCONCLUSIVE (empty; nothing to isolate, same as any
-#         other table). A grant-level refusal (SQLSTATE 42501) on a
-#         hybrid table is surprising (016_asset_registry.sql:334 grants
-#         `authenticated` an unconditional table-level SELECT) but stays
-#         INCONCLUSIVE, never PROVEN/FAILED from the permission error
-#         alone, per the same rule every other table follows.
+#       - HYBRID tables (real-run 27, 2026-09-22 -- Sec-ruled, PR #883
+#         review, TWO rounds) -- `pfin.asset` (016_asset_registry.sql:
+#         307-309: "HYBRID RLS ... global rows (users_id NULL) readable
+#         by all authenticated") is BY DESIGN not a bare-deny table: a
+#         session with no tenant identity established is SUPPOSED to see
+#         the global rows. Real-run 27's naive read (a bare `count(*)`)
+#         saw 7 such rows and misreported a "live RLS bypass" -- the
+#         correct assertion for a hybrid table is "0 rows with a
+#         NON-NULL users_id are visible", not "0 rows total are
+#         visible". Discovered from the policy text ITSELF in
+#         `pg_policies.qual` (never a hand list -- a `SELECT`/`ALL`
+#         policy whose USING clause matches `users_id\s+is\s+null`,
+#         case-insensitive), same B-1 dynamic-enumeration convention as
+#         everything else in this leg -- Sec explicitly ROUND-1-CONFIRMED
+#         this discovery mechanism over a hardcoded list (the `cmd in
+#         ('SELECT','ALL')` scoping is what makes it safe: a miss on a
+#         genuinely hybrid table fails closed via the ordinary "expected
+#         0" path, and a match can only fire on a policy that really is
+#         hybrid in effect), and the discovered set is printed.
+#           For each discovered hybrid table, TWO SEPARATE assertions,
+#         not one: (1) the LEAK half -- `psql_admin_auth_read_hybrid()`
+#         reads the tenant-visible count (`count(*) filter (where
+#         users_id is not null)`, must be 0) and the total visible count
+#         (informational) in one connection; tenant-visible > 0 ->
+#         FAILED, a real bypass, regardless of anything else, even on a
+#         table that has never held tenant data before (one just
+#         leaked). (2) the PROVEN-vs-INCONCLUSIVE half -- Sec's round-2
+#         correction: on tenant-visible == 0, the privileged baseline `p`
+#         for a hybrid table is the TENANT-owned row count (PRIV_SQL's
+#         own hybrid branch computes `count(*) filter (where users_id is
+#         not null)`, NOT the total), because the table's global rows
+#         make it look non-empty while the tenant-scoping half of its
+#         own policy may never have been exercised -- measured live on
+#         this box: 7 global rows, 0 tenant rows; a total-count baseline
+#         would have wrongly credited PROVEN on an assertion that could
+#         not have failed ("an assertion that cannot fail is not a
+#         measurement" -- Sec, noting this is the third time this
+#         specific vacuity trap has come up on this leg). p > 0 ->
+#         PROVEN, counted toward PROVEN_COUNT/HYBRID_COUNT. p == 0 ->
+#         INCONCLUSIVE, worded explicitly as vacuous (global-row
+#         visibility verified; tenant isolation UNPROVEN on this data,
+#         not proven absent) -- same empty-table bucket every other
+#         table's vacuous case already uses. A grant-level refusal
+#         (SQLSTATE 42501) on a hybrid table is surprising
+#         (016_asset_registry.sql:334 grants `authenticated` an
+#         unconditional table-level SELECT) but stays INCONCLUSIVE,
+#         never PROVEN/FAILED from the permission error alone, per the
+#         same rule every other table follows.
 #       - `service_role`'s own BYPASSRLS attribute is confirmed
 #         structurally (`pg_roles.rolbypassrls`), matching the by-design
 #         contrast every migration comment in this repo already states
@@ -833,11 +853,26 @@ else
     # Sec F-2: `reset role` at the tail -- the statements between the SET
     # ROLE and the end of THIS session are the thing to control; explicit,
     # not incidental-because-the-connection-happens-to-close-next.
+    # Sec ruling 2026-09-22 (PR #883 review, round 2): for a HYBRID table
+    # the privileged baseline must be the TENANT-owned row count
+    # (`count(*) filter (where users_id is not null)`), NOT the total row
+    # count -- a hybrid table's global rows make it look non-empty while
+    # the tenant-scoping half of its own policy may never have been
+    # exercised (measured live on this box: pfin.asset has 7 global rows
+    # and 0 tenant rows -- a total-count baseline would wrongly credit
+    # PROVEN on an assertion that could not have failed). Every
+    # non-hybrid table keeps the ordinary total-count baseline, unchanged.
     PRIV_SQL=""
     first=1
     for t in "${TABLES[@]}"; do
-      if [[ $first -eq 1 ]]; then PRIV_SQL="select 'PRIV' as ctx, '$t' as t, count(*) as n from pfin.\"$t\""; first=0
-      else PRIV_SQL="$PRIV_SQL union all select 'PRIV', '$t', count(*) from pfin.\"$t\""; fi
+      t_hybrid="$(printf '%s\n' "$RLS_ENUM" | awk -F'|' -v t="$t" '$1==t {print $8; exit}')"
+      if [[ "$t_hybrid" == "true" ]]; then
+        EXPR="count(*) filter (where users_id is not null)"
+      else
+        EXPR="count(*)"
+      fi
+      if [[ $first -eq 1 ]]; then PRIV_SQL="select 'PRIV' as ctx, '$t' as t, $EXPR as n from pfin.\"$t\""; first=0
+      else PRIV_SQL="$PRIV_SQL union all select 'PRIV', '$t', $EXPR from pfin.\"$t\""; fi
     done
     # Grant-conjunction checking (table+column level, both roles) now
     # happens upstream in the enumeration loop above, against the SAME
@@ -920,12 +955,23 @@ else
         hybrid="$(printf '%s\n' "$RLS_ENUM" | awk -F'|' -v t="$t" '$1==t {print $8; exit}')"
 
         if [[ "$hybrid" == "true" ]]; then
-          # HYBRID (real-run 27, Sec-ruled 2026-09-22) -- see
-          # psql_admin_auth_read_hybrid()'s own header. The correct
-          # assertion for this table is "0 rows with a NON-NULL users_id
-          # are visible", not "0 rows total are visible" -- global rows
-          # (users_id IS NULL) are meant to be visible to every
-          # authenticated caller by design.
+          # HYBRID (real-run 27, Sec-ruled 2026-09-22, PR #883 review --
+          # TWO rounds) -- see psql_admin_auth_read_hybrid()'s own header.
+          # TWO SEPARATE assertions, not one: (1) the LEAK half -- 0 rows
+          # with a NON-NULL users_id visible with no tenant identity
+          # established. Uses the LIVE read ($HYBRID_TENANT) and can fail
+          # on its own merits regardless of $p -- a real leak is a real
+          # leak even on a table with zero pre-existing tenant rows (one
+          # just leaked). (2) the PROVEN-vs-INCONCLUSIVE half -- Sec's
+          # round-2 correction: `$p` here is the PRIVILEGED TENANT-row
+          # count (PRIV_SQL's own hybrid branch, above), NOT the total
+          # row count. p>0 means real tenant-owned rows existed and none
+          # leaked -- PROVEN. p==0 means the leak assertion was VACUOUS
+          # (nothing existed to leak) -- INCONCLUSIVE, explicitly worded
+          # as such, never PROVEN on the strength of an assertion that
+          # could not have failed (identical principle to the DENY-ALL
+          # empty-table ruling; Sec: "it has now come up three times on
+          # this leg in different clothing").
           set +e
           HYBRID_OUT="$(psql_admin_auth_read_hybrid "$t" 2>&1)"
           HYBRID_RC=$?
@@ -940,15 +986,14 @@ else
             elif [[ "$HYBRID_TENANT" != "0" ]]; then
               RLS_STATUS="FAILED"
               RLS_MSGS+=("pfin.$t: HYBRID table -- $HYBRID_TENANT row(s) with a NON-NULL users_id visible to a session with NO tenant identity established (SET ROLE authenticated, no request.jwt.claims) -- expected 0. This is a live RLS bypass, not the by-design global-row exposure this table's own HYBRID policy grants.")
+            elif [[ "$p" -gt 0 ]]; then
+              info "HYBRID: pfin.$t -- global-row visibility VERIFIED ($HYBRID_TOTAL row(s), users_id NULL); tenant isolation PROVEN -- $p owner-bearing row(s) exist (privileged tenant-row count) and none are visible without tenant identity."
+              PROVEN_COUNT=$((PROVEN_COUNT + 1))
+              HYBRID_COUNT=$((HYBRID_COUNT + 1))
             else
-              info "HYBRID: pfin.$t -- $HYBRID_TOTAL global rows visible (users_id NULL), 0 tenant rows visible"
-              if [[ "$HYBRID_TOTAL" -gt 0 ]]; then
-                PROVEN_COUNT=$((PROVEN_COUNT + 1))
-                HYBRID_COUNT=$((HYBRID_COUNT + 1))
-              else
-                INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
-                INCONCLUSIVE_EMPTY_COUNT=$((INCONCLUSIVE_EMPTY_COUNT + 1))
-              fi
+              info "HYBRID: pfin.$t -- global-row visibility VERIFIED ($HYBRID_TOTAL row(s), users_id NULL); tenant isolation INCONCLUSIVE -- this table holds 0 owner-bearing row(s) (privileged tenant-row count), so the leak assertion (no non-NULL users_id row visible) is vacuously true, not a proven negative. Global-row visibility is verified; tenant isolation is UNPROVEN on this data, not proven absent."
+              INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+              INCONCLUSIVE_EMPTY_COUNT=$((INCONCLUSIVE_EMPTY_COUNT + 1))
             fi
           elif [[ "$HYBRID_OUT" == *"42501"* ]]; then
             # Surprising for a hybrid table (016_asset_registry.sql:334
@@ -1086,7 +1131,7 @@ else
           RLS_STATUS="SKIPPED"
           RLS_MSGS+=("every discovered table holds zero rows -- no rows exist to be isolated, so isolation is UNPROVEN, not proven absent. RLS-enabled/anon-zero-grant all checked structurally and hold; the behavioral zero-context read has nothing to demonstrate on an empty table. Re-run once at least one table holds real (or synthetic-but-real) tenant data.")
         else
-          ok "RLS: every discovered table -- RLS on, anon zero-grant; $PROVEN_COUNT table(s) PROVEN isolated ($DENY_ALL_COUNT via allowlisted DENY-ALL, $HYBRID_COUNT via HYBRID global-row demonstration, $((PROVEN_COUNT - DENY_ALL_COUNT - HYBRID_COUNT)) via >=1 policy), $INCONCLUSIVE_COUNT table(s) INCONCLUSIVE ($INCONCLUSIVE_EMPTY_COUNT empty -- nothing to isolate, $INCONCLUSIVE_REFUSED_POLICY_COUNT refused-at-grant on a policy-scoped table -- policy never exercised, $INCONCLUSIVE_UNREADABLE_COUNT unreadable -- an unexpected error, $INCONCLUSIVE_CONTRADICTION_COUNT contradiction -- a zero-grant table's read unexpectedly succeeded)"
+          ok "RLS: every discovered table -- RLS on, anon zero-grant; $PROVEN_COUNT table(s) PROVEN isolated ($DENY_ALL_COUNT via allowlisted DENY-ALL, $HYBRID_COUNT via HYBRID tenant-isolation proof, $((PROVEN_COUNT - DENY_ALL_COUNT - HYBRID_COUNT)) via >=1 policy), $INCONCLUSIVE_COUNT table(s) INCONCLUSIVE ($INCONCLUSIVE_EMPTY_COUNT empty -- nothing to isolate, $INCONCLUSIVE_REFUSED_POLICY_COUNT refused-at-grant on a policy-scoped table -- policy never exercised, $INCONCLUSIVE_UNREADABLE_COUNT unreadable -- an unexpected error, $INCONCLUSIVE_CONTRADICTION_COUNT contradiction -- a zero-grant table's read unexpectedly succeeded)"
         fi
       fi
     fi
@@ -1282,7 +1327,17 @@ process.stdin.on("end", () => {
   req.end();
 });
 '
-python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"from":sys.argv[2]}))' "$KEY" "$FROM" \
+# Sec F-2 (PR #883 review): passing "$KEY"/"$FROM" as python3 -c argv (an
+# earlier draft's shape) puts the key on python3's OWN argv -- readable
+# from /proc/<pid>/cmdline by anything on the box for the duration of the
+# call, contradicting this function's own header claim that the key
+# never appears on any process's argv. Fixed to match this repo's own
+# established stdin-only convention (resolve_app()'s PY_API_HELPER /
+# `api()` passes the Coolify token via curl's `-K -` stdin config, never
+# argv, for the identical reason) -- NUL-separated on python3's stdin
+# instead, mirroring the docker-exec/node half's own stdin-only shape.
+printf '%s\0%s' "$KEY" "$FROM" \
+  | python3 -c 'import json,sys; parts = sys.stdin.buffer.read().split(b"\x00"); k = parts[0].decode(); f = parts[1].decode() if len(parts) > 1 else ""; print(json.dumps({"key": k, "from": f}))' \
   | docker exec -i "$SIBLING_CID" node -e "$NODE_SCRIPT"
 REMOTE
 }

@@ -144,6 +144,21 @@ if [[ "$ARGS" == *"exec -T db psql"* ]]; then
     exit 0
   fi
   if [[ "$ARGS" == *"'PRIV' as ctx"* ]]; then
+    # real-run 27 addition, self-strike-driven (a canned $FAKE_PRIV value
+    # alone cannot prove PRIV_SQL actually REQUESTED the tenant-filtered
+    # count for a hybrid table -- only that the real script correctly
+    # CONSUMES whatever it's given; disabling the real script's own
+    # hybrid branch in PRIV_SQL's construction left every fence scenario
+    # green, because none of them checked the query TEXT). `asset` is
+    # this leg's own discovered hybrid table: whenever the batched query
+    # names it as a table (`'asset' as t` / `, 'asset',`), it MUST also
+    # carry `filter (where users_id is not null)` -- a total `count(*)`
+    # for asset without that filter is a real regression back to the
+    # wrong (total-row) baseline Sec's round-2 ruling rejected.
+    if [[ "$ARGS" == *"'asset'"* && "$ARGS" != *"filter (where users_id is not null)"* ]]; then
+      echo "FAKE DOCKER: PRIV query names 'asset' but carries no users_id-not-null filter -- the hybrid tenant-baseline branch is missing: $ARGS" >&2
+      exit 1
+    fi
     printf '%s' "${FAKE_PRIV:-}"
     exit 0
   fi
