@@ -205,6 +205,25 @@ FACT15_RAW="$(awk '
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# RUN_CASE_SEQ -- monotonic per-scenario counter, incremented as
+# run_case()'s own first statement. MEASURED live 2026-09-23 (production
+# CI, PR #887, run 35811680890, two attempts, two DIFFERENT scenarios
+# failing): run_case()'s marker/log filenames used to be
+# "$WORK/<name>.$$.$RANDOM" -- $$ is THIS SCRIPT's own pid, constant for
+# the whole run, so $RANDOM (a 16-bit draw, 0-32767) was the ONLY thing
+# telling two scenarios' marker files apart. Those marker files are
+# touch-once and NEVER deleted/truncated between scenarios (only their
+# EXISTENCE is checked, e.g. deploy_triggered_marker) -- across the
+# ~100+ scenarios in one run, a $RANDOM collision is a real birthday-
+# paradox risk, and a LATER scenario silently inheriting an EARLIER
+# scenario's already-touched marker (in either direction -- a marker
+# that should be absent reading as present, or vice versa) makes that
+# later scenario's own assertion meaningless, not merely flaky. A
+# monotonic counter is unique by construction; $$ is kept alongside it
+# only for readability/uniqueness-across-processes on shared /tmp, not
+# because it does any of the real work here.
+RUN_CASE_SEQ=0
+
 FAKE_ROOT_PFIN="$WORK/fakebox/root/pfin"
 mkdir -p "$FAKE_ROOT_PFIN"
 printf 'COOLIFY_API_TOKEN=fake-coolify-token-do-not-leak\n' > "$FAKE_ROOT_PFIN/coolify.env"
@@ -417,13 +436,14 @@ run_case() {
   # and/or FAKE_APP_BASE_DIR via CASE_ENV explicitly.
   local desc="$1" expect_exit="$2" apply_flag="$3" records="$4" apex_code="$5" www_code="$6"
   local old_fqdn="$7" new_fqdn="$8" patch_effect="$9"
+  RUN_CASE_SEQ=$((RUN_CASE_SEQ + 1))
   seed_default_app_compose
-  local log="$WORK/curl.log.$$.$RANDOM"
-  local leak_log="$WORK/leak.log.$$.$RANDOM"
-  local ports_patch_marker="$WORK/ports-patch.marker.$$.$RANDOM"
-  local compose_domains_patch_marker="$WORK/compose-domains-patch.marker.$$.$RANDOM"
-  local deploy_triggered_marker="$WORK/deploy-triggered.marker.$$.$RANDOM"
-  local tinker_fqdn_cleared_marker="$WORK/tinker-fqdn-cleared.marker.$$.$RANDOM"
+  local log="$WORK/curl.log.$$.$RUN_CASE_SEQ"
+  local leak_log="$WORK/leak.log.$$.$RUN_CASE_SEQ"
+  local ports_patch_marker="$WORK/ports-patch.marker.$$.$RUN_CASE_SEQ"
+  local compose_domains_patch_marker="$WORK/compose-domains-patch.marker.$$.$RUN_CASE_SEQ"
+  local deploy_triggered_marker="$WORK/deploy-triggered.marker.$$.$RUN_CASE_SEQ"
+  local tinker_fqdn_cleared_marker="$WORK/tinker-fqdn-cleared.marker.$$.$RUN_CASE_SEQ"
   : > "$log"
 
   printf 'PORKBUN_API_KEY=%s\nPORKBUN_SECRET_KEY=%s\nBOX_IP=127.0.0.1\n' "$PORKBUN_API_KEY_VALUE" "$PORKBUN_SECRET_KEY_VALUE" > "$WORK/.env"
