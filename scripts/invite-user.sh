@@ -17,18 +17,25 @@
 #   ADR-074 verification round trip for a from-empty production stack.
 #
 # WHAT THIS DOES
-#   Resolves the `app` container the same way scripts/smoke-remaining-
-#   checks.sh's own LEG 4 does (Coolify API resolve_app() +
-#   find_running_container(), Sec F4 ambiguity discipline: refuses on 0
-#   or >1 running matches). Reads SERVICE_ROLE_KEY from `supabase-envoy`
-#   (container_name is FIXED in infra/supabase/docker-compose.yml's
-#   `api-gw` service block -- confirmed live 2026-09-23 this is the
-#   container that actually holds the value, NOT `supabase-auth`, which
-#   only holds GOTRUE_JWT_SECRET; GoTrue verifies the service_role JWT's
-#   signature, it does not hold a copy of the JWT string itself) via
-#   `docker inspect` FROM THE HOST -- no shell needed inside that
-#   container. The key and the target email are then piped, NUL-
-#   separated, into `docker exec -i <app-container> node -e '<script>'`,
+#   Resolves BOTH the stack's `api-gw` container and the sibling `app`
+#   container the same way scripts/smoke-remaining-checks.sh's own LEG 4
+#   does: Coolify API resolve_app() (by name -> project uuid) +
+#   find_running_container() (`docker compose --project-name <uuid> ps -q
+#   <service>`, Sec F4 ambiguity discipline: refuses on 0 or >1 running
+#   matches). NEVER by a fixed container name -- MEASURED live, real
+#   production run 2026-09-23: Coolify ignores docker-compose.yml's own
+#   `container_name:` directive entirely and names every stack container
+#   `<service>-<project-uuid>-<timestamp>` instead (the compose file's
+#   literal `container_name: supabase-envoy` never reaches the actual
+#   container). Reads SERVICE_ROLE_KEY from the resolved `api-gw`
+#   container via `docker inspect` FROM THE HOST -- no shell needed
+#   inside that container. (Also measured live: SERVICE_ROLE_KEY is
+#   present in the env of all seven stack containers, including `auth` --
+#   `api-gw` is still the resolution target here because it is the
+#   component that actually consumes this value for its own routing, not
+#   because it is the only holder.) The key and the target email are
+#   then piped, NUL-separated, into `docker exec -i <app-container> node
+#   -e '<script>'`,
 #   which POSTs http://api-gw:8000/auth/v1/invite (plain http -- this
 #   never leaves the private stack network) with the key as both the
 #   `apikey` and `Authorization: Bearer` headers and `{"email": ...}` as
@@ -42,7 +49,8 @@
 #
 # WHAT THIS DOES NOT DO
 #   Accepts NO key parameter and NO env-var override for the key --
-#   SERVICE_ROLE_KEY is read from the one fixed on-box container, full
+#   SERVICE_ROLE_KEY is always read from the one `api-gw` container this
+#   script itself resolves off the stack's own Coolify project, full
 #   stop, so no wrong or stale key can ever be passed in by a caller
 #   (Sec C2). Does not touch GoTrue's SMTP config, templates, or
 #   SITE_URL (scripts/provision-supabase-stack.sh's job) -- this script
@@ -68,8 +76,9 @@
 #   With --apply: echoes the target address first (Sec C3, so the
 #   operator sees exactly what is about to be invited before the network
 #   call fires), then performs the resolve + invite. Same
-#   SIBLING_APP_NAME/COMPOSE_SERVICE env-var-override convention as
-#   scripts/smoke-remaining-checks.sh (defaults: pfin-app / app).
+#   STACK_APP_NAME/SIBLING_APP_NAME/COMPOSE_SERVICE env-var-override
+#   convention as scripts/smoke-remaining-checks.sh (defaults:
+#   pfin-supabase-stack / pfin-app / app).
 #
 # EXIT CODES
 #   0  invite accepted (HTTP 2xx from GoTrue), or preflight-only run.
@@ -115,6 +124,7 @@ info "target address: $EMAIL"
 
 BOX_IP="${BOX_IP:-}"
 AUTOMATION_KEY="${AUTOMATION_KEY:-$HOME/.ssh/id_ed25519_claude_mosko-fintech}"
+STACK_APP_NAME="${STACK_APP_NAME:-pfin-supabase-stack}"
 SIBLING_APP_NAME="${SIBLING_APP_NAME:-pfin-app}"
 COMPOSE_SERVICE="${COMPOSE_SERVICE:-app}"
 
@@ -191,7 +201,12 @@ find_running_container() {
   printf '%s' "$list"
 }
 
-step "Resolving '$SIBLING_APP_NAME'"
+step "Resolving '$STACK_APP_NAME' and '$SIBLING_APP_NAME'"
+STACK_UUID="$(resolve_app "$STACK_APP_NAME")" || die "could not resolve '$STACK_APP_NAME'"
+ok "resolved '$STACK_APP_NAME' -> $STACK_UUID"
+API_GW_CID="$(find_running_container "$STACK_UUID" "api-gw")" \
+  || die "could not find exactly one running 'api-gw' container under '$STACK_APP_NAME' ($STACK_UUID)"
+ok "resolved running 'api-gw' container -> $API_GW_CID"
 SIBLING_UUID="$(resolve_app "$SIBLING_APP_NAME")" || die "could not resolve '$SIBLING_APP_NAME'"
 ok "resolved '$SIBLING_APP_NAME' -> $SIBLING_UUID"
 SIBLING_CID="$(find_running_container "$SIBLING_UUID" "$COMPOSE_SERVICE")" \
@@ -203,15 +218,20 @@ step "Inviting $EMAIL"
 # Everything from reading SERVICE_ROLE_KEY through the HTTP POST happens
 # in ONE remote ssh session, mirroring resend_probe()'s own shape: the
 # key is never assigned to a local shell variable, never printed, and
-# never appears on any process's argv. Single-quoted heredoc -- SIBLING_CID
-# and EMAIL arrive via the `env VAR=val` prefix, not local interpolation.
-INVITE_OUT="$(sshx "env SIBLING_CID=\"$SIBLING_CID\" TARGET_EMAIL=\"$EMAIL\" bash -s" <<'REMOTE'
+# never appears on any process's argv. Single-quoted heredoc --
+# API_GW_CID, SIBLING_CID and EMAIL arrive via the `env VAR=val` prefix,
+# not local interpolation. Both container ids were already resolved
+# above via Coolify API + compose project/service (never a fixed
+# container name -- see this file's own header for why).
+INVITE_OUT="$(sshx "env API_GW_CID=\"$API_GW_CID\" SIBLING_CID=\"$SIBLING_CID\" TARGET_EMAIL=\"$EMAIL\" bash -s" <<'REMOTE'
 set -e
-if ! docker inspect supabase-envoy >/dev/null 2>&1; then
+if [[ -z "$API_GW_CID" ]] || ! docker inspect "$API_GW_CID" >/dev/null 2>&1; then
+  # Defensive -- should be unreachable: the caller only invokes this
+  # after find_running_container() already succeeded.
   echo "INVITE_ENVOY_CONTAINER_NOT_FOUND"
   exit 0
 fi
-KEY="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' supabase-envoy | grep -m1 '^SERVICE_ROLE_KEY=' | cut -d= -f2-)"
+KEY="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$API_GW_CID" | grep -m1 '^SERVICE_ROLE_KEY=' | cut -d= -f2-)"
 if [[ -z "$KEY" ]]; then
   echo "INVITE_KEY_ABSENT"
   exit 0
@@ -260,9 +280,9 @@ REMOTE
 
 case "$(sed -n 1p <<<"$INVITE_OUT")" in
   INVITE_ENVOY_CONTAINER_NOT_FOUND)
-    die "the 'supabase-envoy' container does not exist on the box -- is the Supabase stack deployed? (scripts/provision-supabase-stack.sh --apply)" ;;
+    die "the resolved 'api-gw' container ($API_GW_CID) is no longer inspectable on the box -- it may have been replaced mid-run; re-run this script." ;;
   INVITE_KEY_ABSENT)
-    die "SERVICE_ROLE_KEY is absent from 'supabase-envoy''s own env -- run scripts/provision-supabase-stack.sh --apply / scripts/mint-supabase-jwt-keys.sh first." ;;
+    die "SERVICE_ROLE_KEY is absent from the 'api-gw' container's own env -- run scripts/provision-supabase-stack.sh --apply / scripts/mint-supabase-jwt-keys.sh first." ;;
   INVITE_PAYLOAD_PARSE_ERROR)
     die "internal error building the invite payload -- this is a bug in this script, not a GoTrue/network failure." ;;
   INVITE_CONN_ERROR)
