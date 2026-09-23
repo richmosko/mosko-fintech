@@ -792,14 +792,16 @@ step "Materializing the real compose files (never a bogus empty directory this t
 COOLIFY_APP_UUID="$APP_UUID" COOLIFY_SSH_HOST="root@$BOX_IP" "$REPO_ROOT/scripts/coolify-materialize-supabase-mounts.sh" --apply
 
 # Bash-side mirror of the python heredoc's own to_set["SMTP_PORT"] =
-# "587" literal below (Resend's own fixed value, applied whenever
-# SMTP_PASS is seeded -- outbound 465 is blocked on Hetzner by default,
-# measured 2026-09-23). Kept here ONLY so the post-deploy container-env
+# "2465" literal below (Resend's own fixed value, applied whenever
+# SMTP_PASS is seeded -- 2465 = implicit TLS from the first byte on
+# Resend; 465 is blocked outbound on Hetzner by default, measured
+# 2026-09-23 from the auth container's own network namespace, 2465
+# measured OPEN). Kept here ONLY so the post-deploy container-env
 # check further down has something to assert against; if that python
 # literal ever changes, this one must change with it (same duplication
 # class scripts/coolify-env.sh's own value-shape constraints already
 # accept for MAILER_TEMPLATES_*).
-EXPECTED_SMTP_PORT="587"
+EXPECTED_SMTP_PORT="2465"
 
 step "SMTP: operator-provided credential (if any)"
 # Crosses the local->box boundary the same way provision-vps.sh's own
@@ -1178,12 +1180,13 @@ if smtp_seed_file:
         seed = dict(line.rstrip("\n").split("=", 1) for line in f if "=" in line)
     to_set["SMTP_PASS"] = seed.get("SMTP_PASS", "")
     to_set["SMTP_HOST"] = "smtp.resend.com"
-    # 587, not 465 -- measured 2026-09-23 from the auth container's own
+    # 2465, not 465 -- measured 2026-09-23 from the auth container's own
     # network namespace, live production: outbound 465 is BLOCKED
-    # (Hetzner's default egress policy on new projects), 587 is OPEN.
-    # GoTrue's mailer negotiates STARTTLS on 587 automatically; Resend
-    # supports both ports identically otherwise.
-    to_set["SMTP_PORT"] = "587"
+    # (Hetzner's default egress policy on new projects), 2465 is OPEN.
+    # 2465 = implicit TLS from the first byte on Resend, retiring the
+    # STARTTLS-stripping residual Sec recorded on PR #887 (BACKLOG item
+    # 100) without a Hetzner unblock request.
+    to_set["SMTP_PORT"] = "2465"
     to_set["SMTP_USER"] = "resend"
     if seed.get("SMTP_ADMIN_EMAIL"):
         to_set["SMTP_ADMIN_EMAIL"] = seed["SMTP_ADMIN_EMAIL"]
@@ -1392,7 +1395,7 @@ fi
   || die "auth container's own GOTRUE_MAILER_TEMPLATES_CONFIRMATION ('$AUTH_MAILER_CONFIRMATION') does not match the value this run computed ('$MAILER_TEMPLATES_CONFIRMATION') -- the env store PATCH did not reach the running container. Investigate before treating this run as done."
 # Conditional on SMTP_SEED_FILE (an operator SMTP_PASS was provided this
 # run) -- a fresh/no-seed box legitimately still carries the mint-if-
-# absent local-dev placeholder port, not 587, so asserting this
+# absent local-dev placeholder port, not 2465, so asserting this
 # unconditionally would false-fail that case (same conditional shape the
 # SITE_URL_OVERRIDE check above already uses).
 if [[ -n "$SMTP_SEED_FILE" ]]; then
