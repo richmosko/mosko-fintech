@@ -348,12 +348,23 @@ run_case() {
   # harness; default 0 preserves every existing scenario's own behavior
   # unchanged. Fixture update only, no new scenario (F/CTO ruling:
   # smallest change, no busy-work tests for this build).
+  #
+  # SMTP_SEED_FILE/SITE_URL_OVERRIDE (2026-09-23 redeploy-rule fix): the
+  # extracted block now also reads these two -- an SMTP_PORT-only change
+  # slipped through EMAIL_ENV_CHANGED's own diff in live production
+  # (that diff never looked at any SMTP_* key), so a healthy stack now
+  # redeploys UNCONDITIONALLY whenever either was applied this run,
+  # never on a value diff. Same unbound-variable-under-set-u reason as
+  # EMAIL_ENV_CHANGED above; both default empty, preserving every
+  # existing scenario's own behavior unchanged. Fixture update only, no
+  # new scenario.
   APP_UUID="test-stack-uuid-1234" \
     FAKE_CONTAINERS="$FAKE_CONTAINERS" FAKE_GW_NOKEY="$FAKE_GW_NOKEY" FAKE_PGVER="$FAKE_PGVER" \
     FAKE_INIT_STATE="$FAKE_INIT_STATE" FAKE_VOLUME_EXISTS="$FAKE_VOLUME_EXISTS" \
     FAKE_JWT_SETTING="$FAKE_JWT_SETTING" \
     FAKE_GW_WITHKEY="$FAKE_GW_WITHKEY" FAKE_GW_ANON_PRESENT="$FAKE_GW_ANON_PRESENT" \
     EMAIL_ENV_CHANGED="${FAKE_EMAIL_ENV_CHANGED:-0}" \
+    SMTP_SEED_FILE="${FAKE_SMTP_SEED_FILE:-}" SITE_URL_OVERRIDE="${FAKE_SITE_URL_OVERRIDE:-}" \
     bash "$combined" > "$out" 2>&1
   local rc=$?
   set -e
