@@ -1168,7 +1168,12 @@ if smtp_seed_file:
         seed = dict(line.rstrip("\n").split("=", 1) for line in f if "=" in line)
     to_set["SMTP_PASS"] = seed.get("SMTP_PASS", "")
     to_set["SMTP_HOST"] = "smtp.resend.com"
-    to_set["SMTP_PORT"] = "465"
+    # 587, not 465 -- measured 2026-09-23 from the auth container's own
+    # network namespace, live production: outbound 465 is BLOCKED
+    # (Hetzner's default egress policy on new projects), 587 is OPEN.
+    # GoTrue's mailer negotiates STARTTLS on 587 automatically; Resend
+    # supports both ports identically otherwise.
+    to_set["SMTP_PORT"] = "587"
     to_set["SMTP_USER"] = "resend"
     if seed.get("SMTP_ADMIN_EMAIL"):
         to_set["SMTP_ADMIN_EMAIL"] = seed["SMTP_ADMIN_EMAIL"]
