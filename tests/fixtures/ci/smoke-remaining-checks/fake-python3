@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#
+# fake-python3 -- argv-leak SENSOR for scripts/ci/fence-smoke-remaining-
+# checks-strikes.sh (Sec F-2, PR #883 review). This is NOT a python3
+# replacement -- scripts/smoke-remaining-checks.sh calls real python3 for
+# real work in several places (TZ-1's extract_runbook() import, resolve_app's
+# Coolify API helper, derive_auth_host's domain-shape parsing, resend_probe's
+# JSON-payload builder) and every one of those must keep running REAL
+# python3 logic unmodified under this fence. This wrapper only LOGS its own
+# complete argv (mirroring tests/fixtures/ci/push-secrets/fake-curl's own
+# `printf '%s\n' "$*" >> "$LOG"` convention -- the established shape for an
+# argv-leak sensor in this repo) to $FAKE_PYTHON3_ARGV_LOG, then delegates
+# unconditionally to the real binary.
+#
+# Finding the real python3: $PATH has $FAKE_BIN prepended (possibly more
+# than once -- fake-ssh's own remote-emulation shape re-prepends it) ahead
+# of this fixture's own symlink, so a naive `command -v python3` would find
+# THIS SCRIPT again, not the real one. Strip every leading "$FAKE_BIN:"
+# segment off PATH first, then look up python3 in what remains.
+
+set -euo pipefail
+
+printf '%s\n' "$*" >> "${FAKE_PYTHON3_ARGV_LOG:-/dev/null}"
+
+REAL_PATH="$PATH"
+while [[ "$REAL_PATH" == "$FAKE_BIN:"* ]]; do
+  REAL_PATH="${REAL_PATH#"$FAKE_BIN:"}"
+done
+REAL_PYTHON3="$(PATH="$REAL_PATH" command -v python3)"
+exec "$REAL_PYTHON3" "$@"

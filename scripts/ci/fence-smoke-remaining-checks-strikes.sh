@@ -135,6 +135,54 @@
 #       that now carries >=1 real policy -- POLICY-SCOPED (not DENY-ALL
 #       any more), reported as an INFO line, not a failure.
 #
+#   -- real-run 27 (2026-09-22) additions, REVISED after Sec's TWO-round
+#      PR #883 review: RLS HYBRID-table classification (a select policy
+#      admitting `users_id IS NULL` to every authenticated caller, e.g.
+#      `pfin.asset`, discovered LIVE from pg_policies.qual -- Sec
+#      round-1 explicitly CONFIRMED this discovery mechanism, scoped to
+#      `cmd in ('SELECT','ALL')`, over a hardcoded list), and the Resend
+#      probe moved off the auth container's own missing node/curl --
+#
+#   34. RLS-HYBRID-PROVEN -- 0 rows with a non-NULL users_id are visible
+#       AND the privileged TENANT-row baseline (Sec round-2: filtered on
+#       users_id IS NOT NULL, not the total row count) is >0 -- real
+#       tenant-isolation PROVEN, not vacuous; counted toward PROVEN_COUNT
+#       via its own HYBRID_COUNT bucket, content-asserted in the summary
+#       line's breakdown.
+#   35. RLS-HYBRID-INCONCLUSIVE-VACUOUS -- Sec round-2's correction, and
+#       the shape MEASURED LIVE on the real box (leaked=0, global=7,
+#       tenant=0): 0 rows with a non-NULL users_id are visible, but the
+#       privileged TENANT-row baseline is 0 -- the leak assertion is
+#       vacuously true (nothing existed to leak), so this must be
+#       INCONCLUSIVE, never credited as PROVEN on an assertion that could
+#       not have failed ("an assertion that cannot fail is not a
+#       measurement" -- Sec, noting this is the third time this specific
+#       vacuity trap has come up on this leg in different clothing).
+#   36. RLS-HYBRID-BYPASS -- a row with a NON-NULL users_id IS visible to
+#       a session with no tenant identity -- a REAL bypass, FAILED,
+#       explicitly distinguished in its own message from the by-design
+#       global-row exposure, regardless of the privileged tenant-row
+#       baseline (fails even when real tenant rows DO exist).
+#   31. AUTH-RESEND-AUTH-CONTAINER-NOT-FOUND -- zero running containers
+#       match the stack's own `auth` compose service -> FAILED.
+#   32. AUTH-RESEND-AUTH-CONTAINER-AMBIGUOUS -- two running containers
+#       match `auth` -> FAILED, same Sec F4 discipline as every other
+#       container lookup in this script.
+#   33. AUTH-RESEND-CONN-ERROR -- the key IS present and the sibling
+#       container is found, but the HTTPS POST itself fails -> FAILED.
+#   37. AUTH-RESEND-ARGV-LEAK-SENSOR -- Sec F-2 (PR #883 review): checked
+#       on EVERY scenario (run_scenario() itself, not a standalone
+#       numbered scenario) -- an earlier draft passed the Resend key to
+#       python3 as `sys.argv[1]`, readable from `/proc/<pid>/cmdline`;
+#       fake-python3 logs its own complete argv (mirroring
+#       tests/fixtures/ci/push-secrets/fake-curl's own token-argv-leak
+#       convention) and every run asserts the fixture's known key
+#       sentinel never appears in it.
+#   16 (retargeted). AUTH-RESEND-KEY-ABSENT -- the key-absence decision
+#       now lives INSIDE resend_probe()'s own remote script
+#       (FAKE_AUTH_ENV_LINES), checked before ever touching the sibling
+#       container -- FAKE_RESEND_OUT no longer drives this scenario.
+#
 #   -- real-run 25 (2026-09-22) additions: RLS's authenticated read is
 #      now ONE psql invocation PER TABLE (a batched UNION ALL aborted
 #      every table's read the instant ONE table hit a grant-level
@@ -232,6 +280,19 @@ ln -s "$FIXTURE_DIR/fake-ssh" "$FAKE_BIN/ssh"
 ln -s "$FIXTURE_DIR/fake-docker" "$FAKE_BIN/docker"
 ln -s "$FIXTURE_DIR/fake-curl" "$FAKE_BIN/curl"
 ln -s "$FIXTURE_DIR/fake-nc" "$FAKE_BIN/nc"
+[[ -x "$FIXTURE_DIR/fake-python3" ]] || { echo "FATAL: $FIXTURE_DIR/fake-python3 missing or not executable" >&2; exit 2; }
+ln -s "$FIXTURE_DIR/fake-python3" "$FAKE_BIN/python3"
+
+# Sec F-2 (PR #883 review): an argv-leak SENSOR for resend_probe()'s own
+# python3 call, same convention tests/fixtures/ci/push-secrets/fake-curl
+# already established for the Coolify API token -- fake-python3 logs its
+# complete argv, then delegates to real python3 unconditionally (every
+# OTHER python3 call site in the real script -- TZ-1 extraction,
+# resolve_app, derive_auth_host -- must keep running real logic). Checked
+# in run_scenario() itself, on EVERY call, not just the Resend-specific
+# ones -- an argv leak must never appear on ANY run.
+PYTHON3_ARGV_LOG="$WORK/python3_argv.log"
+RESEND_KEY_SENTINEL="fake-resend-key-do-not-leak"
 
 # The happy-path RLS fixture set -- shared as the baseline every scenario
 # starts from, overridden per-scenario below. Two tables, RLS on, one
@@ -245,14 +306,16 @@ ln -s "$FIXTURE_DIR/fake-nc" "$FAKE_BIN/nc"
 # UNION ALL aborting every table's read on the first grant-level
 # refusal). Privileged count >0 with authenticated count 0 is what
 # PROVES isolation (an all-empty set would only be INCONCLUSIVE, see
-# scenario 18). FAKE_RLS_ENUM rows are 7 fields (table|rls|polcount|
+# scenario 18). FAKE_RLS_ENUM rows are 8 fields (table|rls|polcount|
 # anon-table-sel|authenticated-table-sel|anon-col-sel|
-# authenticated-col-sel) -- Sec F-1, round-2 review, PR #880: the
-# trailing three columns only matter for a 0-policy allowlisted
+# authenticated-col-sel|hybrid) -- Sec F-1, round-2 review, PR #880: the
+# middle four privilege columns only matter for a 0-policy allowlisted
 # (DENY-ALL) table, but every row carries them for fixture-format
-# consistency.
-HAPPY_RLS_ENUM='account|true|1|false|false|false|false
-account_users|true|1|false|false|false|false'
+# consistency. The 8th (hybrid) column is a real-run 27 addition
+# (2026-09-22) -- see psql_admin_auth_read_hybrid()'s own header in
+# scripts/smoke-remaining-checks.sh; "false" for every ordinary table.
+HAPPY_RLS_ENUM='account|true|1|false|false|false|false|false
+account_users|true|1|false|false|false|false|false'
 HAPPY_PRIV='PRIV|account|5
 PRIV|account_users|3'
 HAPPY_AUTH='account|OK|0
@@ -294,6 +357,7 @@ run_scenario() {
   # content assertion beyond the exit code (see scenario 18).
   local desc="$1" expect_exit="$2"
   shift 2
+  : > "$PYTHON3_ARGV_LOG"
   set +e
   env REPO_ROOT="$REPO_ROOT" FAKE_ROOT_PFIN="$FAKE_ROOT_PFIN" FAKE_BIN="$FAKE_BIN" \
     BOX_IP=127.0.0.1 AUTOMATION_KEY=/dev/null \
@@ -306,7 +370,11 @@ run_scenario() {
     FAKE_CA7_GW="200" FAKE_CA7_P1="OPEN" FAKE_CA7_P2="OPEN" \
     FAKE_LOGIN_STATUS="200" \
     FAKE_SIGNUP_STATUS="200" FAKE_SIGNUP_CTYPE="application/json" FAKE_SIGNUP_BODY="$ENVELOPE_LITERAL" \
+    FAKE_AUTH_CONTAINERS="1" \
+    FAKE_AUTH_ENV_LINES="GOTRUE_SMTP_PASS=$RESEND_KEY_SENTINEL
+GOTRUE_SMTP_ADMIN_EMAIL=onboarding@resend.dev" \
     FAKE_RESEND_OUT="RESEND_STATUS_200" \
+    FAKE_PYTHON3_ARGV_LOG="$PYTHON3_ARGV_LOG" \
     "$@" \
     PATH="$FAKE_BIN:$PATH" bash "$SMOKE_SH" < /dev/null > "$LAST_OUT" 2>&1
   local rc=$?
@@ -318,7 +386,18 @@ run_scenario() {
     cat "$LAST_OUT" >&2
     return 1
   fi
-  echo "OK: [$desc] exit $rc as expected." >&2
+
+  # Sec F-2 (PR #883 review): checked on EVERY scenario, not just the
+  # Resend-specific ones -- an earlier draft passed the Resend key as
+  # python3 -c argv; this must never happen on ANY run, happy path
+  # included.
+  if grep -qF "$RESEND_KEY_SENTINEL" "$PYTHON3_ARGV_LOG" 2>/dev/null; then
+    echo "FAIL: [$desc] the fake Resend key leaked into a python3 invocation's own argv:" >&2
+    grep -F "$RESEND_KEY_SENTINEL" "$PYTHON3_ARGV_LOG" >&2
+    return 1
+  fi
+
+  echo "OK: [$desc] exit $rc as expected, Resend key absent from every logged python3 argv." >&2
   return 0
 }
 
@@ -403,11 +482,11 @@ run_scenario "TZ-1 drift: a role carries a TimeZone override: refuses" 1 \
 
 # 9. RLS-DISABLED
 run_scenario "RLS disabled on a discovered table: refuses" 1 \
-  FAKE_RLS_ENUM="account|false|1|false|false|false|false" || FAIL=1
+  FAKE_RLS_ENUM="account|false|1|false|false|false|false|false" || FAIL=1
 
 # 10. RLS-ANON-GRANT
 run_scenario "anon holds SELECT on a discovered table: refuses" 1 \
-  FAKE_RLS_ENUM="account|true|1|true|false|false|false" || FAIL=1
+  FAKE_RLS_ENUM="account|true|1|true|false|false|false|false" || FAIL=1
 
 # 11. RLS-ZERO-CONTEXT-NONZERO
 run_scenario "zero-JWT-context session sees >0 rows: refuses" 1 \
@@ -479,9 +558,55 @@ else
   FAIL=1
 fi
 
-# 16. AUTH-RESEND-KEY-ABSENT
+# 16. AUTH-RESEND-KEY-ABSENT -- real-run 27 fix: the key-absence decision
+#     is now made INSIDE resend_probe()'s own remote script (via
+#     FAKE_AUTH_ENV_LINES, checked BEFORE ever touching the sibling
+#     container), not via FAKE_RESEND_OUT any more.
 run_scenario "Resend key absent: informational only, still MANUAL" 4 \
-  FAKE_RESEND_OUT="RESEND_KEY_ABSENT" || FAIL=1
+  FAKE_AUTH_ENV_LINES="" || FAIL=1
+
+# 31. AUTH-RESEND-AUTH-CONTAINER-NOT-FOUND -- real-run 27 addition: zero
+#     running containers match the stack's own `auth` compose service ->
+#     resend_probe() reports RESEND_AUTH_CONTAINER_NOT_FOUND -> auth-login
+#     FAILED via the generic "unexpected RESEND_OUT" branch.
+run_scenario "Resend: zero running auth containers: refuses" 1 \
+  FAKE_AUTH_CONTAINERS="0" || FAIL=1
+if grep -qF "RESEND_AUTH_CONTAINER_NOT_FOUND" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [AUTH-RESEND-AUTH-CONTAINER-NOT-FOUND] refusal names the missing auth container." >&2
+else
+  echo "FAIL: [AUTH-RESEND-AUTH-CONTAINER-NOT-FOUND] expected RESEND_AUTH_CONTAINER_NOT_FOUND not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 32. AUTH-RESEND-AUTH-CONTAINER-AMBIGUOUS -- two running containers match
+#     the `auth` compose service -> resend_probe() refuses to guess which
+#     one, same Sec F4 discipline every other container lookup in this
+#     script already applies.
+run_scenario "Resend: two running auth containers (ambiguous): refuses" 1 \
+  FAKE_AUTH_CONTAINERS="2" || FAIL=1
+if grep -qF "RESEND_AUTH_CONTAINER_AMBIGUOUS" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [AUTH-RESEND-AUTH-CONTAINER-AMBIGUOUS] refusal names the ambiguity." >&2
+else
+  echo "FAIL: [AUTH-RESEND-AUTH-CONTAINER-AMBIGUOUS] expected RESEND_AUTH_CONTAINER_AMBIGUOUS not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 33. AUTH-RESEND-CONN-ERROR -- the key IS present (unlike scenario 16)
+#     and the sibling container is found, but the HTTPS POST itself fails
+#     -- FAILED via the generic "unexpected RESEND_OUT" branch, proving
+#     that branch is still reachable now that the happy path takes a
+#     different code path (RESEND_STATUS_200) than key-absence.
+run_scenario "Resend: connection error from the sibling container: refuses" 1 \
+  FAKE_RESEND_OUT="RESEND_CONN_ERROR" || FAIL=1
+if grep -qF "Resend send-acceptance probe -> RESEND_CONN_ERROR" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [AUTH-RESEND-CONN-ERROR] refusal names the connection error." >&2
+else
+  echo "FAIL: [AUTH-RESEND-CONN-ERROR] expected RESEND_CONN_ERROR refusal message not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
 
 # 17. AUTH-LOGIN-CURL-EMPTY
 run_scenario "GET /login produces no output at all: precondition, refuses (never a status-code comparison)" 1 \
@@ -521,9 +646,9 @@ fi
 #     PROVEN_COUNT via the default-deny mechanism, not a policy). Sec's
 #     four privilege columns (F-1, round-2 review, PR #880) must all
 #     read clean or this scenario itself would wrongly FAIL.
-DENY_ALL_RLS_ENUM='account|true|1|false|false|false|false
-account_users|true|1|false|false|false|false
-audit_log|true|0|false|false|false|false'
+DENY_ALL_RLS_ENUM='account|true|1|false|false|false|false|false
+account_users|true|1|false|false|false|false|false
+audit_log|true|0|false|false|false|false|false'
 DENY_ALL_PRIV='PRIV|account|5
 PRIV|account_users|3
 PRIV|audit_log|7'
@@ -552,7 +677,7 @@ fi
 # content-asserted against the summary line's own counts, not just the
 # aggregate exit code (3 PROVEN: 1 via DENY-ALL, 2 via >=1 policy; 0
 # INCONCLUSIVE, all four breakdown buckets at 0).
-if grep -qF "3 table(s) PROVEN isolated (1 via allowlisted DENY-ALL, 2 via >=1 policy), 0 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 0 refused-at-grant on a policy-scoped table -- policy never exercised, 0 unreadable -- an unexpected error, 0 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
+if grep -qF "3 table(s) PROVEN isolated (1 via allowlisted DENY-ALL, 0 via HYBRID tenant-isolation proof, 2 via >=1 policy), 0 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 0 refused-at-grant on a policy-scoped table -- policy never exercised, 0 unreadable -- an unexpected error, 0 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-DENY-ALL-ALLOWLISTED] sibling tables' reads were NOT aborted by audit_log's denial." >&2
 else
   echo "FAIL: [RLS-DENY-ALL-ALLOWLISTED] sibling-not-aborted proof failed -- expected PROVEN-count summary line not found (a batch-wide abort would have surfaced as a precondition FAILED instead)." >&2
@@ -575,7 +700,7 @@ if grep -qF "the authenticated row-count read failed with an unexpected error" "
   && grep -qF "INCONCLUSIVE for this table only" "$LAST_OUT" 2>/dev/null \
   && ! grep -qF "row read: REFUSED at grant level" "$LAST_OUT" 2>/dev/null \
   && grep -qE '^  RLS:[[:space:]]+VERIFIED' "$LAST_OUT" 2>/dev/null \
-  && grep -qF "1 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 1 via >=1 policy), 1 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 0 refused-at-grant on a policy-scoped table -- policy never exercised, 1 unreadable -- an unexpected error, 0 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
+  && grep -qF "1 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 0 via HYBRID tenant-isolation proof, 1 via >=1 policy), 1 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 0 refused-at-grant on a policy-scoped table -- policy never exercised, 1 unreadable -- an unexpected error, 0 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-AUTH-OTHER-ERROR] unexpected-error precondition message present, scoped to that table, never misclassified as a grant-level refusal, leg still VERIFIED, breakdown attributes it to 'unreadable' specifically (Sec: the summary must name what actually happened)." >&2
 else
   echo "FAIL: [RLS-AUTH-OTHER-ERROR] expected unexpected-error precondition message not found, or leg was not VERIFIED, or it was wrongly classified as a grant-level refusal, or the breakdown line is wrong." >&2
@@ -598,7 +723,7 @@ account_users|OK|0
 audit_log|OK|0" || FAIL=1
 if grep -qF "CONTRADICTION" "$LAST_OUT" 2>/dev/null \
   && grep -qF "is NOT counted as proven until that is resolved" "$LAST_OUT" 2>/dev/null \
-  && grep -qF "2 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 2 via >=1 policy), 1 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 0 refused-at-grant on a policy-scoped table -- policy never exercised, 0 unreadable -- an unexpected error, 1 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
+  && grep -qF "2 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 0 via HYBRID tenant-isolation proof, 2 via >=1 policy), 1 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 0 refused-at-grant on a policy-scoped table -- policy never exercised, 0 unreadable -- an unexpected error, 1 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-DENY-ALL-CONTRADICTION] CONTRADICTION WARN present, correctly INCONCLUSIVE and NOT counted as PROVEN (nor as via-DENY-ALL)." >&2
 else
   echo "FAIL: [RLS-DENY-ALL-CONTRADICTION] expected CONTRADICTION WARN and/or correct PROVEN/INCONCLUSIVE breakdown line not found." >&2
@@ -613,7 +738,7 @@ run_scenario "RLS: policy-scoped table's read is REFUSED at grant level: INCONCL
   FAKE_AUTH_TABLE_RESULTS="account|DENIED|
 account_users|OK|0" || FAIL=1
 if grep -qF "row read: REFUSED at grant level on a POLICY-SCOPED table" "$LAST_OUT" 2>/dev/null \
-  && grep -qF "1 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 1 via >=1 policy), 1 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 1 refused-at-grant on a policy-scoped table -- policy never exercised, 0 unreadable -- an unexpected error, 0 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
+  && grep -qF "1 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 0 via HYBRID tenant-isolation proof, 1 via >=1 policy), 1 table(s) INCONCLUSIVE (0 empty -- nothing to isolate, 1 refused-at-grant on a policy-scoped table -- policy never exercised, 0 unreadable -- an unexpected error, 0 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-REFUSED-POLICY-SCOPED] POLICY-SCOPED refusal correctly INCONCLUSIVE, never PROVEN/FAILED from the permission error alone." >&2
 else
   echo "FAIL: [RLS-REFUSED-POLICY-SCOPED] expected POLICY-SCOPED-refusal INCONCLUSIVE line and/or PROVEN-count line not found." >&2
@@ -640,9 +765,9 @@ fi
 #      this leg exists for: 026_mfa_recovery_code.sql:222's own
 #      column-scoped grants pattern, misapplied to the wrong role).
 run_scenario "RLS DENY-ALL allowlisted table with a column-level grant leak: refuses" 1 \
-  FAKE_RLS_ENUM='account|true|1|false|false|false|false
-account_users|true|1|false|false|false|false
-audit_log|true|0|false|false|false|true' \
+  FAKE_RLS_ENUM='account|true|1|false|false|false|false|false
+account_users|true|1|false|false|false|false|false
+audit_log|true|0|false|false|false|true|false' \
   FAKE_PRIV="$DENY_ALL_PRIV" FAKE_AUTH_TABLE_RESULTS="$DENY_ALL_AUTH" || FAIL=1
 if grep -qF "pfin.audit_log: DENY-ALL-allowlisted but authenticated holds a column-level SELECT grant" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-DENY-ALL-ALLOWLISTED-COLGRANT-LEAK] column-grant conjunction leg caught it." >&2
@@ -657,9 +782,9 @@ fi
 #      catch this even though anon's own table-level grant (checked
 #      separately, unaffected) and both column-level grants are clean.
 run_scenario "RLS DENY-ALL allowlisted table with authenticated table-level SELECT: refuses" 1 \
-  FAKE_RLS_ENUM='account|true|1|false|false|false|false
-account_users|true|1|false|false|false|false
-audit_log|true|0|false|true|false|false' \
+  FAKE_RLS_ENUM='account|true|1|false|false|false|false|false
+account_users|true|1|false|false|false|false|false
+audit_log|true|0|false|true|false|false|false' \
   FAKE_PRIV="$DENY_ALL_PRIV" FAKE_AUTH_TABLE_RESULTS="$DENY_ALL_AUTH" || FAIL=1
 if grep -qF "pfin.audit_log: DENY-ALL-allowlisted but authenticated holds table-level SELECT" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-DENY-ALL-ALLOWLISTED-AUTHTBL-LEAK] authenticated-table-grant conjunction leg caught it." >&2
@@ -674,9 +799,9 @@ fi
 #      Sec's four privilege columns; every one gets its own scenario so
 #      no single column's check can be silently absent.
 run_scenario "RLS DENY-ALL allowlisted table with anon column-level SELECT: refuses" 1 \
-  FAKE_RLS_ENUM='account|true|1|false|false|false|false
-account_users|true|1|false|false|false|false
-audit_log|true|0|false|false|true|false' \
+  FAKE_RLS_ENUM='account|true|1|false|false|false|false|false
+account_users|true|1|false|false|false|false|false
+audit_log|true|0|false|false|true|false|false' \
   FAKE_PRIV="$DENY_ALL_PRIV" FAKE_AUTH_TABLE_RESULTS="$DENY_ALL_AUTH" || FAIL=1
 if grep -qF "pfin.audit_log: DENY-ALL-allowlisted but anon holds a column-level SELECT grant" "$LAST_OUT" 2>/dev/null; then
   echo "OK: [RLS-DENY-ALL-ALLOWLISTED-ANONCOL-LEAK] anon column-grant conjunction leg caught it." >&2
@@ -690,9 +815,9 @@ fi
 #     in RLS_DENY_ALL_EXPECTED -- RLS FAILED in the ENUMERATION loop
 #     itself (Sec requirement 2: never rescued by any behavioral read),
 #     naming the table and the allowlist gap explicitly.
-DENY_ALL_UNLISTED_RLS_ENUM='account|true|1|false|false|false|false
-account_users|true|1|false|false|false|false
-planning_target|true|0|false|false|false|false'
+DENY_ALL_UNLISTED_RLS_ENUM='account|true|1|false|false|false|false|false
+account_users|true|1|false|false|false|false|false
+planning_target|true|0|false|false|false|false|false'
 DENY_ALL_UNLISTED_PRIV='PRIV|account|5
 PRIV|account_users|3
 PRIV|planning_target|2'
@@ -714,9 +839,9 @@ fi
 #     more), reported as an INFO line, not a failure. Grant columns are
 #     irrelevant on a policy-scoped table (never checked) -- authtbl=true
 #     here on purpose, proving that.
-ALLOWLISTED_WITH_POLICY_RLS_ENUM='account|true|1|false|false|false|false
-account_users|true|1|false|false|false|false
-audit_log|true|1|false|true|false|false'
+ALLOWLISTED_WITH_POLICY_RLS_ENUM='account|true|1|false|false|false|false|false
+account_users|true|1|false|false|false|false|false
+audit_log|true|1|false|true|false|false|false'
 ALLOWLISTED_WITH_POLICY_PRIV='PRIV|account|5
 PRIV|account_users|3
 PRIV|audit_log|4'
@@ -729,6 +854,89 @@ if grep -qF "in RLS_DENY_ALL_EXPECTED but carries 1 polic" "$LAST_OUT" 2>/dev/nu
   echo "OK: [RLS-ALLOWLISTED-WITH-POLICIES] INFO line present, no failure." >&2
 else
   echo "FAIL: [RLS-ALLOWLISTED-WITH-POLICIES] expected INFO line not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 34/35/36. RLS-HYBRID-* -- real-run 27 additions, revised after Sec's
+#        two-round PR #883 review: a HYBRID table (a SELECT/ALL policy
+#        admitting `users_id IS NULL` to every authenticated caller,
+#        discovered from pg_policies.qual, never a hand list -- Sec
+#        round-1 explicitly CONFIRMED this discovery mechanism).
+#        `asset`'s own FAKE_AUTH_TABLE_RESULTS row is deliberately ABSENT
+#        -- proves the hybrid table is routed to
+#        psql_admin_auth_read_hybrid() and never reaches the ordinary
+#        per-table read at all; if it did, fake-docker's own "no
+#        FAKE_AUTH_TABLE_RESULTS row for table 'asset'" precondition
+#        error would fire instead, a wrong-reason red exactly like the
+#        22b/22c/22d self-strike note above already guards against.
+#        FAKE_PRIV|asset|<n> now represents the TENANT-owned baseline
+#        (Sec round-2: `count(*) filter (where users_id is not null)`,
+#        NOT the total row count -- see PRIV_SQL's own hybrid branch in
+#        the real script).
+HYBRID_RLS_ENUM='account|true|1|false|false|false|false|false
+account_users|true|1|false|false|false|false|false
+asset|true|1|false|true|false|true|true'
+HYBRID_AUTH='account|OK|0
+account_users|OK|0'
+
+# 34. RLS-HYBRID-PROVEN -- 0 rows with a NON-NULL users_id are visible
+#     (the leak half holds) AND the privileged TENANT-row baseline is >0
+#     (3 owner-bearing rows genuinely exist and none leaked) -- real
+#     tenant-isolation PROVEN, not vacuous. Counted toward PROVEN_COUNT
+#     via its own HYBRID_COUNT bucket.
+run_scenario "RLS HYBRID table: tenant rows exist and none leaked: PROVEN, not a failure" 4 \
+  FAKE_RLS_ENUM="$HYBRID_RLS_ENUM" FAKE_PRIV="PRIV|account|5
+PRIV|account_users|3
+PRIV|asset|3" FAKE_AUTH_TABLE_RESULTS="$HYBRID_AUTH" \
+  FAKE_AUTH_HYBRID_RESULTS="asset|OK|0|7" || FAIL=1
+if grep -qF "HYBRID: pfin.asset -- global-row visibility VERIFIED (7 row(s), users_id NULL); tenant isolation PROVEN -- 3 owner-bearing row(s) exist" "$LAST_OUT" 2>/dev/null \
+  && grep -qF "3 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 1 via HYBRID tenant-isolation proof, 2 via >=1 policy)" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-HYBRID-PROVEN] tenant-isolation-PROVEN line + correct PROVEN breakdown present." >&2
+else
+  echo "FAIL: [RLS-HYBRID-PROVEN] expected tenant-isolation-PROVEN line and/or PROVEN breakdown not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 35. RLS-HYBRID-INCONCLUSIVE-VACUOUS -- Sec's round-2 correction, and
+#     the shape MEASURED LIVE on the real box (team-lead, 2026-09-22:
+#     leaked=0, global=7, tenant=0): 0 rows with a NON-NULL users_id are
+#     visible, but the privileged TENANT-row baseline is 0 -- NO
+#     owner-bearing rows exist at all, so the leak assertion is
+#     vacuously true, never PROVEN on the strength of an assertion that
+#     could not have failed. Global-row visibility is still verified;
+#     tenant isolation is explicitly INCONCLUSIVE, not proven absent.
+run_scenario "RLS HYBRID table: no tenant rows exist at all: global-visibility verified, tenant isolation INCONCLUSIVE (vacuous)" 4 \
+  FAKE_RLS_ENUM="$HYBRID_RLS_ENUM" FAKE_PRIV="PRIV|account|5
+PRIV|account_users|3
+PRIV|asset|0" FAKE_AUTH_TABLE_RESULTS="$HYBRID_AUTH" \
+  FAKE_AUTH_HYBRID_RESULTS="asset|OK|0|7" || FAIL=1
+if grep -qF "HYBRID: pfin.asset -- global-row visibility VERIFIED (7 row(s), users_id NULL); tenant isolation INCONCLUSIVE -- this table holds 0 owner-bearing row(s)" "$LAST_OUT" 2>/dev/null \
+  && grep -qF "vacuously true, not a proven negative" "$LAST_OUT" 2>/dev/null \
+  && grep -qF "2 table(s) PROVEN isolated (0 via allowlisted DENY-ALL, 0 via HYBRID tenant-isolation proof, 2 via >=1 policy), 1 table(s) INCONCLUSIVE (1 empty -- nothing to isolate, 0 refused-at-grant on a policy-scoped table -- policy never exercised, 0 unreadable -- an unexpected error, 0 contradiction -- a zero-grant table's read unexpectedly succeeded)" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-HYBRID-INCONCLUSIVE-VACUOUS] vacuity wording + correct breakdown present, NOT credited as PROVEN." >&2
+else
+  echo "FAIL: [RLS-HYBRID-INCONCLUSIVE-VACUOUS] expected vacuity line and/or breakdown not found." >&2
+  cat "$LAST_OUT" >&2
+  FAIL=1
+fi
+
+# 36. RLS-HYBRID-BYPASS -- a row with a NON-NULL users_id is visible to a
+#     session with no tenant identity established -- a REAL bypass, not
+#     the by-design global-row exposure -- FAILED regardless of the
+#     privileged tenant-row baseline (uses the same PRIV as scenario 34
+#     on purpose -- a real leak fails even when tenant rows DO exist).
+run_scenario "RLS HYBRID table: a tenant row is visible: refuses (real bypass)" 1 \
+  FAKE_RLS_ENUM="$HYBRID_RLS_ENUM" FAKE_PRIV="PRIV|account|5
+PRIV|account_users|3
+PRIV|asset|3" FAKE_AUTH_TABLE_RESULTS="$HYBRID_AUTH" \
+  FAKE_AUTH_HYBRID_RESULTS="asset|OK|2|9" || FAIL=1
+if grep -qF "pfin.asset: HYBRID table -- 2 row(s) with a NON-NULL users_id visible to a session with NO tenant identity established" "$LAST_OUT" 2>/dev/null \
+  && grep -qF "not the by-design global-row exposure" "$LAST_OUT" 2>/dev/null; then
+  echo "OK: [RLS-HYBRID-BYPASS] real-bypass refusal message present, correctly distinguished from the by-design global-row exposure." >&2
+else
+  echo "FAIL: [RLS-HYBRID-BYPASS] expected HYBRID-bypass refusal message not found." >&2
   cat "$LAST_OUT" >&2
   FAIL=1
 fi
