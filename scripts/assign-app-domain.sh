@@ -123,6 +123,36 @@
 #     is never added unilaterally under this script's own scope, the
 #     same review gate the existing TINKER-WRITE-ALLOW-07 site in
 #     provision-worker.sh went through before it existed.
+#   TINKER-WRITE-ALLOW-09 IS A DIFFERENT THING (F/CTO ruling, 2026-09-22):
+#     the prohibition above covers using tinker to make
+#     docker_compose_domains ROUTE traffic it does not already route --
+#     it says nothing about CLEARING the unrelated app-level `fqdn`
+#     field this script never assigns to. TINKER-WRITE-ALLOW-09 (below,
+#     after the docker_compose_domains read-back) does exactly that,
+#     reviewed as a fence-allowlist addition per Sec's PR #862 ruling --
+#     not an ADR-011 Decision 4 surface, no §10 instance.
+#   TINKER-WRITE-ALLOW-09 -- clearing the stale app-level sslip `fqdn`
+#     (F/CTO ruling, 2026-09-22; applied live by hand first via tinker,
+#     scripted here per this repo's own "a hand fix isn't done until
+#     it's in the runbook" standing directive). This app has carried
+#     BOTH the app-level sslip `fqdn` (Coolify's own default,
+#     `http://<uuid>.<box-ip>.sslip.io`) and the service-level
+#     `docker_compose_domains` (this script's own PATCH target) as two
+#     live routing sources on the SAME resource -- the sslip
+#     reachability probe further below exists only because of that
+#     overlap, and its own "FINDING: ... UNINTENDED second route" case is
+#     a symptom of the overlap, not a separate bug. The sslip hostname is
+#     trivially derivable from an in-repo uuid (COOLIFY-FACT-04) and buys
+#     nothing once a real domain is assigned, so F/CTO ruled it cleared
+#     rather than merely observed. MEASURED (F/CTO, 2026-09-22 ~23:10Z,
+#     uuid 7frkiyqnetb4bgev7j7sw5eg): before
+#     fqdn=http://<uuid>.<ip>.sslip.io | ports_exposes=3000 |
+#     docker_compose_domains={"app":{...}}; after fqdn=<NULL> |
+#     ports_exposes=3000 (untouched) | docker_compose_domains={"app":
+#     {...}} (untouched) -- only the fqdn column changes. Consequence:
+#     once fqdn is NULL, the sslip probe's own `-z "$SSLIP_HOST"` branch
+#     ("SKIPPED -- app-level fqdn is empty; nothing to probe.") is the
+#     CORRECT expected outcome from here on, not a regression.
 # The preflight below prints the EXACT body this script would PATCH;
 # only `--apply` actually fires it, and the apply path's own read-back
 # (a fresh GET immediately after) is what confirms the write took.
@@ -166,9 +196,18 @@
 # post-redeploy step re-probes the app's own sslip host (http AND
 # https) against a nonexistent-host control on the same box, prints
 # both side by side, and reports a status-code DIVERGENCE as a
-# FINDING, never a failure -- this script has no mechanism to change
-# `fqdn` and does not attempt to; it only surfaces the observation
-# before DNS cutover completes.
+# FINDING, never a failure.
+#
+# UPDATE (F/CTO ruling 2026-09-22, TINKER-WRITE-ALLOW-09 above): this
+# script now DOES have a mechanism to change `fqdn` -- it clears it
+# structurally, before this probe runs, whenever it is non-empty. So
+# the probe's own `-z "$SSLIP_HOST"` branch ("SKIPPED -- app-level fqdn
+# is empty; nothing to probe.") is now the CORRECT, EXPECTED outcome on
+# every run from here on, not merely one possible reading -- the
+# second-route residual this probe was built to surface is closed
+# structurally, not just observed. Anything OTHER than SKIPPED here on a
+# future run (i.e. the else branch below firing at all) is itself the
+# signal that an fqdn came back and needs investigation.
 #
 # KEYS NEVER TOUCH ANY PROCESS'S OWN ARGV -- same discipline as every
 # sibling script that handles a credential, applied at BOTH hops this
@@ -219,19 +258,23 @@
 #      type at a target name, ambiguous (>1) application match, a
 #      docker_compose_domains 422 (see this script's own header --
 #      distinct from a read-back mismatch), a read-back that does not
-#      contain the target domain, the post-domain-assignment redeploy
-#      failing to reach status=finished within DEPLOY_POLL_ATTEMPTS x
-#      DEPLOY_POLL_INTERVAL_SECONDS, the post-redeploy container-env read
-#      failing to resolve a SINGLE, DIFFERENT-from-pre-deploy,
-#      CONFIRMED-RUNNING container (no container / ambiguous /
-#      non-container-id-shaped / docker ps, inspect, or exec itself
-#      failing / identical to the pre-redeploy container / docker
-#      inspect not reporting State.Running=true -- see
+#      contain the target domain, the TINKER-WRITE-ALLOW-09 fqdn-clear
+#      write not echoing CLEARED or its own follow-up API read-back still
+#      showing fqdn set (API/DB drift), the post-domain-assignment
+#      redeploy failing to reach status=finished within
+#      DEPLOY_POLL_ATTEMPTS x DEPLOY_POLL_INTERVAL_SECONDS, the
+#      post-redeploy container-env read failing to resolve a SINGLE,
+#      DIFFERENT-from-pre-deploy, CONFIRMED-RUNNING container (no
+#      container / ambiguous / non-container-id-shaped / docker ps,
+#      inspect, or exec itself failing / identical to the pre-redeploy
+#      container / docker inspect not reporting State.Running=true -- see
 #      resolve_running_cid(), confirm_container_running(), and their
 #      callers below), the cert poll exhausts its bound, or `www` does
 #      not serve.
 #   2  FAILED -- a precondition this script could not even attempt under
-#      (missing .env names, box unreachable, Porkbun/Coolify API error).
+#      (missing .env names, box unreachable, Porkbun/Coolify API error,
+#      an unresolved/non-uuid-shaped APP_UUID immediately before the
+#      TINKER-WRITE-ALLOW-09 write).
 #
 # ORCHESTRATOR CONTRACT (BACKLOG.md §7.36 item 76's provision.sh calls
 # this directly): non-interactive, no prompts, no `read`. Idempotent by
@@ -1015,7 +1058,55 @@ case "$DOMAIN_SET_CHECK" in
     ;;
 esac
 ok "docker_compose_domains PATCH read-back domain SET for '$APP_COMPOSE_SERVICE' exactly matches intended: $NEW_COMPOSE_DOMAINS"
-info "app-level fqdn after this PATCH: ${NEW_FQDN_AFTER_COMPOSE_PATCH:-<empty>} -- INFORMATIONAL ONLY (whether Coolify derives/mirrors fqdn from docker_compose_domains is UNMEASURED; this script's success does not depend on it)."
+info "app-level fqdn before the clear step below: ${NEW_FQDN_AFTER_COMPOSE_PATCH:-<empty>}"
+
+# TINKER-WRITE-ALLOW-09 -- clear the stale app-level sslip `fqdn` (F/CTO
+# ruling 2026-09-22; full rationale + MEASURED before/after in this
+# script's own header above, under "TINKER-WRITE-ALLOW-09"). Runs AFTER
+# the docker_compose_domains read-back above has already confirmed
+# DOMAIN_SET_OK and BEFORE the redeploy trigger below, so a fresh
+# container never starts carrying the stale sslip fqdn into its own
+# env/Traefik labels. This is a Sec-reviewed CI-fence allowlist addition
+# (scripts/ci/fence-tinker-write-allowlist.txt) per Sec's PR #862
+# ruling -- not an ADR-011 Decision 4 surface, no §10 instance.
+#
+# Pattern mirrors TINKER-WRITE-ALLOW-07 (provision-worker.sh) exactly:
+# verify tinker's OWN echoed result is literally "CLEARED" (never trust a
+# bare exit code), then a SEPARATE API read-back confirms fqdn is
+# actually null (catches API/DB drift, e.g. a cache). Idempotent: a fqdn
+# already empty (second run, or a box where F/CTO's live fix already
+# applied) issues no write at all.
+step "Clearing the app-level sslip fqdn for '$APP_NAME' (TINKER-WRITE-ALLOW-09)"
+if [[ -z "$NEW_FQDN_AFTER_COMPOSE_PATCH" ]]; then
+  ok "app-level fqdn already empty -- no tinker write issued"
+else
+  # uuid pre-validated at resolution time above (UUID_RE); re-assert
+  # defensively immediately before interpolating $APP_UUID into a static
+  # --execute body.
+  [[ "$APP_UUID" =~ $UUID_RE ]] || die2 "APP_UUID '$APP_UUID' is not uuid-shaped immediately before a tinker write -- refusing to interpolate it into --execute."
+  TINKER_FQDN_CLEAR_OUT="$(sshx "docker exec coolify php artisan tinker --execute='/* TINKER-WRITE-ALLOW-09 */ \$app = \\App\\Models\\Application::where(\"uuid\", \"$APP_UUID\")->firstOrFail(); \$app->fqdn = null; \$app->save(); \$app->refresh(); echo \$app->fqdn === null ? \"CLEARED\" : \"STILL_SET\";'" </dev/null 2>&1 | tail -1 | tr -d ' \n')"
+  if [[ "$TINKER_FQDN_CLEAR_OUT" != "CLEARED" ]]; then
+    die "tinker fqdn-clear write on '$APP_NAME' ($APP_UUID) did not report CLEARED (got '$TINKER_FQDN_CLEAR_OUT') -- the model-layer write may have failed, or firstOrFail() found no matching record. Investigate on the box before re-running."
+  fi
+  FQDN_CLEAR_READBACK="$(sshx "env app_uuid=$(printf '%q' "$APP_UUID") bash -s" <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "\$app_uuid" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, uuid = sys.argv[1], sys.argv[2]
+app = api(token, "GET", f"/applications/{uuid}")
+print(app.get("fqdn") or "")
+PYEOF
+REMOTE
+)"
+  if [[ -n "$FQDN_CLEAR_READBACK" ]]; then
+    die "tinker fqdn-clear write reported CLEARED but the API read-back still shows fqdn SET ('$FQDN_CLEAR_READBACK') -- API/DB drift (e.g. a cache), investigate before re-running."
+  fi
+  NEW_FQDN_AFTER_COMPOSE_PATCH=""
+  ok "app-level fqdn cleared via tinker write and API read-back verified NULL"
+fi
+[[ -z "$NEW_FQDN_AFTER_COMPOSE_PATCH" ]] || die "app-level fqdn is '$NEW_FQDN_AFTER_COMPOSE_PATCH' after the TINKER-WRITE-ALLOW-09 clear step above -- expected NULL/empty. Investigate before treating step 9 as done."
 
 # resolve_running_cid -- prints exactly one RESULT LINE, never guesses:
 #   CID:<hex>          -- exactly one running container matched

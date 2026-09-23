@@ -310,7 +310,17 @@ print(json.dumps(json.dumps(obj)))
     if [[ -n "${FAKE_COMPOSE_DOMAINS_PATCH_MARKER:-}" && -f "$FAKE_COMPOSE_DOMAINS_PATCH_MARKER" && "${FAKE_COMPOSE_DOMAINS_PATCH_TAKES_EFFECT:-1}" == "1" ]]; then
       COMPOSE_DOMAINS_OUT="${FAKE_NEW_COMPOSE_DOMAINS:-}"
     fi
+    # FQDN_OUT: stays FAKE_OLD_FQDN unless the TINKER-WRITE-ALLOW-09
+    # clear-write marker exists (the fake `docker` binary touches it once
+    # it has echoed CLEARED) -- then it reports empty, UNLESS
+    # FAKE_TINKER_FQDN_READBACK_TAKES_EFFECT=0 models the write reporting
+    # CLEARED while the API/DB itself still shows the old value (drift,
+    # e.g. a cache) -- same TAKES_EFFECT convention as ports/
+    # compose_domains above.
     FQDN_OUT="${FAKE_OLD_FQDN:-}"
+    if [[ -n "${FAKE_TINKER_FQDN_CLEARED_MARKER:-}" && -f "${FAKE_TINKER_FQDN_CLEARED_MARKER:-}" && "${FAKE_TINKER_FQDN_READBACK_TAKES_EFFECT:-1}" == "1" ]]; then
+      FQDN_OUT=""
+    fi
     emit "$(printf '{"uuid": "%s", "name": "%s", "fqdn": "%s", "docker_compose_domains": %s, "base_directory": "%s", "build_pack": "%s", "ports_exposes": "%s"}' \
       "${FAKE_APP_UUID:-appuuid0000000000001}" "${FAKE_APP_NAME:-pfin-app}" "$FQDN_OUT" "$(build_compose_domains_field "$COMPOSE_DOMAINS_OUT")" \
       "${FAKE_APP_BASE_DIR:-/api}" "${FAKE_APP_BUILD_PACK:-dockercompose}" "$PORTS_OUT")"

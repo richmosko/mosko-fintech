@@ -1250,6 +1250,22 @@ run_deploy_on_success() {
 # synchronously right after use, same shape as
 # scripts/migrator-orchestrate.sh's own Coolify-token handling.
 #
+# HETZNER_API_TOKEN IS THE SOLE CANONICAL NAME (Sec pre-build ask,
+# confirmed by a tree-wide grep before this function was written):
+# `HETZNER_API_TOKEN` is the only live name read anywhere in this
+# repo -- provision.sh (here), provision-vps.sh, provision-supabase-
+# stack.sh, fence-provision-strikes.sh, provision.env.example, and
+# docs/deployment-runbook.md all use it exclusively. `HETZNER_API_KEY`
+# appears in exactly two places, neither of them live: (a) rename
+# commentary in provision.env.example ("Renamed 2026-09-10 from
+# HETZNER_API_KEY ... the script does not accept the old name as a
+# fallback") directly above the real, live `HETZNER_API_TOKEN=` line,
+# and (b) one intentional defensive guard in provision-vps.sh
+# (~line 293) that detects an operator's stale `.env` still carrying
+# the old name and `die`s with an explicit rename instruction -- kept
+# deliberately, not dead code. Nothing named HETZNER_API_KEY needs
+# removing.
+#
 # ⚠ Self-caught running this fence: `set -e`/`set +e` are GLOBAL,
 # PROCESS-WIDE shell options, not scoped to a function or call frame.
 # An earlier draft toggled `set +e`/`set -e` locally around each of
