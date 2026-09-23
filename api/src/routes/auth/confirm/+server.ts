@@ -48,7 +48,14 @@ import type { RequestHandler } from './$types';
 // user-configurable and not derived from any request input.
 const DEST: Record<EmailOtpType, string> = {
 	signup: '/',
-	invite: '/',
+	// invite → /reset-password, NOT '/' (Sec C1): GoTrue's invite mints the user with NO
+	// password. Landing on '/' leaves the founding account logged in with no credential
+	// set; once that session lapses the only way back is /forgot-password, which depends
+	// on the very mail path this route repairs — a circular lockout on the only account.
+	// /reset-password is the password-SET form (works for a never-had-one password, not
+	// just a reset) and a fresh invitee has mfa_policy='none', so the step-up guard
+	// (hooks.server.ts mfaHandle) passes through. Same landing as recovery, same reason.
+	invite: '/reset-password',
 	magiclink: '/',
 	recovery: '/reset-password',
 	email_change: '/' // ADR-074 open question 5 — no email-change UI exists in V1 yet.
