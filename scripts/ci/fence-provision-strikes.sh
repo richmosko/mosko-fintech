@@ -274,6 +274,48 @@ exit 1
 EOF
 chmod +x "$FAKE_BIN/curl"
 
+# Fake `git` -- the Provenance step's own three call shapes (rev-parse
+# HEAD, ls-remote origin refs/heads/main, status --porcelain), added for
+# PR #884's DIRTY-banner detail scenarios (33/33a/33b below). Every case
+# runs with REPO_ROOT set to a scratch dir that is NOT a real git repo,
+# so before this fake existed the real `git` binary simply failed
+# (caught by each call's own `2>/dev/null || <fallback>`) and every
+# scenario silently reported "tree: clean" regardless -- the DIRTY path
+# was never actually exercised by this fence. FAKE_GIT_PORCELAIN (empty
+# by default = clean) drives the new scenarios; rev-parse/ls-remote are
+# stubbed to fixed, uninteresting values since no scenario here cares
+# about their content. Anything else falls through to the REAL git
+# (resolved via the default system PATH, bypassing FAKE_BIN, so this
+# fake cannot recurse into itself) so no OTHER scenario's behavior
+# changes.
+cat > "$FAKE_BIN/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+ARGS="$*"
+if [[ "$ARGS" == *"rev-parse HEAD"* ]]; then
+  printf '%s\n' "${FAKE_GIT_REV_PARSE_HEAD:-fakeheadsha00000000000000000000000000000}"
+  exit 0
+fi
+if [[ "$ARGS" == *"ls-remote origin refs/heads/main"* ]]; then
+  if [[ "${FAKE_GIT_LS_REMOTE_FAILS:-0}" == "1" ]]; then
+    exit 1
+  fi
+  printf '%s\trefs/heads/main\n' "${FAKE_GIT_MAIN_TIP:-fakemaintipsha000000000000000000000000000}"
+  exit 0
+fi
+if [[ "$ARGS" == *"status --porcelain"* ]]; then
+  printf '%s' "${FAKE_GIT_PORCELAIN:-}"
+  exit 0
+fi
+REAL_GIT="$(command -v -p git || true)"
+if [[ -n "$REAL_GIT" ]]; then
+  exec "$REAL_GIT" "$@"
+fi
+echo "FAKE GIT (provision fence): unrecognised invocation and no real git found: $ARGS" >&2
+exit 1
+EOF
+chmod +x "$FAKE_BIN/git"
+
 # 64-char, distinctive-not-generic (BACKLOG item 90 follow-up, cutover
 # real-check): run_cutover() now validates HETZNER_API_TOKEN's SHAPE
 # (64 chars, real Hetzner tokens' length) before ever calling curl, so
@@ -1388,6 +1430,63 @@ CASE_ENV=()
 if [[ -n "${CASE_LAST_DIR:-}" ]] && ! grep -qF "Hetzner API call failed" "$CASE_LAST_DIR/out.txt"; then
   echo "FAIL: [cutover API error] did not name the API-call failure -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
   FAIL=1
+fi
+
+# --- PROVENANCE DIRTY-banner detail (PR #884, Sec ruling: a DIRTY flag
+# that reads the same on every run carries no information) ------------
+# 33. PROVENANCE-CLEAN -- no porcelain output at all -- "tree: clean",
+#     no DIRTY-detail block printed underneath it.
+CASE_ENV=(FAKE_GIT_PORCELAIN='')
+run_case "provenance: clean checkout prints tree: clean, no DIRTY detail" 0 --dry-run --only deploy-app || FAIL=1
+CASE_ENV=()
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  if ! grep -qF "tree: clean" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [provenance clean] did not print 'tree: clean' -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+    FAIL=1
+  fi
+  if grep -qE "DIRTY" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [provenance clean] printed a DIRTY line despite empty porcelain output -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+    FAIL=1
+  fi
+fi
+
+# 33a. PROVENANCE-DIRTY-ALL-CLAUDE -- every porcelain entry is under
+#     .claude/ (agent-memory) -- the one-line "all under .claude/,
+#     cannot affect execution" summary, never the raw per-file list.
+CASE_ENV=(FAKE_GIT_PORCELAIN=$' M .claude/agent-memory/devops/MEMORY.md\n?? .claude/agent-memory/devops/new.md')
+run_case "provenance: all-.claude dirty prints the one-line summary, not a list" 0 --dry-run --only deploy-app || FAIL=1
+CASE_ENV=()
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  if ! grep -qF "DIRTY: 2 entries, all under .claude/ (agent memory; cannot affect execution)" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [provenance all-.claude] did not print the one-line all-.claude summary with the correct count -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+    FAIL=1
+  fi
+  if grep -qF "operator's local checkout:" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [provenance all-.claude] printed the per-file list header despite every entry being under .claude/ -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+    FAIL=1
+  fi
+fi
+
+# 33b. PROVENANCE-DIRTY-MIXED -- a mix of .claude/ and real code/doc
+#     paths -- the non-.claude paths print, each on its own line, never
+#     the one-line all-.claude summary (that summary is reserved for the
+#     ALL-.claude case specifically, never a mixed one).
+CASE_ENV=(FAKE_GIT_PORCELAIN=$' M scripts/provision.sh\n?? .claude/agent-memory/devops/new.md\n M BACKLOG.md')
+run_case "provenance: mixed dirty lists only the non-.claude paths" 0 --dry-run --only deploy-app || FAIL=1
+CASE_ENV=()
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  if ! grep -qF "operator's local checkout:" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [provenance mixed] did not print the per-file list header -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "scripts/provision.sh" "$CASE_LAST_DIR/out.txt" || ! grep -qF "BACKLOG.md" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [provenance mixed] did not name both non-.claude dirty paths -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+    FAIL=1
+  fi
+  if grep -qF "all under .claude/" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [provenance mixed] printed the all-.claude summary despite a mixed dirty set -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+    FAIL=1
+  fi
 fi
 
 if [[ $FAIL -ne 0 ]]; then
