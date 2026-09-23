@@ -123,6 +123,40 @@
 #     is never added unilaterally under this script's own scope, the
 #     same review gate the existing TINKER-WRITE-ALLOW-07 site in
 #     provision-worker.sh went through before it existed.
+#   TINKER-WRITE-ALLOW-09 IS A DIFFERENT THING (F/CTO ruling, 2026-09-22):
+#     the prohibition above covers using tinker to make
+#     docker_compose_domains ROUTE traffic it does not already route --
+#     it says nothing about CLEARING the unrelated app-level `fqdn`
+#     field this script never assigns to. TINKER-WRITE-ALLOW-09 (below,
+#     after the docker_compose_domains read-back) does exactly that,
+#     reviewed as a fence-allowlist addition per Sec's PR #862 ruling --
+#     not an ADR-011 Decision 4 surface, no §10 instance.
+#   TINKER-WRITE-ALLOW-09 -- clearing the stale app-level sslip `fqdn`
+#     (F/CTO ruling, 2026-09-22; applied live by hand first via tinker,
+#     scripted here per this repo's own "a hand fix isn't done until
+#     it's in the runbook" standing directive). This app has carried
+#     BOTH the app-level sslip `fqdn` (Coolify's own default,
+#     `http://<uuid>.<box-ip>.sslip.io`) and the service-level
+#     `docker_compose_domains` (this script's own PATCH target) as two
+#     live routing sources on the SAME resource -- the sslip
+#     reachability probe further below exists only because of that
+#     overlap, and its own "FINDING: ... UNINTENDED second route" case is
+#     a symptom of the overlap, not a separate bug. The sslip hostname is
+#     trivially derivable from an in-repo uuid (COOLIFY-FACT-04) and buys
+#     nothing once a real domain is assigned, so F/CTO ruled it cleared
+#     rather than merely observed. MEASURED (F/CTO, 2026-09-22 ~23:10Z,
+#     uuid 7frkiyqnetb4bgev7j7sw5eg): before
+#     fqdn=http://<uuid>.<ip>.sslip.io | ports_exposes=3000 |
+#     docker_compose_domains={"app":{...}}; after fqdn=<NULL> |
+#     ports_exposes=3000 (untouched) | docker_compose_domains={"app":
+#     {...}} (untouched) -- only the fqdn column changes. Consequence:
+#     in STEADY STATE (fqdn NULL, the expected case on every run after
+#     the first), the sslip probe's own SKIPPED branch is the CORRECT
+#     outcome, not a regression. If fqdn is ever non-empty on a LATER
+#     run's arrival (something re-populated it), the probe still runs
+#     first, against the live value, before this clear removes it (Sec
+#     amendment, 2026-09-22) -- see the ON ARRIVAL section further below
+#     for the full sequence.
 # The preflight below prints the EXACT body this script would PATCH;
 # only `--apply` actually fires it, and the apply path's own read-back
 # (a fresh GET immediately after) is what confirms the write took.
@@ -157,18 +191,23 @@
 # cannot distinguish them. Nothing outside these three exact names is
 # ever read or printed by this step.
 #
-# SSLIP REACHABILITY RE-MEASURED POST-REDEPLOY, WITH A CONTROL (Sec,
-# same follow-up): COOLIFY-FACT-05/06's own "not routed, 404 identical
-# to control" fact was measured BEFORE this app carried
+# SSLIP REACHABILITY -- ON ARRIVAL, BEFORE the redeploy AND BEFORE
+# TINKER-WRITE-ALLOW-09 clears it (Sec amendment, 2026-09-22 -- moved
+# here from its original post-redeploy placement, PR #878/run-21 fix
+# follow-up): COOLIFY-FACT-05/06's own "not routed, 404 identical to
+# control" fact was measured BEFORE this app carried
 # `docker_compose_domains` at all and no longer covers this state --
-# this app may now be reachable via BOTH the intended domain AND its
-# own Coolify-assigned sslip default, an unintended second route. The
-# post-redeploy step re-probes the app's own sslip host (http AND
-# https) against a nonexistent-host control on the same box, prints
-# both side by side, and reports a status-code DIVERGENCE as a
-# FINDING, never a failure -- this script has no mechanism to change
-# `fqdn` and does not attempt to; it only surfaces the observation
-# before DNS cutover completes.
+# this app may be reachable via BOTH the intended domain AND its own
+# Coolify-assigned sslip default, an unintended second route. Steady
+# state (fqdn already NULL, the expected case on every run after the
+# first) prints SKIPPED and stays quiet. A non-empty fqdn on arrival is
+# a configuration regression -- see this script's own TINKER-WRITE-
+# ALLOW-09 section below for the full arrival-FINDING -> probe -> clear
+# sequence and why the probe runs BEFORE the clear (a real measurement
+# of what was actually live, not of what the clear is about to remove).
+# Reports a status-code DIVERGENCE as a FINDING, never a failure --
+# TINKER-WRITE-ALLOW-09 clears the fqdn unconditionally regardless of
+# what the probe finds.
 #
 # KEYS NEVER TOUCH ANY PROCESS'S OWN ARGV -- same discipline as every
 # sibling script that handles a credential, applied at BOTH hops this
@@ -219,19 +258,23 @@
 #      type at a target name, ambiguous (>1) application match, a
 #      docker_compose_domains 422 (see this script's own header --
 #      distinct from a read-back mismatch), a read-back that does not
-#      contain the target domain, the post-domain-assignment redeploy
-#      failing to reach status=finished within DEPLOY_POLL_ATTEMPTS x
-#      DEPLOY_POLL_INTERVAL_SECONDS, the post-redeploy container-env read
-#      failing to resolve a SINGLE, DIFFERENT-from-pre-deploy,
-#      CONFIRMED-RUNNING container (no container / ambiguous /
-#      non-container-id-shaped / docker ps, inspect, or exec itself
-#      failing / identical to the pre-redeploy container / docker
-#      inspect not reporting State.Running=true -- see
+#      contain the target domain, the TINKER-WRITE-ALLOW-09 fqdn-clear
+#      write not echoing CLEARED or its own follow-up API read-back still
+#      showing fqdn set (API/DB drift), the post-domain-assignment
+#      redeploy failing to reach status=finished within
+#      DEPLOY_POLL_ATTEMPTS x DEPLOY_POLL_INTERVAL_SECONDS, the
+#      post-redeploy container-env read failing to resolve a SINGLE,
+#      DIFFERENT-from-pre-deploy, CONFIRMED-RUNNING container (no
+#      container / ambiguous / non-container-id-shaped / docker ps,
+#      inspect, or exec itself failing / identical to the pre-redeploy
+#      container / docker inspect not reporting State.Running=true -- see
 #      resolve_running_cid(), confirm_container_running(), and their
 #      callers below), the cert poll exhausts its bound, or `www` does
 #      not serve.
 #   2  FAILED -- a precondition this script could not even attempt under
-#      (missing .env names, box unreachable, Porkbun/Coolify API error).
+#      (missing .env names, box unreachable, Porkbun/Coolify API error,
+#      an unresolved/non-uuid-shaped APP_UUID immediately before the
+#      TINKER-WRITE-ALLOW-09 write).
 #
 # ORCHESTRATOR CONTRACT (BACKLOG.md §7.36 item 76's provision.sh calls
 # this directly): non-interactive, no prompts, no `read`. Idempotent by
@@ -1015,7 +1058,112 @@ case "$DOMAIN_SET_CHECK" in
     ;;
 esac
 ok "docker_compose_domains PATCH read-back domain SET for '$APP_COMPOSE_SERVICE' exactly matches intended: $NEW_COMPOSE_DOMAINS"
-info "app-level fqdn after this PATCH: ${NEW_FQDN_AFTER_COMPOSE_PATCH:-<empty>} -- INFORMATIONAL ONLY (whether Coolify derives/mirrors fqdn from docker_compose_domains is UNMEASURED; this script's success does not depend on it)."
+
+# --- sslip arrival check + probe + TINKER-WRITE-ALLOW-09 clear --------
+# ON ARRIVAL, BEFORE the redeploy (Sec amendment, 2026-09-22 -- supersedes
+# BOTH the original post-redeploy placement of the probe (PR #878) AND
+# this PR's own first cut, which ran the clear before any probe at all).
+# Sequence, ONLY when the app-level fqdn read back non-empty above:
+#   1. a loud, explicit FINDING line naming the value -- never folded
+#      silently into the clear step's own "before" info line, so an
+#      operator scanning for FINDING never misses a live regression.
+#   2. probe THAT HOST against a nonexistent-host control (grades route
+#      status: FINDING on divergence / MEASURED clean / NOT MEASURED if
+#      the control itself never answered) -- BEFORE it is cleared, so
+#      this is a real measurement of what was actually live, not a
+#      measurement of what TINKER-WRITE-ALLOW-09 is about to remove.
+#   3. THEN clear via TINKER-WRITE-ALLOW-09, reported separately.
+# Steady state (fqdn already NULL -- the expected case on every run
+# after the first) prints SKIPPED and stays quiet: no arrival FINDING,
+# no probe, no clear, no noise.
+#
+# UNMEASURED, STATED PLAINLY: whether Coolify's own Traefik `fqdn`-label
+# regeneration happens immediately on this tinker DB write or only at
+# the next deploy is not established either way -- this step's own
+# probe (2, above) reads the CURRENT live routing state before any
+# write here touches it, so it is correct regardless of that answer;
+# it is only the *clear's* own effect on live traffic, not this
+# script's ability to observe it, that carries that open question.
+step "Checking the app-level sslip fqdn on arrival"
+if [[ -z "$NEW_FQDN_AFTER_COMPOSE_PATCH" ]]; then
+  info "sslip reachability probe SKIPPED -- app-level fqdn is empty; nothing to probe."
+else
+  info "FINDING: app-level fqdn was non-empty on arrival: $NEW_FQDN_AFTER_COMPOSE_PATCH -- configuration regression (TINKER-WRITE-ALLOW-09 below clears it unconditionally; its presence here means something re-populated it since the last clear)."
+
+  step "Probing the app-level sslip fqdn against a nonexistent-host control (before TINKER-WRITE-ALLOW-09 clears it)"
+  SSLIP_HOST="${NEW_FQDN_AFTER_COMPOSE_PATCH#http://}"
+  SSLIP_HOST="${SSLIP_HOST#https://}"
+  SSLIP_HOST="${SSLIP_HOST%%/*}"
+  CONTROL_HOST="nonexistent-$((RANDOM * RANDOM)).${BOX_IP}.sslip.io"
+  SSLIP_HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$SSLIP_HOST/" 2>/dev/null || true)"
+  SSLIP_HTTPS_CODE="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$SSLIP_HOST/" 2>/dev/null || true)"
+  CONTROL_HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$CONTROL_HOST/" 2>/dev/null || true)"
+  CONTROL_HTTPS_CODE="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$CONTROL_HOST/" 2>/dev/null || true)"
+  info "sslip host $SSLIP_HOST: http=$SSLIP_HTTP_CODE https=$SSLIP_HTTPS_CODE  |  nonexistent-host control $CONTROL_HOST: http=$CONTROL_HTTP_CODE https=$CONTROL_HTTPS_CODE"
+  # Sec F-1 (PR #878 review, corrected after df89cf9f): the precondition
+  # is NOT "the control variable is empty" -- Sec's own re-measurement
+  # showed curl still writes its -w format on a failed transfer, with
+  # http_code=000 for DNS failure, connection refused, and timeout
+  # alike, under this script's exact `-s -o /dev/null -w '%{http_code}'
+  # ... 2>/dev/null || true` argv shape; `|| true` only suppresses the
+  # nonzero EXIT STATUS, never the already-written stdout. The control
+  # is a nonexistent host on the SAME box behind the SAME proxy -- on a
+  # working path it always returns a real HTTP status, so failing to
+  # produce one (000, empty, or any other non-3-digit-status value) is
+  # the clean, non-flaky signal the probe itself never ran (network/DNS/
+  # curl failure from THIS machine), not that the sslip route is clear.
+  # The `[[ ]] && VAR=1` form below does not trip errexit when the test
+  # is false (the `[[ ]]` is not the command FOLLOWING the final `&&` in
+  # its own list, so `set -e` does not see it as the list's failure).
+  CONTROL_ANSWERED=0
+  [[ "$CONTROL_HTTP_CODE" =~ ^[1-5][0-9][0-9]$ ]] && CONTROL_ANSWERED=1
+  [[ "$CONTROL_HTTPS_CODE" =~ ^[1-5][0-9][0-9]$ ]] && CONTROL_ANSWERED=1
+  if [[ "$CONTROL_ANSWERED" -ne 1 ]]; then
+    info "sslip reachability probe NOT MEASURED -- the nonexistent-host control returned no usable HTTP status on either scheme (curl reports 000 for DNS failure, connection refused, and timeout alike), so the probe itself did not run from this machine. 'Matches control' would be meaningless here. Re-run from a host that can reach $BOX_IP before treating the sslip route as clear."
+  elif [[ "$SSLIP_HTTP_CODE" != "$CONTROL_HTTP_CODE" || "$SSLIP_HTTPS_CODE" != "$CONTROL_HTTPS_CODE" ]]; then
+    info "FINDING: the sslip host answered DIFFERENTLY from the nonexistent-host control (http $SSLIP_HTTP_CODE vs $CONTROL_HTTP_CODE; https $SSLIP_HTTPS_CODE vs $CONTROL_HTTPS_CODE) -- this app may be reachable via an UNINTENDED second route (its own Coolify-assigned sslip default), not just the domain this script assigned. Not a failure -- investigate before DNS cutover completes; TINKER-WRITE-ALLOW-09 below clears the fqdn regardless."
+  else
+    info "sslip reachability probe MEASURED: the sslip host answered identically to the nonexistent-host control (http $SSLIP_HTTP_CODE, https $SSLIP_HTTPS_CODE) -- no evidence of a second live route."
+  fi
+
+  # TINKER-WRITE-ALLOW-09 -- clear the stale app-level sslip `fqdn`
+  # (F/CTO ruling 2026-09-22; full rationale + MEASURED before/after in
+  # this script's own header above, under "TINKER-WRITE-ALLOW-09"). This
+  # is a Sec-reviewed CI-fence allowlist addition
+  # (scripts/ci/fence-tinker-write-allowlist.txt) per Sec's PR #862
+  # ruling -- not an ADR-011 Decision 4 surface, no §10 instance.
+  # Pattern mirrors TINKER-WRITE-ALLOW-07 (provision-worker.sh) exactly:
+  # verify tinker's OWN echoed result is literally "CLEARED" (never trust
+  # a bare exit code), then a SEPARATE API read-back confirms fqdn is
+  # actually null (catches API/DB drift, e.g. a cache).
+  step "Clearing the app-level sslip fqdn for '$APP_NAME' (TINKER-WRITE-ALLOW-09)"
+  # uuid pre-validated at resolution time above (UUID_RE); re-assert
+  # defensively immediately before interpolating $APP_UUID into a static
+  # --execute body.
+  [[ "$APP_UUID" =~ $UUID_RE ]] || die2 "APP_UUID '$APP_UUID' is not uuid-shaped immediately before a tinker write -- refusing to interpolate it into --execute."
+  TINKER_FQDN_CLEAR_OUT="$(sshx "docker exec coolify php artisan tinker --execute='/* TINKER-WRITE-ALLOW-09 */ \$app = \\App\\Models\\Application::where(\"uuid\", \"$APP_UUID\")->firstOrFail(); \$app->fqdn = null; \$app->save(); \$app->refresh(); echo \$app->fqdn === null ? \"CLEARED\" : \"STILL_SET\";'" </dev/null 2>&1 | tail -1 | tr -d ' \n')"
+  if [[ "$TINKER_FQDN_CLEAR_OUT" != "CLEARED" ]]; then
+    die "tinker fqdn-clear write on '$APP_NAME' ($APP_UUID) did not report CLEARED (got '$TINKER_FQDN_CLEAR_OUT') -- the model-layer write may have failed, or firstOrFail() found no matching record. Investigate on the box before re-running."
+  fi
+  FQDN_CLEAR_READBACK="$(sshx "env app_uuid=$(printf '%q' "$APP_UUID") bash -s" <<REMOTE
+set -e
+TOKEN="\$(grep -m1 '^COOLIFY_API_TOKEN=' /root/.pfin/coolify.env | cut -d= -f2-)"
+python3 - "\$TOKEN" "\$app_uuid" <<'PYEOF'
+$PY_API_HELPER
+import sys
+token, uuid = sys.argv[1], sys.argv[2]
+app = api(token, "GET", f"/applications/{uuid}")
+print(app.get("fqdn") or "")
+PYEOF
+REMOTE
+)"
+  if [[ -n "$FQDN_CLEAR_READBACK" ]]; then
+    die "tinker fqdn-clear write reported CLEARED but the API read-back still shows fqdn SET ('$FQDN_CLEAR_READBACK') -- API/DB drift (e.g. a cache), investigate before re-running."
+  fi
+  NEW_FQDN_AFTER_COMPOSE_PATCH=""
+  ok "app-level fqdn cleared via tinker write and API read-back verified NULL"
+fi
+[[ -z "$NEW_FQDN_AFTER_COMPOSE_PATCH" ]] || die "app-level fqdn is '$NEW_FQDN_AFTER_COMPOSE_PATCH' after the arrival probe + TINKER-WRITE-ALLOW-09 clear above -- expected NULL/empty. Investigate before treating step 9 as done."
 
 # resolve_running_cid -- prints exactly one RESULT LINE, never guesses:
 #   CID:<hex>          -- exactly one running container matched
@@ -1210,60 +1358,6 @@ case "$POST_DEPLOY_RESULT" in
     info "Append this line to scripts/COOLIFY-API-MEASURED.md's COOLIFY-FACT-06 entry (this run's date) -- this script does not write to that file itself."
     ;;
 esac
-
-# Re-take the off-box sslip reachability probe, post-redeploy, WITH a
-# nonexistent-host control (Sec ask, run-21 fix follow-up, and reaffirmed
-# in the redeploy addenda requirement 2: this probe MUST run after the
-# redeploy above, never before it -- Coolify only regenerates Traefik's
-# proxy config at deploy time, so a pre-redeploy probe would still be
-# measuring the OLD routing state):
-# COOLIFY-FACT-05/06's own "not routed, 404 identical to control" fact
-# was measured BEFORE docker_compose_domains existed on this app and no
-# longer covers this state -- this app may now be reachable via BOTH
-# the intended domain (this script's own target) and its own
-# Coolify-assigned sslip default, an UNINTENDED second route. Observed
-# and reported as a FINDING, never a failure -- this script does not
-# change fqdn and has no mechanism to fix a divergence, only to surface
-# it before DNS cutover completes.
-step "Re-taking the sslip reachability probe (post-redeploy) with a nonexistent-host control"
-SSLIP_HOST="${NEW_FQDN_AFTER_COMPOSE_PATCH#http://}"
-SSLIP_HOST="${SSLIP_HOST#https://}"
-SSLIP_HOST="${SSLIP_HOST%%/*}"
-if [[ -z "$SSLIP_HOST" ]]; then
-  info "sslip reachability probe SKIPPED -- app-level fqdn is empty; nothing to probe."
-else
-  CONTROL_HOST="nonexistent-$((RANDOM * RANDOM)).${BOX_IP}.sslip.io"
-  SSLIP_HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$SSLIP_HOST/" 2>/dev/null || true)"
-  SSLIP_HTTPS_CODE="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$SSLIP_HOST/" 2>/dev/null || true)"
-  CONTROL_HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$CONTROL_HOST/" 2>/dev/null || true)"
-  CONTROL_HTTPS_CODE="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$CONTROL_HOST/" 2>/dev/null || true)"
-  info "sslip host $SSLIP_HOST: http=$SSLIP_HTTP_CODE https=$SSLIP_HTTPS_CODE  |  nonexistent-host control $CONTROL_HOST: http=$CONTROL_HTTP_CODE https=$CONTROL_HTTPS_CODE"
-  # Sec F-1 (PR #878 review, corrected after df89cf9f): the precondition
-  # is NOT "the control variable is empty" -- Sec's own re-measurement
-  # showed curl still writes its -w format on a failed transfer, with
-  # http_code=000 for DNS failure, connection refused, and timeout
-  # alike, under this script's exact `-s -o /dev/null -w '%{http_code}'
-  # ... 2>/dev/null || true` argv shape; `|| true` only suppresses the
-  # nonzero EXIT STATUS, never the already-written stdout. The control
-  # is a nonexistent host on the SAME box behind the SAME proxy -- on a
-  # working path it always returns a real HTTP status, so failing to
-  # produce one (000, empty, or any other non-3-digit-status value) is
-  # the clean, non-flaky signal the probe itself never ran (network/DNS/
-  # curl failure from THIS machine), not that the sslip route is clear.
-  # The `[[ ]] && VAR=1` form below does not trip errexit when the test
-  # is false (the `[[ ]]` is not the command FOLLOWING the final `&&` in
-  # its own list, so `set -e` does not see it as the list's failure).
-  CONTROL_ANSWERED=0
-  [[ "$CONTROL_HTTP_CODE" =~ ^[1-5][0-9][0-9]$ ]] && CONTROL_ANSWERED=1
-  [[ "$CONTROL_HTTPS_CODE" =~ ^[1-5][0-9][0-9]$ ]] && CONTROL_ANSWERED=1
-  if [[ "$CONTROL_ANSWERED" -ne 1 ]]; then
-    info "sslip reachability probe NOT MEASURED -- the nonexistent-host control returned no usable HTTP status on either scheme (curl reports 000 for DNS failure, connection refused, and timeout alike), so the probe itself did not run from this machine. 'Matches control' would be meaningless here. Re-run from a host that can reach $BOX_IP before treating the sslip route as clear."
-  elif [[ "$SSLIP_HTTP_CODE" != "$CONTROL_HTTP_CODE" || "$SSLIP_HTTPS_CODE" != "$CONTROL_HTTPS_CODE" ]]; then
-    info "FINDING: the sslip host answered DIFFERENTLY from the nonexistent-host control (http $SSLIP_HTTP_CODE vs $CONTROL_HTTP_CODE; https $SSLIP_HTTPS_CODE vs $CONTROL_HTTPS_CODE) -- this app may be reachable via an UNINTENDED second route (its own Coolify-assigned sslip default), not just the domain this script assigned. Not a failure -- investigate before DNS cutover completes."
-  else
-    info "sslip reachability probe MEASURED: the sslip host answered identically to the nonexistent-host control (http $SSLIP_HTTP_CODE, https $SSLIP_HTTPS_CODE) -- no evidence of a second live route."
-  fi
-fi
 
 # domain_serves_result <host> -- one HTTPS probe; prints one line:
 #   "<TOKEN> <http_code> <ssl_verify_result> <url_effective>"

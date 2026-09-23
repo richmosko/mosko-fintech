@@ -168,6 +168,25 @@
 #      failure (exit 2, a genuine FAILED-STOPS outcome) and deploy-app.sh
 #      is NEVER called -- a resolution failure must never fall through to
 #      passing an empty or stale network value.
+#  29-32. CUTOVER'S REAL HETZNER CHECK (BACKLOG.md item 90 follow-up,
+#      F/CTO's live measurement that the incumbent pfindash.com box was
+#      already torn down) -- run_cutover() no longer returns an
+#      unconditional 4/MANUAL once --confirm-cutover is passed; it
+#      lists the Hetzner project's servers and requires EXACTLY one,
+#      named pfin-prod-1:
+#        29.  ONE-SERVER-VERIFIED -- the ruled steady state -> exit 0.
+#        29a. ONE-SERVER-WRONG-NAME-REFUSES -- count matches but the
+#             name doesn't -> FAILED, never guesses this is fine.
+#        30.  TWO-SERVERS-MANUAL -- more than one server -> MANUAL,
+#             naming BOTH, never deletes anything (no delete branch
+#             exists in this fixture's fake curl at all).
+#        31.  ZERO-SERVERS-FAILED -- an empty project -> FAILED, never
+#             silently treated as "incumbent gone, therefore fine".
+#        32.  API-ERROR-FAILED -- the Hetzner call itself fails
+#             (network/auth/transport) -> FAILED, never silently
+#             treated as "no servers" or "verified".
+#      Token-never-in-argv (Sec's PR #814 standard) is checked on every
+#      one of these via the shared leak-log mechanism.
 #
 # Exit 0 only if every scenario behaves exactly as specified above.
 
@@ -218,7 +237,53 @@ exit 0
 EOF
 chmod +x "$FAKE_BIN/ssh-keygen"
 
-FULL_ENV='HETZNER_API_TOKEN=x
+# Fake `curl` -- run_cutover()'s ONLY external call site (provision.sh
+# itself never calls curl anywhere else; confirmed by grep before this
+# fixture was written). Distinguishes the Hetzner servers-list endpoint
+# by URL; anything else fails closed rather than silently no-op'ing, so
+# an unexpected future curl call in provision.sh's own code cannot pass
+# this fence by accident. Leak-check (Sec's "token never in argv"
+# standard, PR #814 review) -- if $HETZNER_TOKEN_LEAK_VALUE appears
+# ANYWHERE in this invocation's own argv, writes a sentinel to
+# $FAKE_LEAK_LOG; every scenario reaching cutover asserts that file
+# stays empty.
+cat > "$FAKE_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+ARGS="$*"
+if [[ -n "${HETZNER_TOKEN_LEAK_VALUE:-}" ]] && printf '%s' "$ARGS" | grep -qF "$HETZNER_TOKEN_LEAK_VALUE"; then
+  printf 'LEAK: HETZNER_API_TOKEN value found in curl argv: %s\n' "$ARGS" >> "${FAKE_LEAK_LOG:-/dev/null}"
+fi
+if [[ "$ARGS" == *"api.hetzner.cloud/v1/servers"* ]]; then
+  if [[ "${FAKE_HETZNER_API_FAILS:-0}" == "1" ]]; then
+    echo "curl: (7) Failed to connect to api.hetzner.cloud (simulated)" >&2
+    exit 7
+  fi
+  # A literal JSON default embedded directly inside ${VAR:-...} mangles
+  # under bash's own brace-matching (measured: the unescaped `}`
+  # characters in the JSON confuse where the expansion itself ends) --
+  # self-caught running this fence: the default came out as
+  # `{"servers":[{"name":"pfin-prod-1"]}}`, missing a brace, which then
+  # failed to parse as JSON. Computed as a plain variable first instead.
+  DEFAULT_SERVERS_JSON='{"servers":[{"name":"pfin-prod-1"}]}'
+  printf '%s' "${FAKE_HETZNER_SERVERS_JSON:-$DEFAULT_SERVERS_JSON}"
+  exit 0
+fi
+echo "FAKE CURL (provision fence): unrecognised invocation: $ARGS" >&2
+exit 1
+EOF
+chmod +x "$FAKE_BIN/curl"
+
+# 64-char, distinctive-not-generic (BACKLOG item 90 follow-up, cutover
+# real-check): run_cutover() now validates HETZNER_API_TOKEN's SHAPE
+# (64 chars, real Hetzner tokens' length) before ever calling curl, so
+# a 1-char placeholder like the old "x" would make EVERY scenario that
+# reaches cutover with --confirm-cutover fail closed on a token-shape
+# mismatch it was never testing for. Distinctive (not just 64 x's) so
+# the fake curl's own leak-check (below) can grep for it specifically
+# in argv without matching some other placeholder's incidental "x"s.
+HETZNER_TOKEN_LEAK_VALUE="hetznerleakcheckhetznerleakcheckhetznerleakcheckhetznerleakcheck"
+FULL_ENV="HETZNER_API_TOKEN=$HETZNER_TOKEN_LEAK_VALUE
 COOLIFY_ADMIN_EMAIL=x@example.com
 COOLIFY_ADMIN_NAME=x
 COOLIFY_ADMIN_PASSWORD=x
@@ -234,7 +299,7 @@ SIMPLEFIN_TOKEN=x
 PORKBUN_API_KEY=x
 PORKBUN_SECRET_KEY=x
 BOX_IP=127.0.0.1
-'
+"
 
 FAIL=0
 
@@ -246,8 +311,10 @@ run_case() {
   mkdir -p "$case_dir"
   local call_log="$case_dir/calls.log"
   local keygen_log="$case_dir/keygen.log"
+  local leak_log="$case_dir/leak.log"
   : > "$call_log"
   : > "$keygen_log"
+  : > "$leak_log"
   printf '%s' "$FULL_ENV" > "$case_dir/.env"
   # CI_MIGRATE_SSH_PUBKEY points inside case_dir by default (absent unless the case pre-creates it).
   printf 'CI_MIGRATE_SSH_PUBKEY=%s/ci_migrate.pub\n' "$case_dir" >> "$case_dir/.env"
@@ -311,6 +378,8 @@ run_case() {
   # FAKE_STDOUT_db_role_handoff above.
   env REPO_ROOT="$case_dir" SCRIPTS="$FAKE_SCRIPTS_DIR" PATH="$FAKE_BIN:$PATH" \
     FAKE_CALL_LOG="$call_log" FAKE_COUNTER_DIR="$case_dir" FAKE_SSH_KEYGEN_LOG="$keygen_log" \
+    FAKE_LEAK_LOG="$leak_log" HETZNER_TOKEN_LEAK_VALUE="$HETZNER_TOKEN_LEAK_VALUE" \
+    FAKE_HETZNER_API_FAILS="${FAKE_HETZNER_API_FAILS:-0}" FAKE_HETZNER_SERVERS_JSON="${FAKE_HETZNER_SERVERS_JSON:-}" \
     FAKE_STDOUT_db_role_handoff="VERIFIED already handed off -- store and live role bind-checked, no-op." \
     FAKE_STDOUT_provision_worker="${SENTINEL_PREFIX}ABSENT${SENTINEL_MID}ABSENT" \
     ${CASE_ENV[@]+"${CASE_ENV[@]}"} \
@@ -332,20 +401,26 @@ run_case() {
 }
 
 # 1. HAPPY-PATH -- dns -> ci-keypair -> github-ci -> deploy-on-success ->
-# remaining-checks, FIVE CONSECUTIVE, fully-scripted steps (the
+# remaining-checks -> cutover, SIX CONSECUTIVE, fully-scripted steps (the
 # registry's last five before cutover -- QA, BACKLOG.md §7.36 item 81
 # moved `remaining-checks` to immediately before `cutover`, after
 # `deploy-on-success`, so its own auth-login leg can reach the domain
-# `dns` assigns; it was FOUR before that move), correctly STOPPING at
-# cutover, the always-MANUAL terminal gate (run_cutover returns 4
-# unconditionally, --confirm-cutover or not -- it only changes the
-# printed message). This is this orchestrator's real terminal behavior BY
-# DESIGN: no --from invocation can ever complete past cutover with exit
-# 0, because that gate is a deliberate one-way door, never auto-
-# satisfied. A "happy path" scenario for THIS registry is therefore "N
-# steps VERIFIED, then a clean MANUAL stop at cutover" -- not "exit 0
-# across the whole remaining run". `remaining-checks` reads VERIFIED here
-# because the generic fake-step.sh dispatcher's own default (no
+# `dns` assigns; it was FOUR before that move -- PLUS cutover itself,
+# now a real check per BACKLOG.md item 90's own follow-up: F/CTO
+# measured live via the Hetzner API that the incumbent pfindash.com box
+# was already torn down, so `run_cutover` no longer returns an
+# unconditional 4/MANUAL once --confirm-cutover is passed -- it lists
+# the Hetzner project's servers and VERIFIES exactly one, named
+# `pfin-prod-1`. This registry CAN now complete past cutover with exit
+# 0 -- the one-way-door property lives in the GATE (REFUSED without
+# --confirm-cutover, unchanged below), not in cutover being
+# permanently unsatisfiable once past it. The fake curl's own DEFAULT
+# response (no CASE_ENV override) is a clean single `pfin-prod-1`
+# server, so this happy-path scenario -- which cares about the
+# REGISTRY WALK, not the Hetzner check's own predicates (scenarios
+# 29-32 below cover those) -- reaches a genuine end-to-end VERIFIED.
+# `remaining-checks` reads VERIFIED here because the generic
+# fake-step.sh dispatcher's own default (no
 # FAKE_RC_smoke_remaining_checks override in this scenario's CASE_ENV) is
 # exit 0 -- this scenario is about the REGISTRY WALK, not
 # smoke-remaining-checks.sh's own control flow, which
@@ -355,11 +430,12 @@ CASE_ENV=()
 # --confirm-cutover (the apex A repoint is the user-visible go-live
 # switch) -- a happy-path run reaching dns->cutover must pass it, same
 # as it always needed to for cutover's own gate.
-run_case "happy-path (dns -> ci-keypair -> github-ci -> deploy-on-success -> remaining-checks VERIFIED, stops at cutover)" 1 --from dns --confirm-cutover || FAIL=1
+run_case "happy-path (dns -> ci-keypair -> github-ci -> deploy-on-success -> remaining-checks -> cutover, all VERIFIED)" 0 --from dns --confirm-cutover || FAIL=1
 if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   VERIFIED_COUNT="$(grep -c ': VERIFIED' "$CASE_LAST_DIR/out.txt" 2>/dev/null || echo 0)"
-  [[ "$VERIFIED_COUNT" == "5" ]] || { echo "FAIL: [happy-path] expected 5 VERIFIED steps, saw $VERIFIED_COUNT" >&2; FAIL=1; }
-  grep -q -- "--from cutover" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [happy-path] resume hint does not name cutover" >&2; FAIL=1; }
+  [[ "$VERIFIED_COUNT" == "6" ]] || { echo "FAIL: [happy-path] expected 6 VERIFIED steps (5 + cutover), saw $VERIFIED_COUNT" >&2; FAIL=1; }
+  grep -qF "cutover: the Hetzner project holds exactly one server (pfin-prod-1); the incumbent is gone" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [happy-path] cutover did not report its own VERIFIED line -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2; FAIL=1; }
+  [[ -s "$CASE_LAST_DIR/leak.log" ]] && { echo "FAIL: [happy-path] the Hetzner token leaked into curl argv: $(cat "$CASE_LAST_DIR/leak.log")" >&2; FAIL=1; }
 fi
 
 # 6a. DNS-REFUSES-WITHOUT-CONFIRM-CUTOVER (Sec F-6, PR #849 review) --
@@ -1248,6 +1324,71 @@ if [[ -n "${CASE_LAST_DIR:-}" ]]; then
   fi
 fi
 CASE_ENV=()
+
+# --- 29-32: run_cutover()'s real Hetzner check (BACKLOG.md item 90
+# follow-up, F/CTO's live measurement that the incumbent was already
+# torn down) -- isolated via --only cutover --confirm-cutover so each
+# scenario tests exactly one Hetzner-response shape. -----------------
+
+# 29. CUTOVER-ONE-SERVER-VERIFIED -- the ruled steady state: exactly one
+#     server, named pfin-prod-1 -> VERIFIED, exit 0.
+run_case "cutover: exactly one server (pfin-prod-1) verifies" 0 --only cutover --confirm-cutover || FAIL=1
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  grep -qF "cutover: the Hetzner project holds exactly one server (pfin-prod-1); the incumbent is gone" "$CASE_LAST_DIR/out.txt" || { echo "FAIL: [cutover one server] did not print the expected VERIFIED line -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2; FAIL=1; }
+  [[ -s "$CASE_LAST_DIR/leak.log" ]] && { echo "FAIL: [cutover one server] the Hetzner token leaked into curl argv: $(cat "$CASE_LAST_DIR/leak.log")" >&2; FAIL=1; }
+fi
+
+# 29a. CUTOVER-ONE-SERVER-WRONG-NAME-REFUSES -- exactly one server, but
+#     NOT named pfin-prod-1 -- never guesses this is fine just because
+#     the count matches; refuses (FAILED, exit 2), names the actual name.
+CASE_ENV=(FAKE_HETZNER_SERVERS_JSON='{"servers":[{"name":"some-other-box"}]}')
+run_case "cutover: one server with the wrong name refuses" 2 --only cutover --confirm-cutover || FAIL=1
+CASE_ENV=()
+if [[ -n "${CASE_LAST_DIR:-}" ]] && ! grep -qF "it is named 'some-other-box', not the ruled name 'pfin-prod-1'" "$CASE_LAST_DIR/out.txt"; then
+  echo "FAIL: [cutover wrong name] did not name the actual vs ruled server name -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+  FAIL=1
+fi
+
+# 30. CUTOVER-TWO-SERVERS-MANUAL -- more than one server -- MANUAL
+#     (exit 1), naming BOTH servers, NEVER deletes anything (no curl
+#     DELETE call is even possible -- this fixture's fake curl has no
+#     delete branch at all, so an accidental delete attempt would fail
+#     closed with "unrecognised invocation", not silently succeed).
+CASE_ENV=(FAKE_HETZNER_SERVERS_JSON='{"servers":[{"name":"pfin-prod-1"},{"name":"leftover-incumbent-box"}]}')
+run_case "cutover: two servers is MANUAL, naming both" 1 --only cutover --confirm-cutover || FAIL=1
+CASE_ENV=()
+if [[ -n "${CASE_LAST_DIR:-}" ]]; then
+  if ! grep -qF "pfin-prod-1,leftover-incumbent-box" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [cutover two servers] did not name both servers -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "NEVER deletes anything" "$CASE_LAST_DIR/out.txt"; then
+    echo "FAIL: [cutover two servers] did not state the never-deletes discipline -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+    FAIL=1
+  fi
+fi
+
+# 31. CUTOVER-ZERO-SERVERS-FAILED -- an empty project (e.g. everything
+#     torn down, including the replacement) -- FAILED (exit 2), never
+#     silently treated as "incumbent gone, therefore fine".
+CASE_ENV=(FAKE_HETZNER_SERVERS_JSON='{"servers":[]}')
+run_case "cutover: zero servers refuses (FAILED)" 2 --only cutover --confirm-cutover || FAIL=1
+CASE_ENV=()
+if [[ -n "${CASE_LAST_DIR:-}" ]] && ! grep -qF "ZERO servers" "$CASE_LAST_DIR/out.txt"; then
+  echo "FAIL: [cutover zero servers] did not name the zero-servers refusal -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+  FAIL=1
+fi
+
+# 32. CUTOVER-API-ERROR-FAILED -- the Hetzner API call itself fails
+#     (network/auth/transport) -- FAILED (exit 2), never silently
+#     treated as "no servers" or "verified".
+CASE_ENV=(FAKE_HETZNER_API_FAILS=1)
+run_case "cutover: Hetzner API call failure refuses (FAILED)" 2 --only cutover --confirm-cutover || FAIL=1
+CASE_ENV=()
+if [[ -n "${CASE_LAST_DIR:-}" ]] && ! grep -qF "Hetzner API call failed" "$CASE_LAST_DIR/out.txt"; then
+  echo "FAIL: [cutover API error] did not name the API-call failure -- captured output: $(cat "$CASE_LAST_DIR/out.txt")" >&2
+  FAIL=1
+fi
 
 if [[ $FAIL -ne 0 ]]; then
   echo "" >&2
