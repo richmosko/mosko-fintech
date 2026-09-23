@@ -1311,24 +1311,31 @@ run_cutover() {
     return 2
   fi
 
-  # Self-caught running this fence: `trap ... RETURN` set INSIDE this
-  # function does not stay scoped to it -- bash re-fires it when the
-  # CALLER (run_step(), which dispatches to this function) also
-  # returns, by which point this function's own `local` has gone out of
-  # scope, and `set -u` turns that into "hetzner_curl_config: unbound
-  # variable", aborting the whole orchestrator on an otherwise-VERIFIED
-  # run. No trap needed at all: the config file's only consumer is the
-  # one curl call immediately below, so it is removed synchronously,
-  # right after use, on every path (including the early-return cases
-  # further down -- rm before each return, not once at the end).
-  local hetzner_curl_config
-  hetzner_curl_config="$(mktemp)"
-  chmod 600 "$hetzner_curl_config"
-  printf 'header = "Authorization: Bearer %s"\n' "$hetzner_token" > "$hetzner_curl_config"
-
+  # Self-caught running this fence, historical (an earlier draft): `trap
+  # ... RETURN` set INSIDE this function does not stay scoped to it --
+  # bash re-fires it when the CALLER (run_step(), which dispatches to
+  # this function) also returns, by which point this function's own
+  # `local` has gone out of scope, and `set -u` turns that into
+  # "hetzner_curl_config: unbound variable", aborting the whole
+  # orchestrator on an otherwise-VERIFIED run. That draft used a
+  # mode-600 temp file + a RETURN trap to clean it up; fixed then by
+  # removing the trap and calling `rm` synchronously on every path.
+  #
+  # Sec F-1 (PR #882 review): removed the temp file ENTIRELY rather than
+  # just fixing its cleanup -- the header now goes straight to curl's
+  # own stdin via `--config -`, the same pattern this repo's embedded-
+  # Python `api()` helpers already use for the Coolify token (`-K -`).
+  # No file, no disk, no cleanup path, no signal window (a SIGINT mid-
+  # call no longer risks skipping an `rm`), and no trap-scope question
+  # to reason about at all. The token-never-in-argv property is
+  # unchanged -- it still never appears as a curl argument, only ever
+  # on stdin.
+  # Sec F-2 (PR #882 review): `--max-time 10` added -- this was the only
+  # curl call in this file without one; a hung connection no longer
+  # blocks the cutover step indefinitely with no operator feedback.
   local servers_json curl_rc=0
-  servers_json="$(curl -fsS --config "$hetzner_curl_config" "https://api.hetzner.cloud/v1/servers" 2>&1)" || curl_rc=$?
-  rm -f "$hetzner_curl_config"
+  servers_json="$(printf 'header = "Authorization: Bearer %s"\n' "$hetzner_token" \
+    | curl -fsS --max-time 10 --config - "https://api.hetzner.cloud/v1/servers" 2>&1)" || curl_rc=$?
   if [[ $curl_rc -ne 0 ]]; then
     info "Hetzner API call failed (curl rc=$curl_rc): $servers_json"
     return 2

@@ -116,23 +116,26 @@
 #             own curl.log -- the deploy POST and the deployments-poll
 #             GET must actually have been issued, not just assumed from
 #             the exit code.
-#        25l. SSLIP-PROBE-SKIPPED-AFTER-ALLOW-09-CLEAR (F/CTO ruling
-#             2026-09-22, supersedes the four scenarios this slot used
-#             to hold -- see the RETIRED comment at this scenario's own
-#             site for the full reasoning): TINKER-WRITE-ALLOW-09 (see
-#             assign-app-domain.sh's own header) now clears any
-#             non-empty app-level fqdn BEFORE this probe runs, so its
-#             ELSE branch (an actual curl probe against $SSLIP_HOST,
-#             the FINDING/MEASURED/NOT-MEASURED family this slot used to
-#             exercise directly) is unreachable on any exit-0 run --
-#             verified by code inspection, not a standing scenario per
-#             curl-response shape, matching this file's own established
-#             "verified by inspection, not every branch needs a live
-#             scenario" convention (see the EXHAUSTIVE PATCH DISPATCH
-#             note above). 25l instead proves the one thing that IS
-#             reachable and load-bearing now: a pre-existing non-empty
-#             fqdn gets cleared, and the probe correctly takes SKIPPED,
-#             not a live probe -- team-lead's stated prediction.
+#        25l-25l8. SSLIP PROBE ON ARRIVAL + TINKER-WRITE-ALLOW-09 (Sec
+#             amendment, 2026-09-22, final placement -- supersedes BOTH
+#             the original post-redeploy placement (PR #878) AND an
+#             intermediate cut of this same PR that ran the clear
+#             BEFORE any probe): the probe now runs ON ARRIVAL, against
+#             whatever fqdn value the docker_compose_domains read-back
+#             produced, BEFORE TINKER-WRITE-ALLOW-09 clears it and
+#             before the redeploy -- a real measurement of what was
+#             actually live, not of what the clear is about to remove.
+#             8 scenarios: 25l steady-state SKIPPED (fqdn already
+#             empty, no arrival FINDING/probe/clear at all); 25l2
+#             arrival FINDING + probe MEASURED clean + clear succeeds;
+#             25l3 arrival FINDING + probe divergence FINDING + clear
+#             succeeds anyway (diagnostic, never a gate); 25l4/25l5/25l6
+#             the three NOT-MEASURED shapes (control unreachable, both
+#             sides unreachable, control genuinely empty output) each
+#             with the clear still succeeding; 25l7/25l8 TINKER-WRITE-
+#             ALLOW-09's own clear-mechanics failures (tinker echoes
+#             STILL_SET; API read-back drift after a CLEARED echo) --
+#             both confirm the probe ran first regardless.
 #   29/30. WWW-AS-A (live dns fix, 2026-09-22 -- www.pfindash.com already
 #      existed as an A record, not a CNAME, and this script only ever
 #      looked for a CNAME) -- a mismatched www A edits in place to box_ip
@@ -916,84 +919,155 @@ if [[ -n "${CASE_LOG:-}" ]]; then
   fi
 fi
 
-# --- sslip reachability probe, post-redeploy, with a nonexistent-host
-# control (Sec redeploy addenda, requirement 2) ------------------------
+# --- sslip reachability probe, ON ARRIVAL (before TINKER-WRITE-ALLOW-09
+# clears it and before the redeploy) -- Sec amendment, 2026-09-22,
+# superseding both the original post-redeploy placement (PR #878) and
+# this PR's own first cut (clear-before-probe) -----------------------
 SSLIP_APP_HOST_FQDN="http://sslipprobe0000000001.127.0.0.1.sslip.io"
 
-# RETIRED, 4 OF 5 (F/CTO ruling 2026-09-22, TINKER-WRITE-ALLOW-09 above):
-# the four scenarios this comment used to introduce (FINDING-on-
-# divergence / no-FINDING-when-matching / control-unreachable /
-# machine-fully-unreachable / control-empty-output -- five names, one
-# already folded away) drove the probe's ELSE branch (an actual curl
-# probe against a non-empty $SSLIP_HOST) by passing a non-empty
-# $old_fqdn straight through to the post-redeploy read. That branch is
-# now UNREACHABLE on any exit-0 run: TINKER-WRITE-ALLOW-09 runs earlier
-# in the real script and unconditionally clears any non-empty app-level
-# fqdn before this probe ever executes (its own die() on a failed clear
-# or a failed read-back would already have stopped the script well
-# before reaching this step) -- so a successful run always sees
-# $SSLIP_HOST empty here, by construction, not by chance. Verified by
-# code inspection (assign-app-domain.sh's own ordering: the clear step
-# sits strictly between the docker_compose_domains read-back and the
-# redeploy trigger, both strictly before this probe) rather than by a
-# standing green/red scenario for each curl-response shape -- same
-# convention this file's own "EXHAUSTIVE PATCH DISPATCH, NO CATCH-ALL"
-# note above already uses for a different branch this fence cannot
-# currently strike. Do not restore these four on the reasoning that
-# "nothing exercises the divergence/control-unreachable/control-empty
-# logic any more" -- that logic still exists in the script as
-# defense-in-depth (a future change could reintroduce a live app-level
-# fqdn reaching this point), it is just not reachable from THIS fence's
-# black-box, whole-script harness today. 25l below replaces all five
-# with the one thing that IS reachable and load-bearing now: proving
-# team-lead's stated prediction (a pre-existing non-empty fqdn is
-# cleared before the probe runs, so the probe takes its SKIPPED branch,
-# and that is the CORRECT expected outcome, not a regression).
+# 8 scenarios in this family, all driven by run_case's own $old_fqdn
+# param (positional 7), which the real script reads back as
+# NEW_FQDN_AFTER_COMPOSE_PATCH immediately after the docker_compose_domains
+# PATCH -- i.e. the value the arrival check/probe/clear sequence sees:
+#   25l.  STEADY STATE -- fqdn already empty on arrival: SKIPPED only,
+#         no arrival FINDING, no probe, no clear, no noise.
+#   25l2. ARRIVAL FINDING + probe MEASURED clean (sslip host matches the
+#         control) + clear still succeeds afterward.
+#   25l3. ARRIVAL FINDING + probe FINDING (sslip host diverges from the
+#         control) + clear still succeeds afterward regardless.
+#   25l4. probe NOT MEASURED -- nonexistent-host control itself
+#         unreachable (000) -- never a false all-clear; clear still
+#         happens.
+#   25l5. probe NOT MEASURED -- BOTH sides unreachable (000/000, the
+#         real defect Sec's PR #878 re-review caught: an equal
+#         comparison at 000==000 would otherwise be a false all-clear).
+#   25l6. probe NOT MEASURED -- control produces genuinely empty stdout
+#         (build-independence coverage, not just the 000 shape).
+#   25l7. TINKER-ALLOW-09-WRITE-REFUSED -- the tinker --execute itself
+#         echoes STILL_SET -- dies, never reaches the redeploy. The
+#         probe still ran first (it is unconditional whenever fqdn is
+#         non-empty), so its own MEASURED/FINDING line is present too.
+#   25l8. TINKER-ALLOW-09-READBACK-DRIFT -- the write echoes CLEARED but
+#         the separate API read-back still shows fqdn SET -- dies,
+#         never reaches the redeploy. Probe output present here too.
 
-# 25l. SSLIP-PROBE-SKIPPED-AFTER-ALLOW-09-CLEAR -- $old_fqdn is
-#     non-empty (the sslip default) going in; TINKER-WRITE-ALLOW-09
-#     clears it before this probe runs, so it must print SKIPPED, never
-#     attempt an actual probe (no FINDING, no MEASURED, no NOT MEASURED
-#     line -- those all belong to the retired branch above).
-run_case "sslip probe: SKIPPED once TINKER-WRITE-ALLOW-09 clears a pre-existing app-level fqdn" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+# 25l. SSLIP-STEADY-STATE-SKIPPED -- fqdn already empty going in: no
+#     arrival FINDING, no probe, no clear line, no noise.
+run_case "sslip probe: steady state (fqdn already empty) prints SKIPPED only" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
 if [[ -n "${CASE_OUTPUT:-}" ]]; then
   if ! grep -qF "sslip reachability probe SKIPPED -- app-level fqdn is empty; nothing to probe." <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [sslip probe skipped after clear] did not print the SKIPPED line despite the pre-run fqdn having been cleared -- captured output: $CASE_OUTPUT" >&2
+    echo "FAIL: [sslip steady state] did not print the SKIPPED line -- captured output: $CASE_OUTPUT" >&2
     FAIL=1
   fi
-  if grep -qE "FINDING:|sslip reachability probe (MEASURED|NOT MEASURED)" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [sslip probe skipped after clear] printed a FINDING/MEASURED/NOT-MEASURED line -- the probe's else branch ran despite fqdn having been cleared -- captured output: $CASE_OUTPUT" >&2
+  if grep -qE "FINDING: app-level fqdn was non-empty on arrival|sslip reachability probe (MEASURED|NOT MEASURED)|cleared via tinker write" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [sslip steady state] printed an arrival FINDING, a probe outcome, or a clear line despite fqdn already being empty -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 25l2. ARRIVAL-FINDING-THEN-MEASURED-CLEAN-THEN-CLEAR-OK
+run_case "sslip probe: arrival FINDING + probe MEASURED clean + clear succeeds" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "FINDING: app-level fqdn was non-empty on arrival: $SSLIP_APP_HOST_FQDN" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [arrival+measured] did not print the arrival FINDING naming the value -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "sslip reachability probe MEASURED: the sslip host answered identically" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [arrival+measured] did not print the MEASURED-clean line -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qF "the sslip host answered DIFFERENTLY from the nonexistent-host control" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [arrival+measured] printed a divergence FINDING despite the sslip host matching the control -- captured output: $CASE_OUTPUT" >&2
     FAIL=1
   fi
   if ! grep -qF "app-level fqdn cleared via tinker write and API read-back verified NULL" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [sslip probe skipped after clear] did not print the TINKER-WRITE-ALLOW-09 success line -- captured output: $CASE_OUTPUT" >&2
+    echo "FAIL: [arrival+measured] did not print the clear-success line -- captured output: $CASE_OUTPUT" >&2
     FAIL=1
   fi
 fi
 
-# --- TINKER-WRITE-ALLOW-09 (F/CTO ruling 2026-09-22) -- clear the
-# app-level sslip fqdn: no-op / write-refused / read-back-drift --------
-
-# 25l2. TINKER-ALLOW-09-NOOP -- app-level fqdn is ALREADY empty going
-#     in (old_fqdn="") -- no tinker write may be issued at all; the
-#     "already empty" ok line prints, the "cleared via tinker" line
-#     (which only prints after an actual write) must NOT.
-run_case "TINKER-WRITE-ALLOW-09: fqdn already empty issues no tinker write" 0 --apply "$ALREADY_CORRECT" 200 200 "" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+# 25l3. ARRIVAL-FINDING-THEN-PROBE-DIVERGENCE-THEN-CLEAR-OK-ANYWAY
+FAKE_SSLIP_HTTP_CODE=200
+FAKE_SSLIP_HTTPS_CODE=200
+run_case "sslip probe: arrival FINDING + probe divergence FINDING + clear succeeds anyway" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_SSLIP_HTTP_CODE FAKE_SSLIP_HTTPS_CODE
 if [[ -n "${CASE_OUTPUT:-}" ]]; then
-  if ! grep -qF "app-level fqdn already empty -- no tinker write issued" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [ALLOW-09 no-op] did not print the already-empty no-op line -- captured output: $CASE_OUTPUT" >&2
+  if ! grep -qF "FINDING: app-level fqdn was non-empty on arrival: $SSLIP_APP_HOST_FQDN" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [arrival+divergence] did not print the arrival FINDING -- captured output: $CASE_OUTPUT" >&2
     FAIL=1
   fi
-  if grep -qF "cleared via tinker write" <<<"$CASE_OUTPUT"; then
-    echo "FAIL: [ALLOW-09 no-op] printed the cleared-via-tinker success line despite fqdn already being empty -- a write was issued when it should not have been -- captured output: $CASE_OUTPUT" >&2
+  if ! grep -qF "the sslip host answered DIFFERENTLY from the nonexistent-host control" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [arrival+divergence] did not print the divergence FINDING -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "sslipprobe0000000001" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [arrival+divergence] did not name the sslip host it probed -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if ! grep -qF "app-level fqdn cleared via tinker write and API read-back verified NULL" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [arrival+divergence] did not clear the fqdn despite the divergence FINDING -- the clear must fire regardless of what the probe finds -- captured output: $CASE_OUTPUT" >&2
     FAIL=1
   fi
 fi
 
-# 25l3. TINKER-ALLOW-09-WRITE-REFUSED -- the tinker --execute itself
+# 25l4. SSLIP-PROBE-CONTROL-UNREACHABLE-NOT-MEASURED (Sec F-1, PR #878
+#     review) -- the nonexistent-host control returns 000 on both
+#     schemes -- must print NOT MEASURED, never a FINDING or a
+#     MEASURED-clean line. Clear still happens (diagnostic, not a gate).
+FAKE_CONTROL_UNREACHABLE=1
+run_case "sslip probe: unreachable control (000) prints NOT MEASURED, clear still succeeds" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_CONTROL_UNREACHABLE
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "sslip reachability probe NOT MEASURED" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [control unreachable] did not print the NOT MEASURED refusal -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qE "the sslip host answered DIFFERENTLY|sslip reachability probe MEASURED:" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [control unreachable] printed a divergence FINDING or a MEASURED-clean line despite the control never having responded." >&2
+    FAIL=1
+  fi
+  if ! grep -qF "app-level fqdn cleared via tinker write and API read-back verified NULL" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [control unreachable] did not clear the fqdn despite NOT MEASURED -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+fi
+
+# 25l5. SSLIP-PROBE-MACHINE-FULLY-UNREACHABLE-NOT-MEASURED -- BOTH the
+#     sslip host and the control return 000 -- must still print NOT
+#     MEASURED, never a false MEASURED-clean from 000==000.
+FAKE_CONTROL_UNREACHABLE=1
+FAKE_SSLIP_UNREACHABLE=1
+run_case "sslip probe: machine fully unreachable (both sides 000) prints NOT MEASURED" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_CONTROL_UNREACHABLE FAKE_SSLIP_UNREACHABLE
+if [[ -n "${CASE_OUTPUT:-}" ]]; then
+  if ! grep -qF "sslip reachability probe NOT MEASURED" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [machine unreachable] did not print the NOT MEASURED refusal despite both sides returning 000 -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
+  if grep -qF "sslip reachability probe MEASURED:" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [machine unreachable] printed a false MEASURED-clean line for 000==000." >&2
+    FAIL=1
+  fi
+fi
+
+# 25l6. SSLIP-PROBE-CONTROL-EMPTY-OUTPUT-NOT-MEASURED -- build-
+#     independence: genuinely empty stdout on total failure is ALSO NOT
+#     MEASURED, not just the 000 shape.
+FAKE_CONTROL_EMPTY=1
+run_case "sslip probe: control with genuinely empty output also prints NOT MEASURED" 0 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
+unset FAKE_CONTROL_EMPTY
+if [[ -n "${CASE_OUTPUT:-}" ]] && ! grep -qF "sslip reachability probe NOT MEASURED" <<<"$CASE_OUTPUT"; then
+  echo "FAIL: [control empty output] did not print the NOT MEASURED refusal for a genuinely empty control response -- captured output: $CASE_OUTPUT" >&2
+  FAIL=1
+fi
+
+# --- TINKER-WRITE-ALLOW-09's own clear mechanics -- write-refused /
+# read-back-drift (the probe above always runs first when fqdn is
+# non-empty, so its own output is present in both scenarios below too) -
+# 25l7. TINKER-ALLOW-09-WRITE-REFUSED -- the tinker --execute itself
 #     echoes STILL_SET (the model-layer write failed, or firstOrFail()
 #     found no matching record) -- must die naming STILL_SET, never
-#     proceed to the redeploy.
+#     proceed to the redeploy. The probe still ran first.
 FAKE_TINKER_FQDN_CLEAR_RESULT=STILL_SET
 run_case "TINKER-WRITE-ALLOW-09: tinker write reports STILL_SET refuses" 1 --apply "$ALREADY_CORRECT" 200 200 "$SSLIP_APP_HOST_FQDN" "https://fake-domain.test,https://www.fake-domain.test" 1 || FAIL=1
 unset FAKE_TINKER_FQDN_CLEAR_RESULT
@@ -1002,13 +1076,17 @@ if [[ -n "${CASE_OUTPUT:-}" ]]; then
     echo "FAIL: [ALLOW-09 write refused] did not name the STILL_SET refusal -- captured output: $CASE_OUTPUT" >&2
     FAIL=1
   fi
+  if ! grep -qF "FINDING: app-level fqdn was non-empty on arrival" <<<"$CASE_OUTPUT"; then
+    echo "FAIL: [ALLOW-09 write refused] the probe/arrival-FINDING step did not run before the failed clear -- captured output: $CASE_OUTPUT" >&2
+    FAIL=1
+  fi
   if grep -qF "Triggering a redeploy" <<<"$CASE_OUTPUT"; then
     echo "FAIL: [ALLOW-09 write refused] fell through to the redeploy step despite the tinker write itself reporting STILL_SET." >&2
     FAIL=1
   fi
 fi
 
-# 25l4. TINKER-ALLOW-09-READBACK-DRIFT -- the tinker write echoes
+# 25l8. TINKER-ALLOW-09-READBACK-DRIFT -- the tinker write echoes
 #     CLEARED, but the SEPARATE follow-up API read-back still shows
 #     fqdn SET (API/DB drift, e.g. a cache) -- must die naming the
 #     drift, never trust the write's own echoed result alone.
