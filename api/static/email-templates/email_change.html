@@ -1,0 +1,19 @@
+<!-- pfin-template:email_change v1 — canary: any received email is decidable
+     custom-vs-stock, since GoTrue silently falls back to its built-in body on a
+     template-fetch failure. -->
+<!-- GoTrue email-change template (ADR-074 SSR token_hash pattern; Consequence 7).
+     Served by the app container over the private stack network
+     (GOTRUE_MAILER_TEMPLATES_EMAIL_CHANGE=http://app:3000/email-templates/email_change.html).
+     `double_confirm_changes = true` (supabase/config.toml) means this is sent TWICE —
+     once to the current address, once to the pending one — each with its own token.
+     {{ .SendingTo }} names THIS copy's recipient so the reader knows which side of the
+     change they're confirming; {{ .Email }} is the current address, {{ .NewEmail }}
+     the pending one. Plain, minimal HTML: no scripts, no user free-text. -->
+<h2>Confirm your email change</h2>
+<p>A change to the email address on your mosko-fintech account was requested: from
+	<strong>{{ .Email }}</strong> to <strong>{{ .NewEmail }}</strong>.</p>
+<p>This message was sent to <strong>{{ .SendingTo }}</strong>. Confirm this address to
+	continue the change — both addresses must confirm before it takes effect:</p>
+<p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&amp;type=email_change">Confirm email change</a></p>
+<p>Or enter this code: <strong>{{ .Token }}</strong></p>
+<p>If you didn't request this change, you can ignore this email — no change will be made without both confirmations.</p>

@@ -1,0 +1,13 @@
+<!-- pfin-template:magiclink v1 — canary: any received email is decidable custom-vs-stock,
+     since GoTrue silently falls back to its built-in body on a template-fetch failure. -->
+<!-- GoTrue magic-link / email-OTP template (ADR-074 SSR token_hash pattern; consumed
+     by Auth-4 email-2FA, which uses the CODE not the link — {{ .Token }} is
+     emphasized). Served by the app container over the private stack network
+     (GOTRUE_MAILER_TEMPLATES_MAGIC_LINK=http://app:3000/email-templates/magic_link.html).
+     NOTE the `type=` literal below is `magiclink` (no underscore) — the env var and
+     this filename use the underscore, GoTrue's type literal does not. -->
+<h2>Your sign-in code</h2>
+<p>Use this one-time code to finish signing in to mosko-fintech:</p>
+<p style="font-size:1.5em"><strong>{{ .Token }}</strong></p>
+<p>This code expires shortly. If you didn't try to sign in, you can ignore this email.</p>
+<p>(Prefer a link? <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&amp;type=magiclink">Sign in here</a>.)</p>

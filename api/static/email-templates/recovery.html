@@ -1,0 +1,11 @@
+<!-- pfin-template:recovery v1 — canary: any received email is decidable custom-vs-stock,
+     since GoTrue silently falls back to its built-in body on a template-fetch failure. -->
+<!-- GoTrue password-reset template (ADR-074 SSR token_hash pattern; consumed by
+     Auth-5 recovery). Served by the app container over the private stack network
+     (GOTRUE_MAILER_TEMPLATES_RECOVERY=http://app:3000/email-templates/recovery.html).
+     Plain, minimal HTML: no scripts, no user free-text. -->
+<h2>Reset your password</h2>
+<p>A password reset was requested for your mosko-fintech account. Use the link below to choose a new password:</p>
+<p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&amp;type=recovery">Reset password</a></p>
+<p>Or enter this code: <strong>{{ .Token }}</strong></p>
+<p>If you didn't request this, you can safely ignore this email — your password won't change.</p>
