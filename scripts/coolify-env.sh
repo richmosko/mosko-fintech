@@ -121,7 +121,16 @@
 # FQDNs, comma-separated; unset/empty is fail-safe no-op per
 # workers/provider-sync/.env.example's own "non-secret" declaration) --
 # never a credential, never a URL carrying embedded creds (Note N1 there).
-SET_ALLOWLIST=(PGRST_DB_SCHEMAS MIGRATOR_DB_USER PUBLIC_SUPABASE_URL PUBLIC_SUPABASE_ANON_KEY PFIN_DB_SSLMODE PFIN_DB_HOST PFIN_DB_PORT PFIN_DB_NAME PFIN_DB_USER PLAID_ENV ADMISSION_PROBE_PUBLIC_URLS)
+#
+# SITE_URL / MAILER_TEMPLATES_INVITE|CONFIRMATION|RECOVERY|MAGIC_LINK|
+# EMAIL_CHANGE -- ADR-074 (F/CTO-ratified 2026-09-23). All six are
+# non-secret (public URLs and a public hostname); none appears in
+# secrets-manifest.yml (re-checked at this PR). SITE_URL is the
+# confirmation-email link's own host; the five MAILER_TEMPLATES_* are
+# fixed http://app:3000/... literals `scripts/provision-supabase-
+# stack.sh` computes -- see this script's own value-shape constraints
+# below for both.
+SET_ALLOWLIST=(PGRST_DB_SCHEMAS MIGRATOR_DB_USER PUBLIC_SUPABASE_URL PUBLIC_SUPABASE_ANON_KEY PFIN_DB_SSLMODE PFIN_DB_HOST PFIN_DB_PORT PFIN_DB_NAME PFIN_DB_USER PLAID_ENV ADMISSION_PROBE_PUBLIC_URLS SITE_URL MAILER_TEMPLATES_INVITE MAILER_TEMPLATES_CONFIRMATION MAILER_TEMPLATES_RECOVERY MAILER_TEMPLATES_MAGIC_LINK MAILER_TEMPLATES_EMAIL_CHANGE)
 # MIGRATOR_DB_PASSWORD is delete-only, never settable here (it is minted
 # ONLY by scripts/provision-migrator-app.sh's own mint-if-absent step,
 # ADR-072 Amendment 4 Decision B -- routing it through this script's
@@ -288,6 +297,30 @@ if [[ "$OP" == "set" ]]; then
       ADMISSION_PROBE_PUBLIC_URLS)
         [[ "$v" =~ ^https://[A-Za-z0-9.-]+(,https://[A-Za-z0-9.-]+)*$ ]] \
           || die "'ADMISSION_PROBE_PUBLIC_URLS' value does not match the required shape (bare comma-separated https:// FQDNs, no userinfo, no query-string, no path) -- this value is echoed verbatim into Discord alerts (workers/provider-sync/.env.example Note N1). Refusing."
+        ;;
+      # ADR-074 (F/CTO-ratified 2026-09-23): SITE_URL is the confirmation-
+      # email link's own host, dereferenced by mail clients over the
+      # public internet -- must be https://, never localhost/127.0.0.1
+      # (same production-always guards scripts/provision-supabase-
+      # stack.sh applies at write time; this is the belt to that
+      # suspenders on any OTHER write path into this name).
+      SITE_URL)
+        [[ "$v" == https://* ]] \
+          || die "'SITE_URL' value '$v' does not start with https:// -- refusing (this is the confirmation-email link's own host, dereferenced by mail clients over the public internet)."
+        case "$v" in
+          *localhost*|*127.0.0.1*)
+            die "'SITE_URL' value '$v' contains localhost/127.0.0.1 -- refusing (this would ship a dead link in every auth email; see ADR-074 Part 0)." ;;
+        esac
+        ;;
+      # MAILER_TEMPLATES_* -- Consequence 2: a bare path is silently
+      # rewritten by GoTrue to SITE_URL + path, an unnoticed public
+      # fetch. Each value is a fixed http://app:3000/email-templates/*
+      # literal `provision-supabase-stack.sh` computes -- the prefix
+      # check both confirms the scheme AND that it targets the private
+      # `app` container, not some other host.
+      MAILER_TEMPLATES_INVITE|MAILER_TEMPLATES_CONFIRMATION|MAILER_TEMPLATES_RECOVERY|MAILER_TEMPLATES_MAGIC_LINK|MAILER_TEMPLATES_EMAIL_CHANGE)
+        [[ "$v" == http://app:3000/email-templates/* ]] \
+          || die "'$k' value '$v' does not start with http://app:3000/email-templates/ -- refusing (a bare path or a different host is silently rewritten to SITE_URL + path by GoTrue, becoming an unintended public fetch)."
         ;;
     esac
   done

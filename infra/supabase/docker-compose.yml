@@ -189,6 +189,22 @@ services:
       GOTRUE_MAILER_URLPATHS_CONFIRMATION: ${MAILER_URLPATHS_CONFIRMATION}
       GOTRUE_MAILER_URLPATHS_RECOVERY: ${MAILER_URLPATHS_RECOVERY}
       GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: ${MAILER_URLPATHS_EMAIL_CHANGE}
+      # ADR-074 Decision A + Part 2(a): our own templates, fetched by GoTrue
+      # over HTTP from the `app` container on this same private stack
+      # network (measured live, 2026-09-23: `getent hosts app` from inside
+      # this container resolves 10.0.2.11 on network
+      # nz7mbexygw9lesjlazcxeltn -- the ADR's own "app alias UNMEASURED"
+      # residual risk is discharged by this measurement, not assumed).
+      # Values are ABSOLUTE with an explicit http:// scheme (Consequence 2:
+      # template.go's loadEntryBody() silently rewrites any bare path to
+      # SITE_URL + path, turning a typo into an unnoticed public fetch) --
+      # computed as fixed literals by provision-supabase-stack.sh, never
+      # read from an operator .env.
+      GOTRUE_MAILER_TEMPLATES_INVITE: ${MAILER_TEMPLATES_INVITE}
+      GOTRUE_MAILER_TEMPLATES_CONFIRMATION: ${MAILER_TEMPLATES_CONFIRMATION}
+      GOTRUE_MAILER_TEMPLATES_RECOVERY: ${MAILER_TEMPLATES_RECOVERY}
+      GOTRUE_MAILER_TEMPLATES_MAGIC_LINK: ${MAILER_TEMPLATES_MAGIC_LINK}
+      GOTRUE_MAILER_TEMPLATES_EMAIL_CHANGE: ${MAILER_TEMPLATES_EMAIL_CHANGE}
       GOTRUE_EXTERNAL_PHONE_ENABLED: ${ENABLE_PHONE_SIGNUP}
       GOTRUE_SMS_AUTOCONFIRM: ${ENABLE_PHONE_AUTOCONFIRM}
 

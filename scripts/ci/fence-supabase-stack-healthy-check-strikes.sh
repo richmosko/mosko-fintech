@@ -340,11 +340,20 @@ run_case() {
   # extracted code more permissively than production ever does.
   { printf 'set -euo pipefail\n'; cat "$EXTRACT"; printf 'echo "RESULT_NEED_DEPLOY=$NEED_DEPLOY"\n'; } > "$combined"
   set +e
+  # EMAIL_ENV_CHANGED (ADR-074): the extracted block now reads this var
+  # (set earlier in the real script's own flow, outside the extracted
+  # region) to decide whether a healthy stack still needs a redeploy for
+  # an auth-email env change -- required here only because `set -u`
+  # otherwise makes it an unbound-variable error in this isolated
+  # harness; default 0 preserves every existing scenario's own behavior
+  # unchanged. Fixture update only, no new scenario (F/CTO ruling:
+  # smallest change, no busy-work tests for this build).
   APP_UUID="test-stack-uuid-1234" \
     FAKE_CONTAINERS="$FAKE_CONTAINERS" FAKE_GW_NOKEY="$FAKE_GW_NOKEY" FAKE_PGVER="$FAKE_PGVER" \
     FAKE_INIT_STATE="$FAKE_INIT_STATE" FAKE_VOLUME_EXISTS="$FAKE_VOLUME_EXISTS" \
     FAKE_JWT_SETTING="$FAKE_JWT_SETTING" \
     FAKE_GW_WITHKEY="$FAKE_GW_WITHKEY" FAKE_GW_ANON_PRESENT="$FAKE_GW_ANON_PRESENT" \
+    EMAIL_ENV_CHANGED="${FAKE_EMAIL_ENV_CHANGED:-0}" \
     bash "$combined" > "$out" 2>&1
   local rc=$?
   set -e
