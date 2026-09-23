@@ -3,27 +3,56 @@
 # fake-docker -- offline stand-in for docker, used by
 # scripts/ci/fence-smoke-remaining-checks-strikes.sh. Handles every docker
 # invocation scripts/smoke-remaining-checks.sh makes:
-#   1. `docker compose --project-name <uuid> ps -q <service>` -- one
-#      container id per line (two if FAKE_CONTAINERS=2, striking the
-#      ambiguity guard).
-#   2. `docker inspect --format '...' <id>` -- RUNNING, real tab.
-#   3. `docker compose --project-name <uuid> exec -T db psql ... -tAc
+#   1. `docker compose --project-name <uuid> ps -q auth` -- the Resend
+#      probe's own auth-container lookup (real-run 27 addition) -- one
+#      container id per line, count controlled by $FAKE_AUTH_CONTAINERS
+#      (default 1; 0/2 strike the not-found/ambiguity guards).
+#   2. `docker compose --project-name <uuid> ps -q <service>` -- the
+#      ordinary sibling-container lookup (find_running_container(), used
+#      by both CA-7's positive control and the Resend probe's sibling
+#      resolution) -- one container id per line (two if
+#      FAKE_CONTAINERS=2, striking the ambiguity guard).
+#   3. `docker inspect --format '{{range .Config.Env}}...{{end}}' <id>`
+#      -- the Resend probe's env-listing read of the auth container (real-
+#      run 27 addition; no binary needed INSIDE the container for this)
+#      -- prints $FAKE_AUTH_ENV_LINES verbatim (e.g.
+#      "GOTRUE_SMTP_PASS=...\nGOTRUE_SMTP_ADMIN_EMAIL=..."; empty/absent
+#      means the key is not configured).
+#   4. `docker inspect --format '...State.Running...' <id>` -- the
+#      ordinary RUNNING/id/created-time read find_running_container()
+#      uses -- RUNNING, real id, a fixed timestamp.
+#   5. `docker compose --project-name <uuid> exec -T db psql ... -tAc
 #      "<query>"` -- distinguished by a SANITY-TOKEN substring unique to
 #      each of the psql_admin() call sites in the real script (the SAME
 #      tokens that query's own SQL text carries):
 #        pg_db_role_setting   -> TZ-1                 -> $FAKE_TZ1_ROWS
-#        relrowsecurity       -> RLS enumeration (7 fields per row:
+#        relrowsecurity       -> RLS enumeration (8 fields per row:
 #                                   table|rls|polcount|anon-table-sel|
 #                                   authenticated-table-sel|anon-col-sel|
-#                                   authenticated-col-sel -- Sec F-1,
-#                                   round-2 review, PR #880: all four
+#                                   authenticated-col-sel|hybrid -- Sec
+#                                   F-1, round-2 review, PR #880: all four
 #                                   grant checks live in THIS query now,
-#                                   not a second round trip) -> $FAKE_RLS_ENUM
+#                                   not a second round trip; the 8th
+#                                   (hybrid) column is a real-run 27
+#                                   addition) -> $FAKE_RLS_ENUM
 #        'PRIV' as ctx         -> RLS privileged-baseline batched query
 #                                   (ALL tables, one UNION ALL call, admin
 #                                   never errors) -> $FAKE_PRIV, format
 #                                   "PRIV|table|count" per discovered
 #                                   table.
+#        count(*) filter (where -> real-run 27 addition:
+#        users_id is not null)    psql_admin_auth_read_hybrid()'s
+#                                   per-HYBRID-table read -- see the
+#                                   "set role authenticated" entry below
+#                                   for the table-name-extraction and
+#                                   OK/DENIED/ERROR MODE convention this
+#                                   reuses; $FAKE_AUTH_HYBRID_RESULTS rows
+#                                   are "table|MODE|tenant_visible|total"
+#                                   (OK prints "tenant_visible|total").
+#                                   MUST be checked BEFORE the generic
+#                                   "set role authenticated" entry below,
+#                                   which would otherwise also match (both
+#                                   queries carry that same `-c` flag).
 #        set role authenticated -> real-run 25 fix (2026-09-22), amended
 #                                   by Sec's 2026-09-22 ruling: the
 #                                   `authenticated` count is now ONE
@@ -55,21 +84,47 @@
 #                                   stay a precondition failure scoped to
 #                                   that one table, never a pass).
 #        rolbypassrls         -> service_role BYPASSRLS -> $FAKE_BYPASSRLS
-#   4. `docker compose --project-name <uuid> exec -T auth node -e '...'`
-#      -- the Resend send-acceptance probe -- prints $FAKE_RESEND_OUT.
-#   5. `docker exec <container> node -e '...'` (no `compose`, no `auth`)
-#      -- the CA-7 positive-control probe -- prints "$FAKE_CA7_GW
-#      $FAKE_CA7_P1 $FAKE_CA7_P2".
+#   6. `docker exec -i <sibling_cid> node -e '...api.resend.com...'` --
+#      real-run 27 addition: the Resend HTTPS POST, now run in the
+#      SIBLING APP container instead of the (node/curl-less) auth
+#      container -- stdin (the python3-built JSON payload) is drained and
+#      ignored; prints $FAKE_RESEND_OUT. Keyed on "api.resend.com" so it
+#      never collides with entry 7 below (both are "exec ... node -e").
+#   7. `docker exec <container> node -e '...'` (no `-i`, no `compose`, no
+#      "api.resend.com") -- the CA-7 positive-control probe -- prints
+#      "$FAKE_CA7_GW $FAKE_CA7_P1 $FAKE_CA7_P2".
 
 set -euo pipefail
 
 ARGS="$*"
+
+# real-run 27 addition -- the auth-container lookup (`ps -q auth`) is a
+# SEPARATE fixture count from the sibling-app lookup's own `ps -q
+# $COMPOSE_SERVICE` (FAKE_CONTAINERS, below): both match the generic
+# "ps -q" substring, so the more specific "ps -q auth" check must be
+# checked FIRST.
+if [[ "$ARGS" == *"compose --project-name"*"ps -q auth" ]]; then
+  N="${FAKE_AUTH_CONTAINERS:-1}"
+  [[ "$N" -ge 1 ]] && echo "auth-container-1"
+  [[ "$N" -ge 2 ]] && echo "auth-container-2"
+  exit 0
+fi
 
 if [[ "$ARGS" == *"compose --project-name"*"ps -q"* ]]; then
   echo "container-abc123"
   if [[ "${FAKE_CONTAINERS:-1}" == "2" ]]; then
     echo "container-def456"
   fi
+  exit 0
+fi
+
+# real-run 27 addition -- resend_probe()'s `docker inspect --format
+# '{{range .Config.Env}}...{{end}}'` read of the auth container's own
+# env (never a shell/binary inside the container -- see that function's
+# own header). Must be checked BEFORE the generic "inspect --format"
+# (State.Running) handler below, which would otherwise also match.
+if [[ "$ARGS" == *"inspect --format"*"Config.Env"* ]]; then
+  printf '%s\n' "${FAKE_AUTH_ENV_LINES:-}"
   exit 0
 fi
 
@@ -91,6 +146,45 @@ if [[ "$ARGS" == *"exec -T db psql"* ]]; then
   if [[ "$ARGS" == *"'PRIV' as ctx"* ]]; then
     printf '%s' "${FAKE_PRIV:-}"
     exit 0
+  fi
+  if [[ "$ARGS" == *"count(*) filter (where users_id is not null)"* ]]; then
+    # real-run 27 addition -- psql_admin_auth_read_hybrid()'s per-table
+    # HYBRID read. Same table-name-extraction/MODE convention as the
+    # ordinary per-table read below, but $FAKE_AUTH_HYBRID_RESULTS rows
+    # are "table|MODE|tenant_visible|total" (OK prints
+    # "tenant_visible|total", matching psql -A's own default field
+    # separator).
+    TBL="$(printf '%s' "$ARGS" | sed -n 's/.*pfin\.\([a-z_][a-z0-9_]*\)$/\1/p')"
+    if [[ -z "$TBL" ]]; then
+      echo "FAKE DOCKER: could not extract table name from HYBRID authenticated-read query: $ARGS" >&2
+      exit 1
+    fi
+    ROW="$(printf '%s\n' "${FAKE_AUTH_HYBRID_RESULTS:-}" | awk -F'|' -v t="$TBL" '$1==t {print; exit}')"
+    if [[ -z "$ROW" ]]; then
+      echo "FAKE DOCKER: no FAKE_AUTH_HYBRID_RESULTS row for table '$TBL' -- fixture gap: $ARGS" >&2
+      exit 1
+    fi
+    MODE="$(printf '%s' "$ROW" | awk -F'|' '{print $2}')"
+    TENANT="$(printf '%s' "$ROW" | awk -F'|' '{print $3}')"
+    TOTAL="$(printf '%s' "$ROW" | awk -F'|' '{print $4}')"
+    case "$MODE" in
+      OK)
+        printf '%s|%s' "$TENANT" "$TOTAL"
+        exit 0
+        ;;
+      DENIED)
+        printf 'ERROR:  42501: permission denied for table %s\nHINT:  Grant the required privileges to the current role with: GRANT SELECT ON pfin.%s TO authenticated;\nLOCATION:  aclcheck_error, aclchk.c:2843\n' "$TBL" "$TBL" >&2
+        exit 1
+        ;;
+      ERROR)
+        printf 'ERROR:  58P01: %s\n' "${TENANT:-simulated unexpected error}" >&2
+        exit 1
+        ;;
+      *)
+        echo "FAKE DOCKER: unrecognised FAKE_AUTH_HYBRID_RESULTS mode '$MODE' for table '$TBL'" >&2
+        exit 1
+        ;;
+    esac
   fi
   if [[ "$ARGS" == *"set role authenticated"* ]]; then
     # `pfin.<table>` is the LAST thing on the reconstructed "$*" line --
@@ -148,8 +242,16 @@ if [[ "$ARGS" == *"exec -T db psql"* ]]; then
   exit 1
 fi
 
-if [[ "$ARGS" == *"exec -T auth node -e"* ]]; then
-  printf '%s\n' "${FAKE_RESEND_OUT:-RESEND_KEY_ABSENT}"
+# real-run 27 addition -- resend_probe()'s `docker exec -i <sibling_cid>
+# node -e '...'` (the Resend HTTPS POST, now run in the sibling app
+# container, keyed on "api.resend.com" so it never collides with the
+# CA-7 positive-control `node -e` probe below). Drains stdin (the
+# python3-built JSON payload) before answering -- content is ignored,
+# the fixture is controlled entirely by $FAKE_RESEND_OUT, same
+# convention as the (now-retired) in-auth-container probe this replaces.
+if [[ "$ARGS" == *"exec -i"*"node -e"* && "$ARGS" == *"api.resend.com"* ]]; then
+  cat >/dev/null
+  printf '%s\n' "${FAKE_RESEND_OUT:-RESEND_STATUS_200}"
   exit 0
 fi
 

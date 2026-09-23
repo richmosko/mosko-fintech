@@ -142,6 +142,34 @@
 #         applies -- each table's `authenticated` read is its own fresh
 #         docker-exec/psql connection now, so there is no shared session
 #         for a stray SET ROLE to leak across.
+#       - HYBRID tables (real-run 27, 2026-09-22 -- Sec-ruled) --
+#         `pfin.asset` (016_asset_registry.sql:307-309: "HYBRID RLS ...
+#         global rows (users_id NULL) readable by all authenticated") is
+#         BY DESIGN not a bare-deny table: a session with no tenant
+#         identity established is SUPPOSED to see the global rows.
+#         Real-run 27's naive read (a bare `count(*)`) saw 7 such rows
+#         and misreported a "live RLS bypass" -- the correct assertion
+#         for a hybrid table is "0 rows with a NON-NULL users_id are
+#         visible", not "0 rows total are visible". Discovered from the
+#         policy text ITSELF in `pg_policies.qual` (never a hand list --
+#         a `SELECT`/`ALL` policy whose USING clause matches
+#         `users_id\s+is\s+null`, case-insensitive), same B-1
+#         dynamic-enumeration convention as everything else in this leg.
+#         For each discovered hybrid table:
+#         `psql_admin_auth_read_hybrid()` reads BOTH the tenant-visible
+#         count (`count(*) filter (where users_id is not null)`, must be
+#         0) and the total visible count (informational) in one
+#         connection. tenant-visible > 0 -> FAILED, a real bypass,
+#         regardless of anything else. tenant-visible == 0 and total > 0
+#         -> PROVEN (reported `HYBRID: pfin.<t> -- N global rows visible
+#         (users_id NULL), 0 tenant rows visible`), counted toward
+#         PROVEN_COUNT the same as any other demonstrated table. total ==
+#         0 too -> INCONCLUSIVE (empty; nothing to isolate, same as any
+#         other table). A grant-level refusal (SQLSTATE 42501) on a
+#         hybrid table is surprising (016_asset_registry.sql:334 grants
+#         `authenticated` an unconditional table-level SELECT) but stays
+#         INCONCLUSIVE, never PROVEN/FAILED from the permission error
+#         alone, per the same rule every other table follows.
 #       - `service_role`'s own BYPASSRLS attribute is confirmed
 #         structurally (`pg_roles.rolbypassrls`), matching the by-design
 #         contrast every migration comment in this repo already states
@@ -202,10 +230,7 @@
 #         .strict() fired at all.
 #       - A Resend send-acceptance probe, SEPARATELY: reads
 #         `GOTRUE_SMTP_PASS`/`GOTRUE_SMTP_ADMIN_EMAIL` from the Supabase
-#         stack's own `auth` (GoTrue) container env -- filtered ON THE BOX
-#         inside the remote command string, same hygiene boundary
-#         scripts/pgrst-schemas-live-check.sh already documents, never
-#         crossing back to the operator's machine -- and, if present,
+#         stack's own `auth` (GoTrue) container env, and, if present,
 #         issues one real Resend API send to `delivered@resend.dev`,
 #         Resend's own documented test address that accepts a send
 #         without actually delivering it or counting against normal
@@ -214,6 +239,40 @@
 #         says so explicitly -- "needs a secrets-manifest.yml decision
 #         before it's wired up") -- this leg treats that absence as
 #         informational, not a failure.
+#           real-run 27 fix (2026-09-22) -- the ORIGINAL probe ran
+#         `docker compose exec -T auth node -e ...`, executing INSIDE the
+#         `auth` (GoTrue) container itself. MEASURED live, real-run 27,
+#         2026-09-22: that exec exits rc=127 with no stdout/stderr text at
+#         all -- GoTrue's own image is a minimal Go-binary image and ships
+#         neither `node` nor `curl` (consistent with a bare `node: not
+#         found`/`exec format error` from an image with no such binary on
+#         PATH). This leg had never actually attempted a Resend send.
+#         Fixed via `resend_probe()`, in two parts, BOTH still entirely ON
+#         THE BOX -- the key never crosses back to the operator's machine,
+#         same hygiene boundary scripts/pgrst-schemas-live-check.sh already
+#         documents, and it is never assigned to a local (operator-side)
+#         shell variable, never printed, and never appears in any
+#         process's argv on the box:
+#           (1) the key is read via `docker inspect --format
+#               '{{range .Config.Env}}...{{end}}'` on the `auth`
+#               container FROM THE HOST -- this needs NO binary inside the
+#               container at all (not even a shell), sidestepping the
+#               missing-node/curl problem for the read step entirely.
+#           (2) the actual HTTPS POST to Resend runs via `node` INSIDE THE
+#               SIBLING APP CONTAINER instead ($SIBLING_APP_NAME /
+#               $COMPOSE_SERVICE) -- proven present by THIS SAME LEG'S own
+#               CA-7 positive-control probe (Leg 2, the identical `docker
+#               exec ... node -e` mechanism, already measured working
+#               against a real SvelteKit/Node app image). The key is piped
+#               in on STDIN as a JSON payload (`docker exec -i`, built on
+#               the box with `python3 -c 'import json...'` -- never with
+#               hand-escaped shell string interpolation), never on any
+#               command's argv, and the whole read-then-post sequence is
+#               ONE remote ssh script/session (one round trip), not two.
+#         The sibling container id itself is resolved the ordinary way
+#         (`find_running_container()`, the same Sec F4 ambiguity discipline
+#         CA-7 already applies) -- it is a container id, not a secret, so
+#         it is fine to hold locally and pass in as an env var.
 #       - ⚠ THE EMAIL-CONFIRMATION ROUND-TRIP ITSELF -- following the
 #         link a real confirmation email carries and confirming the
 #         session actually establishes -- IS NOT SCRIPTED, and there is
@@ -430,6 +489,31 @@ docker compose --project-name "\$STACK_UUID" exec -T db psql -U supabase_admin -
 REMOTE
 }
 
+psql_admin_auth_read_hybrid() {
+  # psql_admin_auth_read_hybrid <table> -- HYBRID-table variant of
+  # psql_admin_auth_read() (real-run 27 fix, Sec-ruled 2026-09-22): a
+  # HYBRID select policy (016_asset_registry.sql:307-309's own documented
+  # posture -- `using (users_id is null or users_id = auth.uid())`) makes
+  # "authenticated sees 0 rows" the WRONG assertion for that table --
+  # global rows (users_id IS NULL) are meant to be visible to every
+  # authenticated caller by design (Sec joint-review merge-block 6). This
+  # reads TWO counts in the SAME session/connection instead: rows where
+  # users_id IS NOT NULL (must be 0 -- a non-NULL users_id row visible
+  # with no tenant identity established IS a bypass, same as any other
+  # table) and the total visible row count (informational -- how many
+  # global rows exist). Same VERBOSITY/role/-q shape as
+  # psql_admin_auth_read() -- see that function's own header for why each
+  # flag is there. Output: "<tenant_visible>|<total>" (psql -A's own
+  # default field separator). `<table>` is interpolated only after the
+  # same identifier-shape validation psql_admin_auth_read() already
+  # requires of its caller.
+  local t="$1"
+  sshx "env STACK_UUID=\"$STACK_UUID\" bash -s" <<REMOTE
+set -e
+docker compose --project-name "\$STACK_UUID" exec -T db psql -q -t -A -U supabase_admin -d postgres -c '\set VERBOSITY verbose' -c 'set role authenticated' -c 'select count(*) filter (where users_id is not null), count(*) from pfin.$t' </dev/null
+REMOTE
+}
+
 psql_admin_auth_read() {
   # psql_admin_auth_read <table> -- the RLS leg's per-table `authenticated`
   # row-count read (real-run 25 fix, Sec-ruled 2026-09-22). THREE separate
@@ -642,7 +726,15 @@ RLS_MSGS=()
 # COVERAGE, not on any single table's verdict (the empty-set guard below
 # catches total loss, not partial). pg_attribute is catalog-level, not
 # role-filtered -- discovery no longer depends on who is asking.
-RLS_ENUM_QUERY="select c.relname, c.relrowsecurity::text, (select count(*) from pg_policies p where p.schemaname = n.nspname and p.tablename = c.relname)::text, has_table_privilege('anon', c.oid, 'SELECT')::text, has_table_privilege('authenticated', c.oid, 'SELECT')::text, has_any_column_privilege('anon', c.oid, 'SELECT')::text, has_any_column_privilege('authenticated', c.oid, 'SELECT')::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and c.relkind in ('r','p') and exists (select 1 from pg_attribute a where a.attrelid = c.oid and a.attname = 'users_id' and a.attnum > 0 and not a.attisdropped) order by c.relname;"
+# 8th column (real-run 27 addition, Sec-ruled 2026-09-22): HYBRID-table
+# discovery. Discovered from the policy text ITSELF -- never a hand list
+# -- exactly as 016_asset_registry.sql:307-309's own select policy reads:
+# `exists (... a SELECT/ALL policy whose USING clause admits users_id IS
+# NULL)`. `\s+` is a Postgres ARE advanced-regex whitespace class (NOT
+# the same family as `\b`, which this repo's own memory already flags as
+# a literal backspace, not a boundary, in this regex engine -- `\s` IS
+# supported here). `~*` is case-insensitive.
+RLS_ENUM_QUERY="select c.relname, c.relrowsecurity::text, (select count(*) from pg_policies p where p.schemaname = n.nspname and p.tablename = c.relname)::text, has_table_privilege('anon', c.oid, 'SELECT')::text, has_table_privilege('authenticated', c.oid, 'SELECT')::text, has_any_column_privilege('anon', c.oid, 'SELECT')::text, has_any_column_privilege('authenticated', c.oid, 'SELECT')::text, (exists (select 1 from pg_policies p2 where p2.schemaname = n.nspname and p2.tablename = c.relname and p2.cmd in ('SELECT','ALL') and p2.qual ~* 'users_id\s+is\s+null'))::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'pfin' and c.relkind in ('r','p') and exists (select 1 from pg_attribute a where a.attrelid = c.oid and a.attname = 'users_id' and a.attnum > 0 and not a.attisdropped) order by c.relname;"
 
 set +e
 RLS_ENUM="$(psql_admin "$RLS_ENUM_QUERY")"
@@ -662,7 +754,8 @@ elif [[ -z "$RLS_ENUM" ]]; then
 else
   TABLES=()
   ALLOWLIST_CANDIDATES=()
-  while IFS='|' read -r tbl rls polcount anonsel authsel anoncol authcol; do
+  HYBRID_TABLES=()
+  while IFS='|' read -r tbl rls polcount anonsel authsel anoncol authcol hybrid; do
     [[ -z "$tbl" ]] && continue
     if [[ ! "$tbl" =~ ^[a-z_][a-z0-9_]*$ ]]; then
       RLS_STATUS="FAILED"
@@ -670,6 +763,9 @@ else
       continue
     fi
     TABLES+=("$tbl")
+    if [[ "$hybrid" == "true" ]]; then
+      HYBRID_TABLES+=("$tbl")
+    fi
     if [[ "$rls" != "true" ]]; then
       RLS_STATUS="FAILED"
       RLS_MSGS+=("pfin.$tbl: relrowsecurity=$rls, expected true -- RLS is not enabled on a table carrying users_id.")
@@ -713,6 +809,9 @@ else
     fi
   done <<<"$RLS_ENUM"
   info "discovered ${#TABLES[@]} users_id-bearing pfin table(s): ${TABLES[*]}"
+  if [[ ${#HYBRID_TABLES[@]} -gt 0 ]]; then
+    info "discovered ${#HYBRID_TABLES[@]} HYBRID table(s) (a SELECT/ALL policy admits users_id IS NULL to every authenticated caller): ${HYBRID_TABLES[*]}"
+  fi
 
   if [[ "$RLS_STATUS" == "VERIFIED" ]]; then
     # Sec F-1 (PR #869 review): a bare "authenticated sees 0 rows" read is
@@ -798,6 +897,7 @@ else
       PROVEN_COUNT=0
       INCONCLUSIVE_COUNT=0
       DENY_ALL_COUNT=0
+      HYBRID_COUNT=0
       # Sec ruling 2026-09-22 (PR #881 review, round 2): INCONCLUSIVE has
       # four distinct causes now, and a summary that folds them into one
       # undifferentiated bucket asserts something false ("empty, nothing
@@ -817,6 +917,55 @@ else
           continue
         fi
         polcount="$(printf '%s\n' "$RLS_ENUM" | awk -F'|' -v t="$t" '$1==t {print $3; exit}')"
+        hybrid="$(printf '%s\n' "$RLS_ENUM" | awk -F'|' -v t="$t" '$1==t {print $8; exit}')"
+
+        if [[ "$hybrid" == "true" ]]; then
+          # HYBRID (real-run 27, Sec-ruled 2026-09-22) -- see
+          # psql_admin_auth_read_hybrid()'s own header. The correct
+          # assertion for this table is "0 rows with a NON-NULL users_id
+          # are visible", not "0 rows total are visible" -- global rows
+          # (users_id IS NULL) are meant to be visible to every
+          # authenticated caller by design.
+          set +e
+          HYBRID_OUT="$(psql_admin_auth_read_hybrid "$t" 2>&1)"
+          HYBRID_RC=$?
+          set -e
+          if [[ $HYBRID_RC -eq 0 ]]; then
+            HYBRID_TENANT="$(awk -F'|' '{print $1}' <<<"$HYBRID_OUT")"
+            HYBRID_TOTAL="$(awk -F'|' '{print $2}' <<<"$HYBRID_OUT")"
+            if [[ -z "$HYBRID_TENANT" || -z "$HYBRID_TOTAL" ]]; then
+              INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+              INCONCLUSIVE_UNREADABLE_COUNT=$((INCONCLUSIVE_UNREADABLE_COUNT + 1))
+              info "pfin.$t: HYBRID read returned an unparseable row ('$HYBRID_OUT') -- INCONCLUSIVE for this table only, not an isolation finding."
+            elif [[ "$HYBRID_TENANT" != "0" ]]; then
+              RLS_STATUS="FAILED"
+              RLS_MSGS+=("pfin.$t: HYBRID table -- $HYBRID_TENANT row(s) with a NON-NULL users_id visible to a session with NO tenant identity established (SET ROLE authenticated, no request.jwt.claims) -- expected 0. This is a live RLS bypass, not the by-design global-row exposure this table's own HYBRID policy grants.")
+            else
+              info "HYBRID: pfin.$t -- $HYBRID_TOTAL global rows visible (users_id NULL), 0 tenant rows visible"
+              if [[ "$HYBRID_TOTAL" -gt 0 ]]; then
+                PROVEN_COUNT=$((PROVEN_COUNT + 1))
+                HYBRID_COUNT=$((HYBRID_COUNT + 1))
+              else
+                INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+                INCONCLUSIVE_EMPTY_COUNT=$((INCONCLUSIVE_EMPTY_COUNT + 1))
+              fi
+            fi
+          elif [[ "$HYBRID_OUT" == *"42501"* ]]; then
+            # Surprising for a hybrid table (016_asset_registry.sql:334
+            # grants authenticated a table-level SELECT unconditionally),
+            # but stays INCONCLUSIVE per the same permission-error rule
+            # every other table follows -- never PROVEN, never FAILED,
+            # from a refusal alone.
+            info "pfin.$t: HYBRID table, row read: REFUSED at grant level -- not an RLS observation; INCONCLUSIVE (a hybrid table is expected to carry an authenticated grant; a refusal here is worth a second look, but never PROVEN/FAILED from a permission error alone)."
+            INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+            INCONCLUSIVE_REFUSED_POLICY_COUNT=$((INCONCLUSIVE_REFUSED_POLICY_COUNT + 1))
+          else
+            INCONCLUSIVE_COUNT=$((INCONCLUSIVE_COUNT + 1))
+            INCONCLUSIVE_UNREADABLE_COUNT=$((INCONCLUSIVE_UNREADABLE_COUNT + 1))
+            info "pfin.$t: the HYBRID authenticated read failed with an unexpected error (rc=$HYBRID_RC, not SQLSTATE 42501) -- precondition, INCONCLUSIVE for this table only, not an isolation finding. $HYBRID_OUT"
+          fi
+          continue
+        fi
 
         set +e
         AUTH_OUT="$(psql_admin_auth_read "$t" 2>&1)"
@@ -937,7 +1086,7 @@ else
           RLS_STATUS="SKIPPED"
           RLS_MSGS+=("every discovered table holds zero rows -- no rows exist to be isolated, so isolation is UNPROVEN, not proven absent. RLS-enabled/anon-zero-grant all checked structurally and hold; the behavioral zero-context read has nothing to demonstrate on an empty table. Re-run once at least one table holds real (or synthetic-but-real) tenant data.")
         else
-          ok "RLS: every discovered table -- RLS on, anon zero-grant; $PROVEN_COUNT table(s) PROVEN isolated ($DENY_ALL_COUNT via allowlisted DENY-ALL, $((PROVEN_COUNT - DENY_ALL_COUNT)) via >=1 policy), $INCONCLUSIVE_COUNT table(s) INCONCLUSIVE ($INCONCLUSIVE_EMPTY_COUNT empty -- nothing to isolate, $INCONCLUSIVE_REFUSED_POLICY_COUNT refused-at-grant on a policy-scoped table -- policy never exercised, $INCONCLUSIVE_UNREADABLE_COUNT unreadable -- an unexpected error, $INCONCLUSIVE_CONTRADICTION_COUNT contradiction -- a zero-grant table's read unexpectedly succeeded)"
+          ok "RLS: every discovered table -- RLS on, anon zero-grant; $PROVEN_COUNT table(s) PROVEN isolated ($DENY_ALL_COUNT via allowlisted DENY-ALL, $HYBRID_COUNT via HYBRID global-row demonstration, $((PROVEN_COUNT - DENY_ALL_COUNT - HYBRID_COUNT)) via >=1 policy), $INCONCLUSIVE_COUNT table(s) INCONCLUSIVE ($INCONCLUSIVE_EMPTY_COUNT empty -- nothing to isolate, $INCONCLUSIVE_REFUSED_POLICY_COUNT refused-at-grant on a policy-scoped table -- policy never exercised, $INCONCLUSIVE_UNREADABLE_COUNT unreadable -- an unexpected error, $INCONCLUSIVE_CONTRADICTION_COUNT contradiction -- a zero-grant table's read unexpectedly succeeded)"
         fi
       fi
     fi
@@ -1063,6 +1212,81 @@ print(host_source)
 PYEOF
 }
 
+resend_probe() {
+  # resend_probe <sibling_container_id> -- see this file's own LEG 4
+  # header for the real-run 27 root cause and fix. `sibling_container_id`
+  # is resolved LOCALLY first, by the caller, via find_running_container()
+  # (a container id, not sensitive) and passed in as an env var here;
+  # everything from resolving the `auth` container onward -- INCLUDING
+  # reading GOTRUE_SMTP_PASS and building/sending the request -- happens
+  # in ONE remote ssh session. The key is read, used, and discarded
+  # entirely on the box: it is never assigned to a local (operator-side)
+  # shell variable in this function, never printed, and never crosses
+  # back to the operator's machine even transiently. A single-quoted
+  # heredoc (`<<'REMOTE'`, unlike this file's other remote-script
+  # functions) is deliberate here -- every value this remote script needs
+  # (STACK_UUID, SIBLING_CID) arrives via the `env VAR=val` prefix instead
+  # of local interpolation, so no `\$`-escaping convention is needed and
+  # none of this script's own `$` (JS/psql) text can be mistaken for a
+  # local-shell substitution.
+  #
+  # Prints exactly one of: RESEND_KEY_ABSENT / RESEND_AUTH_CONTAINER_NOT_FOUND
+  # / RESEND_AUTH_CONTAINER_AMBIGUOUS / RESEND_SIBLING_CONTAINER_NOT_FOUND
+  # (defensive -- the caller already validated this, see below) /
+  # RESEND_STATUS_<code> / RESEND_CONN_ERROR / RESEND_PAYLOAD_PARSE_ERROR.
+  local sibling_cid="$1"
+  sshx "env STACK_UUID=\"$STACK_UUID\" SIBLING_CID=\"$sibling_cid\" bash -s" <<'REMOTE'
+set -e
+AUTH_CIDS="$(docker compose --project-name "$STACK_UUID" ps -q auth)"
+AUTH_COUNT="$(printf '%s\n' "$AUTH_CIDS" | grep -c . || true)"
+if [[ "$AUTH_COUNT" -eq 0 ]]; then
+  echo "RESEND_AUTH_CONTAINER_NOT_FOUND"
+  exit 0
+elif [[ "$AUTH_COUNT" -gt 1 ]]; then
+  echo "RESEND_AUTH_CONTAINER_AMBIGUOUS"
+  exit 0
+fi
+AUTH_CID="$AUTH_CIDS"
+ENV_LINES="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$AUTH_CID")"
+KEY="$(printf '%s\n' "$ENV_LINES" | grep -m1 '^GOTRUE_SMTP_PASS=' | cut -d= -f2-)"
+FROM="$(printf '%s\n' "$ENV_LINES" | grep -m1 '^GOTRUE_SMTP_ADMIN_EMAIL=' | cut -d= -f2-)"
+if [[ -z "$KEY" ]]; then
+  echo "RESEND_KEY_ABSENT"
+  exit 0
+fi
+if [[ -z "$SIBLING_CID" ]]; then
+  # Defensive -- should be unreachable: the caller only invokes this
+  # function after find_running_container() already succeeded.
+  echo "RESEND_SIBLING_CONTAINER_NOT_FOUND"
+  exit 0
+fi
+NODE_SCRIPT='
+const https = require("https");
+let stdin = "";
+process.stdin.on("data", (c) => { stdin += c; });
+process.stdin.on("end", () => {
+  let payload;
+  try { payload = JSON.parse(stdin); } catch (e) { console.log("RESEND_PAYLOAD_PARSE_ERROR"); return; }
+  const body = JSON.stringify({
+    from: payload.from || "onboarding@resend.dev",
+    to: ["delivered@resend.dev"],
+    subject: "smoke-remaining-checks: CA-7/TZ-1/RLS/auth-login synthetic probe",
+    text: "synthetic Resend send-acceptance probe (docs/deployment-runbook.md remaining-checks). No real recipient."
+  });
+  const req = https.request({
+    host: "api.resend.com", path: "/emails", method: "POST",
+    headers: { "Authorization": "Bearer " + payload.key, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+  }, (res) => { res.on("data", () => {}); res.on("end", () => console.log("RESEND_STATUS_" + res.statusCode)); });
+  req.on("error", () => console.log("RESEND_CONN_ERROR"));
+  req.write(body);
+  req.end();
+});
+'
+python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"from":sys.argv[2]}))' "$KEY" "$FROM" \
+  | docker exec -i "$SIBLING_CID" node -e "$NODE_SCRIPT"
+REMOTE
+}
+
 # =====================================================================
 # LEG 4 -- auth login
 # =====================================================================
@@ -1175,44 +1399,33 @@ PYEOF
   fi
 
   if [[ "$AUTH_STATUS" != "FAILED" ]]; then
-    RESEND_NODE_HELPER='
-const http = require("http");
-const key = process.env.GOTRUE_SMTP_PASS || "";
-const from = process.env.GOTRUE_SMTP_ADMIN_EMAIL || "";
-if (!key) { console.log("RESEND_KEY_ABSENT"); process.exit(0); }
-const https = require("https");
-const body = JSON.stringify({
-  from: from || "onboarding@resend.dev",
-  to: ["delivered@resend.dev"],
-  subject: "smoke-remaining-checks: CA-7/TZ-1/RLS/auth-login synthetic probe",
-  text: "synthetic Resend send-acceptance probe (docs/deployment-runbook.md remaining-checks). No real recipient."
-});
-const req = https.request({
-  host: "api.resend.com", path: "/emails", method: "POST",
-  headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
-}, (res) => { res.on("data", () => {}); res.on("end", () => console.log("RESEND_STATUS_" + res.statusCode)); });
-req.on("error", () => console.log("RESEND_CONN_ERROR"));
-req.write(body);
-req.end();
-'
+    # real-run 27 fix (2026-09-22): resolved via find_running_container()
+    # first (Sec F4 ambiguity discipline, same as CA-7's own sibling
+    # lookup) -- a fresh, independent resolution, never assuming CA-7's
+    # own leg already ran or succeeded earlier in the SAME invocation.
     set +e
-    RESEND_OUT="$(sshx "env STACK_UUID=\"$STACK_UUID\" bash -s" <<REMOTE
-set -e
-docker compose --project-name "\$STACK_UUID" exec -T auth node -e $(printf '%q' "$RESEND_NODE_HELPER") </dev/null
-REMOTE
-)"
-    RESEND_RC=$?
+    RESEND_SIBLING_CID="$(find_running_container "$SIBLING_UUID" "$COMPOSE_SERVICE")"
+    RESEND_FIND_RC=$?
     set -e
-    if [[ $RESEND_RC -ne 0 || -z "$RESEND_OUT" ]]; then
+    if [[ $RESEND_FIND_RC -ne 0 ]]; then
       AUTH_STATUS="FAILED"
-      AUTH_MSG="could not run the Resend send-acceptance probe inside $STACK_APP_NAME's auth container (rc=$RESEND_RC)."
-    elif [[ "$RESEND_OUT" == "RESEND_KEY_ABSENT" ]]; then
-      info "auth login: GOTRUE_SMTP_PASS is absent on the auth container -- Resend not yet configured (infra/supabase/README.md: intentionally left unset pending a secrets-manifest.yml decision). Not a failure; the send-acceptance sub-check is not attempted."
-    elif [[ "$RESEND_OUT" == "RESEND_STATUS_200" ]]; then
-      ok "auth login: Resend send-acceptance probe (to delivered@resend.dev, Resend's own test address) -> 200"
+      AUTH_MSG="could not find exactly one running '$COMPOSE_SERVICE' container under '$SIBLING_APP_NAME' to run the Resend probe from (rc=$RESEND_FIND_RC) -- precondition, not a Resend finding."
     else
-      AUTH_STATUS="FAILED"
-      AUTH_MSG="Resend send-acceptance probe -> $RESEND_OUT, expected RESEND_STATUS_200 or RESEND_KEY_ABSENT."
+      set +e
+      RESEND_OUT="$(resend_probe "$RESEND_SIBLING_CID")"
+      RESEND_RC=$?
+      set -e
+      if [[ $RESEND_RC -ne 0 || -z "$RESEND_OUT" ]]; then
+        AUTH_STATUS="FAILED"
+        AUTH_MSG="could not run the Resend send-acceptance probe (rc=$RESEND_RC) -- see resend_probe()'s own header for the mechanism this replaced and why."
+      elif [[ "$RESEND_OUT" == "RESEND_KEY_ABSENT" ]]; then
+        info "auth login: GOTRUE_SMTP_PASS is absent on the auth container -- Resend not yet configured (infra/supabase/README.md: intentionally left unset pending a secrets-manifest.yml decision). Not a failure; the send-acceptance sub-check is not attempted."
+      elif [[ "$RESEND_OUT" == "RESEND_STATUS_200" ]]; then
+        ok "auth login: Resend send-acceptance probe (to delivered@resend.dev, Resend's own test address, via the sibling app container's node runtime) -> 200"
+      else
+        AUTH_STATUS="FAILED"
+        AUTH_MSG="Resend send-acceptance probe -> $RESEND_OUT, expected RESEND_STATUS_200 or RESEND_KEY_ABSENT."
+      fi
     fi
   fi
 
