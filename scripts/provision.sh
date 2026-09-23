@@ -301,11 +301,37 @@ step "Provenance"
 PROVISION_HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 PROVISION_MAIN_TIP="$(git -C "$REPO_ROOT" ls-remote origin refs/heads/main 2>/dev/null | cut -f1 || true)"
 [[ -n "$PROVISION_MAIN_TIP" ]] || PROVISION_MAIN_TIP="unreachable"
+PROVISION_TREE_PORCELAIN="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)"
 PROVISION_TREE_STATE="clean"
-if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+if [[ -n "$PROVISION_TREE_PORCELAIN" ]]; then
   PROVISION_TREE_STATE="DIRTY"
 fi
 info "provision.sh @ $PROVISION_HEAD_SHA on origin/main $PROVISION_MAIN_TIP (tree: $PROVISION_TREE_STATE)"
+# A DIRTY flag that reads the same on every run carries no information
+# (Sec ruling, PR #884 review) -- name WHAT is dirty in the OPERATOR'S
+# LOCAL CHECKOUT (the repo this script itself runs from -- never the
+# production box, which this banner says nothing about). `git status
+# --porcelain`'s own format is `XY PATH` (2 status columns + a space
+# before the path starts at column 4); renames read `XY OLD -> NEW` --
+# left as one string here, since the raw path text is all this
+# classification needs, not a rename-aware parse. Bounded to 20 paths
+# printed, then a count of the rest, so a genuinely messy checkout
+# never floods the banner.
+if [[ "$PROVISION_TREE_STATE" == "DIRTY" ]]; then
+  PROVISION_TREE_PATHS="$(printf '%s\n' "$PROVISION_TREE_PORCELAIN" | cut -c4-)"
+  PROVISION_TREE_NON_CLAUDE="$(printf '%s\n' "$PROVISION_TREE_PATHS" | grep -v '^\.claude/' || true)"
+  if [[ -z "$PROVISION_TREE_NON_CLAUDE" ]]; then
+    PROVISION_TREE_COUNT="$(printf '%s\n' "$PROVISION_TREE_PATHS" | wc -l | tr -d ' ')"
+    info "DIRTY: $PROVISION_TREE_COUNT entries, all under .claude/ (agent memory; cannot affect execution)"
+  else
+    info "DIRTY entries in the operator's local checkout:"
+    PROVISION_TREE_NON_CLAUDE_COUNT="$(printf '%s\n' "$PROVISION_TREE_NON_CLAUDE" | wc -l | tr -d ' ')"
+    printf '%s\n' "$PROVISION_TREE_NON_CLAUDE" | head -20 | while IFS= read -r p; do info "  $p"; done
+    if [[ "$PROVISION_TREE_NON_CLAUDE_COUNT" -gt 20 ]]; then
+      info "  ...and $((PROVISION_TREE_NON_CLAUDE_COUNT - 20)) more"
+    fi
+  fi
+fi
 
 # --- .env operator-provided-name preflight (names only, per Part 2 of
 # docs/deployment-runbook.md -- hand-maintained here, same posture as
