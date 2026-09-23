@@ -17,6 +17,13 @@
 // server-side exactly once here, and must never reappear in a Referer header or get
 // bookmarked/forwarded in a later URL.
 //
+// This is a `+server.ts`, deliberately NOT a `+page.server.ts`: a page load fetches
+// assets (script/style/img/font) from a document URL that still holds `token_hash`,
+// and `referrer-policy` would then be the only thing standing between the token and a
+// third party. This route instead renders nothing, so no subresource request is ever
+// issued from a document whose URL carries the token, and there is no outbound
+// Referer to leak it. Do not "improve" this route into a page.
+//
 // ACCESS-LOG RESIDUAL (decided, not inherited — team-lead or Sec, if this changes):
 // grepped this repo for any request-URL logger (morgan/pino-http/access-log) — none
 // exists, and @sveltejs/adapter-node's own server has no built-in request logger, so
