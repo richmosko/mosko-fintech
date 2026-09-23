@@ -791,6 +791,16 @@ step "Materializing the real compose files (never a bogus empty directory this t
 # default matching by coincidence.
 COOLIFY_APP_UUID="$APP_UUID" COOLIFY_SSH_HOST="root@$BOX_IP" "$REPO_ROOT/scripts/coolify-materialize-supabase-mounts.sh" --apply
 
+# Bash-side mirror of the python heredoc's own to_set["SMTP_PORT"] =
+# "587" literal below (Resend's own fixed value, applied whenever
+# SMTP_PASS is seeded -- outbound 465 is blocked on Hetzner by default,
+# measured 2026-09-23). Kept here ONLY so the post-deploy container-env
+# check further down has something to assert against; if that python
+# literal ever changes, this one must change with it (same duplication
+# class scripts/coolify-env.sh's own value-shape constraints already
+# accept for MAILER_TEMPLATES_*).
+EXPECTED_SMTP_PORT="587"
+
 step "SMTP: operator-provided credential (if any)"
 # Crosses the local->box boundary the same way provision-vps.sh's own
 # COOLIFY_ADMIN_PASSWORD does: piped over SSH stdin into a file on the box
@@ -1277,7 +1287,10 @@ if [[ -z "$EXISTING_DB_VOLUME" ]]; then
 else
   info "${APP_UUID}_db-data already exists -- checking whether the stack is already healthy (a genuine idempotent re-run) before treating this as a poisoned volume"
   if check_stack_already_healthy; then
-    if [[ "$EMAIL_ENV_CHANGED" == "1" ]]; then
+    if [[ -n "$SMTP_SEED_FILE" || -n "$SITE_URL_OVERRIDE" ]]; then
+      info "stack already healthy, but this run pushed an operator SMTP credential and/or a SITE_URL override -- redeploying UNCONDITIONALLY, not on a value diff (measured 2026-09-23, live production: the SITE_URL/MAILER_TEMPLATES_*-only diff below missed an SMTP_PORT change entirely, since it never looked at any SMTP_* key; a diff also structurally cannot see a SMTP_PASS rotation, since that value is never read back for comparison. A stack restart per --apply run when a seed is present is the accepted cost -- ADR-074 Consequence 9: a store PATCH alone does not reach a container Coolify does not restart)."
+      NEED_DEPLOY=1
+    elif [[ "$EMAIL_ENV_CHANGED" == "1" ]]; then
       info "stack already healthy, but this run changed the auth-email env (SITE_URL and/or a MAILER_TEMPLATES_* value) -- redeploying so the running auth container picks it up (ADR-074 Consequence 9: a store PATCH alone does not reach a container Coolify does not restart)."
       NEED_DEPLOY=1
     else
@@ -1351,11 +1364,23 @@ ok "all 7 containers healthy"
 # (measured, real run 27; same instrument smoke-remaining-checks.sh's own
 # resend_probe() already uses for exactly this reason). Confirms the
 # change actually reached the container Coolify started, not just the
-# Coolify env store this script PATCHed. `supabase-auth` is this
-# compose's own fixed `container_name` (infra/supabase/docker-
-# compose.yml), not a project-templated name, so no resolution step is
-# needed the way the generic 7-container health check above needs one.
-AUTH_ENV="$(sshx "docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' supabase-auth")"
+# Coolify env store this script PATCHed.
+#
+# ⚠ CORRECTED 2026-09-23, live production apply: this used to inspect
+# the compose file's own fixed `container_name: supabase-auth` directly
+# and died `no such object: supabase-auth` -- Coolify ignores
+# docker-compose.yml's `container_name:` entirely and names every stack
+# container `<service>-<project-uuid>-<timestamp>` instead (same class
+# of bug scripts/invite-user.sh's own header now documents for
+# `api-gw`/supabase-envoy). Resolved by compose project + service below,
+# same `docker compose --project-name <uuid> ps -q <service>` +
+# RUNNING-state-filter idiom scripts/smoke-remaining-checks.sh's own
+# find_running_container() already uses -- never a fixed name again.
+AUTH_CID_LIST="$(sshx "docker compose --project-name $APP_UUID ps -q auth | xargs -r -I{} docker inspect --format '{{.State.Running}}{{\"\\t\"}}{{.Id}}' {} | awk -F'\t' '\$1==\"true\"{print \$2}'")"
+AUTH_CID_COUNT="$(printf '%s\n' "$AUTH_CID_LIST" | grep -c . || true)"
+[[ "$AUTH_CID_COUNT" == "1" ]] || die "expected exactly one RUNNING 'auth' container under compose project '$APP_UUID', found $AUTH_CID_COUNT -- investigate before treating this run as done."
+AUTH_CID="$AUTH_CID_LIST"
+AUTH_ENV="$(sshx "docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' $AUTH_CID")"
 AUTH_SITE_URL="$(printf '%s\n' "$AUTH_ENV" | sed -n 's/^GOTRUE_SITE_URL=//p')"
 AUTH_MAILER_CONFIRMATION="$(printf '%s\n' "$AUTH_ENV" | sed -n 's/^GOTRUE_MAILER_TEMPLATES_CONFIRMATION=//p')"
 info "auth container GOTRUE_SITE_URL=$AUTH_SITE_URL"
@@ -1365,7 +1390,18 @@ if [[ -n "$SITE_URL_OVERRIDE" && "$AUTH_SITE_URL" != "$SITE_URL_OVERRIDE" ]]; th
 fi
 [[ "$AUTH_MAILER_CONFIRMATION" == "$MAILER_TEMPLATES_CONFIRMATION" ]] \
   || die "auth container's own GOTRUE_MAILER_TEMPLATES_CONFIRMATION ('$AUTH_MAILER_CONFIRMATION') does not match the value this run computed ('$MAILER_TEMPLATES_CONFIRMATION') -- the env store PATCH did not reach the running container. Investigate before treating this run as done."
-ok "auth container's own env confirms the current SITE_URL/MAILER_TEMPLATES_CONFIRMATION values (names+values, non-secret)"
+# Conditional on SMTP_SEED_FILE (an operator SMTP_PASS was provided this
+# run) -- a fresh/no-seed box legitimately still carries the mint-if-
+# absent local-dev placeholder port, not 587, so asserting this
+# unconditionally would false-fail that case (same conditional shape the
+# SITE_URL_OVERRIDE check above already uses).
+if [[ -n "$SMTP_SEED_FILE" ]]; then
+  AUTH_SMTP_PORT="$(printf '%s\n' "$AUTH_ENV" | sed -n 's/^GOTRUE_SMTP_PORT=//p')"
+  info "auth container GOTRUE_SMTP_PORT=$AUTH_SMTP_PORT"
+  [[ "$AUTH_SMTP_PORT" == "$EXPECTED_SMTP_PORT" ]] \
+    || die "auth container's own GOTRUE_SMTP_PORT ('$AUTH_SMTP_PORT') does not match the expected value ('$EXPECTED_SMTP_PORT') -- the env store PATCH did not reach the running container. Investigate before treating this run as done."
+fi
+ok "auth container's own env confirms the current SITE_URL/SMTP_PORT/MAILER_TEMPLATES_CONFIRMATION values (names+values, non-secret)"
 
 PGVER="$(sshx "docker compose --project-name $APP_UUID exec -T db psql -U supabase_admin -d postgres -Atc 'show server_version;'" 2>/dev/null | cut -d. -f1)"
 [[ "$PGVER" == "17" ]] || die "expected Postgres 17, got server_version starting '$PGVER'"
